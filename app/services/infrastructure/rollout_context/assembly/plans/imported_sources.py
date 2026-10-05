@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.request_plan import (
     ContextContribution,
     resolve_contribution_for_ref,
@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )
 
-_FIELDS = {"schema", "session_id", "plan_id", "refs", "contributions"}
+_FIELDS = {"schema", "session_id", "thread_id", "plan_id", "refs", "contributions"}
 _INTEGRITY_FIELDS = (
     "source_revision", "content_length", "content_hash", "redacted_stable_digest",
 )
@@ -41,23 +41,34 @@ def _contribution_value(item: ContextContribution) -> dict[str, object]:
     return {field.name: getattr(item, field.name) for field in fields(ContextContribution)}
 
 
-def _parse(value: object, session_id: str, plan_id: str) -> ParsedSourceManifest:
+def _parse(
+    value: object, session_id: str, thread_id: str, plan_id: str
+) -> ParsedSourceManifest:
     if not isinstance(value, Mapping) or set(value) != _FIELDS:
         raise ValueError("source manifest 字段非法")
     if value["schema"] != "context-plan-source:v1":
         raise ValueError("source manifest schema 非法")
-    if any(not isinstance(owner, str) or not owner.strip() for owner in (session_id, plan_id)):
+    if any(
+        not isinstance(owner, str) or not owner.strip()
+        for owner in (session_id, thread_id, plan_id)
+    ):
         raise ValueError("source manifest owner 非法")
-    if (value["session_id"], value["plan_id"]) != (session_id, plan_id):
+    if (value["session_id"], value["thread_id"], value["plan_id"]) != (
+        session_id,
+        thread_id,
+        plan_id,
+    ):
         raise ValueError("source manifest owner 不一致")
     if not isinstance(value["refs"], list) or not isinstance(value["contributions"], list):
         raise TypeError("source manifest registry 必须是 array")
     refs = tuple(parse_context_ref(ref) for ref in value["refs"])
-    if len({(ref.ref_type, ref.ref_id) for ref in refs}) != len(refs):
+    if len({selection_ref_identity(ref) for ref in refs}) != len(refs):
         raise ValueError("source manifest 重复 ref")
     for ref in refs:
-        if ref.session_id != session_id or ref.plan_id != (
-            plan_id if ref.ref_type == "request_only" else None
+        if (
+            ref.session_id != session_id
+            or ref.plan_id != (plan_id if ref.ref_type == "request_only" else None)
+            or (ref.ref_type == "request_only" and ref.thread_id != thread_id)
         ):
             raise ValueError("source manifest ref owner 不一致")
     contributions = []
@@ -77,11 +88,11 @@ def _parse(value: object, session_id: str, plan_id: str) -> ParsedSourceManifest
 
 
 def parse_source_manifest(
-    value: object, *, session_id: str, plan_id: str
+    value: object, *, session_id: str, thread_id: str, plan_id: str
 ) -> ParsedSourceManifest:
     """严格解析显式清单；安全边界不将不可信 metadata 放进异常链。"""
     try:
-        result = _parse(value, session_id, plan_id)
+        result = _parse(value, session_id, thread_id, plan_id)
     except Exception:  # noqa: BLE001 - domain 异常可能携带敏感原值
         failed = True
     else:
@@ -92,7 +103,7 @@ def parse_source_manifest(
 
 
 def read_source_manifest(
-    raw: object, *, session_id: str, plan_id: str
+    raw: object, *, session_id: str, thread_id: str, plan_id: str
 ) -> ParsedSourceManifest:
     """持久字段必须是严格 JCS；拒绝重复 key、空值和隐式格式归一化。"""
     try:
@@ -101,7 +112,7 @@ def read_source_manifest(
         value = json.loads(raw)
         if raw != json_text(value):
             raise ValueError("source manifest 不是规范 JCS")
-        result = _parse(value, session_id, plan_id)
+        result = _parse(value, session_id, thread_id, plan_id)
     except Exception:  # noqa: BLE001 - 恢复错误不能保留正文/凭据
         failed = True
     else:
@@ -112,34 +123,37 @@ def read_source_manifest(
 
 
 def build_source_manifest(
-    *, session_id: str, plan_id: str, refs: Sequence[ContextRef],
+    *, session_id: str, thread_id: str, plan_id: str, refs: Sequence[ContextRef],
     contributions: Sequence[ContextContribution],
 ) -> dict[str, object]:
     """调用方显式提供已验证、无正文且尚未绑定 assembly 的来源。"""
     value = {
         "schema": "context-plan-source:v1",
         "session_id": session_id,
+        "thread_id": thread_id,
         "plan_id": plan_id,
         "refs": [ref.to_dict() for ref in refs],
         "contributions": [_contribution_value(item) for item in contributions],
     }
-    return parse_source_manifest(value, session_id=session_id, plan_id=plan_id).manifest
+    return parse_source_manifest(
+        value, session_id=session_id, thread_id=thread_id, plan_id=plan_id
+    ).manifest
 
 
 def validate_source_bindings(
     snapshot: ContextAssemblySnapshot, sources: ParsedSourceManifest
 ) -> None:
     """含 omitted 的所有显式 binding 都由同一来源清单证明，不访问 detail/body。"""
-    refs = {(ref.ref_type, ref.ref_id): ref for ref in sources.refs}
+    refs = {selection_ref_identity(ref): ref for ref in sources.refs}
     for ref in snapshot.refs:
-        if refs.get((ref.ref_type, ref.ref_id)) != ref:
+        if refs.get(selection_ref_identity(ref)) != ref:
             raise ValueError("source-mismatch: snapshot ref 与 imported source manifest 不一致")
     included = {item.contribution_id: item for item in snapshot.contributions}
     bound_ids = set()
     for entry in snapshot.selection:
         if not isinstance(entry.ref, ContextRef):
             continue
-        ref = refs.get((entry.ref.ref_type, entry.ref.ref_id))
+        ref = refs.get(selection_ref_identity(entry.ref))
         if ref != entry.ref:
             raise ValueError("source-mismatch: selection 缺少相同 source ref")
         if ref.ref_type != "request_only" or (not entry.included and entry.contribution_id is None):

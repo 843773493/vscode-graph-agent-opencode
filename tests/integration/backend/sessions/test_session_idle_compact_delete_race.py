@@ -22,12 +22,20 @@ from app.api.deps import (
 from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.schemas.internal_v2.session import SessionDTO
+from app.schemas.internal_v2.session_navigation.operations import (
+    NavigationMutationEnqueueRequest,
+)
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService, JobState
+from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.operations_service import (
+    local_navigation_scope,
+)
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.session_navigation_queue import create_catalog_intent
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -80,6 +88,7 @@ class _Harness:
     client: httpx.AsyncClient
     session_service: SessionService
     job_service: JobService
+    catalog_service: SessionCatalogService
     checkpoint_store: _RecordingCheckpointStore
     compactor: _CompactorProbe
 
@@ -101,6 +110,10 @@ async def harness() -> AsyncIterator[_Harness]:
         job_event_bus=JobEventBus(),
         job_executor=_ImmediateJobExecutor(),
         session_lifecycle_guard=session_service.assert_session_active,
+    )
+    catalog_service = SessionCatalogService(
+        session_service=session_service,
+        job_service=job_service,
     )
     checkpoint_store = _RecordingCheckpointStore()
     compactor = _CompactorProbe()
@@ -131,6 +144,7 @@ async def harness() -> AsyncIterator[_Harness]:
                 client=client,
                 session_service=session_service,
                 job_service=job_service,
+                catalog_service=catalog_service,
                 checkpoint_store=checkpoint_store,
                 compactor=compactor,
             )
@@ -187,10 +201,19 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
 
     monkeypatch.setattr(harness.session_service, "get", record_session_get)
     harness.workspace.delete_service.set_session_drain_callback(hold_delete_drain)
-    delete_task = asyncio.create_task(
-        harness.client.delete(f"/api/v1/sessions/{session_id}")
+    catalog = harness.catalog_service
+    scope = local_navigation_scope(catalog.workspace_id)
+    intent = create_catalog_intent(
+        catalog,
+        "delete_session",
+        target_node_id=session_id,
     )
+    await catalog.operations.start()
     try:
+        await catalog.operations.enqueue(
+            NavigationMutationEnqueueRequest(intents=[intent]),
+            scope,
+        )
         await asyncio.wait_for(drain_started.wait(), timeout=3)
         assert session_id in harness.job_service._deleting_sessions
 
@@ -204,11 +227,22 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
         assert harness.checkpoint_store.load_calls == 0
         assert harness.checkpoint_store.save_calls == 0
         assert harness.compactor.check_calls == 0
+        continue_drain.set()
+        receipt = await catalog.operations.await_terminal(
+            intent.client_operation_id,
+            scope,
+        )
+        assert receipt.state == "committed", receipt.error_detail
+        for _ in range(300):
+            try:
+                harness.workspace.node(session_id)
+            except KeyError:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("删除 operation committed 后未完成物理 settlement")
     finally:
         continue_drain.set()
-        await asyncio.gather(delete_task, return_exceptions=True)
-
-    delete = delete_task.result()
-    assert delete.status_code == 200, delete.text
+        await catalog.operations.stop()
     with pytest.raises(KeyError):
         harness.workspace.node(session_id)

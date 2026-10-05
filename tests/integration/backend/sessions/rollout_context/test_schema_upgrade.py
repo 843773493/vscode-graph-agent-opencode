@@ -55,7 +55,8 @@ def old_schema(
     with RolloutCheckpointSaver(sessions) as saver:
         saver.accept_turn(
             session_id, accepted_ingress_id="schema-ingress",
-            acceptance_idempotency_key="schema-acceptance", payload="升级必须保留真实 root",
+            acceptance_idempotency_key="schema-acceptance", job_id="schema-job",
+            admission_idempotency_key="schema-admission", payload="升级必须保留真实 root",
         )
         saver.register_context_contribution(session_id, ContextContribution(
             contribution_id="old-policy", source_kind="workspace_policy", source_revision="v1",
@@ -188,7 +189,7 @@ def test_artifact_validation_failure_rolls_back_schema_before_commit(old_schema:
 
     with (
         pytest.raises(RuntimeError, match="published artifact verification failed"),
-        storage._lock(old_schema.session_id, ""),
+        storage._lock(storage.main_thread_id(old_schema.session_id), "", session_id=old_schema.session_id),
     ):
         storage._migrate_schema_locked(
             old_schema.session_id, checkpoint_ns="", to_version=2,

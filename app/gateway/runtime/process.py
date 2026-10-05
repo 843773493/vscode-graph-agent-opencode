@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import logging
 import math
 import os
@@ -14,6 +15,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TextIO
+from uuid import UUID
 
 import httpx
 
@@ -310,6 +312,60 @@ def resolve_python_executable(_: Path) -> Path:
     return Path(sys.executable).absolute()
 
 
+def resolve_backend_workspace_id(project_root: Path, workspace_root: Path) -> str:
+    """通过 Workspace 自己的 CLI 读取或初始化稳定 backend UUID。"""
+
+    resolved_project_root = project_root.expanduser().resolve(strict=True)
+    resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
+    if not resolved_workspace_root.is_dir():
+        raise NotADirectoryError(f"工作区根不是目录: {resolved_workspace_root}")
+    result = subprocess.run(
+        [
+            str(resolve_python_executable(resolved_project_root)),
+            "-m",
+            "app.core.workspace_identity",
+            "--workspace-root",
+            str(resolved_workspace_root),
+        ],
+        cwd=resolved_project_root,
+        env=_local_child_environment(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Workspace backend UUID CLI 执行失败: "
+            f"workspace_root={resolved_workspace_root}, exit={result.returncode}, "
+            f"stderr={result.stderr!r}, stdout={result.stdout!r}"
+        )
+    if result.stderr:
+        raise RuntimeError(
+            "Workspace backend UUID CLI 成功时 stderr 必须为空: "
+            f"workspace_root={resolved_workspace_root}, stderr={result.stderr!r}"
+        )
+    if not result.stdout.endswith("\n") or result.stdout.count("\n") != 1:
+        raise TypeError(
+            "Workspace backend UUID CLI 必须只输出一行 UUID: "
+            f"workspace_root={resolved_workspace_root}, stdout={result.stdout!r}"
+        )
+    workspace_id = result.stdout[:-1]
+    try:
+        parsed_workspace_id = UUID(workspace_id)
+    except ValueError as error:
+        raise ValueError(
+            "Workspace backend UUID CLI 返回非 UUID: "
+            f"workspace_root={resolved_workspace_root}, workspace_id={workspace_id!r}"
+        ) from error
+    if str(parsed_workspace_id) != workspace_id:
+        raise ValueError(
+            "Workspace backend UUID CLI 返回非标准 UUID 文本: "
+            f"workspace_root={resolved_workspace_root}, workspace_id={workspace_id!r}"
+        )
+    return workspace_id
+
+
 async def wait_for_http_ok(
     url: str,
     process: subprocess.Popen[str] | None = None,
@@ -350,6 +406,7 @@ def start_local_backend_process(
     *,
     project_root: Path,
     workspace_root: Path,
+    backend_workspace_id: str,
     port: int,
     log_dir: Path,
     extra_env: dict[str, str] | None = None,
@@ -358,10 +415,33 @@ def start_local_backend_process(
         WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS
     ),
 ) -> ManagedProcess:
+    try:
+        parsed_workspace_id = UUID(backend_workspace_id)
+    except ValueError as error:
+        raise ValueError(
+            f"启动 Workspace 后端必须提供 backend UUID: {backend_workspace_id!r}"
+        ) from error
+    if str(parsed_workspace_id) != backend_workspace_id:
+        raise ValueError(
+            "启动 Workspace 后端必须提供标准 backend UUID 文本: "
+            f"{backend_workspace_id!r}"
+        )
+    resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
+    if not resolved_workspace_root.is_dir():
+        raise NotADirectoryError(f"工作区根不是目录: {resolved_workspace_root}")
     python_executable = resolve_python_executable(project_root)
     env = _local_child_environment()
-    env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["WORKSPACE_ROOT"] = str(resolved_workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    env["BOXTEAM_MOUNTED_WORKSPACES"] = json.dumps(
+        [
+            {
+                "workspace_id": backend_workspace_id,
+                "workspace_root": str(resolved_workspace_root),
+            }
+        ],
+        separators=(",", ":"),
+    )
     env["PYTHONUNBUFFERED"] = "1"
     if extra_env:
         env.update(extra_env)
@@ -413,10 +493,10 @@ def start_local_node_service_process(
     *,
     project_root: Path,
     workspace_root: Path,
-    workspace_id: str,
     service: str,
     port: int,
     log_dir: Path,
+    terminal_workspace_id: str | None = None,
 ) -> ManagedProcess:
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
@@ -434,28 +514,40 @@ def start_local_node_service_process(
     env = _local_child_environment()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    command = [
+        node_executable,
+        str(backend_path),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--workspace-root",
+        str(workspace_root),
+    ]
+    if service == "terminal":
+        if terminal_workspace_id is None:
+            raise ValueError("启动 Terminal Manager 必须提供 Workspace backend UUID")
+        try:
+            parsed_workspace_id = UUID(terminal_workspace_id)
+        except ValueError as error:
+            raise ValueError(
+                "启动 Terminal Manager 必须提供 backend UUID: "
+                f"{terminal_workspace_id!r}"
+            ) from error
+        if str(parsed_workspace_id) != terminal_workspace_id:
+            raise ValueError(
+                "启动 Terminal Manager 必须提供标准 backend UUID 文本: "
+                f"{terminal_workspace_id!r}"
+            )
+        command.extend(["--workspace-id", terminal_workspace_id])
+    elif terminal_workspace_id is not None:
+        raise ValueError("启动 Browser Manager 不接受 Terminal Workspace UUID")
+    if service == "browser":
+        command.extend(
+            ["--frontend-url", os.environ.get("BOXTEAM_BROWSER_FRONTEND_URL", "http://127.0.0.1")]
+        )
     process = _spawn_logged_process(
-        [
-            node_executable,
-            str(backend_path),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--workspace-root",
-            str(workspace_root),
-            "--workspace-id",
-            workspace_id,
-            "--frontend-url",
-            os.environ.get(
-                (
-                    "BOXTEAM_TERMINAL_FRONTEND_URL"
-                    if service == "terminal"
-                    else "BOXTEAM_BROWSER_FRONTEND_URL"
-                ),
-                "http://127.0.0.1",
-            ),
-        ],
+        command,
         log_file=log_file,
         cwd=project_root,
         env=env,

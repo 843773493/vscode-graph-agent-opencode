@@ -255,7 +255,9 @@ class RolloutSchemaIntrospectionMixin:
             )
         if schema_version < storage_version.ROLLOUT_SCHEMA_VERSION and not allow_older_schema:
             raise RuntimeError(
-                "schema-upgrade-required: v2 SQLite 必须显式执行 Saver.upgrade_rollout_schema，"
+                "thread_owner_schema_stale: 当前 rollout SQLite 不含 Thread owner 约束，"
+                "不提供自动兼容或迁移。请备份后删除对应 Thread node 下整个 rollout/ "
+                "目录（index.sqlite 与 rollout.jsonl），再按当前 catalog owner 重建；"
                 f"current={schema_version}, target={storage_version.ROLLOUT_SCHEMA_VERSION}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:

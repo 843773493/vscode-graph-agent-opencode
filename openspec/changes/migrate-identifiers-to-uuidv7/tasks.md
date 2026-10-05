@@ -34,21 +34,25 @@
 - [x] 5.1 断言 `nodes.node_id`、`thread_catalog.thread_id` 的表 DDL 未因 v7 变更（无新列、无新索引、无迁移 DDL）。门槛：`uv run pytest -q tests/unit/core/test_session_catalog_store.py tests/unit/core/test_session_control_store.py` 退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「5.1」。）**
 - [x] 5.2 补测试：v7 id 插入既有主键表后，按 id 排序≈按时间顺序。门槛：对应单测退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「5.2」。）**
 
-## 5A. 阻断性前置：哈希与幂等键审计（D9，MUST 在 §6 之前完成）
+## 5A. 未来身份重写前置：哈希与幂等键审计（D9）
+
+> 本节记录的审计原为存量身份重写方案做准备。E04b 将 §6 收敛为 v7-only 拒绝和旧 catalog fail-closed；当前没有 ID 重写、importer 或隔离操作，故本审计不是当前拒绝路径的前置条件。若未来另立 change 重写持久 ID，本节的审计和处置才是阻断门。
 
 - [x] 5A.1 审计全仓 `content_hash` / `contribution_content_hash` / `plan_hash`(`context_plan_hash`) / `request_hash`(`context_request_hash`) / itemized plan-hash / 幂等键 / 去重键的输入，逐条判定是否**直接或间接**包含 `session_id` / `thread_id` / 资源 id（含 `create_prefixed_id` 产物、`display_uri`、`entry_identity`、catalog payload）。门槛：审计报告落盘到 `out/tests/temp/uuidv7_openspec/artifacts/`，命令 `rg -rn 'sha256_jcs|hashlib.sha256|idempotency_key' app --glob '*.py' -l` 退出码 0 且报告覆盖全部命中文件。
 - [x] 5A.2 命中清单必须含「文件 + 符号 + 判定依据」；已实测命中至少包括 `app/domain/itemized/hash/plan_hash.py` 的 `context_plan_hash`（含 `session_id`/`plan_id`/`ref_id`）、`app/domain/itemized/hash/request_hash.py` 的 `context_request_hash`、`app/core/thread_creation.py` 的 `compute_thread_creation_preimage_hash`（含 `session_id`/`thread_id`）、以及 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_idempotency_key(commit_kind, subject_id, outcome, metadata)`（**签名显式含 `subject_id`，生产调用点即 canonical id**）。门槛：`rg -n 'session_id|thread_id|subject_id' app/domain/itemized/hash/plan_hash.py app/core/thread_creation.py app/services/infrastructure/rollout_context/storage/transaction.py` 退出码 0，且报告逐条记录。
 - [x] 5A.2b A5 强制处置：`default_idempotency_key` 已判定**会漂移**，MUST 进 §5A 的处置表并明确「随迁移一致重算」或「该 id 不参与迁移」，MUST NOT 只登记不处置。门槛：报告处置表中存在该符号条目且处置非空。
 - [x] 5A.3 必须附「已验证**不**含 id」的**负向证据**，例如 `app/domain/itemized/hashing.py` 的 `content_hash` 输入仅 `{payload_kind, payload}`、`contribution_content_hash` 仅 `{contribution_kind, body}`，`app/core/session_creation.py` 的 `compute_session_creation_preimage_hash` 四元组 `{workspace_id, parent_node_id, title, session_metadata}` 不含 `session_id`。门槛：`rg -n 'def content_hash|def contribution_content_hash' app/domain/itemized/hashing.py` 退出码 0 且报告记录输入字段清单。
 - [x] 5A.4 逐条给出处置：以 id 为输入的哈希/幂等键 MUST 明确为「随迁移一致重算」或「该 id 不参与迁移」，并配验证；MUST NOT 留成「迁移后哈希漂移但无人负责」。门槛：报告逐条标注处置；未落定条数 MUST 为 0。
-- [x] 5A.5 审计未落定前，§6 的迁移任务 MUST NOT 执行任何重编号。门槛：执行记录证明 §6 在 §5A 全部勾选后才开工。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「5A.5」。）**
-> **（2026-09-30 补齐，5A.1–5A.4 已满足；5A.5 留作 §6 开工时的执行记录）**：交付物已补齐到 `out/tests/temp/uuidv7_openspec/artifacts/hash_audit_*`（源报告 `out/tests/temp/uuidv7_hash_audit/artifacts/`）。门槛命令 `rg -rn 'sha256_jcs|hashlib.sha256|idempotency_key' app --glob '*.py' -l` 实测 **191 个文件全覆盖、未归类 = 0**（三 token 各自命中 56/81/102，并集 191）；互斥归类为 A 原语本体 3、B 内容哈希 39、C canonical 身份原型 2、D opaque 56、E 非 canonical id 派生 23、F 含 canonical id 的 preimage 68。**F 类 68 个文件逐符号处置、未落定 = 0**（随迁移一致重算 66、fork 链路 key 重映射重算 1、该 id 不参与迁移 1）。负向证据齐：`content_hash` 仅 `{payload_kind, payload}`、`contribution_content_hash` 仅 `{contribution_kind, body}`、`compute_session_creation_preimage_hash` 仅 `{workspace_id, parent_node_id, title, session_metadata}`，另附 17 条「只吃正文/默认值」负向。
+- [x] 5A.5 任何未来单独授权的持久 ID 重写 MUST 在审计和处置落定前保持未开工；当前 §6 只拒绝旧 profile，不执行重编号。**（本轮口径修正：不再把历史审计顺序表述为当前迁移任务已经开工。）**
+> **（2026-09-30 补齐，5A.1–5A.4 已满足）**：交付物已补齐到 `out/tests/temp/uuidv7_openspec/artifacts/hash_audit_*`（源报告 `out/tests/temp/uuidv7_hash_audit/artifacts/`）。门槛命令 `rg -rn 'sha256_jcs|hashlib.sha256|idempotency_key' app --glob '*.py' -l` 实测 **191 个文件全覆盖、未归类 = 0**（三 token 各自命中 56/81/102，并集 191）；互斥归类为 A 原语本体 3、B 内容哈希 39、C canonical 身份原型 2、D opaque 56、E 非 canonical id 派生 23、F 含 canonical id 的 preimage 68。**F 类 68 个文件逐符号处置、未落定 = 0**（历史重编号方案下曾登记随迁移重算 66、fork 链路 key 重映射重算 1、该 id 不参与迁移 1）。负向证据齐：`content_hash` 仅 `{payload_kind, payload}`、`contribution_content_hash` 仅 `{contribution_kind, body}`、`compute_session_creation_preimage_hash` 仅 `{workspace_id, parent_node_id, title, session_metadata}`，另附 17 条「只吃正文/默认值」负向。
 >
-> **§5A 已落定的两条边界，供 §6 直接复用**：① `default_idempotency_key(commit_kind, subject_id, outcome, metadata)` 的 `subject_id` 即 canonical id，判定**会漂移**，处置 = 随迁移一致重算（实测不同 subject_id 得到不同 key）；② `compute_thread_creation_preimage_hash` 含 session_id/thread_id/delegation_id，处置 = 随迁移一致重算（实测 v4-like 与 v7-like 摘要不同）。唯一「该 id 不参与迁移」是 `core/session_subtree_delete.py` 的 `idempotency_key`（瞬时隔离目录名，随删除回收，非持久身份）。
+> **§5A 审计记录（供未来另行授权的重写评估）**：① `default_idempotency_key(commit_kind, subject_id, outcome, metadata)` 的 `subject_id` 即 canonical id，实测不同 subject_id 得到不同 key；② `compute_thread_creation_preimage_hash` 含 session_id/thread_id/delegation_id，实测 v4-like 与 v7-like 摘要不同。唯一「该 id 不参与重写」是 `core/session_subtree_delete.py` 的 `idempotency_key`（瞬时隔离目录名，随删除回收，非持久身份）。
 >
-> **迁移面口径（owner 裁定）**：本审计按「是否含 canonical id（**含其派生面**）」判定，把由 message_id/turn_id/execution_id 派生、或经 `default_idempotency_key(subject_id=...)` 携带 canonical id 的哈希/幂等键一并纳入「重算」。**§6 不得收窄为只重编号 `ses_`/`thr_` 字面**，否则本报告的间接派生项会变成「迁移后漂移但无人负责」。本项门槛满足。
+> **身份重写影响面口径（owner 裁定）**：本审计按「是否含 canonical id（含其派生面）」判定，把由 message_id/turn_id/execution_id 派生、或经 `default_idempotency_key(subject_id=...)` 携带 canonical id 的哈希/幂等键一并纳入未来重写处置。任何未来重写不得收窄为只改 `ses_`/`thr_` 字面，否则间接派生项会变成「身份变化后哈希漂移但无人负责」。
 
-## 5B. 阻断性前置：gateway 控制面库逐表分类（D10，MUST 在 §6 之前完成）
+## 5B. 身份 profile 影响盘点：gateway 控制面库逐表分类（D10）
+
+> 本节是持久面影响盘点，不会自动迁移或隔离 Gateway 控制面数据；任何未来持久 ID 重写均须由独立 change 指定处置。
 
 - [x] 5B.1 对控制面库（`app/gateway/control/gateway_state/` 包，原单文件已随 `579001a8` 拆分 等）承载 session 身份的表逐表分类为 `migrate` / `explicitly_invalidated` / `not_affected`。**已实测控制面只有两个 SQLite 库**：库 A `gateway.sqlite`（`app/gateway/main.py` 实例化，建表权威在 `gateway_state.py` 的 `_GATEWAY_MIGRATIONS`，21 张表 + 框架表 `schema_migrations`）、库 B `federation/control.sqlite`（`app/gateway/federation/store.py`，4 张表）。门槛：报告给出逐表分类与判定依据，且 `rg -n 'session_id|access_session_id' app/gateway/control/gateway_state/` 退出码 0。
 - [x] 5B.2 `user_access_lease` MUST NOT 归入 `explicitly_invalidated`，除非实测证明其为「可安全丢弃的租约」；否则归 `migrate`。门槛：报告给出该表的分类与安全依据。
@@ -62,20 +66,20 @@
 > - **控制面库之外另有 4 处含 canonical id 的持久面已转登 §6.1b**（会话索引缓存 JSON、profile 的 `collapsed_session_ids`、generators 的 `placement.session_id`/`message_id`/`job_id`、工作区后端持久面）。
 > - `runtime_lease_<uuid4>` / `target_generation_<uuid4>` 属非工厂前缀，已明文纳入 §7 豁免。
 
-## 6. 存量 UUIDv4 一次性显式迁移（D3）
+## 6. 存量 UUIDv4 显式拒绝（D3）
 
-### 6.0 owner 裁定（2026-10-01 定稿）：无运行时开关 + 存量 v4 一次性显式处置
+### 6.0 owner 裁定（2026-10-04 收敛）：v7-only + 不提供 Session Catalog importer
 
-> **状态：已定稿（不再是「待裁定」）。** 本裁定由 owner 直接给出，**不与第二轮 §6.0 的 A/B/C 三选项机械对应**（方向接近「C 其它形态」）；凡与第二轮选项文字冲突处，**以本条裁定为准**。
+> **状态：已定稿。** E04b 已删除 Session Catalog migration package、CLI、legacy reader/layout 和专用迁移测试；既不保留 UUIDv4 catalog 隔离/重编号，也不提供 importer。
 >
-> **2026-10-04 验收更新：§6.2/§6.3/§6.5/§6.6 已完成。** 报告字段由既有 `1287390f` 提供；`c16b2c17` 补齐 durable quarantine intent、rename 中断恢复和真实 canonical UUIDv4 session/folder 验收。证据见本节末尾，不以历史勾选代替实际核验。
+> session 创建、删除链路各自仍有效的隔离语义由对应 owner 保持；这些语义不属于旧 catalog importer。
 
 **裁定结论**：
 
-1. **不接受运行时维护开关**：`identity_profile_migration_active`（以及任何等价「窗口期接受 `v4|v7`」的运行时分叉）**判死**。理由：AGENTS.md 第 1 条严禁双轨，**运行时开关就是双轨**；且 HEAD 已机械断言源码中不存在该开关（见下「事实 3」）。**分支 B（维护窗口 + 双接受）就此判死，不再是候选。**
-2. **坚持 HEAD 现状（canonical 校验器只接受 v7）**，这是 O-1 的既有裁定，**不推翻**。
-3. **存量 v4 必须一次性显式处置**，不得静默吸收、不得扫盘重建。判据是既有迁移机对非法 id 的 `illegal_id` 隔离（`app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段）。要求：启动/迁移时遇到 v4 canonical id MUST **fail-closed** 并给出**可操作的显式处置指引（隔离 + 报告）**，MUST NOT 回退 v4、MUST NOT 双读。
-4. **勾选口径变更**：§6.2/§6.3/§6.5/§6.6 的验收门从「运行时开关可用」改为「**一次性显式处置路径可用且有测试**」；2026-10-04 已按此口径通过实现、独立审查和主树测试。
+1. **不接受运行时维护开关**：`identity_profile_migration_active`（以及任何等价「窗口期接受 `v4|v7`」的运行时分叉）**判死**。理由：AGENTS.md 第 1 条严禁双轨，运行时开关就是双轨。
+2. canonical validator 始终只接受 v7；遇到 v4 canonical 身份明确失败，不回退、不重编号。
+3. 只有旧 `session-catalog-index.json` 而没有 SQLite catalog 时，resolver 明确报错并保留 JSON 与原物理数据；MUST NOT 初始化空 catalog、导入、双读、扫盘、隔离或重编号。用户从当前格式备份恢复或人工处理旧工作区。
+4. session creation/deletion 的 staging、quarantine 等隔离语义继续由各自 owner 维护，不随 catalog importer 删除。
 
 **判死的方案（原分支 B）**：维护窗口 + `identity_profile_migration_active` + 窗口期接受 `v4|v7`。— **判死**：窗口期的运行时双接受即双轨，与 AGENTS.md 第 1 条及本 change「彻底根除双轨」目标冲突。
 
@@ -83,34 +87,34 @@
 
 1. **生产读写路径的校验器只接受 v7，不接受 v4。** `app/core/session_catalog_store/validators.py:31-55` 的 `validate_session_id`/`validate_thread_id` → `_validate_uuid_payload` 对 payload 第 13 个 hex 位**硬要求 `== "7"`**，非 v7 一律 `raise ValueError`。
    原始输出：`rg -n 'v4|uuid4' app/core/session_catalog_store` → **EXIT=1（0 命中）**。
-2. **迁移机对非法 id 直接隔离，绝不重编号——这就是「一次性显式处置」的既有判据。** `app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段中，`validate_session_id(node.node_id)` 失败即返回 `illegal_id`，节点进隔离区而非被读出重写；**不存在「放宽读到 v4 再重编号」的路径**。
+2. **运行时 validator 只接受 v7，绝不重编号。** `validate_session_id` 失败会明确拒绝非法值；生产链路不存在 v4 fallback、旧 ID path alias 或磁盘扫描吸收路径。
 3. **HEAD 已机械断言源码中不存在维护开关。** `tests/unit/core/test_canonical_identifier_matrix.py:170` 的 `test_identifier_profile_converged_to_v7_only`（注释写明「O-1 分支 A：不引入维护开关」）断言 `"identity_profile_migration_active" not in source` 且 `"_validate_uuid_v4_payload" not in source`。
    原始输出：`rg -n 'identity_profile_migration_active' app tests scripts` → 仅 1 行命中，即该断言行本身（`tests/unit/core/test_canonical_identifier_matrix.py:173`），**app/ 生产源码 0 命中**。
 
-**存量 v4 一次性显式处置的验收口径（§6.2/§6.3/§6.5/§6.6 共用，可判否）**：
+**v7-only 与旧 catalog fail-closed 的验收口径（§6.2–§6.7 共用）**：
 
-- **MUST**：启动/迁移遇到 v4 canonical id → **fail-closed**（`illegal_id` 隔离），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建。
-- **MUST**：给出**可操作的显式处置指引**——隔离报告须含**被隔离 id、物理路径、原因、建议动作**，MUST NOT 静默丢弃。
-- **MUST**：有测试机械证明「v4 存量被隔离且报告可见、不静默吸收」。
-- **MUST NOT**：引入 `identity_profile_migration_active` 或任何运行时开关、放宽校验器到 `v4|v7`。
+- **MUST**：v4 canonical ID 被 validator 明确拒绝；旧 JSON-only catalog 报错且保留输入及物理数据。
+- **MUST**：旧 JSON-only 路径不得创建空 SQLite catalog；既有损坏 SQLite catalog 必须显式报错，不得重置或重建。
+- **MUST NOT**：引入 importer、自动隔离/重编号、双读、扫盘重建、旧 ID path alias，或 `identity_profile_migration_active` 等运行时开关。
+- **MUST**：session creation/deletion 的已有隔离合同仍由各自链路维持并通过对应测试。
 
 **定稿后果（对原始动机：`sessions/YYYY/MM/DD/` 分桶与 SQLite 主键）**：
 
 | 对象 | 定稿后果 |
 |---|---|
-| **存量 v4 分桶** | 非法 canonical v4 节点由显式迁移隔离到 `orphaned/session-catalog-migration/`，不进入活跃 catalog，也不为其计算新的 v7 日期桶。 |
-| **存量 v4 主键** | 活跃 catalog 只接受 v7；隔离报告保留原非法 ID，不重编号、不把 v4/v7 混入活跃表。 |
-| **存量 v4 的可达性** | 遇到即 fail-closed 隔离 + 显式报告，**不静默吸收、不扫盘重建**；开发中间数据按用户最新授权可直接清理；显式迁移仍返回准确处置报告。 |
+| **存量 v4 分桶** | canonical validator 拒绝 v4；不计算 v7 日期桶，不自动隔离或重写。 |
+| **存量 v4 主键** | 活跃 catalog 只接受 v7；旧 JSON-only catalog 明确失败，不重编号、不导入。 |
+| **存量 v4 的可达性** | 保留旧 JSON 与物理数据并给出错误路径；恢复备份或人工处理，不提供 importer 或自动处置报告。 |
 
 **这是接受「运行时无双轨」的代价，已定稿，不再重新讨论。**
 
 - [x] 6.1 按 design D12 的「工厂前缀 × 持久面」全集矩阵（`IdentifierPrefix` 的 33 个前缀）枚举迁移面，MUST NOT 只匹配 `ses_`/`thr_` 字面。门槛：矩阵落盘到 `out/tests/temp/uuidv7_openspec/artifacts/`；命令 `rg -n 'IdentifierPrefix = Literal' -A40 app/core/identifier.py` 退出码 0 且矩阵行数 MUST 等于该 `Literal` 的前缀数（33）；每个持久面前缀 MUST 给出具名载体证据，每个非持久面前缀 MUST 给出「不落盘」的负向证据。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.1」。）** **（独立复核 2026-10-01 实测：`typing.get_args(IdentifierPrefix)` = 33 且去重后仍 33，等于矩阵行数与 `Literal` 前缀数；见 §台账「独立复核证据（2026-10-01）」。）**
 - [x] 6.1b 复核已实测的持久面漏项至少覆盖 `op_`（`navigation_mutation_records` 主键）、`strm_`（`message_streams/*.jsonl` 文件名）、`msg_`（rollout `messages.message_id`）、`evt_`/`snapshot_`（message_stream JSONL）、`part_`（`item_parts.part_id`）、`goal_`（`goal.json`）、`gen_`/`grun_`（generators 文件）、`team_`/`ttask_`/`tevt_`（team JSON/JSONL），**外加 2026-09-30 控制面审计新点的四处非 SQLite 持久面**：控制面会话索引缓存 `state/gateway/indexes/session-catalogs/*.json`（含真实 `ses_`/`thr_`）、用户档案 `state/gateway/users/<id>/profile.jsonc` 的 `session_sidebar.collapsed_session_ids`（含 canonical `ses_`）、Gateway generators 产出的 `state/gateway/generators/*.json` 与 `generation-runs/**`（含 `placement.session_id`/`message_id`/`job_id`）、工作区后端持久面（`workspace_activity.session_id`、`attachment_*.owner_session_id`）。门槛：报告逐项列出具名路径与调用点。**注意：迁移 generators 的产出数据文件不等于修改 `app/gateway/control/generators.py` 源码，后者为受保护路径，全程禁改。** **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.1b」。）**
-- [x] 6.2 存量 canonical UUIDv4 显式处置：既有 `illegal_id` 隔离与报告字段，加上 durable intent 全树 proof 和 rename 恢复；无 v4 回退、双读或运行时开关。真实 CLI 验证 id、物理路径、reason、suggested_action；迁移主测试与两份新增测试在主树合计 **117 passed / 24.20s，退出码 0**（受进程外保护）。
-- [x] 6.3 真实 `ses_UUIDv4` session/folder 与合法 v7 同工作区验收；非法节点排除于 completed catalog。覆盖真实 rename 后/fsync 前中断、target-only 两侧 barrier 顺序与任一 barrier 失败仍保持 intent、不重复 rename、不写 isolated checkpoint。
-- [x] 6.4 canonical 校验器仅接受 v7，运行路径无 v4 双读或旧 ID alias。2026-10-04 独立 `rg` 在 `app/core/session_catalog_store` 对 `v4|uuid4|_validate_uuid_v4_payload` 为退出码 1、零命中；真实存量处置与报告验收见 6.2/6.3，子门槛已满足。
-- [x] 6.5 无维护开关、无双 profile；独立 `rg -n identity_profile_migration_active app` 为退出码 1、零命中，既有 `test_identifier_profile_converged_to_v7_only` 主树受保护复跑 **1 passed / 0.22s，退出码 0**，结合真实 v4 隔离与可操作报告行为测试验收。不新增镜像源码搜索的测试。
-- [x] 6.6 显式处置不静默：真实 CLI JSON 与 human 输出逐项断言被隔离 ID、原路径、原因、建议动作；v4 不进入活跃 catalog。既有缺权威 index 的 runner 用例明确非零退出，拒绝扫盘重建；生产不存在维护开关或双 profile。
+- [x] 6.2 删除旧 Session Catalog importer、CLI、legacy reader/layout 和迁移专用测试；`app tests scripts` 中相关符号搜索零命中，无悬空调用。
+- [x] 6.3 保持 session creation 与 subtree deletion 各自的隔离/恢复语义；`test_session_creation.py` 的 staging/quarantine 恢复用例与 `test_session_subtree_delete.py` 的物理隔离用例随本轮受保护回归通过，不借用 catalog importer 的 `illegal_id` quarantine。
+- [x] 6.4 canonical 校验器只接受 v7，运行路径无 v4 双读或旧 ID path alias；由 canonical profile 测试覆盖 v4 拒绝、v7 接受。
+- [x] 6.5 无维护开关、无双 profile；`test_identifier_profile_converged_to_v7_only` 断言 v7-only profile，生产源码无 `identity_profile_migration_active`。
+- [x] 6.6 旧 JSON-only catalog 明确报错并保留 JSON/物理数据，且不创建 SQLite catalog；未知 SQLite schema 版本明确报错，不重置原 catalog。`test_path_utils_catalog.py` 覆盖 JSON、物理 manifest、错误路径、无新 SQLite 及未知 schema。
 - [x] 6.7（A2，已按 §6.0 裁定改写措辞）**无运行时开关的收敛断言**：必须有一条测试证明「`v4` 位 profile 的 canonical 身份被拒绝且 `v7` 被接受」，以机械证明**不存在窗口期、不存在运行时双轨**。门槛：该测试退出码 0。 **（第二轮 2026-10-01 复跑勾选：见 §台账补勾证据「6.7」。）**
 
 ## 7. JS 服务进程与浏览器前端边界（D7）
@@ -131,7 +135,7 @@
 
 - [x] 9.1 `openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate migrate-identifiers-to-uuidv7 --strict` 输出 `Change 'migrate-identifiers-to-uuidv7' is valid`，退出码 0；门槛满足。）**
 - [x] 9.2 `openspec validate --strict --all` 退出码 0 且 `0 failed`（本 change 加入后为 40 passed）。 **（本次实测（提交 `f6fc990f`）现状：`openspec validate --strict --all` 输出 `Totals: 40 passed, 0 failed (40 items)`，退出码 0；门槛满足。）**
-- [x] 9.3 在 U05 完成自然 UUIDv7 实时分配接线后，使用进程外内存/超时保护重跑完整十一份关联测试（工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation、migration 与隔离恢复）。回归必须包含真实 Session journal、main-thread 与 child-thread allocation：幂等 hit 不额外分配 ID；miss 不调用 `*_at`；Session 从 `session_id`、child 从自身 `thread_id` 派生毫秒级 `created_at` 与 UTC locator；main-thread 自然 ID 可跨午夜而不改变 Session locator，main row 的 `created_at` 仍等于 Session `created_at`；固定 fixture 的 ID/时间成组相等；同毫秒单调唯一和默认库回拨语义仍通过。任何只跑单测或旧接线的绿测不得勾选本项。命令使用 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash ...` 或正式 matrix runner；记录完整命令、环境和逐测试结果。旧 2026-10-04 685 passed 是 A07 反例发现前的基线，不能作为本项完成证据。
+- [x] 9.3 在 U05 完成自然 UUIDv7 实时分配接线后，使用进程外内存/超时保护重跑关联测试（工厂、单调性、canonical/豁免、catalog/control、Session/Thread creation 及各自隔离/失败路径）。回归必须包含真实 Session journal、main-thread 与 child-thread allocation：幂等 hit 不额外分配 ID；miss 不调用 `*_at`；Session 从 `session_id`、child 从自身 `thread_id` 派生毫秒级 `created_at` 与 UTC locator；main-thread 自然 ID 可跨午夜而不改变 Session locator，main row 的 `created_at` 仍等于 Session `created_at`；固定 fixture 的 ID/时间成组相等；同毫秒单调唯一和默认库回拨语义仍通过。任何只跑单测或旧接线的绿测不得勾选本项。命令使用 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash ...` 或正式 matrix runner；记录完整命令、环境和逐测试结果。旧 2026-10-04 685 passed 是 A07 反例发现前的基线，不能作为本项完成证据。
 
 ## 2026-10-04 自然分配最终验收（U05/U06/U07）
 
@@ -187,8 +191,8 @@
 
 **2026-10-04 A07 owner 核验（主树 commit `7653dd92`）**：`uuidv7-final-contract-verification.md`（本轮保留证据，根为 `out/tests/temp/2026/10/04/024121-team-execution/architecture_reviewer/artifacts/`） 通过只读链路检查与进程外 probe 确认，Session、main-thread 与 child-thread 实时路径使用显式时间戳 helper；200 个 `create_uuid_hex_at(effective_now_ms())` 样本出现 3 组同毫秒 ID，其中 2 组非单调。故 §2.3/2.4、§4.4/4.5/4.7 与 §9.3 的旧历史证据不满足自然 realtime allocation 合同；相关项保持未勾，必须等 U05 修复后由真实创建路径回归验收。历史日志与旧通过数字仅表示修复前基线，不作为当前完成证明。
 
-**第二轮曾未能复跑的项（2026-10-01 已收敛）**：`tests/unit/core/test_session_catalog_migration.py` 第二轮复跑为 67 failed / 21 passed（EXIT=1），失败原因为 `app/core/session_catalog_migration/_journal.py` 的 `NameError: name '_atomic_write_bytes' is not defined`——该模块当时正被并发 agent 从单文件重构为包（`app/core/session_catalog_migration{,.py}` 并存于工作树，未提交），属他人**在途**改动。**该在途重构现已合并**：单文件 `app/core/session_catalog_migration.py` 已物理下线、包版 `_journal.py:10` 已 `from app.core.atomic_fs import atomic_write_bytes as _atomic_write_bytes`；独立复核 2026-10-01 复跑 `timeout 1200 bash -c 'ulimit -d 4194304; exec "$@"' bash uv run --no-sync pytest -q tests/unit/core/test_session_catalog_migration.py -p no:randomly` → **88 passed in 19.06s（EXIT=0）**。失败项已闭合；但 6.4 的「子门槛」仍按上文口径（报告缺路径/建议动作）保持未完全达。
+**历史复跑记录（2026-10-01；不代表当前能力）**：当时 `tests/unit/core/test_session_catalog_migration.py` 曾从 67 failed / 21 passed 修至 88 passed。E04b 后该迁移模块与专用测试均已物理删除；上述通过结果仅记录历史工作树状态，不再作为本 change 的验收证据，也不承诺 UUIDv4 catalog 的隔离/导入能力。
 
 ### 2026-10-04 存量处置收口证据
 
-实现提交 `c16b2c17`；独立审查 `out/tests/temp/2026/10/04/024121-team-execution/architecture_reviewer/artifacts/u01-u02-final-review.md` 核对最终九文件 hash、proof 唯一 owner 与 fsync 故障窗口。主树验证日志 `coordinator/artifacts/u01-u02-main-validation.log`（117 passed）与 `u02-canonical-profile-negative.log`（1 passed）；完整固定补丁/hash、负向命令证据保留在同轮 coordinator artifacts。对应 §6.2/§6.3/§6.5/§6.6 已完成，历史快照中“字段尚缺 / 保持未勾”的说明仅描述当时状态。
+此前记录的 `c16b2c17`、`u01-u02-final-review.md` 与 117 passed / 1 passed，验证的是后来由 E04b 删除的 v4 quarantine/import 实现；这些是历史证据，不代表当前入口存在。E04b 的当前验收改为验证迁移入口已删除、旧 JSON-only catalog 明确失败且不创建空 SQLite，并确认 session creation/deletion 隔离语义仍由各自 owner 保持。

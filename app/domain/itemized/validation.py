@@ -14,7 +14,7 @@ def _non_empty_string(value: object, field_name: str) -> str:
 
 TURN_TRANSITIONS: dict[str, frozenset[str]] = {
     TurnStatus.OPEN: frozenset(
-        {TurnStatus.ACTIVE, TurnStatus.CANCELLED, TurnStatus.FAILED, TurnStatus.UNKNOWN}
+        {TurnStatus.ACTIVE, TurnStatus.INTERRUPTED, TurnStatus.CANCELLED, TurnStatus.FAILED, TurnStatus.UNKNOWN}
     ),
     TurnStatus.ACTIVE: frozenset(
         {
@@ -27,7 +27,9 @@ TURN_TRANSITIONS: dict[str, frozenset[str]] = {
         }
     ),
     TurnStatus.INTERRUPTED: frozenset({TurnStatus.ACTIVE}),
-    TurnStatus.UNKNOWN: frozenset({TurnStatus.ACTIVE}),
+    TurnStatus.UNKNOWN: frozenset(
+        {TurnStatus.ACTIVE, TurnStatus.CANCELLED, TurnStatus.INTERRUPTED}
+    ),
     TurnStatus.COMPLETED: frozenset(),
     TurnStatus.COMPLETED_EMPTY: frozenset(),
     TurnStatus.CANCELLED: frozenset(),

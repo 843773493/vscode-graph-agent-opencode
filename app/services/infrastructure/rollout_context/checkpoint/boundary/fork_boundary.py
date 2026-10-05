@@ -52,7 +52,11 @@ class RolloutForkBoundaryOwnerMixin:
                 "fork_boundary.cutoff_message_sequence 必须是 int 或 None: "
                 + repr(cutoff_message_sequence)
             )
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        session_id = thread_id
+        thread_id = self.main_thread_id(session_id)
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        ) as connection:
             self._require_v2_runtime(connection)
             source = self._checkpoint_row(
                 connection,
@@ -71,7 +75,7 @@ class RolloutForkBoundaryOwnerMixin:
                 return
             view_id = strict_text(source[6], field="checkpoints.view_id")
             source_sequences = self._view_message_sequences(
-                thread_id,
+                session_id,
                 checkpoint_ns,
                 view_id,
                 set(),

@@ -77,7 +77,7 @@ export function parseChildThreadStatus(value: unknown): ChildThreadStatus {
 
 export type ChildThreadSummary = Omit<
   WorkspaceProtocol.ChildThreadSummaryDTO,
-  | "created_at"
+  "created_at"
   | "delegation_id"
   | "role"
   | "subagent_type"
@@ -236,8 +236,10 @@ export type NodeDebugConfigurationSummary = WorkspaceProtocol.NodeDebugConfigura
 export type NodeDebugConfigurationActivateRequest = WorkspaceProtocol.NodeDebugConfigurationActivateRequest;
 export type NodeDebugConfigurationCopyRequest = Omit<
   WorkspaceProtocol.NodeDebugConfigurationCopyRequest,
-  "name"
+  "name" | "source_thread_id" | "target_thread_id"
 > & {
+  source_thread_id?: string;
+  target_thread_id?: string;
   name?: string | null;
 };
 export type NodeDebugConfigurationCreateRequest = Omit<
@@ -389,8 +391,10 @@ export type MessageReplayAccepted = Omit<WorkspaceProtocol.MessageReplayAccepted
 export type AgentStateMessages = WorkspaceProtocol.AgentStateMessagesDTO;
 export type PendingRequest = Omit<
   WorkspaceProtocol.PendingRequestDTO,
-  "attachments" | "delivery_policy" | "status" | "waiting_reason" | "last_boundary" | "message_metadata" | "created_at" | "updated_at"
+  "attachments" | "delivery_policy" | "status" | "waiting_reason" | "last_boundary" | "message_metadata" | "created_at" | "updated_at" | "turn_id" | "execution_binding"
 > & {
+  turn_id: string | null;
+  execution_binding: JsonObject;
   attachments?: AttachmentRef[];
   delivery_policy: DeliveryPolicy;
   status?: "queued";
@@ -419,6 +423,10 @@ export type Session = Omit<WorkspaceProtocol.SessionDTO, "created_at" | "updated
   kind?: "normal" | "context_fork";
   generation_origin?: WorkspaceProtocol.SessionGenerationOriginDTO | null;
 };
+export interface SessionMainThread {
+  session_id: string;
+  thread_id: string;
+}
 export type SessionUpdateRequest = WorkspaceProtocol.SessionUpdateRequest;
 export type DeleteSessionResult = WorkspaceProtocol.DeleteSessionResultDTO;
 export type SessionCompactResult = Omit<WorkspaceProtocol.SessionCompactResultDTO, "status" | "summary" | "history_file_path" | "strategy" | "compacted_at"> & {
@@ -520,12 +528,48 @@ export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadReque
   tool_call_ids?: string[] | null;
   include?: string[];
 };
-export type TurnHistoryPage = Omit<WorkspaceProtocol.TurnHistoryPageDTO, "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor"> & {
+export type TurnHistoryPage = Omit<
+  WorkspaceProtocol.TurnHistoryPageDTO,
+  "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor" | "internal_executions"
+> & {
   items: TurnDetail[];
   summaries?: TurnSummary[];
+  internal_executions?: InternalExecutionHistory[];
   next_cursor?: string | null;
   before_cursor?: string | null;
   after_cursor?: string | null;
+};
+export type InternalDisplayProvenance = WorkspaceProtocol.InternalDisplayProvenanceDTO;
+export type InternalExecutionDisplayPart = Omit<
+  WorkspaceProtocol.InternalExecutionDisplayPartDTO,
+  "kind" | "created_at" | "provenance"
+> & {
+  kind: "generated_session_result";
+  created_at: string;
+  provenance: InternalDisplayProvenance;
+};
+export type InternalExecutionStatus =
+  | "completed"
+  | "completed_empty"
+  | "failed"
+  | "interrupted"
+  | "cancelled"
+  | "execution_lost"
+  | "unknown";
+export type InternalExecutionHistory = Omit<
+  WorkspaceProtocol.InternalExecutionHistoryDTO,
+  | "created_at"
+  | "updated_at"
+  | "display_parts"
+  | "response_parts"
+  | "status"
+  | "logical_item_ordinal"
+> & {
+  created_at: string;
+  updated_at: string;
+  status: InternalExecutionStatus;
+  display_parts: InternalExecutionDisplayPart[];
+  response_parts: TurnResponsePart[];
 };
 export type TurnJobSummary = WorkspaceProtocol.TurnJobSummaryDTO;
 export type TurnPage = Omit<WorkspaceProtocol.TurnPageDTO, "items" | "next_cursor"> & {

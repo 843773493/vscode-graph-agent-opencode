@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import commentjson
@@ -11,6 +11,11 @@ import pytest
 from dotenv import load_dotenv
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.process_scope import capture_test_processes
+from tests.support.session_catalog_owner import (
+    FixtureCatalogOwner,
+    fixture_catalog_scope,
+)
 
 # 测试进程显式加载仓库环境；产品运行时只读取 BOXTEAM_HOME/config/.env。
 load_dotenv(Path.cwd() / ".env", override=False)
@@ -33,6 +38,22 @@ def use_config(name: str) -> str:
     return os.path.join(CONFIGS_DIR, "tests", "workspace", f"{name}.jsonc")
 
 
+@pytest.fixture(autouse=True)
+def test_process_lifetime() -> Iterator[None]:
+    with capture_test_processes():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def session_catalog_owner(
+    test_process_lifetime: None,
+) -> Iterator[FixtureCatalogOwner]:
+    """standalone helper 显式委派本用例 owner；生产 registry scope 会覆盖它。"""
+    del test_process_lifetime
+    with fixture_catalog_scope() as owner:
+        yield owner
+
+
 @pytest.fixture
 def session_bundle_factory() -> Callable[[Path, str], Path]:
     """在显式 sessions 根目录中创建最小合法会话 bundle。"""
@@ -49,8 +70,10 @@ def setup_test_config(
     test_config_path: str,
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    test_process_lifetime: None,
 ) -> None:
     """每个测试通过独立 BOXTEAM_HOME 使用标准 Workspace 配置路径。"""
+    del test_process_lifetime
     run_context = TestRunContext.from_test_file(Path(request.node.path))
     boxteam_home = run_context.boxteam_home_for_node(request.node.nodeid)
     if boxteam_home.exists():
@@ -88,8 +111,8 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
     return temp_root
 
 
-@pytest.fixture(scope="session")
-def runtime_manifest_path() -> Path:
+@pytest.fixture(scope="session", autouse=True)
+def runtime_manifest_path() -> Iterator[Path]:
     """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。
 
     路径 MUST NOT 落在 pytest 的 basetemp（``/tmp/pytest-of-<$USER>/pytest-<N>``）：
@@ -115,16 +138,13 @@ def runtime_manifest_path() -> Path:
         + "\n",
         encoding="utf-8",
     )
-    return manifest
-
-
-@pytest.fixture(autouse=True)
-def setup_runtime_manifest(
-    runtime_manifest_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """默认注入 runtime manifest，使 inline 层 config 来源可编出 VRN。
-
-    个别用例显式 delenv 以验证缺失 manifest 时的 fail-closed 行为。
-    """
-    monkeypatch.setenv("BOXTEAM_RUNTIME_MANIFEST", str(runtime_manifest_path))
+    # 会话级注入先于模块级服务启动；个别用例仍可显式移除以验证缺失配置。
+    previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
+    os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(manifest)
+    try:
+        yield manifest
+    finally:
+        if previous_manifest is None:
+            os.environ.pop("BOXTEAM_RUNTIME_MANIFEST", None)
+        else:
+            os.environ["BOXTEAM_RUNTIME_MANIFEST"] = previous_manifest

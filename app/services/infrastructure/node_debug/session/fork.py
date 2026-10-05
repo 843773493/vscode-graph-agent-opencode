@@ -28,7 +28,6 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import (
-    MAIN_THREAD_ID,
     resolve_node_debug_owner,
 )
 
@@ -278,7 +277,7 @@ def capture_source_copy_snapshot(
     store: NodeDebugSessionStore,
     *,
     session_id: str,
-    thread_id: str = MAIN_THREAD_ID,
+    thread_id: str,
     capture_mode: NodeDebugForkCaptureMode,
     workspace_config_revision: str | None = None,
     workspace_config_hash: str | None = None,

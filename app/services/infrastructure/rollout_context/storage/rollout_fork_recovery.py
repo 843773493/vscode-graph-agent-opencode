@@ -8,7 +8,6 @@ import sqlite3
 from pathlib import Path
 
 from app.core.sqlite_state import utc_now_text as _now
-from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
     publish_target_snapshot,
     remove_target_snapshot,
@@ -19,6 +18,7 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
 )
+from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 __all__ = ["RolloutForkRecoveryMixin"]
 
@@ -26,6 +26,7 @@ __all__ = ["RolloutForkRecoveryMixin"]
 class RolloutForkRecoveryMixin:
     def _recover_fork_materialization(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         connection: sqlite3.Connection,
@@ -37,10 +38,47 @@ class RolloutForkRecoveryMixin:
         rollout；``target_committed`` 已经拥有完整的目标数据，只需补做父库
         pinned retention。这里不从 JSONL 推断任何 checkpoint 或上下文状态。
         """
+        database_owner = connection.execute(
+            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+        ).fetchone()
+        if database_owner is None:
+            raise RuntimeError("fork recovery 缺少 database_meta owner")
+        actual_owner = (
+            required_text(database_owner[0], field="database_meta.session_id"),
+            required_text(database_owner[1], field="database_meta.thread_id"),
+        )
+        expected_owner = (
+            required_text(session_id, field="session_id"),
+            required_text(thread_id, field="thread_id"),
+        )
+        if actual_owner != expected_owner:
+            raise RuntimeError(
+                "fork recovery rollout owner 不匹配: "
+                f"expected={expected_owner!r}, actual={actual_owner!r}"
+            )
+        target_thread_id = thread_id
+        snapshot_columns = {
+            "source_thread_id",
+            "target_thread_id",
+            "checkpoint_ns",
+            "source_snapshot_sha256",
+        }
+        journal_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(fork_materializations)")
+        }
+        missing_snapshot_columns = snapshot_columns - journal_columns
+        if missing_snapshot_columns:
+            raise RuntimeError(
+                "fork recovery journal schema 缺少 source snapshot proof 列: "
+                f"{sorted(missing_snapshot_columns)!r}"
+            )
         rows = connection.execute(
             """
-            SELECT materialization_id, fork_id, source_session_id,
-                   source_checkpoint_id, source_view_id, relationship, status
+            SELECT materialization_id, fork_id, target_session_id, source_session_id,
+                   source_checkpoint_id, source_view_id, relationship, status,
+                   source_thread_id, target_thread_id, checkpoint_ns,
+                   source_snapshot_sha256
             FROM fork_materializations
             WHERE status IN ('prepared', 'target_committed')
             ORDER BY created_at
@@ -57,16 +95,30 @@ class RolloutForkRecoveryMixin:
         (
             materialization_id,
             fork_id,
+            journal_target_session_id,
             source_session_id,
             source_checkpoint_id,
             source_view_id,
             relationship,
             status,
+            source_thread_id,
+            journal_target_thread_id,
+            journal_checkpoint_ns,
+            source_snapshot_sha256,
         ) = row
         materialization_id = required_text(
             materialization_id, field="fork_materializations.materialization_id"
         )
         fork_id = required_text(fork_id, field="fork_materializations.fork_id")
+        journal_target_session_id = required_text(
+            journal_target_session_id,
+            field="fork_materializations.target_session_id",
+        )
+        if journal_target_session_id != session_id:
+            raise RuntimeError(
+                "fork recovery journal target session 不匹配: "
+                f"expected={session_id}, actual={journal_target_session_id}"
+            )
         source_session_id = required_text(
             source_session_id,
             field="fork_materializations.source_session_id",
@@ -88,6 +140,28 @@ class RolloutForkRecoveryMixin:
             {"prepared", "target_committed"},
             field="fork_materializations.status",
         )
+        source_thread_id = required_text(
+            source_thread_id, field="fork_materializations.source_thread_id"
+        )
+        journal_target_thread_id = required_text(
+            journal_target_thread_id,
+            field="fork_materializations.target_thread_id",
+        )
+        if journal_target_thread_id != target_thread_id:
+            raise RuntimeError("fork recovery journal target thread 不匹配")
+        journal_checkpoint_ns = strict_text(
+            journal_checkpoint_ns,
+            field="fork_materializations.checkpoint_ns",
+            allow_empty=True,
+        )
+        if journal_checkpoint_ns != checkpoint_ns:
+            raise RuntimeError("fork recovery journal checkpoint namespace 不匹配")
+        if (
+            not isinstance(source_snapshot_sha256, str)
+            or len(source_snapshot_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_snapshot_sha256)
+        ):
+            raise RuntimeError("fork recovery journal source snapshot hash 非法")
         if status == "target_committed":
             debug_row = connection.execute(
                 "SELECT lineage_json FROM fork_identity_mappings "
@@ -103,8 +177,9 @@ class RolloutForkRecoveryMixin:
                     "published",
                 }:
                     raise RuntimeError("fork target_committed 的 debug snapshot 状态非法")
-                target_node = self._host._path_resolver.resolve_session_node_for_runtime(
-                    thread_id
+                target_node = self._host._resolve_thread_node(
+                    session_id,
+                    target_thread_id,
                 )
                 if lineage["state"] == "ready":
                     relative = Path(
@@ -125,8 +200,8 @@ class RolloutForkRecoveryMixin:
                         )
                 verify_published_target_snapshot(
                     target_node,
-                    target_session_id=thread_id,
-                    target_thread_id=MAIN_THREAD_ID,
+                    target_session_id=session_id,
+                    target_thread_id=target_thread_id,
                     manifest_sha256=required_text(
                         lineage.get("target_manifest_sha256"),
                         field="debug_snapshot.target_manifest_sha256",
@@ -152,9 +227,17 @@ class RolloutForkRecoveryMixin:
                     if result.rowcount != 1:
                         raise RuntimeError("fork recovery 未收敛 debug published journal")
             if relationship == "pinned":
-                source_root = self._host.root(source_session_id, checkpoint_ns)
+                if self._host._path_resolver.main_thread_id(source_session_id) != source_thread_id:
+                    raise RuntimeError("fork recovery journal source thread 不再是 catalog main")
+                source_root = self._host.root(
+                    source_session_id,
+                    journal_checkpoint_ns,
+                    thread_id=source_thread_id,
+                )
                 if not source_root.is_dir() or not self._host.index_path(
-                    source_session_id, checkpoint_ns
+                    source_session_id,
+                    journal_checkpoint_ns,
+                    thread_id=source_thread_id,
                 ).is_file():
                     error_message = (
                         "fork 已提交目标 rollout，但 pinned 父 rollout 不存在，"
@@ -175,11 +258,11 @@ class RolloutForkRecoveryMixin:
                     source_checkpoint_id=source_checkpoint_id,
                     source_view_id=source_view_id,
                     fork_id=fork_id,
-                    owner_session_id=thread_id,
-                    checkpoint_ns=checkpoint_ns,
+                    owner_session_id=session_id,
+                    checkpoint_ns=journal_checkpoint_ns,
                 )
             result = connection.execute(
-                "UPDATE fork_materializations SET status = 'committed', committed_at = ?, error_message = NULL WHERE materialization_id = ?",
+                "UPDATE fork_materializations SET status = 'committed', committed_at = ?, error_message = NULL WHERE materialization_id = ? AND status = 'target_committed'",
                 (_now(), materialization_id),
             )
             if result.rowcount != 1:
@@ -205,7 +288,10 @@ class RolloutForkRecoveryMixin:
                 "published",
             }:
                 raise RuntimeError("prepared fork 的 debug snapshot journal 损坏")
-            target_node = self._host._path_resolver.resolve_session_node_for_runtime(thread_id)
+            target_node = self._host._resolve_thread_node(
+                session_id,
+                target_thread_id,
+            )
             relative = Path(
                 required_text(
                     lineage.get("target_debug_staging_path"),
@@ -227,8 +313,8 @@ class RolloutForkRecoveryMixin:
             if has_published:
                 verify_published_target_snapshot(
                     target_node,
-                    target_session_id=thread_id,
-                    target_thread_id=MAIN_THREAD_ID,
+                    target_session_id=session_id,
+                    target_thread_id=target_thread_id,
                     manifest_sha256=required_text(
                         lineage.get("target_manifest_sha256"),
                         field="debug_snapshot.target_manifest_sha256",

@@ -21,43 +21,45 @@ class StreamToolRegistryMixin:
         tool_call_id = self._resolve_tool_call_id(tool_call_id)
         tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
         if tool_call_id not in self._completed_tool_call_ids:
-            await self.writer.commit(
-                "tool_call.completed",
-                {
-                    "tool_call_id": tool_call_id,
-                    "tool_invocation_id": tool_invocation_id,
-                    "tool_name": tool_name,
-                    "status": "completed",
-                    "completion_reason": "tool_started",
-                    "arguments_complete": self._tool_call_arguments_complete.get(
-                        tool_call_id,
-                        False,
-                    ),
-                },
-                model_call_id=self.current_model_call_id,
-                tool_call_id=tool_call_id,
-                tool_invocation_id=tool_invocation_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "tool_call.completed",
+                    {
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": tool_invocation_id,
+                        "tool_name": tool_name,
+                        "status": "completed",
+                        "completion_reason": "tool_started",
+                        "arguments_complete": self._tool_call_arguments_complete.get(
+                            tool_call_id,
+                            False,
+                        ),
+                    },
+                    model_call_id=self.current_model_call_id,
+                    tool_call_id=tool_call_id,
+                    tool_invocation_id=tool_invocation_id,
+                )
             self._completed_tool_call_ids.add(tool_call_id)
         self._started_tool_execution_ids.add(tool_execution_id)
         self._active_tool_executions[tool_execution_id] = (tool_call_id, tool_name)
         if tool_call_id not in self._tool_call_model_call_ids:
             self._tool_call_model_call_ids[tool_call_id] = self.current_model_call_id
-        await self.writer.commit(
-            "tool.started",
-            {
-                "tool_execution_id": tool_execution_id,
-                "tool_call_id": tool_call_id,
-                "tool_invocation_id": tool_invocation_id,
-                "tool_attempt_id": tool_execution_id,
-                "tool_name": tool_name,
-            },
-            model_call_id=self.current_model_call_id,
-            tool_execution_id=tool_execution_id,
-            tool_call_id=tool_call_id,
-            tool_invocation_id=tool_invocation_id,
-            tool_attempt_id=tool_execution_id,
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "tool.started",
+                {
+                    "tool_execution_id": tool_execution_id,
+                    "tool_call_id": tool_call_id,
+                    "tool_invocation_id": tool_invocation_id,
+                    "tool_attempt_id": tool_execution_id,
+                    "tool_name": tool_name,
+                },
+                model_call_id=self.current_model_call_id,
+                tool_execution_id=tool_execution_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=tool_invocation_id,
+                tool_attempt_id=tool_execution_id,
+            )
 
     def claim_tool_call_id(
         self,
@@ -167,22 +169,43 @@ class StreamToolRegistryMixin:
         """在分派丢失时闭合工具调用，避免 snapshot 永远停在 accumulating。"""
         for tool_call_id, tool_name, arguments_complete in self.pending_tool_calls():
             tool_invocation_id = self._tool_invocation_id_for(tool_call_id)
-            await self.writer.commit(
-                "tool_call.completed",
-                {
-                    "tool_call_id": tool_call_id,
-                    "tool_invocation_id": tool_invocation_id,
-                    "tool_name": tool_name,
-                    "status": "incomplete",
-                    "completion_reason": completion_reason,
-                    "arguments_complete": arguments_complete,
-                    "error": error,
-                },
-                model_call_id=self.current_model_call_id,
-                tool_call_id=tool_call_id,
-                tool_invocation_id=tool_invocation_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "tool_call.completed",
+                    {
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": tool_invocation_id,
+                        "tool_name": tool_name,
+                        "status": "incomplete",
+                        "completion_reason": completion_reason,
+                        "arguments_complete": arguments_complete,
+                        "error": error,
+                    },
+                    model_call_id=self.current_model_call_id,
+                    tool_call_id=tool_call_id,
+                    tool_invocation_id=tool_invocation_id,
+                )
             self._completed_tool_call_ids.add(tool_call_id)
+
+    async def fail_active_tool_executions(
+        self,
+        *,
+        completion_reason: str,
+        error: str,
+    ) -> None:
+        for tool_execution_id, (tool_call_id, tool_name) in tuple(
+            self._active_tool_executions.items()
+        ):
+            await self.complete_tool(
+                tool_execution_id=tool_execution_id,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                status="failed",
+                result=error,
+                error=error,
+                outcome="outcome_unknown",
+                completion_reason=completion_reason,
+            )
 
     async def complete_tool(
         self,
@@ -194,6 +217,7 @@ class StreamToolRegistryMixin:
         result: str,
         error: str | None = None,
         outcome: str | None = None,
+        completion_reason: str | None = None,
         persist_canonical: bool = True,
     ) -> None:
         tool_call_id = self._resolve_tool_call_id(tool_call_id)
@@ -245,15 +269,16 @@ class StreamToolRegistryMixin:
                     }
                     if error is not None:
                         payload["error"] = error
-                    await self.writer.commit(
-                        "tool.completed",
-                        payload,
-                        model_call_id=model_call_id,
-                        tool_execution_id=tool_execution_id,
-                        tool_call_id=tool_call_id,
-                        tool_invocation_id=tool_invocation_id,
-                        tool_attempt_id=tool_execution_id,
-                    )
+                    if self.writer is not None:
+                        await self.writer.commit(
+                            "tool.completed",
+                            payload,
+                            model_call_id=model_call_id,
+                            tool_execution_id=tool_execution_id,
+                            tool_call_id=tool_call_id,
+                            tool_invocation_id=tool_invocation_id,
+                            tool_attempt_id=tool_execution_id,
+                        )
                     self._active_tool_executions.pop(tool_execution_id, None)
                     self._completed_tool_execution_ids.add(tool_execution_id)
                     return
@@ -277,9 +302,12 @@ class StreamToolRegistryMixin:
                 "status": normalized_status,
                 "outcome": normalized_outcome,
                 "completion_reason": (
-                    "tool_completed"
-                    if normalized_outcome == "success"
-                    else "provider_failed"
+                    completion_reason
+                    or (
+                        "tool_completed"
+                        if normalized_outcome == "success"
+                        else "provider_failed"
+                    )
                 ),
                 "result": result,
             }
@@ -289,19 +317,19 @@ class StreamToolRegistryMixin:
             if model_call_id is None:
                 model_call_id = self.current_model_call_id
                 self._tool_call_model_call_ids[tool_call_id] = model_call_id
-            await self.writer.commit(
-                "tool.completed",
-                payload,
-                model_call_id=model_call_id,
-                tool_execution_id=tool_execution_id,
-                tool_call_id=tool_call_id,
-                tool_invocation_id=str(payload["tool_invocation_id"]),
-                tool_attempt_id=tool_execution_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "tool.completed",
+                    payload,
+                    model_call_id=model_call_id,
+                    tool_execution_id=tool_execution_id,
+                    tool_call_id=tool_call_id,
+                    tool_invocation_id=str(payload["tool_invocation_id"]),
+                    tool_attempt_id=tool_execution_id,
+                )
             if (
                 persist_canonical
                 and self._canonical_item_sink is not None
-                and self._canonical_turn_id is not None
             ):
                 result_outcome = (
                     "unknown"
@@ -350,7 +378,11 @@ class StreamToolRegistryMixin:
                         "execution_confirmed": result_outcome != "unknown",
                     },
                     turn_id=self._canonical_turn_id,
-                    turn_scope="turn_member",
+                    turn_scope=(
+                        "turn_member"
+                        if self._canonical_turn_id is not None
+                        else None
+                    ),
                     message_group_id=f"message-{tool_execution_id}",
                     wire_role="tool",
                 )

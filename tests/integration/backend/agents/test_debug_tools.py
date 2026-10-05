@@ -12,7 +12,10 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.agents.tool_invocation_context import ToolInvocationContext
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
@@ -31,6 +34,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from tests.support.node_debug_dependencies import (
+    TEST_THREAD_ID,
     permissive_node_debug_session_admission,
 )
 
@@ -94,6 +98,12 @@ class _SessionCatalogResolverStub:
         path = self._root / session_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def get_node(self, node_id: str) -> object:
+        raise KeyError(node_id)
+
+    def main_thread_id(self, session_id: str) -> str:
+        return TEST_THREAD_ID
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
         path = self._root / session_id / "threads" / thread_id
@@ -173,7 +183,7 @@ async def _wait_for_debug_state(
     expected_status: str,
     output_fragment: str | None = None,
 ):
-    state = await service.get_state(session_id, "main")
+    state = await service.get_state(session_id, TEST_THREAD_ID)
     for _ in range(300):
         if state.status == expected_status and (
             output_fragment is None
@@ -181,7 +191,7 @@ async def _wait_for_debug_state(
         ):
             return state
         await asyncio.sleep(0.01)
-        state = await service.get_state(session_id, "main")
+        state = await service.get_state(session_id, TEST_THREAD_ID)
     raise AssertionError(
         f"等待调试状态失败: status={state.status}, output={state.output!r}"
     )
@@ -190,14 +200,21 @@ async def _wait_for_debug_state(
 def _tool_map(
     workspace_root: Path,
     service: NodeDebugService,
+    *,
+    session_id: str = "ses_e2e_debug",
 ) -> dict[str, object]:
+    binding = ThreadRuntimeBinding(
+        session_id=session_id,
+        thread_id=TEST_THREAD_ID,
+    )
     return {
         tool.name: tool
         for tool in create_debugging_tools(
-            session_id="ses_e2e_debug",
+            session_id=session_id,
             workspace_root=workspace_root,
             node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
+            invocation_context=ToolInvocationContext(thread_binding=binding),
+            thread_binding=binding,
         )
     }
 
@@ -418,7 +435,12 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         session_id="ses_e2e_debug_isolated",
         workspace_root=workspace_root,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(
+            thread_binding=ThreadRuntimeBinding(
+                session_id="ses_e2e_debug_isolated",
+                thread_id=TEST_THREAD_ID,
+            )
+        ),
     )
     by_name = {tool.name: tool for tool in tools}
     other_tools = {
@@ -427,7 +449,12 @@ async def test_node_inspector_tool_adapter_integration_isolation(
             session_id="ses_other_debug_session",
             workspace_root=workspace_root,
             node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
+            invocation_context=ToolInvocationContext(
+                thread_binding=ThreadRuntimeBinding(
+                    session_id="ses_other_debug_session",
+                    thread_id=TEST_THREAD_ID,
+                )
+            ),
         )
     }
 
@@ -494,7 +521,9 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         )
         assert removed_logpoint["ok"] is True
 
-        other_session = await service.get_state("ses_other_debug_session", "main")
+        other_session = await service.get_state(
+            "ses_other_debug_session", TEST_THREAD_ID
+        )
         assert other_session.status == "idle"
         assert other_session.breakpoints == []
         assert other_session.actions == []
@@ -544,8 +573,12 @@ async def test_node_inspector_tool_adapter_integration_isolation(
         )
         assert other_start_result["ok"] is True
         assert other_start_result["state"]["status"] == "paused"
-        state = await service.get_state("ses_e2e_debug_isolated", "main")
-        other_state = await service.get_state("ses_other_debug_session", "main")
+        state = await service.get_state(
+            "ses_e2e_debug_isolated", TEST_THREAD_ID
+        )
+        other_state = await service.get_state(
+            "ses_other_debug_session", TEST_THREAD_ID
+        )
         assert state.pid is not None
         assert other_state.pid is not None
         assert state.pid != other_state.pid
@@ -753,13 +786,18 @@ async def test_node_debug_rejects_unimplemented_adapter(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
+    binding = ThreadRuntimeBinding(
+        session_id="ses_debugpy_rejection",
+        thread_id=TEST_THREAD_ID,
+    )
     tools = {
         tool.name: tool
         for tool in create_debugging_tools(
             session_id="ses_debugpy_rejection",
             workspace_root=workspace_root,
             node_debug_service=service,
-            invocation_context=ToolInvocationContext(),
+            invocation_context=ToolInvocationContext(thread_binding=binding),
+            thread_binding=binding,
         )
     }
 
@@ -902,7 +940,7 @@ async def test_human_and_agent_share_cross_file_debug_runtime(
         human_state = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id="ses_e2e_debug",
-                thread_id="main",
+                thread_id=TEST_THREAD_ID,
                 action="continue",
             ),
         )
@@ -977,7 +1015,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
 
         original = worker_path.read_text(encoding="utf-8")
         worker_path.write_text("// 已插入说明\n" + original, encoding="utf-8")
-        changed = await service.get_state("ses_e2e_debug", "main")
+        changed = await service.get_state("ses_e2e_debug", TEST_THREAD_ID)
         assert changed.requires_restart is True
         assert changed.source_changed_paths == ["debug-worker.mjs"]
         assert changed.breakpoints[0].line == worker_line
@@ -987,7 +1025,7 @@ async def test_active_debug_session_invalidates_changed_source_without_blocking_
         continued = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id="ses_e2e_debug",
-                thread_id="main",
+                thread_id=TEST_THREAD_ID,
                 action="continue",
             ),
         )
@@ -1094,7 +1132,7 @@ async def test_start_and_finish_report_invalid_breakpoints_at_both_boundaries(
             "// 运行中新增说明\n" + entry_path.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-        changed = await service.get_state("ses_e2e_debug", "main")
+        changed = await service.get_state("ses_e2e_debug", TEST_THREAD_ID)
         assert changed.status == "paused"
         assert {breakpoint.relocation_status for breakpoint in changed.breakpoints} == {
             "pending_update"
@@ -1153,7 +1191,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         configured = await first.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=session_id,
-                thread_id="main",
+                thread_id=TEST_THREAD_ID,
                 name="可恢复方案",
                 script_path="debug-entry.mjs",
                 working_directory="",
@@ -1171,7 +1209,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         assert configuration_id is not None
         started = await first.start(
             session_id=session_id,
-            thread_id="main",
+                thread_id=TEST_THREAD_ID,
             configuration_id=configuration_id,
             path=str(worker_path),
             working_directory=str(workspace_root),
@@ -1192,7 +1230,7 @@ async def test_session_launch_configuration_is_restored_after_service_restart(
         session_admission=permissive_node_debug_session_admission(),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
-    restored_state = await restored.get_state(session_id, "main")
+    restored_state = await restored.get_state(session_id, TEST_THREAD_ID)
     assert restored_state.status == "idle"
     assert restored_state.script_path == "debug-entry.mjs"
     assert restored_state.working_directory == ""

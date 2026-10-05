@@ -49,10 +49,11 @@ def _validate_source_overlay_row(
     row: dict[str, object],
     *,
     session_id: str,
+    thread_id: str,
     checkpoint_ns: str,
 ) -> None:
-    if row.get("session_id") != session_id:
-        raise RuntimeError("source overlay session identity 不一致")
+    if (row.get("session_id"), row.get("thread_id")) != (session_id, thread_id):
+        raise RuntimeError("source overlay SessionThread owner 不一致")
     if row.get("checkpoint_ns") != checkpoint_ns:
         raise RuntimeError("source overlay checkpoint namespace identity 不一致")
     for name in ("overlay_id", "source_kind", "source_revision", "status"):
@@ -115,6 +116,8 @@ class ContextOverlayStorageMixin:
         self,
         overlay: object,
         *,
+        session_id: str,
+        thread_id: str,
         base_content: object | None = None,
         delta_content: object | None = None,
     ) -> None:
@@ -124,6 +127,7 @@ class ContextOverlayStorageMixin:
             for name in (
                 "overlay_id",
                 "session_id",
+                "thread_id",
                 "checkpoint_ns",
                 "source_kind",
                 "source_revision",
@@ -148,7 +152,13 @@ class ContextOverlayStorageMixin:
             )
         }
         overlay_id = _required_text(values, "overlay_id")
-        session_id = _required_text(values, "session_id")
+        session_id = _required_text({"session_id": session_id}, "session_id")
+        thread_id = _required_text({"thread_id": thread_id}, "thread_id")
+        if (values["session_id"], values["thread_id"]) != (
+            session_id,
+            thread_id,
+        ):
+            raise ValueError("source overlay SessionThread owner 不一致")
         source_kind = _required_text(values, "source_kind")
         source_revision = _required_text(values, "source_revision")
         status = _required_text(values, "status")
@@ -267,6 +277,7 @@ class ContextOverlayStorageMixin:
             + sha256_jcs(
                 {
                     "session_id": values["session_id"],
+                    "thread_id": values["thread_id"],
                     "checkpoint_ns": checkpoint_ns,
                     "source_kind": values["source_kind"],
                     "source_revision": values["source_revision"],
@@ -292,16 +303,19 @@ class ContextOverlayStorageMixin:
         )
         if status == "active" and not values["delta_ref"] and not values["base_ref"]:
             raise ValueError("active source overlay 必须声明 base_ref 或 delta_ref")
-        with self._lock(session_id, checkpoint_ns):
-            self.initialize(session_id, checkpoint_ns)
-            with self._connect(session_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
-                    "SELECT session_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ?",
-                    (overlay_id,),
+                    "SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+                    (overlay_id, session_id, thread_id),
                 ).fetchone()
                 expected = (
                     session_id,
+                    thread_id,
                     checkpoint_ns,
                     source_kind,
                     source_revision,
@@ -329,8 +343,8 @@ class ContextOverlayStorageMixin:
                         return
                     raise ValueError("source overlay identity 冲突")
                 duplicate = connection.execute(
-                    "SELECT overlay_id FROM source_overlays WHERE session_id = ? AND checkpoint_ns = ? AND idempotency_key = ?",
-                    (session_id, checkpoint_ns, idempotency_key),
+                    "SELECT overlay_id FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? AND idempotency_key = ?",
+                    (session_id, thread_id, checkpoint_ns, idempotency_key),
                 ).fetchone()
                 if duplicate is not None:
                     raise ValueError(
@@ -338,8 +352,8 @@ class ContextOverlayStorageMixin:
                         f"{idempotency_key}"
                     )
                 latest_epoch = connection.execute(
-                    "SELECT MAX(source_overlay_epoch) FROM source_overlays WHERE session_id = ? AND checkpoint_ns = ?",
-                    (session_id, checkpoint_ns),
+                    "SELECT MAX(source_overlay_epoch) FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?",
+                    (session_id, thread_id, checkpoint_ns),
                 ).fetchone()
                 if latest_epoch is None:
                     raise RuntimeError("source overlay latest epoch 查询失败")
@@ -366,8 +380,8 @@ class ContextOverlayStorageMixin:
                     if relation_id == overlay_id:
                         raise ValueError("source overlay lineage 不得自引用")
                     target = connection.execute(
-                        "SELECT session_id, checkpoint_ns, status FROM source_overlays WHERE overlay_id = ?",
-                        (relation_id,),
+                        "SELECT session_id, thread_id, checkpoint_ns, status FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+                        (relation_id, session_id, thread_id),
                     ).fetchone()
                     if target is None:
                         raise KeyError(
@@ -376,18 +390,22 @@ class ContextOverlayStorageMixin:
                     target_session_id = _required_text(
                         {"session_id": target[0]}, "session_id"
                     )
-                    target_checkpoint_ns = target[1]
+                    target_thread_id = _required_text(
+                        {"thread_id": target[1]}, "thread_id"
+                    )
+                    target_checkpoint_ns = target[2]
                     if not isinstance(target_checkpoint_ns, str):
                         raise TypeError(
                             "source overlay lineage target checkpoint_ns 必须是字符串"
                         )
-                    target_status = _required_text({"status": target[2]}, "status")
+                    target_status = _required_text({"status": target[3]}, "status")
                     if (
                         target_session_id != session_id
+                        or target_thread_id != thread_id
                         or target_checkpoint_ns != checkpoint_ns
                     ):
                         raise ValueError(
-                            "source overlay lineage 不得跨 session/checkpoint namespace"
+                            "source overlay lineage 不得跨 session/thread/checkpoint namespace"
                         )
                     if target_status != "active":
                         raise ValueError(
@@ -408,15 +426,16 @@ class ContextOverlayStorageMixin:
                         else "superseded"
                     )
                     cursor = connection.execute(
-                        "UPDATE source_overlays SET status = ? WHERE overlay_id = ? AND status = 'active'",
-                        (next_status, relation_id),
+                        "UPDATE source_overlays SET status = ? WHERE overlay_id = ? AND session_id = ? AND thread_id = ? AND status = 'active'",
+                        (next_status, relation_id, session_id, thread_id),
                     )
                     _assert_one_row(cursor, context="source overlay lineage 状态更新")
                 cursor = connection.execute(
-                    "INSERT INTO source_overlays(overlay_id, session_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         overlay_id,
                         session_id,
+                        thread_id,
                         checkpoint_ns,
                         source_kind,
                         source_revision,
@@ -451,12 +470,15 @@ class ContextOverlayStorageMixin:
 
     def list_source_overlays(
         self,
+        session_id: str,
         thread_id: str,
         *,
         source_overlay_epoch: int | None = None,
         checkpoint_ns: str = "",
         snapshot: RolloutReadSnapshot | None = None,
     ) -> list[dict[str, object]]:
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("list source overlays session_id 必须是非空字符串")
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("list source overlays thread_id 必须是非空字符串")
         if not isinstance(checkpoint_ns, str):
@@ -468,13 +490,20 @@ class ContextOverlayStorageMixin:
         ):
             raise ValueError("list source overlays epoch 必须是非负整数或 null")
         if snapshot is not None and (
-            snapshot.thread_id != thread_id or snapshot.checkpoint_ns != checkpoint_ns
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("source overlay snapshot 与目标 rollout 不一致")
         owned_connection = None
         if snapshot is None:
-            self.initialize(thread_id, checkpoint_ns)
-            owned_connection = self._connect(thread_id, checkpoint_ns, read_only=True)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            owned_connection = self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            )
         connection = (
             self._snapshot_connection(snapshot)
             if snapshot is not None
@@ -483,8 +512,8 @@ class ContextOverlayStorageMixin:
         assert connection is not None
         try:
             self._require_v2_runtime(connection)
-            query = "SELECT overlay_id, session_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND checkpoint_ns = ?"
-            params: list[object] = [thread_id, checkpoint_ns]
+            query = "SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?"
+            params: list[object] = [session_id, thread_id, checkpoint_ns]
             if source_overlay_epoch is not None:
                 query += " AND source_overlay_epoch = ?"
                 params.append(source_overlay_epoch)
@@ -496,6 +525,7 @@ class ContextOverlayStorageMixin:
         keys = (
             "overlay_id",
             "session_id",
+            "thread_id",
             "checkpoint_ns",
             "source_kind",
             "source_revision",
@@ -523,7 +553,8 @@ class ContextOverlayStorageMixin:
         for row in result:
             _validate_source_overlay_row(
                 row,
-                session_id=thread_id,
+                session_id=session_id,
+                thread_id=thread_id,
                 checkpoint_ns=checkpoint_ns,
             )
         return result

@@ -20,6 +20,7 @@ import AnchoredOverlay from "../../overlays/AnchoredOverlay";
 import ResourceTreeRow from "./ResourceTreeRow";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { ResourceThreadRef } from "../../../api/workspaceResources";
 
 const DEFAULT_GROUP_OPEN: Record<ResourceAttentionGroup, boolean> = {
   active: true,
@@ -40,6 +41,7 @@ export default function ResourcePanel({
   activePreviewPath,
   onRefresh,
   onControl,
+  onTerminalControl,
   onOpenTerminalPreview,
   onOpenTerminalExtension,
   onOpenBrowserPreview,
@@ -60,6 +62,7 @@ export default function ResourcePanel({
     resourceId: string,
     action: SessionResourceAction,
   ) => Promise<void>;
+  onTerminalControl?: (resourceId: string, action: "promote" | "detach", thread?: ResourceThreadRef) => Promise<void>;
   onOpenTerminalPreview: (terminalId: string) => void;
   onOpenTerminalExtension?: (terminalId: string) => void;
   onOpenBrowserPreview: (browserId: string) => void;
@@ -187,6 +190,22 @@ export default function ResourcePanel({
         setNoticeTechnicalDetails(errorMessage(copyError));
         setNotice("复制失败：可展开技术详情查看原因，或选中 ID 手动复制。");
       });
+  };
+
+  const handleTerminalControl = async (resourceId: string, action: "promote" | "detach", thread?: ResourceThreadRef) => {
+    if (!onTerminalControl) return;
+    setBusyResourceId(resourceId);
+    setNotice("");
+    setNoticeTechnicalDetails("");
+    try {
+      await onTerminalControl(resourceId, action, thread);
+      setNotice(action === "promote" ? "终端已保留到当前工作区" : "已解除指定线程与终端的关联");
+    } catch (cause) {
+      setNotice("终端管理失败，请查看错误详情后重试。");
+      setNoticeTechnicalDetails(errorMessage(cause));
+    } finally {
+      setBusyResourceId(null);
+    }
   };
 
   const handleOpenTerminal = (resourceId: string) => {
@@ -377,6 +396,7 @@ export default function ResourcePanel({
                               selected={isPreviewedResource(resource, activePreviewPath)}
                               busy={busyResourceId === resource.resource_id}
                               onControl={handleControl}
+                              onTerminalControl={onTerminalControl ? handleTerminalControl : undefined}
                               onCopy={handleCopy}
                               onOpenTerminal={handleOpenTerminal}
                               onOpenTerminalExtension={onOpenTerminalExtension}

@@ -13,15 +13,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
+
 from app.core.identifier import to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
     validate_session_id,
+    validate_thread_id,
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
-from tests.support.canonical_id_at import thread_id_at
+from tests.support.canonical_id_at import thread_id_at, thread_id_for_name_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,7 @@ class CatalogSessionBundleSpec:
     title: str
     parent_node_id: str | None = None
     created_at: datetime | None = None
+    main_thread_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +70,11 @@ def _created_at_from_session_id(session_id: str) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=embedded_ms)
 
 
+def fixture_main_thread_id(session_id: str) -> str:
+    """为需要稳定 owner 的测试会话生成与其创建毫秒相同的 canonical ID。"""
+    return thread_id_for_name_at(session_id, _created_at_from_session_id(session_id))
+
+
 def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle:
     """写入一个固定 ID 的完整测试会话资源。
 
@@ -91,10 +100,9 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
             f"created_at_ms={created_at_ms}, session_id_ms={session_id_ms}"
         )
     # main thread 与 session 同源同一冻结毫秒，便于断言与解析一致。
-    main_thread_id = thread_id_at(created_at)
-    locator = (
-        f"sessions/{created_at.astimezone(UTC):%Y/%m/%d}/{spec.session_id}"
-    )
+    main_thread_id = spec.main_thread_id or thread_id_at(created_at)
+    validate_thread_id(main_thread_id)
+    locator = f"sessions/{created_at.astimezone(UTC):%Y/%m/%d}/{spec.session_id}"
     directory = sessions_root / locator.removeprefix("sessions/")
     directory.parent.mkdir(parents=True, exist_ok=True)
 
@@ -126,6 +134,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
             main_thread_id = node.main_thread_id or main_thread_id
 
         directory.mkdir(parents=True, exist_ok=True)
+        (directory / "threads").mkdir(exist_ok=True)
         manifest = {
             "session_id": spec.session_id,
             "workspace_id": spec.workspace_id,
@@ -147,6 +156,7 @@ def seed_catalog_session(spec: CatalogSessionBundleSpec) -> CatalogSessionBundle
             control.initialize_main_thread(
                 main_thread_id,
                 datetime.fromisoformat(str(manifest["created_at"])),
+                TEST_THREAD_GRAPH_BINDING,
             )
             control.initialize_fence("active", 1)
             control.verify_matches_catalog_main_thread(main_thread_id)
@@ -169,6 +179,7 @@ def seed_catalog_session_bundle(
     workspace_id: str | None = None,
     title: str | None = None,
     parent_node_id: str | None = None,
+    main_thread_id: str | None = None,
 ) -> CatalogSessionBundle:
     """按测试常用参数构造并播种一个固定 ID 会话。"""
 
@@ -183,6 +194,7 @@ def seed_catalog_session_bundle(
             workspace_id=resolved_workspace_id,
             title=title or f"测试会话 {session_id}",
             parent_node_id=parent_node_id,
+            main_thread_id=main_thread_id,
         )
     )
 
@@ -190,6 +202,7 @@ def seed_catalog_session_bundle(
 __all__ = [
     "CatalogSessionBundle",
     "CatalogSessionBundleSpec",
+    "fixture_main_thread_id",
     "seed_catalog_session",
     "seed_catalog_session_bundle",
 ]

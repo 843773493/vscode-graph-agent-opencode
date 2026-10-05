@@ -207,7 +207,12 @@ function writeDevelopmentManifest() {
   return manifestPath;
 }
 
-async function waitForHttpOk(url, label, processHandle = null) {
+async function waitForHttpOk(
+  url,
+  label,
+  processHandle = null,
+  headers = undefined,
+) {
   const timeoutMs = 90_000;
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -222,7 +227,7 @@ async function waitForHttpOk(url, label, processHandle = null) {
       );
     }
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers });
       if (response.ok) {
         process.stdout.write(`[dev] ${label} ready: ${url}\n`);
         return;
@@ -238,6 +243,53 @@ async function waitForHttpOk(url, label, processHandle = null) {
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
   );
+}
+
+function resolveBackendWorkspaceId(environment) {
+  const result = Bun.spawnSync(
+    [
+      pythonBin,
+      "-m",
+      "app.core.workspace_identity",
+      "--workspace-root",
+      defaultWorkspaceRoot,
+    ],
+    {
+      cwd: projectRoot,
+      env: environment,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const stdout = result.stdout.toString().trim();
+  const stderr = result.stderr.toString().trim();
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Workspace backend UUID 初始化失败: exit=${String(result.exitCode)}${
+        stderr ? `\n${stderr}` : ""
+      }`,
+    );
+  }
+  let payload;
+  try {
+    payload = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`Workspace backend UUID CLI 返回无效 JSON: ${stdout}`, {
+      cause: error,
+    });
+  }
+  const workspaceId = payload?.workspace_id;
+  if (
+    typeof workspaceId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      workspaceId,
+    )
+  ) {
+    throw new Error(
+      `Workspace backend UUID CLI 返回非法 workspace_id: ${String(workspaceId)}`,
+    );
+  }
+  return workspaceId;
 }
 
 async function waitForDetachedReady(child, readyFile, logPath) {
@@ -458,6 +510,19 @@ async function main() {
       `boxteam_home=${boxteamHome}\n`,
   );
   installDevelopmentConfiguration(environment);
+  const backendWorkspaceId =
+    serviceMode === "backend" || serviceMode === "all"
+      ? resolveBackendWorkspaceId(environment)
+      : null;
+  if (backendWorkspaceId !== null) {
+    environment.BOXTEAM_WORKSPACE_ID = backendWorkspaceId;
+    environment.BOXTEAM_MOUNTED_WORKSPACES = JSON.stringify([
+      {
+        workspace_id: backendWorkspaceId,
+        workspace_root: defaultWorkspaceRoot,
+      },
+    ]);
+  }
   const processes = [];
   const pendingGatewayRestart =
     environment.BOXTEAM_CONFIG_CANDIDATE_REF?.trim() !== "";
@@ -547,6 +612,8 @@ async function main() {
       await waitForHttpOk(
         `http://${host}:${ports.backend}/api/v1/health`,
         "backend",
+        null,
+        { "X-BoxTeam-Workspace-Id": backendWorkspaceId },
       );
     } else if (serviceMode === "web") {
       await waitForHttpOk(`http://${host}:${ports.frontend}/health`, "frontend");

@@ -65,10 +65,17 @@ def assembly_case(
         session_id,
         accepted_ingress_id="manifest-ingress",
         acceptance_idempotency_key="manifest-acceptance",
+        job_id="manifest-job",
+        admission_idempotency_key="manifest-admission",
         payload="assembly 恢复必须使用同一 plan registry",
         payload_kind="text",
     )
-    with saver._storage._connect(session_id, "", read_only=True) as connection:
+    with saver._storage._connect(
+        saver._storage.main_thread_id(session_id),
+        "",
+        read_only=True,
+        session_id=session_id,
+    ) as connection:
         database_path = connection.execute("PRAGMA database_list").fetchone()[2]
     # 默认关闭 FK 的独立诊断连接仅用于显式损坏注入，不改变生产连接约束。
     connection = sqlite3.connect(database_path)
@@ -115,7 +122,8 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         refs=tuple(
             ContextRef.request_only_ref(
                 f"{item.contribution_id}-ref",
-                session_id=case.session_id, thread_id="thread-1",
+                session_id=case.session_id,
+                thread_id="thread-1",
                 plan_id=plan_id,
                 source_revision=item.source_revision,
                 source_ref=item.contribution_id,

@@ -9,6 +9,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    InternalExecutionIntent,
+)
 from app.schemas.event import ModelTokenUsagePayload
 
 _STALE_EXECUTION_CHANNEL = "__pregel_tasks"
@@ -140,7 +145,7 @@ def _rewrite_latest_assistant_message(
         # 已写入的消息从目标 Turn 中排除。
         message_metadata.pop("internal", None)
         message_metadata["turn_id"] = turn_id
-        message_metadata["job_id"] = turn_id
+        message_metadata.pop("job_id", None)
         response_metadata["message_metadata"] = message_metadata
     if token_usage is not None and token_usage.reported_model_calls > 0:
         response_metadata["token_usage"] = token_usage.model_dump(mode="json")
@@ -164,6 +169,7 @@ def persist_standard_assistant_checkpoint(
     *,
     checkpointer: BaseCheckpointSaver,
     session_id: str,
+    thread_id: str,
     turn_id: str | None = None,
     content_blocks: Sequence[Mapping[str, object]],
     final_text: str,
@@ -178,10 +184,12 @@ def persist_standard_assistant_checkpoint(
         raise ValueError("最终 assistant 消息缺少 message_id")
     if message_created_at.tzinfo is None:
         raise ValueError("最终 assistant message_created_at 必须包含时区")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise ValueError("最终 assistant checkpoint 缺少真实 thread_id")
     if not content_blocks and not final_text:
         return False
 
-    config = build_checkpoint_config(session_id)
+    config = build_checkpoint_config(thread_id)
     tup = checkpointer.get_tuple(config)
     if tup is None:
         return False
@@ -237,6 +245,7 @@ def persist_standard_assistant_checkpoint(
             raise RuntimeError("当前 checkpoint saver 不支持 Turn finalization")
         finalize_turn(
             session_id=session_id,
+            thread_id=thread_id,
             turn_id=turn_id,
             final_message_id=message_id,
         )
@@ -247,19 +256,63 @@ def persist_user_message_checkpoint(
     *,
     checkpointer: BaseCheckpointSaver,
     session_id: str,
+    thread_id: str,
+    job_id: str,
+    admission_idempotency_key: str,
     message: HumanMessage,
+    execution_intent: InternalExecutionIntent | None = None,
+    checkpoint_ns: str = "",
 ) -> bool:
-    """在模型执行前幂等固化用户消息，确保失败轮次仍可被重试。"""
+    """在模型执行前固化真实 Turn acceptance 或 Turn-less internal admission。"""
     response_metadata = message.response_metadata or {}
     message_id = response_metadata.get("message_id")
     if not isinstance(message_id, str) or not message_id:
         raise ValueError("用户消息缺少持久化 message_id")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise ValueError("用户消息 checkpoint 缺少真实 thread_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise ValueError("用户消息 checkpoint 缺少真实 job_id")
+    if not isinstance(admission_idempotency_key, str) or not admission_idempotency_key:
+        raise ValueError("用户消息 checkpoint 缺少独立 admission_idempotency_key")
 
-    # RolloutCheckpointSaver 在 acceptance-time 先建立 root/Turn/execution，
-    # 随后的 LangGraph checkpoint 只负责把同一个 root 投影回 messages channel。
-    # 旧 saver 没有该 owner API 时继续走其只读兼容路径。
     accept_turn = getattr(checkpointer, "accept_turn", None)
-    if callable(accept_turn):
+    admit_internal_execution = getattr(
+        checkpointer, "admit_internal_execution", None
+    )
+    execution_for_turn = getattr(checkpointer, "execution_for_turn", None)
+    read_admission = getattr(checkpointer, "execution_admission", None)
+    if not all(
+        callable(port)
+        for port in (
+            accept_turn,
+            admit_internal_execution,
+            execution_for_turn,
+            read_admission,
+        )
+    ):
+        raise TypeError("checkpoint saver 缺少 v2 execution admission owner 端口")
+
+    if execution_intent is not None:
+        if not isinstance(execution_intent, InternalExecutionIntent):
+            raise TypeError("internal job execution_intent 类型非法")
+        if execution_intent.message_id != message_id:
+            raise ValueError(
+                "internal execution intent 与持久化消息 identity 不一致: "
+                f"intent={execution_intent.message_id!r}, message={message_id!r}"
+            )
+        if execution_intent.admission_idempotency_key != admission_idempotency_key:
+            raise ValueError(
+                "internal execution intent 与 Job admission idempotency key 不一致"
+            )
+        admission = admit_internal_execution(
+            session_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            intent=execution_intent,
+            message=message,
+            checkpoint_ns=checkpoint_ns,
+        )
+    else:
         message_metadata = response_metadata.get("message_metadata")
         turn_id = (
             message_metadata.get("turn_id")
@@ -267,14 +320,14 @@ def persist_user_message_checkpoint(
             else None
         )
         if not isinstance(turn_id, str) or not turn_id:
-            # 旧调用方没有把 job id 放入 message_metadata 时，使用稳定的
-            # ingress-derived id；这仍然在 acceptance-time 创建真实 Turn，
-            # 不从 wire role 或物理邻接猜测。
-            turn_id = f"turn-{message_id}"
+            raise ValueError("user_turn checkpoint 缺少显式真实 turn_id")
         accepted = accept_turn(
             session_id,
+            thread_id=thread_id,
             accepted_ingress_id=message_id,
             acceptance_idempotency_key=f"message:{message_id}",
+            job_id=job_id,
+            admission_idempotency_key=admission_idempotency_key,
             payload=message.content,
             payload_kind=(
                 "text" if isinstance(message.content, str) else "structured_content"
@@ -288,11 +341,44 @@ def persist_user_message_checkpoint(
                 # 丢失 internal 标记，并被历史 API 当作真实用户输入展示。
                 "message_metadata": dict(message_metadata or {}),
             },
+            checkpoint_ns=checkpoint_ns,
         )
         if not isinstance(accepted, Mapping):
             raise TypeError("RolloutCheckpointSaver.accept_turn 返回值非法")
+        execution_id = accepted.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise RuntimeError("Turn acceptance 未返回 initial execution identity")
+        admission = read_admission(
+            session_id,
+            thread_id=thread_id,
+            execution_id=execution_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+        if not isinstance(admission, ExecutionAdmission):
+            raise TypeError("RolloutCheckpointSaver.execution_admission 返回值非法")
+        if admission.turn_id != turn_id:
+            raise RuntimeError(
+                "Turn acceptance 与 initial execution admission 的 turn_id 不一致: "
+                f"accepted={turn_id!r}, admission={admission.turn_id!r}"
+            )
+    expected_origin = "internal" if execution_intent is not None else "user_turn"
+    if not isinstance(admission, ExecutionAdmission):
+        raise TypeError("checkpoint saver 返回了非法 execution admission")
+    if (
+        admission.session_id != session_id
+        or admission.thread_id != thread_id
+        or admission.job_id != job_id
+        or admission.admission_idempotency_key != admission_idempotency_key
+        or admission.execution_origin != expected_origin
+        or (expected_origin == "internal" and admission.turn_id is not None)
+        or (expected_origin == "user_turn" and admission.turn_id is None)
+    ):
+        raise RuntimeError(
+            "message checkpoint admission 与 SessionThread/job/origin 不一致: "
+            f"session_id={session_id}, thread_id={thread_id}, job_id={job_id}"
+        )
 
-    config = build_checkpoint_config(session_id)
+    config = build_checkpoint_config(thread_id)
     tup = checkpointer.get_tuple(config)
     if tup is None:
         # acceptance 已经先于 provider dispatch 固化；旧 LangGraph saver
@@ -340,10 +426,11 @@ def persist_user_message_checkpoint(
     if "messages" not in updated_channels:
         updated_channels.append("messages")
     checkpoint["updated_channels"] = updated_channels
-    checkpointer.put(
-        config=tup.config,
-        checkpoint=checkpoint,
-        metadata={"source": "user_message_checkpoint", "step": -1, "writes": {}},
-        new_versions={"messages": messages_version},
-    )
+    with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+        checkpointer.put(
+            config=tup.config,
+            checkpoint=checkpoint,
+            metadata={"source": "user_message_checkpoint", "step": -1, "writes": {}},
+            new_versions={"messages": messages_version},
+        )
     return True

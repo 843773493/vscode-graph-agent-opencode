@@ -4,7 +4,7 @@
 record（``thread_creation_record.py``）、创建发布与终结（``thread_creation_
 publish.py``）、初始 execution intent（``execution_intent.py``）、collaboration
 成员账本（``collaboration.py``）、schema 初始化与版本升级（``_schema.py``），
-共用 SQL 常量收敛在 ``sql.py``。
+共用 SQL 常量收敛在 ``sql.py``，GraphBinding 行投影位于 ``contracts.py``。
 
 本 facade 只保留 ``SessionControlStore`` 的类声明（四个既有 mixin + 五个新
 mixin）与连接生命周期方法（``__init__``/``connection``/``close``/
@@ -15,7 +15,7 @@ mixin）与连接生命周期方法（``__init__``/``connection``/``close``/
 错误分类约定沿用 ``session_catalog_store.py``：``TypeError`` 输入类型错误、
 ``ValueError`` 输入形态非法、``KeyError`` 目标行不存在、``RuntimeError`` 语义
 冲突。连接约定：WAL、``foreign_keys``、``busy_timeout``、``sqlite3.Row``、
-``PRAGMA user_version`` 非 0/1/``SCHEMA_VERSION`` 时 fail-closed 拒绝打开。
+未知 ``PRAGMA user_version`` 时 fail-closed 拒绝打开。
 """
 
 from __future__ import annotations
@@ -24,6 +24,10 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from app.core.session_control_store.contracts import (
+    ThreadGraphBindingRecord as ThreadGraphBindingRecord,
+)
 
 from app.core.session_catalog_store import validate_thread_id as validate_thread_id
 from app.core.session_control_communication_ledger.communication_ledger import (
@@ -85,6 +89,7 @@ __all__ = [
     "SessionControlStore",
     "ThreadCreationRecord",
     "ThreadExecutionIntent",
+    "ThreadGraphBindingRecord",
     "ThreadOwnerBinding",
     "compute_initial_execution_binding_preimage_hash",
     "derive_communication_admission_identity",
@@ -107,25 +112,17 @@ class SessionControlStore(
     + thread creation record / execution intent journal / 通用 operation
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
-    构造时创建 database_path 父目录并幂等建表；``user_version`` 只允许
-    0（新库，初始化后写 5）、1（R12/R13 v1 库，单事务加法升级后写 5）、
-    2（R20 v2 库，``thread_execution_intents`` 单事务加法升级补齐稳定
-    binding/job identity 后写 5）、3（R23 库，加法补建 collaboration
-    ledger/member 表）、4（R25 库）、5（B2：加法补建
-    ``session_operation_leases`` 表与非终态索引）、6（B1：加法补建
-    ``thread_owner_bindings`` owner 字段槽）或 7（D5：加法补建
-    ``communication_outbox``/``communication_inbox`` 通信 ledger 表与
-    inbox 状态索引），其余版本
-    fail-closed 拒绝打开。
+    构造时创建 database_path 父目录并幂等建表；``user_version`` 0–7
+    按单事务升级，8 是当前版本。升级增加 thread_catalog GraphBinding
+    列时历史行保持未绑定，运行时读取 fail closed，不从旧 JSON 或当前
+    registry 推断。
     """
 
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, database_path: Path) -> None:
         if not isinstance(database_path, Path):
-            raise TypeError(
-                f"database_path 必须是 Path: {database_path!r}"
-            )
+            raise TypeError(f"database_path 必须是 Path: {database_path!r}")
         self.database_path = database_path.expanduser().resolve()
         validate_sqlite_path_budget(self.database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,9 +154,7 @@ class SessionControlStore(
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RuntimeError(
-                f"session control store 已关闭: {self.database_path}"
-            )
+            raise RuntimeError(f"session control store 已关闭: {self.database_path}")
 
     def _begin_immediate(self) -> None:
         """开启写事务（BEGIN IMMEDIATE），锁冲突转明确领域错误。

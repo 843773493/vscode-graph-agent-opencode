@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.enums import (
@@ -18,7 +19,9 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.records import CanonicalItemRecord
+from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -51,24 +54,27 @@ def terminal_case(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
     session_id = f"ses_{create_uuid_hex()}"
-    session_node = session_bundle_factory(sessions, session_id)
+    session_bundle_factory(sessions, session_id)
     saver = RolloutCheckpointSaver(sessions)
     accepted = saver.accept_turn(
         session_id,
         accepted_ingress_id=f"ingress-{session_id}",
         acceptance_idempotency_key=f"acceptance-{session_id}",
+        job_id=f"job-{session_id}",
+        admission_idempotency_key=f"admission-{session_id}",
         payload="terminal convergence 用户输入",
         payload_kind=PayloadKind.TEXT,
         turn_id=f"turn-{session_id}",
         root_item_id=f"item-root-{session_id}",
         initial_execution_id=f"execution-{session_id}",
     )
+    thread_id = saver._storage._resolve_thread_identity(session_id, None)
     return TerminalCase(
         sessions=sessions,
         session_id=session_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
-        root=session_node / "rollout",
+        root=saver._storage.root(session_id, thread_id=thread_id),
         saver=saver,
     )
 
@@ -125,6 +131,117 @@ def _terminal_rows(
         "AND subject_id = ? ORDER BY commit_id",
         (case.turn_id,),
     ).fetchall()
+
+
+def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
+    terminal_case: TerminalCase,
+) -> None:
+    case = terminal_case
+    with sqlite3.connect(case.index) as connection:
+        root_binding = connection.execute(
+            "SELECT ic.execution_id, m.execution_id, m.turn_id "
+            "FROM item_catalog AS ic JOIN messages AS m ON m.message_id = "
+            "substr(ic.item_id, 6) "
+            "WHERE ic.item_id = (SELECT root_input_item_id FROM turn_records "
+            "WHERE session_id = ? AND turn_id = ?)",
+            (case.session_id, case.turn_id),
+        ).fetchone()
+    assert root_binding == (case.execution_id, case.execution_id, case.turn_id)
+
+    thread_id = case.saver._storage._resolve_thread_identity(case.session_id, None)
+    internal_execution_id = f"internal-{case.session_id}"
+    internal_job_id = f"job-{internal_execution_id}"
+    internal_message_id = f"message-{internal_execution_id}"
+    prepared_notice = internal_message_factory.build(
+        kind="generated_session_result",
+        control="独立任务已经结束。",
+        sections=(
+            PromptSection("control_context", {"source": "test"}),
+            PromptSection("generated_session_result", "独立执行结果"),
+        ),
+        display_content="独立任务已经结束。",
+    )
+    case.saver.admit_internal_execution(
+        case.session_id,
+        thread_id=thread_id,
+        job_id=internal_job_id,
+        intent=InternalExecutionIntent(
+            message_id=internal_message_id,
+            execution_id=internal_execution_id,
+            admission_idempotency_key=f"internal-admission-{case.session_id}",
+        ),
+        message=HumanMessage(
+            content=prepared_notice.content,
+            id=internal_message_id,
+            response_metadata={
+                "message_id": internal_message_id,
+                "created_at": "2026-10-04T12:00:00+00:00",
+                "message_metadata": prepared_notice.metadata,
+            },
+        ),
+    )
+    output = CanonicalItemRecord.create(
+        item_sequence=999,
+        item_id=f"item-{internal_execution_id}-output",
+        semantic_kind=SemanticKind.ASSISTANT_OUTPUT,
+        payload_kind="text",
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "runtime",
+            "producer_id": "internal-agent",
+            "invocation_id": internal_execution_id,
+        },
+        payload="独立 execution 的终态输出",
+        metadata={"projection_message_id": f"{internal_execution_id}-output"},
+        wire_role="assistant",
+    )
+
+    commit_id = case.saver.converge_execution(
+        case.session_id,
+        thread_id=thread_id,
+        turn_id=None,
+        execution_id=internal_execution_id,
+        outcome="completed",
+        turn_status=None,
+        items=(output,),
+    )
+    jsonl_after_first_commit = case.jsonl.read_bytes()
+    replayed_commit_id = case.saver.converge_execution(
+        case.session_id,
+        thread_id=thread_id,
+        turn_id=None,
+        execution_id=internal_execution_id,
+        outcome="completed",
+        turn_status=None,
+        items=(output,),
+    )
+
+    assert replayed_commit_id == commit_id
+    assert case.jsonl.read_bytes() == jsonl_after_first_commit
+    with sqlite3.connect(case.index) as connection:
+        internal_item = connection.execute(
+            "SELECT turn_id, execution_id FROM item_catalog WHERE item_id = ?",
+            (output.item_id,),
+        ).fetchone()
+        internal_message = connection.execute(
+            "SELECT turn_id, execution_id, role FROM messages WHERE message_id = ?",
+            (output.metadata["projection_message_id"],),
+        ).fetchone()
+        internal_execution = connection.execute(
+            "SELECT turn_id, execution_origin, outcome FROM executions "
+            "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+            (case.session_id, thread_id, internal_execution_id),
+        ).fetchone()
+        terminal_commits = connection.execute(
+            "SELECT COUNT(*) FROM storage_commits WHERE commit_kind = "
+            "'terminal_convergence' AND subject_id = ? AND commit_id = ?",
+            (internal_execution_id, commit_id),
+        ).fetchone()
+
+    assert internal_item == (None, internal_execution_id)
+    assert internal_message == (None, internal_execution_id, "assistant")
+    assert internal_execution == (None, "internal", "completed")
+    assert terminal_commits == (1,)
 
 
 def test_pre_model_failure_keeps_accepted_user_turn_visible(

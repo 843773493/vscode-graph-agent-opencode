@@ -13,6 +13,10 @@ from collections.abc import Mapping
 
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution
+from app.services.infrastructure.rollout_context.fork.source_snapshot import (
+    ForkRequestOnlyContent,
+    freeze_request_only_content,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
@@ -26,6 +30,8 @@ class ContextSourceOverlayMixin:
         self,
         overlay: object,
         *,
+        session_id: str,
+        thread_id: str,
         checkpoint_ns: str = "",
         base_content: object | None = None,
         delta_content: object | None = None,
@@ -37,9 +43,15 @@ class ContextSourceOverlayMixin:
             raise TypeError("source overlay checkpoint namespace 必须是字符串")
         if overlay_checkpoint_ns != checkpoint_ns:
             raise ValueError("source overlay checkpoint namespace 不一致")
-        session_id = getattr(overlay, "session_id", None)
+        overlay_session_id = getattr(overlay, "session_id", None)
         if not isinstance(session_id, str) or not session_id:
-            raise ValueError("source overlay 缺少 session_id")
+            raise ValueError("source overlay 缺少显式 session_id")
+        if overlay_session_id != session_id:
+            raise ValueError("source overlay SessionThread owner 不一致")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("source overlay 缺少显式 thread_id")
+        if getattr(overlay, "thread_id", None) != thread_id:
+            raise ValueError("source overlay SessionThread owner 不一致")
         overlay_id = getattr(overlay, "overlay_id", None)
         source_kind = getattr(overlay, "source_kind", None)
         source_revision = getattr(overlay, "source_revision", None)
@@ -71,6 +83,8 @@ class ContextSourceOverlayMixin:
         # 内存正文只作为本次注册时的校验输入，不成为重启后的第二事实源。
         self._storage.register_source_overlay(
             overlay,
+            session_id=session_id,
+            thread_id=thread_id,
             base_content=base_content,
             delta_content=delta_content,
         )
@@ -152,14 +166,18 @@ class ContextSourceOverlayMixin:
             )
             self.register_context_contribution(
                 session_id,
+                thread_id,
                 contribution,
                 checkpoint_ns=checkpoint_ns,
                 request_content=content,
             )
             with self._lock:
-                self._request_only_content[(session_id, checkpoint_ns, ref)] = content
+                self._request_only_content[
+                    (session_id, thread_id, checkpoint_ns, ref)
+                ] = content
         self.reconcile_context(
             session_id,
+            thread_id=thread_id,
             operation="source_edit",
             checkpoint_ns=checkpoint_ns,
             delta_ref=(
@@ -172,15 +190,37 @@ class ContextSourceOverlayMixin:
             materialize_overlay=materializes_overlay_id is not None,
         )
 
+    def _capture_request_only_content_for_fork(
+        self,
+        *,
+        source_session_id: str,
+        source_thread_id: str,
+        checkpoint_ns: str,
+    ) -> tuple[ForkRequestOnlyContent, ...]:
+        """脱离 Saver 的可变 cache 引用，冻结当前 source owner 的 request 内容。"""
+        with self._lock:
+            source_values = {
+                ref: value
+                for (session_id, thread_id, namespace, ref), value
+                in self._request_only_content.items()
+                if (session_id, thread_id, namespace)
+                == (source_session_id, source_thread_id, checkpoint_ns)
+            }
+        return freeze_request_only_content(source_values)
+
     def _copy_request_only_context_for_fork(
         self,
         *,
         source_session_id: str,
+        source_thread_id: str,
         target_session_id: str,
+        target_thread_id: str,
         fork_id: str,
         checkpoint_ns: str,
+        source_content_snapshot: tuple[ForkRequestOnlyContent, ...],
     ) -> None:
-        """把当前进程可用的 overlay body 绑定到 target-local ref。"""
+        """只用 capture 前冻结的 request-only bytes 绑定 target-local ref。"""
+        frozen_content = {item.ref: item.value_bytes for item in source_content_snapshot}
         mappings = self._storage.list_fork_identity_mappings(
             target_session_id,
             fork_id=fork_id,
@@ -189,6 +229,7 @@ class ContextSourceOverlayMixin:
         )
         source_contributions = self._storage.list_context_contributions(
             source_session_id,
+            source_thread_id,
             checkpoint_ns=checkpoint_ns,
         )
         target_contribution_ids = {
@@ -198,6 +239,7 @@ class ContextSourceOverlayMixin:
             )
             for row in self._storage.list_context_contributions(
                 target_session_id,
+                target_thread_id,
                 checkpoint_ns=checkpoint_ns,
             )
         }
@@ -209,12 +251,16 @@ class ContextSourceOverlayMixin:
                 )
                 if contribution_id not in target_contribution_ids:
                     continue
-                source_key = (source_session_id, checkpoint_ns, contribution_id)
-                target_key = (target_session_id, checkpoint_ns, contribution_id)
-                if source_key in self._request_only_content:
-                    self._request_only_content[target_key] = self._request_only_content[
-                        source_key
-                    ]
+                value_bytes = frozen_content.get(contribution_id)
+                if value_bytes is None:
+                    continue
+                target_key = (
+                    target_session_id,
+                    target_thread_id,
+                    checkpoint_ns,
+                    contribution_id,
+                )
+                self._request_only_content[target_key] = json.loads(value_bytes)
             for mapping in mappings:
                 lineage_json = strict_text(
                     mapping.get("lineage_json"),
@@ -247,18 +293,16 @@ class ContextSourceOverlayMixin:
                     if (
                         source_ref is not None
                         and target_ref is not None
-                        and (
-                            source_session_id,
-                            checkpoint_ns,
-                            source_ref,
-                        )
-                        in self._request_only_content
+                        and source_ref in frozen_content
                     ):
                         self._request_only_content[
-                            (target_session_id, checkpoint_ns, target_ref)
-                        ] = self._request_only_content[
-                            (source_session_id, checkpoint_ns, source_ref)
-                        ]
+                            (
+                                target_session_id,
+                                target_thread_id,
+                                checkpoint_ns,
+                                target_ref,
+                            )
+                        ] = json.loads(frozen_content[source_ref])
                 # full_rollout_copy 使用 preserved local overlay mapping，老
                 # 版本 lineage 将 ref 放在顶层；读取它可保持同进程副本可用。
                 for source_key, target_key in (
@@ -278,28 +322,28 @@ class ContextSourceOverlayMixin:
                     if (
                         source_ref is not None
                         and target_ref is not None
-                        and (
-                            source_session_id,
-                            checkpoint_ns,
-                            source_ref,
-                        )
-                        in self._request_only_content
+                        and source_ref in frozen_content
                     ):
                         self._request_only_content[
-                            (target_session_id, checkpoint_ns, target_ref)
-                        ] = self._request_only_content[
-                            (source_session_id, checkpoint_ns, source_ref)
-                        ]
+                            (
+                                target_session_id,
+                                target_thread_id,
+                                checkpoint_ns,
+                                target_ref,
+                            )
+                        ] = json.loads(frozen_content[source_ref])
 
     def list_source_overlays(
         self,
         session_id: str,
+        thread_id: str,
         *,
         source_overlay_epoch: int | None = None,
         checkpoint_ns: str = "",
     ) -> list[dict[str, object]]:
         return self._storage.list_source_overlays(
             session_id,
+            thread_id,
             source_overlay_epoch=source_overlay_epoch,
             checkpoint_ns=checkpoint_ns,
         )

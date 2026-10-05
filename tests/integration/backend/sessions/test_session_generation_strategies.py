@@ -14,6 +14,7 @@ from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.session_navigation_http import submit_navigation_operation
 
 
 @pytest.fixture(scope="module")
@@ -129,24 +130,29 @@ async def _create_nested_anchor(
     root_name: str,
     child_name: str,
 ) -> tuple[str, str]:
-    root_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": root_name},
+    root_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name=root_name,
     )
-    assert root_response.status_code == 200, root_response.text
-    root_id = root_response.json()["data"]["items"][-1]["folder_id"]
-    child_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": child_name, "parent_folder_id": root_id},
+    assert root_receipt["state"] == "committed"
+    root_id = str(root_receipt["created_node_id"])
+    child_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name=child_name,
+        parent_node_id=root_id,
     )
-    assert child_response.status_code == 200, child_response.text
-    child_id = child_response.json()["data"]["items"][-1]["folder_id"]
+    assert child_receipt["state"] == "committed"
+    child_id = str(child_receipt["created_node_id"])
     session_id = await create_session(client, title)
-    assign_response = await client.put(
-        f"/api/v1/session-catalog/sessions/{session_id}/folder",
-        json={"folder_id": child_id},
+    assign_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=session_id,
+        parent_node_id=child_id,
     )
-    assert assign_response.status_code == 200, assign_response.text
+    assert assign_receipt["state"] == "committed"
     return session_id, child_id
 
 

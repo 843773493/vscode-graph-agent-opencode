@@ -44,6 +44,8 @@ const capabilities: NodeDebugCapabilities = {
   supported_adapters: ["node"],
   launch_profiles: [],
 };
+const mainThreadId = "thr_00000000700070008000000000000001";
+const childThreadId = "thr_00000000700070008000000000000002";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalBroadcastChannelDescriptor = Object.getOwnPropertyDescriptor(
@@ -81,12 +83,17 @@ describe("useNodeDebugWorkbench", () => {
     const getStateSpy = spyOn(api, "getNodeDebugState").mockImplementation(
       async (_port, _sessionId, threadId) => state(threadId),
     );
+    const mainThreadSpy = spyOn(api, "getSessionMainThread").mockResolvedValue({
+      session_id: "session-workbench",
+      thread_id: mainThreadId,
+    });
     const capabilitiesSpy = spyOn(api, "getNodeDebugCapabilities").mockResolvedValue(capabilities);
     const actionSpy = spyOn(api, "applyNodeDebugAction").mockImplementation(
       async (_port, request) => state(request.thread_id),
     );
     restoreApi = () => {
       getStateSpy.mockRestore();
+      mainThreadSpy.mockRestore();
       capabilitiesSpy.mockRestore();
       actionSpy.mockRestore();
     };
@@ -116,21 +123,21 @@ describe("useNodeDebugWorkbench", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(binding.threadId).toBe("main");
+    expect(binding.threadId).toBe(mainThreadId);
     expect(binding.activeFrame?.path).toBe("/workspace/app.js");
 
     await act(async () => {
-      binding.selectThread("child-1");
+      binding.selectThread(childThreadId);
       await Promise.resolve();
     });
-    expect(binding.threadId).toBe("child-1");
+    expect(binding.threadId).toBe(childThreadId);
     expect(auxiliaryVisible).toBe(true);
     expect(auxiliaryTab).toBe("debug");
     expect(persistedLayouts).toEqual([{
       auxiliary_visible: true,
       auxiliary_tab: "debug",
     }]);
-    expect(statusMessages[statusMessages.length - 1]).toBe("已切换调试 owner: child-1");
+    expect(statusMessages[statusMessages.length - 1]).toBe(`已切换调试 owner: ${childThreadId}`);
 
     await act(async () => {
       binding.changeBreakpoint(
@@ -145,7 +152,7 @@ describe("useNodeDebugWorkbench", () => {
       49_412,
       {
         session_id: "session-workbench",
-        thread_id: "child-1",
+        thread_id: childThreadId,
         action: "set_breakpoint",
         params: {
           path: "/workspace/app.js",
@@ -158,5 +165,41 @@ describe("useNodeDebugWorkbench", () => {
       "workspace-workbench",
     );
     expect(getStateSpy).toHaveBeenCalled();
+  });
+
+  test("catalog main thread 解析前阻止调试 mutation", async () => {
+    installBrowserGlobals();
+    const mainThreadSpy = spyOn(api, "getSessionMainThread").mockReturnValue(
+      new Promise(() => {}),
+    );
+    const startSpy = spyOn(api, "startNodeDebug").mockResolvedValue(state(""));
+    restoreApi = () => {
+      mainThreadSpy.mockRestore();
+      startSpy.mockRestore();
+    };
+
+    let binding!: NodeDebugWorkbenchBinding;
+    function Probe(): React.ReactNode {
+      binding = useNodeDebugWorkbench({
+        apiPort: 49_412,
+        workspaceId: "workspace-workbench",
+        sessionId: "session-workbench",
+        enabled: true,
+        onStatusChange: () => {},
+        extensionWindowRequested: false,
+        setAuxiliaryVisible: () => {},
+        setAuxiliaryTab: () => {},
+        persistLayoutSettings: () => {},
+      });
+      return null;
+    }
+
+    await act(async () => {
+      renderer = create(<Probe />);
+      await Promise.resolve();
+    });
+    expect(binding.threadId).toBeNull();
+    expect(await binding.controller.start({ path: "entry.mjs" })).toBeNull();
+    expect(startSpy).not.toHaveBeenCalled();
   });
 });

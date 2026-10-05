@@ -21,24 +21,32 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     VrnResolveError,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE,
     OPERATION_ACTIVATE,
     OPERATION_OBSERVE,
     OPERATION_READ_CONTENT,
+    SESSION_RESOURCE_IDENTITY_NAMESPACE,
     ResolutionContext,
     ResolvedResourceHandle,
+    ResourceIdentity,
     ResourceProvenance,
     SemanticResourceDescriptor,
+    derive_resource_identity,
+    validate_resource_identity,
 )
 
 __all__ = [
+    "CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE",
     "OPERATION_ACTIVATE",
     "OPERATION_OBSERVE",
     "OPERATION_READ_CONTENT",
+    "SESSION_RESOURCE_IDENTITY_NAMESPACE",
     "CatalogBinding",
     "ObservedSourceDescriptor",
     "ParsedVrn",
     "ResolutionContext",
     "ResolvedResourceHandle",
+    "ResourceIdentity",
     "ResourceProvenance",
     "SemanticResourceDescriptor",
     "TrackedResourceBinding",
@@ -46,8 +54,10 @@ __all__ = [
     "VirtualResourceResolver",
     "VrnGrammarError",
     "VrnResolveError",
+    "derive_resource_identity",
     "parse_vrn",
     "resource_display_uri",
     "skill_display_uri",
+    "validate_resource_identity",
     "workspace_agent_spec_display_uri",
 ]

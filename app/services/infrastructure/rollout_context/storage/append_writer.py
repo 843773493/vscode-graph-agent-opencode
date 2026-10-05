@@ -50,6 +50,7 @@ class RolloutAppendWriter:
     def append_writes(
         self,
         *,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         checkpoint_id: str,
@@ -58,6 +59,7 @@ class RolloutAppendWriter:
         task_path: str,
     ) -> None:
         self._storage.append_writes(
+            session_id=session_id,
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             checkpoint_id=checkpoint_id,
@@ -70,19 +72,22 @@ class RolloutAppendWriter:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         final_message_id: str,
         checkpoint_ns: str = "",
     ) -> None:
         """把最终消息 ID 解析为 sequence，再追加 SQLite finalization。"""
         final_message_sequence = self._storage.final_message_sequence(
-            thread_id=session_id,
+            session_id=session_id,
+            thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             turn_id=turn_id,
             final_message_id=final_message_id,
         )
         self._storage.append_turn_finalize(
-            thread_id=session_id,
+            session_id=session_id,
+            thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             turn_id=turn_id,
             final_message_sequence=final_message_sequence,
@@ -93,16 +98,32 @@ class RolloutAppendWriter:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         status: str,
         checkpoint_ns: str = "",
     ) -> bool:
         """持久化失败、取消或超时 Turn 的终态。"""
         return self._storage.mark_turn_terminal_status(
-            thread_id=session_id,
+            session_id=session_id,
+            thread_id=thread_id,
             turn_id=turn_id,
             status=status,
             checkpoint_ns=checkpoint_ns,
+        )
+
+    def mark_job_terminal_status(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        job_id: str,
+        status: str,
+        checkpoint_ns: str = "",
+    ) -> bool:
+        return self._storage.mark_job_terminal_status(
+            session_id=session_id, thread_id=thread_id,
+            job_id=job_id, status=status, checkpoint_ns=checkpoint_ns,
         )
 
     def copy_turn_finalizations(

@@ -14,7 +14,6 @@ from app.domain.itemized.enums import DetailAvailability
 from app.domain.itemized.errors import CodeCarryingError, ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
 
-
 ResourceActivationBoundary = str
 _BOUNDARIES: Final[frozenset[str]] = frozenset({"turn", "model_call"})
 _SNAPSHOT_KINDS: Final[frozenset[str]] = _BOUNDARIES

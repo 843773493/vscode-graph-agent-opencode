@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
@@ -40,9 +41,7 @@ class FakeBinder:
             self.seen_wakeup_keys.append(target.inbox.wakeup_key)
         if self.fail_message is not None:
             raise RuntimeError(self.fail_message)
-        return InboxExecutionBinding(
-            job_id=self.job_id or make_job_id(), turn_id=None
-        )
+        return InboxExecutionBinding(job_id=self.job_id or make_job_id(), turn_id=None)
 
 
 @dataclass
@@ -57,7 +56,9 @@ class StoreHarness:
 def harness(tmp_path: Path) -> StoreHarness:
     session_id = f"ses_{create_uuid_hex()}"
     created = SessionControlStore(tmp_path / "session-control.sqlite")
-    created.initialize_main_thread(f"thr_{create_uuid_hex()}", DEFAULT_CREATED_AT)
+    created.initialize_main_thread(
+        f"thr_{create_uuid_hex()}", DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     created.initialize_fence("active", 1)
     yield StoreHarness(store=created, session_id=session_id)
     created.close()
@@ -115,7 +116,9 @@ async def test_start_requires_binder(harness: StoreHarness) -> None:
 async def test_startup_recovery_binds_pending_inbox(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
     worker = InboxAdmissionWorker(
-        store=harness.store, claim_owner="worker-a", binder=FakeBinder(job_id=make_job_id())
+        store=harness.store,
+        claim_owner="worker-a",
+        binder=FakeBinder(job_id=make_job_id()),
     )
     worker.start()
     attempts = worker.admit_pending_once()
@@ -155,9 +158,10 @@ async def test_recovery_after_restart_binds_remaining_inboxes(
     assert harness.store.get_communication_inbox(second.communication_id).state == (
         "execution_bound"
     )
-    assert harness.store.get_communication_inbox(
-        third.communication_id
-    ).state == "execution_bound"
+    assert (
+        harness.store.get_communication_inbox(third.communication_id).state
+        == "execution_bound"
+    )
 
 
 async def test_duplicate_claim_by_same_owner_is_idempotent(
@@ -203,7 +207,10 @@ async def test_two_workers_claim_conflict_classified(harness: StoreHarness) -> N
 async def test_stale_generation_is_rejected(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
     newer = InboxAdmissionWorker(
-        store=harness.store, claim_owner="worker-a", claim_generation=2, binder=FakeBinder()
+        store=harness.store,
+        claim_owner="worker-a",
+        claim_generation=2,
+        binder=FakeBinder(),
     )
     newer.start()
     assert newer.admit_pending_once()[0].outcome == "bound"
@@ -219,7 +226,10 @@ async def test_stale_generation_is_rejected(harness: StoreHarness) -> None:
         fresh.communication_id, claim_owner="worker-a", claim_generation=3
     )
     stale = InboxAdmissionWorker(
-        store=harness.store, claim_owner="worker-a", claim_generation=1, binder=FakeBinder()
+        store=harness.store,
+        claim_owner="worker-a",
+        claim_generation=1,
+        binder=FakeBinder(),
     )
     stale.start()
     with pytest.raises(RuntimeError, match="generation"):
@@ -244,7 +254,9 @@ async def test_binder_failure_keeps_recoverable_then_retries(
     assert "job service 暂不可用" in current.last_error
     # 失败后重试：同 owner 同 generation claim 幂等重入，绑定成功。
     recovered = InboxAdmissionWorker(
-        store=harness.store, claim_owner="worker-a", binder=FakeBinder(job_id=make_job_id())
+        store=harness.store,
+        claim_owner="worker-a",
+        binder=FakeBinder(job_id=make_job_id()),
     )
     recovered.start()
     attempts = recovered.admit_pending_once()
@@ -258,7 +270,9 @@ async def test_binder_receives_frozen_wakeup_key(harness: StoreHarness) -> None:
     inbox = seed_inbox(harness)
     seen: list[str] = []
     binder = FakeBinder(seen_wakeup_keys=seen)
-    worker = InboxAdmissionWorker(store=harness.store, claim_owner="worker-a", binder=binder)
+    worker = InboxAdmissionWorker(
+        store=harness.store, claim_owner="worker-a", binder=binder
+    )
     worker.start()
     worker.admit_pending_once()
     assert seen == [inbox.wakeup_key]

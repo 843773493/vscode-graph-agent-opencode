@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -14,7 +15,11 @@ from app.gateway.remote_gateway import (
     reconcile_configured_remote_gateways,
     reconnect_remote_gateway,
 )
-from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
+from app.gateway.runtime.local_workspace import (
+    start_managed_local_workspace_runtime,
+    wait_for_workspace_health,
+)
+from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import (
     build_managed_local_workspace_id,
 )
@@ -49,8 +54,6 @@ def _external_default_backend_url() -> str | None:
     if configured_url is None or configured_url.strip() == "":
         return None
     normalized_url = configured_url.strip().rstrip("/")
-    if normalized_url == "managed-by-gateway":
-        return None
     if not normalized_url.startswith(("http://", "https://")):
         raise ValueError(
             "BOXTEAM_DEFAULT_BACKEND_URL 必须是 http:// 或 https:// 地址: "
@@ -117,6 +120,7 @@ async def _restore_managed_local_runtimes(
             runtime = await start_managed_local_workspace_runtime(
                 project_root=get_project_root(),
                 workspace_root=workspace_root,
+                expected_backend_workspace_id=target.backend_workspace_id,
                 log_dir=gateway_root / "logs",
                 reusable_backend_url=reusable_backend_url,
                 adopt_existing_backend=preserve_existing_managed_runtimes,
@@ -136,6 +140,7 @@ async def _restore_managed_local_runtimes(
                 ),
             )
             target.backend_url = runtime.service_urls["workspace_api"]
+            target.backend_workspace_id = runtime.backend_workspace_id
             target.local_service_urls = {
                 "terminal_manager": runtime.service_urls["terminal_manager"],
                 "browser_manager": runtime.service_urls["browser_manager"],
@@ -205,6 +210,35 @@ async def create_registry(
     default_root_path = _default_workspace_root()
     root_path = str(default_root_path)
     default_workspace_id = build_managed_local_workspace_id(root_path)
+    for target in persisted_targets:
+        if target.connection_kind != "local":
+            continue
+        workspace_root = Path(target.root_path).expanduser().resolve()
+        if not workspace_root.is_dir():
+            continue
+        actual_backend_workspace_id = await asyncio.to_thread(
+            resolve_backend_workspace_id,
+            get_project_root(),
+            workspace_root,
+        )
+        if (
+            target.backend_workspace_id is not None
+            and target.backend_workspace_id != actual_backend_workspace_id
+        ):
+            raise RuntimeError(
+                "Gateway registry 工作区 backend UUID 与本地身份文件不一致: "
+                f"workspace_id={target.workspace_id}, "
+                f"expected={target.backend_workspace_id}, "
+                f"actual={actual_backend_workspace_id}, root={workspace_root}"
+            )
+        if target.backend_workspace_id is None:
+            # TODO: 旧 registry schema 缺少 backend_workspace_id 的目标完成一次性修复后，删除该回填分支。
+            target.backend_workspace_id = actual_backend_workspace_id
+            registry.upsert(
+                target,
+                activate=False,
+                mutation_owner=target.owner,
+            )
     persisted_default = persisted_targets_by_id.get(default_workspace_id)
     if persisted_default is None:
         persisted_default = next(
@@ -215,12 +249,84 @@ async def create_registry(
             ),
             None,
         )
+    try:
+        return await _complete_registry_startup(
+            gateway_root=gateway_root,
+            resolved_gateway_config=resolved_gateway_config,
+            registry=registry,
+            persisted_targets_by_id=persisted_targets_by_id,
+            persisted_default=persisted_default,
+            persisted_active_workspace_id=persisted_active_workspace_id,
+            default_root_path=default_root_path,
+            root_path=root_path,
+            default_workspace_id=default_workspace_id,
+            preserve_existing_managed_runtimes=preserve_existing_managed_runtimes,
+        )
+    except BaseException as startup_error:
+        try:
+            registry.close(
+                detach_adopted_managed_processes=preserve_existing_managed_runtimes
+            )
+        except BaseException as cleanup_error:  # noqa: BLE001 - 取消与清理错误必须完整保留
+            raise BaseExceptionGroup(
+                "Gateway registry 构造失败且已创建运行时清理失败",
+                [startup_error, cleanup_error],
+            ) from None
+        raise
+
+
+async def _complete_registry_startup(
+    *,
+    gateway_root: Path,
+    resolved_gateway_config: GatewayConfig,
+    registry: GatewayWorkspaceRegistry,
+    persisted_targets_by_id: dict[str, WorkspaceTarget],
+    persisted_default: WorkspaceTarget | None,
+    persisted_active_workspace_id: str | None,
+    default_root_path: Path,
+    root_path: str,
+    default_workspace_id: str,
+    preserve_existing_managed_runtimes: bool,
+) -> GatewayWorkspaceRegistry:
     external_backend_url = _external_default_backend_url()
     default_runtime = None
+
+    def close_unregistered_default_runtime(startup_error: BaseException) -> None:
+        if default_runtime is None or (
+            registry.has_target(default_workspace_id)
+            and registry.has_runtime(default_workspace_id)
+        ):
+            return
+        try:
+            if preserve_existing_managed_runtimes:
+                default_runtime.detach_adopted_processes()
+            default_runtime.close()
+        except BaseException as cleanup_error:  # noqa: BLE001 - 取消与清理错误必须完整保留
+            raise BaseExceptionGroup(
+                "Gateway 默认运行时注册失败且清理失败",
+                [startup_error, cleanup_error],
+            ) from None
+
+    backend_workspace_id = await asyncio.to_thread(
+        resolve_backend_workspace_id,
+        get_project_root(),
+        default_root_path,
+    )
+    if (
+        persisted_default is not None
+        and persisted_default.backend_workspace_id is not None
+        and persisted_default.backend_workspace_id != backend_workspace_id
+    ):
+        raise RuntimeError(
+            "默认工作区 backend UUID 与 Gateway registry 不一致: "
+            f"expected={persisted_default.backend_workspace_id}, "
+            f"actual={backend_workspace_id}, workspace_root={default_root_path}"
+        )
     if external_backend_url is None:
         default_runtime = await start_managed_local_workspace_runtime(
             project_root=get_project_root(),
             workspace_root=default_root_path,
+            expected_backend_workspace_id=backend_workspace_id,
             log_dir=gateway_root / "logs",
             backend_debug_port=_default_backend_debug_port(),
             preferred_backend_port=_default_backend_port(),
@@ -247,43 +353,63 @@ async def create_registry(
             default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
             preserve_adopted_processes_on_failure=(preserve_existing_managed_runtimes),
         )
-        backend_url = default_runtime.service_urls["workspace_api"]
-        local_service_urls = {
-            "terminal_manager": default_runtime.service_urls["terminal_manager"],
-            "browser_manager": default_runtime.service_urls["browser_manager"],
-        }
+        try:
+            backend_url = default_runtime.service_urls["workspace_api"]
+            backend_workspace_id = default_runtime.backend_workspace_id
+            local_service_urls = {
+                "terminal_manager": default_runtime.service_urls["terminal_manager"],
+                "browser_manager": default_runtime.service_urls["browser_manager"],
+            }
+        except BaseException as startup_error:
+            close_unregistered_default_runtime(startup_error)
+            raise
         managed = True
     else:
         # 测试和外部开发编排可以显式提供已运行的工作区后端；Gateway 不应再为
         # 同一工作区启动第二个进程，否则会与工作区 SQLite 所有权锁冲突。
         backend_url = external_backend_url
+        await wait_for_workspace_health(
+            f"{backend_url}/api/v1/health",
+            backend_workspace_id,
+            request_timeout_seconds=(
+                resolved_gateway_config.gateway_process_health_request_timeout_seconds
+            ),
+            poll_interval_seconds=(
+                resolved_gateway_config.gateway_process_health_poll_interval_seconds
+            ),
+        )
         local_service_urls = {}
         managed = False
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id=default_workspace_id,
-            name=(
-                persisted_default.name
-                if (persisted_default is not None and persisted_default.name_customized)
-                else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
+    try:
+        registry.upsert(
+            WorkspaceTarget(
+                workspace_id=default_workspace_id,
+                name=(
+                    persisted_default.name
+                    if (persisted_default is not None and persisted_default.name_customized)
+                    else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
+                ),
+                name_customized=(
+                    persisted_default.name_customized
+                    if persisted_default is not None
+                    else False
+                ),
+                root_path=root_path,
+                backend_url=backend_url,
+                backend_workspace_id=backend_workspace_id,
+                connection_kind="local",
+                owner="system",
+                managed=managed,
+                removable=False,
+                system_default=True,
+                local_service_urls=local_service_urls,
             ),
-            name_customized=(
-                persisted_default.name_customized
-                if persisted_default is not None
-                else False
-            ),
-            root_path=root_path,
-            backend_url=backend_url,
-            connection_kind="local",
-            owner="system",
-            managed=managed,
-            removable=False,
-            system_default=True,
-            local_service_urls=local_service_urls,
-        ),
-        runtime=default_runtime,
-        activate=persisted_active_workspace_id is None,
-    )
+            runtime=default_runtime,
+            activate=persisted_active_workspace_id is None,
+        )
+    except BaseException as startup_error:
+        close_unregistered_default_runtime(startup_error)
+        raise
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )

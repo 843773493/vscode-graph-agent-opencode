@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from functools import partial
-from typing import Protocol
+from typing import Annotated, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.auth import (
     GatewayAuthContext,
     get_gateway_local_token,
@@ -52,7 +53,7 @@ def _registry(app: object) -> GatewayWorkspaceRegistry:
     state = getattr(app, "state", None)
     registry = getattr(state, "registry", None)
     if not isinstance(registry, GatewayWorkspaceRegistry):
-        raise RuntimeError("Gateway registry 尚未初始化")
+        raise RuntimeError("Gateway registry 尚未初始化")  # noqa: TRY004 - 保留装配失败合同。
     return registry
 
 
@@ -60,7 +61,7 @@ def _http_client(app: object) -> httpx.AsyncClient:
     state = getattr(app, "state", None)
     client = getattr(state, "http_client", None)
     if not isinstance(client, httpx.AsyncClient):
-        raise RuntimeError("Gateway HTTP client 尚未初始化")
+        raise RuntimeError("Gateway HTTP client 尚未初始化")  # noqa: TRY004
     return client
 
 
@@ -74,11 +75,13 @@ def _service_name(service_path: str) -> GatewayServiceName:
 def _proxy_request_headers(
     request: Request,
     target: WorkspaceTarget | None = None,
+    service: GatewayServiceName | None = None,
 ) -> dict[str, str]:
     headers = filter_hop_by_hop_headers(
         (key, value)
         for key, value in request.headers.items()
         if key.lower() not in GATEWAY_PROXY_DROPPED_HEADERS
+        and key.lower() != "x-boxteam-backend-workspace-id"
     )
     headers["X-Request-ID"] = get_request_id(request)
     # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在剥离集合里剔除。
@@ -93,7 +96,28 @@ def _proxy_request_headers(
         ).get(connection_id)
         headers["X-BoxTeam-Federation-Token"] = credential.token
         headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
+    elif target is not None and service == "terminal_manager":
+        headers["X-BoxTeam-Workspace-Id"] = _terminal_workspace_id(target)
     return headers
+
+
+def _terminal_workspace_id(target: WorkspaceTarget) -> str:
+    workspace_id = target.backend_workspace_id
+    if workspace_id is None:
+        raise RuntimeError(
+            f"终端代理 target 缺少受控 backend UUID: workspace_id={target.workspace_id}"
+        )
+    return validate_workspace_id(workspace_id)
+
+
+def _validate_terminal_target_header(
+    target: WorkspaceTarget, backend_workspace_id: str | None
+) -> None:
+    if backend_workspace_id is not None and (
+        target.connection_kind == "remote_gateway"
+        or backend_workspace_id != _terminal_workspace_id(target)
+    ):
+        raise HTTPException(status_code=400, detail="终端 Gateway target 与 backend UUID 冲突")
 
 
 def _proxy_response_headers(response: httpx.Response) -> dict[str, str]:
@@ -134,9 +158,11 @@ async def proxy_auxiliary_http(
     service_path: str,
     path: str,
     request: Request,
-    auth: GatewayAuthContext = Depends(verify_gateway_access),
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
 ):
     service = _service_name(service_path)
+    if service == "terminal_manager" and path.strip("/") != "health":
+        raise HTTPException(status_code=403, detail="Terminal 管理请使用工作区 /api/v1/resources owner API")
     proxy_target_to_proto(
         workspace_id=workspace_id,
         service=service,
@@ -147,6 +173,10 @@ async def proxy_auxiliary_http(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    if service == "terminal_manager":
+        _validate_terminal_target_header(
+            target, request.headers.get("X-BoxTeam-Backend-Workspace-Id")
+        )
     if auth.kind == "federation" and target.connection_kind != "local":
         raise HTTPException(
             status_code=400,
@@ -183,7 +213,7 @@ async def proxy_auxiliary_http(
                 target_url,
                 params=request.query_params,
                 content=await request.body(),
-                headers=_proxy_request_headers(request, target),
+                headers=_proxy_request_headers(request, target, service),
             )
             response = await send_upstream_request(client, forwarded)
         except httpx.RequestError as error:
@@ -277,6 +307,13 @@ async def _proxy_auxiliary_websocket(
     registry = _registry(websocket.app)
     try:
         target = registry.resolve(workspace_id)
+        if service == "terminal_manager":
+            _validate_terminal_target_header(
+                target, websocket.headers.get("X-BoxTeam-Backend-Workspace-Id")
+            )
+            _validate_terminal_target_header(
+                target, websocket.query_params.get("workspace_id")
+            )
         federation_token = websocket.headers.get("x-boxteam-federation-token")
         if federation_token is not None:
             FederationCredentialStore(
@@ -286,6 +323,9 @@ async def _proxy_auxiliary_websocket(
                 raise PermissionError("bounded federation 禁止代理嵌套远程辅助服务")
         elif websocket.query_params.get("token") != get_gateway_local_token():
             raise PermissionError("invalid local token")
+    except HTTPException as error:
+        await websocket.close(code=1008, reason=str(error.detail)[:120])
+        return
     except (LookupError, PermissionError, ValueError) as error:
         await websocket.close(code=1008, reason=str(error)[:120])
         return
@@ -314,6 +354,8 @@ async def _proxy_auxiliary_websocket(
         # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
         # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
         upstream_headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
+        if service == "terminal_manager" and target.connection_kind != "remote_gateway":
+            upstream_headers["X-BoxTeam-Workspace-Id"] = _terminal_workspace_id(target)
         if target.connection_kind == "remote_gateway":
             connection_id = target.remote_gateway_connection_id
             if connection_id is None:
@@ -346,7 +388,7 @@ async def _proxy_auxiliary_websocket(
                 task.result()
     except (ConnectionClosed, WebSocketDisconnect):
         return
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - 把上游失败显式发送给 WebSocket 调用方。
         await websocket.close(code=1011, reason=str(error)[:120])
     finally:
         release_route_reference()

@@ -110,8 +110,8 @@ def test_recovery_routes_expose_strict_proof_and_discard_contracts() -> None:
     gateway_openapi = gateway_app.openapi()
 
     expected_routes = {
-        "/api/v1/config/pending/resolve": "ConfigPendingHealthProofRequest",
-        "/api/v1/config/pending/discard": "ConfigPendingDiscardRequest",
+        "/api/v1/workspaces/{workspace_id}/config/pending/resolve": "ConfigPendingHealthProofRequest",
+        "/api/v1/workspaces/{workspace_id}/config/pending/discard": "ConfigPendingDiscardRequest",
     }
     for path, schema_name in expected_routes.items():
         request_body = workspace_openapi["paths"][path]["post"]["requestBody"]

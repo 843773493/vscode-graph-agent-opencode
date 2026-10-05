@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     DetailAvailability,
@@ -13,6 +12,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import validate_hash_token
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.validation import _non_empty_string
@@ -142,7 +142,9 @@ class ContextSelectionEntry:
         if self.detail_ref is not None:
             if not isinstance(self.detail_ref, DetailRef):
                 raise ItemSchemaError("ContextSelectionEntry.detail_ref 必须是 typed DetailRef")
-            self.detail_ref.require_owner(self.ref.session_id, self.assembly_id)
+            self.detail_ref.require_owner(
+                self.ref.session_id, self.ref.thread_id, self.assembly_id
+            )
         if self.contribution_id is not None:
             _non_empty_string(
                 self.contribution_id,

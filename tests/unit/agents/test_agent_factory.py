@@ -30,6 +30,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "system_prompt": "测试提示词",
         "checkpointer": MagicMock(),
         "session_id": "ses_empty_extension_catalog",
+        "thread_id": "thr_00000000400070008000000000000002",
         "agent_id": "default",
         "tools": [],
         "enabled_tool_names": {"read_file"},
@@ -41,6 +42,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "session_service": MagicMock(),
         "session_orchestrator": MagicMock(),
         "session_subagent_service": MagicMock(),
+        "team_service": MagicMock(),
         "session_context_query_service": MagicMock(),
         "workspace_session_context_client": MagicMock(),
         "config_service": config_service,
@@ -57,7 +59,9 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
         patch.object(agent_factory, "SealedAssemblyDispatchBridge"),
-        patch.object(agent_factory, "create_agent", return_value=built_agent) as create_agent,
+        patch.object(
+            agent_factory, "create_agent", return_value=built_agent
+        ) as create_agent,
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
         patch.object(
             agent_factory,
@@ -94,6 +98,8 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "system_prompt": "测试提示词",
         "checkpointer": checkpointer,
         "session_id": "tools_inspection_session",
+        "owns_thread": False,
+        "thread_id": "thr_00000000400070008000000000000002",
         "agent_id": "default",
         "tools": [],
         "enabled_tool_names": {"read_file"},
@@ -105,6 +111,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "session_service": MagicMock(),
         "session_orchestrator": MagicMock(),
         "session_subagent_service": MagicMock(),
+        "team_service": MagicMock(),
         "session_context_query_service": MagicMock(),
         "workspace_session_context_client": MagicMock(),
         "config_service": config_service,

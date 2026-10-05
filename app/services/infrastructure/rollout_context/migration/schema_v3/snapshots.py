@@ -6,9 +6,9 @@ from copy import deepcopy
 from dataclasses import replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.migration.schema_v3.legacy_hash import (
     legacy_hashes,
 )
@@ -62,20 +62,27 @@ def detail_purposes(assemblies: list[dict], snapshots: dict[str, dict]) -> dict[
     return result
 
 
-def typed_snapshot(value: dict, detail_map: dict[str, DetailRef]) -> ContextAssemblySnapshot:
+def typed_snapshot(
+    value: dict,
+    detail_map: dict[str, DetailRef],
+    *,
+    thread_id: str,
+) -> ContextAssemblySnapshot:
     result = deepcopy(value)
     session_id, plan_id = result["session_id"], result["plan_id"]
+    result["thread_id"] = thread_id
 
     def mapped(detail_id: str) -> dict[str, str]:
         if not isinstance(detail_id, str) or detail_id not in detail_map:
             raise SchemaV3UpgradeError("source-mismatch: 旧 detail identity 未注册")
         ref = detail_map[detail_id]
-        ref.require_owner(session_id)
+        ref.require_owner(session_id, thread_id)
         return ref.to_dict()
 
     def context_ref(ref: dict, final_detail: object = None) -> dict:
         ref = dict(ref)
         ref["session_id"] = session_id
+        ref["thread_id"] = thread_id
         ref["plan_id"] = None if ref["ref_type"] == "canonical_item" else plan_id
         old_final = ref.pop("detail_ref", None)
         if old_final is not None and old_final != final_detail:
@@ -91,12 +98,14 @@ def typed_snapshot(value: dict, detail_map: dict[str, DetailRef]) -> ContextAsse
     result["refs"] = [context_ref(ref, final.get((ref["ref_type"], ref["ref_id"]))) for ref in result["refs"]]
     for ref in result["tool_set_refs"]:
         ref["session_id"] = session_id
+        ref["thread_id"] = thread_id
         require_equal(ref["plan_id"], plan_id, "旧 ToolSetRef plan")
         require_equal(ref["assembly_id"], result["assembly_id"], "旧 ToolSetRef assembly")
     for entry in result["selection"]:
         require_equal(entry["assembly_id"], result["assembly_id"], "旧 selection assembly")
         if entry["ref"]["ref_type"] == "tool_set":
             entry["ref"]["session_id"] = session_id
+            entry["ref"]["thread_id"] = thread_id
         else:
             entry["ref"] = context_ref(entry["ref"], entry["detail_ref"])
         if entry["detail_ref"] is not None:

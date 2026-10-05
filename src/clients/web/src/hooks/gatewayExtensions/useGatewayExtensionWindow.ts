@@ -7,6 +7,8 @@ import type {
   useGatewayExtensionResources,
 } from "./useGatewayExtensionResources";
 import type { SessionResource } from "../../types/backend";
+import type { ResourceThreadRef } from "../../api/workspaceResources";
+import { terminalPreviewThread } from "../../state/display/terminalResourceDisplay";
 import { buildGatewayAttachUrl } from "../../utils/attachUrls";
 import {
   EXTENSION_WINDOW_NAME,
@@ -25,7 +27,7 @@ interface UseGatewayExtensionWindowOptions {
   extensionResources: ReturnType<typeof useGatewayExtensionResources>;
   openAuxiliaryTab: (tab: WorkspaceAuxiliaryTab) => void;
   openBrowserPreview: (browserId: string) => void;
-  openTerminalPreview: (terminalId: string) => void;
+  openTerminalPreview: (terminalId: string, thread?: ResourceThreadRef) => void;
   apiPort: number;
   activeSessionWorkspaceId: string | null;
   activeSessionId: string | null;
@@ -80,7 +82,9 @@ export function useGatewayExtensionWindow({
       if (kind === "browser") {
         openBrowserPreview(resourceId ?? "");
       } else if (kind === "terminal") {
-        openTerminalPreview(resourceId ?? "");
+        const resource = sessionResources.find((candidate) => candidate.kind === "terminal" && candidate.resource_id === resourceId);
+        if (!resource) throw new Error("终端不在当前会话的权威关联清单中");
+        openTerminalPreview(resource.resource_id, terminalPreviewThread(resource, activeSessionId ?? ""));
       }
       setStatus("扩展窗口未能打开，已在当前页面切换为扩展窗口模式；请检查浏览器弹窗权限。");
       return;
@@ -136,6 +140,7 @@ export function useGatewayExtensionWindow({
             extensionPreviewEntry.workspace_id,
             extensionPreviewEntry.resource.resource_id,
             true,
+            terminalPreviewThread(extensionPreviewEntry.resource, extensionPreviewEntry.session_id),
           ),
         }
     : null;

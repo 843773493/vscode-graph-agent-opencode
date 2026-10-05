@@ -7,6 +7,10 @@ import pytest
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.registry import WorkspaceTarget
 from app.schemas.internal_v2.session import SessionDTO
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 
 
 class _Response:
@@ -39,11 +43,15 @@ async def test_resource_catalog_uses_fast_workspace_resource_projection() -> Non
         root_path="/tmp/test-workspace",
         backend_url="http://127.0.0.1:8010",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     session = SessionDTO(
         session_id="ses_live",
         workspace_id="gw_test",
+        resource_identity=session_resource_identity("gw_test", "ses_live"),
+        vrn=session_resource_vrn("gw_test", "ses_live"),
+        scope="workspace",
         title="运行中会话",
         current_agent_id="agent_test",
         created_at=datetime(2026, 7, 5, 1, 2, 3, tzinfo=UTC),

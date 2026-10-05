@@ -7,11 +7,12 @@ import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   HttpRequestError,
+  gatewayWorkspaceRequestHeaders,
   requestGatewayResponse,
   requestJson,
   unwrapApiData,
-  workspaceHeader,
 } from "../http";
+import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
 export class SessionActivityCursorGoneError extends Error {
   readonly status = 410;
@@ -24,7 +25,7 @@ export class SessionActivityCursorGoneError extends Error {
 
 export async function listSessionActivity(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { after?: number; limit?: number } = {},
 ): Promise<CursorPage<SessionActivity>> {
   const params = new URLSearchParams({
@@ -36,7 +37,7 @@ export async function listSessionActivity(
       await requestJson<APIResponse<CursorPage<SessionActivity>>>(
         port,
         `/api/v1/session-catalog/events?${params.toString()}`,
-        { headers: workspaceHeader(workspaceId) },
+        { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
       ),
     );
   } catch (error: unknown) {
@@ -49,7 +50,7 @@ export async function listSessionActivity(
 
 export async function streamSessionActivity(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   options: {
     after?: number;
     signal?: AbortSignal;
@@ -68,7 +69,7 @@ export async function streamSessionActivity(
         skipGatewayUserSession: true,
         headers: {
           accept: "text/event-stream",
-          ...workspaceHeader(workspaceId),
+          ...gatewayWorkspaceRequestHeaders(workspaceTarget),
           ...(options.after !== undefined
             ? { "Last-Event-ID": String(options.after) }
             : {}),

@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { SessionResource } from "../../../types/backend";
-import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import type { WorkspaceResourceDTO } from "../../../api/workspaceResources";
 import TerminalPanel from "./TerminalPanel";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
 
@@ -25,42 +24,27 @@ function installWindow(): void {
   });
 }
 
-function entry(workspaceId: string, resourceId: string): GatewayExtensionResourceEntry {
-  const resource: SessionResource = {
-    resource_id: resourceId,
-    session_id: "ses_bottom_panel",
-    kind: "terminal",
-    name: "终端 / 主终端",
-    status: "running",
-    created_at: "2026-07-26T01:00:00Z",
-    updated_at: "2026-07-26T02:00:00Z",
-    started_at: null,
-    ended_at: null,
-    available_actions: [],
-    metadata: {},
-  };
+function entry(workspaceId: string, resourceId: string): WorkspaceResourceDTO {
   return {
-    key: `${workspaceId}:${resourceId}`,
-    connection_kind: "local",
-    gateway_name: "本地 Gateway",
-    workspace_id: workspaceId,
-    workspace_name: "测试工作区",
-    session_id: "ses_bottom_panel",
-    session_title: "测试会话",
-    resource: resource as GatewayExtensionResourceEntry["resource"],
+    resource_id: resourceId, workspace_id: workspaceId, kind: "terminal",
+    retention_scope: "workspace", owner_revision: 1, source_thread: { session_id: "ses_owner", thread_id: "thr_owner" },
+    thread_associations: [], status: "running", reconciliation_status: "verified", available_actions: [],
+    metadata: { title: "主终端" }, created_at: "2026-07-26T01:00:00Z", updated_at: "2026-07-26T02:00:00Z",
   };
 }
 
-function panelProps(entries: GatewayExtensionResourceEntry[]) {
+function panelProps(entries: WorkspaceResourceDTO[]) {
   return {
-    entries,
-    workspaceId: "workspace_test",
+    controller: {
+      items: entries, loading: false, mutating: false, error: null, refresh: async () => {},
+      control: async () => entries[0]!, create: async () => entries[0]!,
+    },
+    currentThread: null,
+    workspaceId: entries[0]?.workspace_id ?? "workspace_test",
     workspaceName: "测试工作区",
     selectedTerminalId: null,
     height: 240,
-    loading: false,
     onSelectTerminal: () => {},
-    onRefresh: () => {},
     onSwitchToOutput: () => {},
     onSwitchToPorts: () => {},
     onSwitchToAutomation: () => {},
@@ -68,7 +52,7 @@ function panelProps(entries: GatewayExtensionResourceEntry[]) {
   };
 }
 
-function renderPanel(entries: GatewayExtensionResourceEntry[]): ReactTestRenderer {
+function renderPanel(entries: WorkspaceResourceDTO[]): ReactTestRenderer {
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(<TerminalPanel {...panelProps(entries)} />);
@@ -138,8 +122,19 @@ describe("TerminalPanel 终端连接兜底", () => {
     const fallback = findFrameFallback(renderer);
     expect(fallback).toBeDefined();
     const text = textOf(fallback!.props.children);
-    expect(text).toContain("无法构造终端连接地址");
+    expect(text).toContain("终端暂不可连接");
     expect(text).toContain("workspace_id");
+    renderer.unmount();
+  });
+
+  test("临时孤儿不发起无授权 iframe，显示重新关联与保留入口", () => {
+    installWindow();
+    const orphan = { ...entry("workspace_test", "term_orphan"), retention_scope: "thread", available_actions: ["promote", "attach"], thread_associations: [] };
+    const renderer = renderPanel([orphan]);
+    expect(renderer.root.findAllByType("iframe")).toHaveLength(0);
+    expect(textOf(findFrameFallback(renderer)!.props.children)).toContain("没有线程关联");
+    const promote = renderer.root.findAllByType("button").find((button) => textOf(button.props.children) === "保留到工作区");
+    expect(promote?.props.disabled).toBe(false);
     renderer.unmount();
   });
 });

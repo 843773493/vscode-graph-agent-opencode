@@ -54,7 +54,8 @@ class MessageCodec(Protocol):
         *,
         item_sequence: int,
         message_id: str,
-        turn_id: str,
+        turn_id: str | None,
+        execution_id: str | None = None,
         timestamp: str,
         model_call_id: str | None = None,
     ) -> tuple[CanonicalItemRecord, ...]: ...
@@ -105,6 +106,51 @@ class RolloutTurnAnchor:
     final_message_sequence: int | None
     anchor_mode: str
     cutoff_message_sequence: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContextTurnItemWindow:
+    """同一 view 的 Turn ordinal window 对应的 canonical membership bounds。"""
+
+    view_id: str
+    first_logical_turn_ordinal: int
+    last_logical_turn_ordinal: int
+    view_exists: bool
+    first_turn_exists: bool
+    last_turn_exists: bool
+    lower_logical_item_ordinal: int | None
+    upper_logical_item_ordinal: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySnapshotBounds:
+    """同一读快照中的 history revision 与两条分页 lane 共用坐标上界。"""
+
+    view_id: str
+    history_view_revision: int
+    upper_turn_ordinal: int | None
+    upper_logical_item_ordinal: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class InternalExecutionHistoryEntry:
+    """一个有显式 display-only membership 的 internal execution item。"""
+
+    execution_id: str
+    job_id: str
+    outcome: str
+    logical_item_ordinal: int
+    created_at: str
+    updated_at: str
+    item: CanonicalItemRecord
+
+
+@dataclass(frozen=True, slots=True)
+class InternalExecutionHistoryPage:
+    """同一 snapshot 内的有界 internal execution item page。"""
+
+    entries: tuple[InternalExecutionHistoryEntry, ...]
+    has_more: bool
 
 
 class _RolloutFileLock:
@@ -253,6 +299,7 @@ class _RolloutSQLiteConnection(sqlite3.Connection):
 
 @dataclass(slots=True)
 class RolloutReadSnapshot:
+    session_id: str
     thread_id: str
     checkpoint_ns: str
     manifest: RolloutManifest

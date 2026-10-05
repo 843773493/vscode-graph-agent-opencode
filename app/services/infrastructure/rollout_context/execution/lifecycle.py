@@ -16,8 +16,8 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.validation import (
-    is_terminal_turn_status,
     validate_turn_transition,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
@@ -44,7 +44,8 @@ class RolloutTurnLifecycleMixin:
     def append_turn_finalize(
         self,
         *,
-        thread_id: str,
+        session_id: str,
+        thread_id: str | None = None,
         checkpoint_ns: str = "",
         turn_id: str,
         final_message_sequence: int,
@@ -61,9 +62,14 @@ class RolloutTurnLifecycleMixin:
             final_message_sequence,
             field="final_message_sequence",
         )
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        with self._lock(
+            owner_thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 row = connection.execute(
                     "SELECT message_id FROM messages WHERE message_sequence = ?",
@@ -130,9 +136,10 @@ class RolloutTurnLifecycleMixin:
                 connection.execute("BEGIN IMMEDIATE")
                 commit_id, _commit_offset = self._append_v2_records_transaction(
                     connection,
-                    thread_id,
+                    owner_thread_id,
                     checkpoint_ns,
                     (),
+                    session_id=session_id,
                     commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
                     commit_mode=CommitMode.METADATA_ONLY.value,
                     outcome=ControlOutcome.COMPLETED.value,
@@ -148,9 +155,9 @@ class RolloutTurnLifecycleMixin:
                     (final_item_id, latest_execution_id, timestamp, turn_id),
                 )
                 connection.execute(
-                    "UPDATE executions SET outcome = 'completed' "
+                    "UPDATE executions SET outcome = 'completed', updated_at = ? "
                     "WHERE turn_id = ? AND execution_id = ?",
-                    (turn_id, latest_execution_id),
+                    (timestamp, turn_id, latest_execution_id),
                 )
                 connection.execute(
                     "UPDATE model_calls SET outcome = 'completed', "
@@ -206,7 +213,8 @@ class RolloutTurnLifecycleMixin:
     def cancel_unfinished_turns(
         self,
         *,
-        thread_id: str,
+        session_id: str,
+        thread_id: str | None = None,
         checkpoint_ns: str = "",
     ) -> int:
         """取消 fork 后不会由子会话继续执行的未完成 Turn。
@@ -216,9 +224,14 @@ class RolloutTurnLifecycleMixin:
         显示“正在处理”。没有最终消息指针的 Turn 在子会话中只能明确标记为取消，
         等用户需要时再通过重试创建新的 Job。
         """
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        with self._lock(
+            owner_thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 rows = connection.execute(
                     "SELECT turn_id, status, last_execution_id "
@@ -251,9 +264,10 @@ class RolloutTurnLifecycleMixin:
                 connection.execute("BEGIN IMMEDIATE")
                 commit_id, _commit_offset = self._append_v2_records_transaction(
                     connection,
-                    thread_id,
+                    owner_thread_id,
                     checkpoint_ns,
                     (),
+                    session_id=session_id,
                     commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
                     commit_mode=CommitMode.METADATA_ONLY.value,
                     outcome=ControlOutcome.CANCELLED.value,
@@ -287,8 +301,8 @@ class RolloutTurnLifecycleMixin:
                         ),
                     )
                     connection.execute(
-                        "UPDATE executions SET outcome = ? WHERE execution_id = ?",
-                        (ControlOutcome.CANCELLED.value, execution_id),
+                        "UPDATE executions SET outcome = ?, updated_at = ? WHERE execution_id = ?",
+                        (ControlOutcome.CANCELLED.value, timestamp, execution_id),
                     )
                     connection.execute(
                         "UPDATE model_calls SET outcome = ?, dispatch_state = 'unknown' "
@@ -353,132 +367,141 @@ class RolloutTurnLifecycleMixin:
                 self._commit_connection(connection)
                 return len(rows)
 
+    def mark_job_terminal_status(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        job_id: str,
+        status: str,
+        checkpoint_ns: str = "",
+    ) -> bool:
+        """只收口已提交的精确 Job admission，user/internal 共用终态事务。"""
+        try:
+            admission = self.execution_admission_for_job(
+                session_id, thread_id=thread_id, job_id=job_id,
+                checkpoint_ns=checkpoint_ns,
+            )
+        except KeyError:
+            return False
+        return self._mark_admission_terminal_status(
+            admission, status=status, checkpoint_ns=checkpoint_ns,
+            preserve_recovery=True,
+        )
+
     def mark_turn_terminal_status(
         self,
         *,
+        session_id: str,
         thread_id: str,
         turn_id: str,
         status: str,
         checkpoint_ns: str = "",
     ) -> bool:
-        """把失败或取消等终态写入 SQLite，供历史恢复继续显示可重试状态。
-
-        不是所有 Job 都对应聊天 Turn（例如后台任务），因此找不到 Turn 时
-        返回 ``False``。找到后状态和控制事件在同一事务中提交，避免页面切换
-        后只能从短生命周期的 JobService 内存状态恢复失败信息。
-        """
-        if status not in {"failed", "cancelled", "timed_out"}:
-            raise ValueError(f"非法的 Turn 终态: {status}")
-        if not self.index_path(thread_id, checkpoint_ns).is_file():
-            # 后台 Job 也会进入统一终态事件流，但它们未必拥有聊天 Turn。
+        """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
+        try:
+            execution_id = self.execution_for_turn(
+                session_id, thread_id=thread_id, turn_id=turn_id,
+                checkpoint_ns=checkpoint_ns,
+            )
+        except KeyError:
             return False
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        admission = self.execution_admission(
+            session_id, thread_id=thread_id, execution_id=execution_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+        return self._mark_admission_terminal_status(
+            admission, status=status, checkpoint_ns=checkpoint_ns,
+            preserve_recovery=False,
+        )
+
+    def _mark_admission_terminal_status(
+        self,
+        admission: ExecutionAdmission,
+        *,
+        status: str,
+        checkpoint_ns: str,
+        preserve_recovery: bool,
+    ) -> bool:
+        outcomes = {
+            "failed": ControlOutcome.FAILED.value,
+            "cancelled": ControlOutcome.CANCELLED.value,
+            "timed_out": ControlOutcome.INTERRUPTED.value,
+            "execution_lost": ControlOutcome.EXECUTION_LOST.value,
+        }
+        if status not in outcomes:
+            raise ValueError(f"未知 execution terminal status: {status!r}")
+        outcome = outcomes[status]
+        turn_status = (
+            TurnStatus.UNKNOWN.value if status == "execution_lost" else outcome
+        ) if admission.turn_id is not None else None
+        with self._lock(
+            admission.thread_id, checkpoint_ns, session_id=admission.session_id,
+        ):
+            with self._connect(
+                admission.thread_id, checkpoint_ns, session_id=admission.session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
-                itemized_turn = connection.execute(
-                    "SELECT status FROM turn_records WHERE turn_id = ?",
-                    (turn_id,),
+                execution = connection.execute(
+                    "SELECT outcome FROM executions WHERE session_id = ? "
+                    "AND thread_id = ? AND execution_id = ?",
+                    (admission.session_id, admission.thread_id, admission.execution_id),
                 ).fetchone()
-                if itemized_turn is not None:
-                    outcome = {
-                        "failed": ControlOutcome.FAILED.value,
-                        "cancelled": ControlOutcome.CANCELLED.value,
-                        "timed_out": ControlOutcome.INTERRUPTED.value,
-                    }[status]
-                    target_status = {
-                        "failed": TurnStatus.FAILED.value,
-                        "cancelled": TurnStatus.CANCELLED.value,
-                        "timed_out": TurnStatus.INTERRUPTED.value,
-                    }[status]
-                    current_status = strict_text(
-                        itemized_turn[0], field="turn_records.status"
-                    )
-                    if current_status == target_status:
-                        return True
-                    # AgentExecutionService 在异常收尾时先将丢失的
-                    # execution/Turn 收敛为 unknown；JobService 随后仍会
-                    # 报告业务 Job failed。两者是不同状态轴，不能把
-                    # execution_lost 的可恢复 Turn 强行改写成 failed。
-                    if (
-                        current_status == TurnStatus.UNKNOWN.value
-                        and status == "failed"
+                if execution is None:
+                    raise KeyError(f"execution admission 已丢失: {admission.execution_id}")
+                current_outcome = strict_text(execution[0], field="executions.outcome")
+                if current_outcome not in {
+                    ControlOutcome.UNKNOWN.value, ControlOutcome.EXECUTION_LOST.value,
+                }:
+                    return True
+                # Job failed 是业务轴；不覆盖已丢失/未知 execution 的恢复语义。
+                if preserve_recovery and status == "failed":
+                    return True
+                if admission.turn_id is not None:
+                    turn = connection.execute(
+                        "SELECT status FROM turn_records WHERE session_id = ? "
+                        "AND thread_id = ? AND turn_id = ?",
+                        (admission.session_id, admission.thread_id, admission.turn_id),
+                    ).fetchone()
+                    if turn is None:
+                        raise KeyError(f"admission 的 Turn 已丢失: {admission.turn_id}")
+                    current_status = strict_text(turn[0], field="turn_records.status")
+                    if current_status not in {
+                        TurnStatus.OPEN.value, TurnStatus.ACTIVE.value,
+                        TurnStatus.UNKNOWN.value,
+                    } or (
+                        current_status == TurnStatus.UNKNOWN.value and status == "failed"
                     ):
                         return True
-                    # Turn 已经收敛到与本请求不同的终态时，它仍是同一个终态轴；
-                    # 例如 Turn 正常 completed 后迟到的 job_failed 事件。
-                    # 启动恢复与事件监听都是 best-effort 收敛路径，不能因为
-                    # 已有终态而抛错，否则每次启动都会用同一条历史 Trace 再次
-                    # 崩溃并写下新的失败事件，形成无法自愈的启动死循环。
-                    if is_terminal_turn_status(current_status):
-                        return True
-                    try:
-                        validate_turn_transition(current_status, target_status)
-                    except ItemSchemaError as error:
-                        raise ValueError(
-                            f"非法 Turn.status 转移: {current_status}->{target_status}"
-                        ) from error
-                    latest_execution = connection.execute(
-                        "SELECT execution_id FROM executions WHERE turn_id = ? "
-                        "ORDER BY attempt DESC, execution_ordinal DESC LIMIT 1",
-                        (turn_id,),
-                    ).fetchone()
-                    if latest_execution is None:
-                        raise RuntimeError(f"Turn 没有可收敛的 execution: {turn_id}")
-                    latest_execution_id = strict_text(
-                        latest_execution[0], field="executions.execution_id"
-                    )
-                    connection.execute("BEGIN IMMEDIATE")
-                    self._append_v2_records_transaction(
-                        connection,
-                        thread_id,
-                        checkpoint_ns,
-                        (),
-                        commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                        commit_mode=CommitMode.METADATA_ONLY.value,
-                        outcome=outcome,
-                        subject_id=turn_id,
-                        idempotency_key=(
-                            f"terminal:{turn_id}:{latest_execution_id}:{outcome}"
-                        ),
-                        begin_transaction=False,
-                    )
-                    timestamp = _now()
-                    connection.execute(
-                        "UPDATE turn_records SET status = ?, updated_at = ? WHERE turn_id = ?",
-                        (
-                            target_status,
-                            timestamp,
-                            turn_id,
-                        ),
-                    )
-                    connection.execute(
-                        "UPDATE executions SET outcome = ? WHERE turn_id = ? AND execution_id = ?",
-                        (outcome, turn_id, latest_execution_id),
-                    )
-                    connection.execute(
-                        "UPDATE model_calls SET outcome = ?, dispatch_state = CASE WHEN ? = 'failed' THEN 'failed' ELSE 'unknown' END WHERE execution_id = ?",
-                        (outcome, outcome, latest_execution_id),
-                    )
-                    connection.execute(
-                        "UPDATE context_assemblies SET status = 'terminal', outcome = ?, terminal_at = ? WHERE turn_id = ? AND execution_id = ? AND status = 'sealed'",
-                        (outcome, timestamp, turn_id, latest_execution_id),
-                    )
-                    self._commit_connection(connection)
+                if current_outcome == ControlOutcome.EXECUTION_LOST.value and status == "execution_lost":
                     return True
-                return False
+            self.converge_execution(
+                admission.session_id, thread_id=admission.thread_id,
+                turn_id=admission.turn_id, execution_id=admission.execution_id,
+                outcome=outcome, turn_status=turn_status, checkpoint_ns=checkpoint_ns,
+                loss_reason=(
+                    "execution_lost"
+                    if status == "execution_lost" and admission.turn_id is not None
+                    else None
+                ),
+            )
+            return True
 
     def final_message_sequence(
         self,
         *,
-        thread_id: str,
+        session_id: str,
+        thread_id: str | None = None,
         checkpoint_ns: str,
         turn_id: str,
         final_message_id: str,
     ) -> int:
         """解析已提交 final message 的物理序号，供受控 writer 使用。"""
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns) as connection:
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+        with self._connect(
+            owner_thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT message_sequence FROM messages WHERE turn_id = ? AND message_id = ? ORDER BY message_sequence DESC LIMIT 1",
@@ -487,7 +510,7 @@ class RolloutTurnLifecycleMixin:
         if row is None:
             raise RuntimeError(
                 "最终 assistant 消息未出现在 rollout projection 中: "
-                f"session_id={thread_id}, turn_id={turn_id}, message_id={final_message_id}"
+                f"session_id={session_id}, turn_id={turn_id}, message_id={final_message_id}"
             )
         return strict_non_negative_int(
             row[0], field="messages.message_sequence"

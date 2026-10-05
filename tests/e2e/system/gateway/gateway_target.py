@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 import time
@@ -7,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.core.workspace_identity import validate_workspace_id
 from configs.boxteam import SSH_KEY_NAME, install_gateway_development_assets
 
 READY_TIMEOUT_SECONDS = 60
@@ -110,6 +112,46 @@ def start_remote_backend_via_ssh(
 ) -> str:
     _require_linux_target(target, "启动远端工作区后端")
     clear_remote_listeners(target, [remote_backend_port])
+    identity_result = run_ssh_command(
+        target,
+        " ".join(
+            [
+                "cd",
+                shlex.quote(target.repository_path),
+                "&&",
+                shlex.quote(f"{target.python_environment}/bin/python"),
+                "-m app.core.workspace_identity --workspace-root",
+                shlex.quote(remote_workspace_path),
+            ]
+        ),
+        timeout=60,
+    )
+    try:
+        identity_payload = json.loads(identity_result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "远端 Workspace backend UUID CLI 返回无效 JSON: "
+            f"stdout={identity_result.stdout!r}"
+        ) from error
+    backend_workspace_id = (
+        identity_payload.get("workspace_id")
+        if isinstance(identity_payload, dict)
+        else None
+    )
+    if not isinstance(backend_workspace_id, str):
+        raise TypeError(
+            "远端 Workspace backend UUID CLI 缺少 workspace_id: "
+            f"payload={identity_payload!r}"
+        )
+    mounted_workspaces = json.dumps(
+        [
+            {
+                "workspace_id": backend_workspace_id,
+                "workspace_root": remote_workspace_path,
+            }
+        ],
+        separators=(",", ":"),
+    )
     log_dir = f"{remote_workspace_path}/.boxteam/logs"
     remote_boxteam_home = f"{remote_workspace_path}.boxteam-home"
     remote_config_root = f"{remote_boxteam_home}/config"
@@ -138,6 +180,7 @@ def start_remote_backend_via_ssh(
             f"WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
             f"BOXTEAM_PROJECT_ROOT={shlex.quote(target.repository_path)}",
+            f"BOXTEAM_MOUNTED_WORKSPACES={shlex.quote(mounted_workspaces)}",
             *env_parts,
             "PYTHONUNBUFFERED=1",
             f"UV_PROJECT_ENVIRONMENT={shlex.quote(target.python_environment)}",
@@ -287,6 +330,17 @@ def start_remote_auxiliary_services_via_ssh(
     browser_port: int,
 ) -> RemoteAuxiliaryProcesses:
     _require_linux_target(target, "启动远端辅助服务")
+    remote_identity_path = f"{remote_workspace_path}/.boxteam/workspace-identity.json"
+    identity = json.loads(
+        run_ssh_command(
+            target,
+            f"cat {shlex.quote(remote_identity_path)}",
+            timeout=15,
+        ).stdout
+    )
+    if not isinstance(identity, dict) or not isinstance(identity.get("workspace_id"), str):
+        raise TypeError(f"远端工作区身份文件缺少 workspace_id: {remote_identity_path}")
+    workspace_id = validate_workspace_id(identity["workspace_id"])
     clear_remote_listeners(target, [terminal_port, browser_port])
     log_dir = f"{remote_workspace_path}/.boxteam/logs"
     command = " ".join(
@@ -299,6 +353,7 @@ def start_remote_auxiliary_services_via_ssh(
             "nohup node src/workspace-services/terminal/server/backend.js",
             f"--host 127.0.0.1 --port {terminal_port}",
             f"--workspace-root {shlex.quote(remote_workspace_path)}",
+            f"--workspace-id {shlex.quote(workspace_id)}",
             f"> {shlex.quote(log_dir)}/remote-terminal.stdout.log",
             f"2> {shlex.quote(log_dir)}/remote-terminal.stderr.log < /dev/null &",
             "terminal_pid=$!;",
@@ -374,6 +429,7 @@ def wait_for_remote_backend_ready(
     target: GatewaySshTarget,
     remote_backend_port: int,
     remote_backend_pid: str,
+    backend_workspace_id: str,
 ) -> None:
     deadline = time.monotonic() + TARGET_READY_TIMEOUT_SECONDS
     last_error = ""
@@ -383,7 +439,8 @@ def wait_for_remote_backend_ready(
                 target,
                 (
                     f"kill -0 {shlex.quote(remote_backend_pid)} "
-                    f"&& curl -fsS http://127.0.0.1:{remote_backend_port}/api/v1/health"
+                    f"&& curl -fsS -H {shlex.quote('X-BoxTeam-Workspace-Id: ' + backend_workspace_id)} "
+                    f"http://127.0.0.1:{remote_backend_port}/api/v1/health"
                 ),
             ),
             capture_output=True,

@@ -136,6 +136,10 @@ class NodeDebugClaimRuntime:
     def write_launch_claim(self, claim: NodeDebugLaunchClaimDTO) -> None:
         if self._session_store is None:
             return
+        if self._residency_tracker is not None and claim.phase in _NODE_DEBUG_BLOCKER_REASON:
+            # 检查、持久写入与 blocker push 是同一同步步骤；卸载 listener 等待期间
+            # 不允许先落盘新 claim 再发现 runtime 已关闭准入。
+            self._residency_tracker.assert_blocker_admission(claim.session_id, claim.thread_id)
         self._session_store.write_launch_claim(claim)
         self._sync_residency_blocker(claim)
 

@@ -34,7 +34,7 @@ class NodeDebugLaunchEntryMixin:
         path: str,
         args: list[str],
         breakpoints: list[NodeDebugBreakpointRequest],
-        thread_id: str,
+        thread_id: str | None = None,
         configuration_id: str | None = None,
         launch_profile_name: str | None = None,
         working_directory: str | None = None,
@@ -53,97 +53,99 @@ class NodeDebugLaunchEntryMixin:
         与已 cancel 任务的 gather 均有界），不会与 ``_runtimes_lock`` 形成反向持锁
         （``_owner_lock → _runtimes_lock → runtime.state_lock`` 单向）。
         """
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        async with self._owner_lock(owner):
-            result = await self._create_launch_orchestrator().launch(
-                NodeDebugLaunchRequest(
-                    owner=owner,
-                    path=path,
-                    args=args,
-                    breakpoints=breakpoints,
-                    configuration_id=configuration_id,
-                    launch_profile_name=launch_profile_name,
-                    working_directory=working_directory,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            owner = self._owner_key(session_id, thread_id)
+            async with self._owner_lock(owner):
+                result = await self._create_launch_orchestrator().launch(
+                    NodeDebugLaunchRequest(
+                        owner=owner,
+                        path=path,
+                        args=args,
+                        breakpoints=breakpoints,
+                        configuration_id=configuration_id,
+                        launch_profile_name=launch_profile_name,
+                        working_directory=working_directory,
+                        actor=actor,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                    )
                 )
-            )
-            return await self.get_state(*result.owner)
+                return await self._get_state_admitted(*result.owner)
 
     async def restart(
         self,
         session_id: str,
         *,
-        thread_id: str,
+        thread_id: str | None = None,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        # 重启 = 停止旧实例 + 启动新实例，必须整体处于 per-owner 临界区内（R3b 复核
-        # 残留项）：否则 stop 落在另一并发启动的 spawn 窗口时会得到假终态。临界区内
-        # 直接调用启动编排器，绝不能再经 `start()` 重入同一把 asyncio.Lock
-        # （不可重入，重入即自锁）。
-        async with self._owner_lock(owner):
-            self._session_state.ensure_loaded(session_id, thread_id)
-            runtime = self._runtimes.get(owner)
-            if runtime is None:
-                self._assert_no_unsettled_claim(owner, operation="重启调试")
-                raise RuntimeError(
-                    f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
-                )
-            async with runtime.state_lock:
-                path = runtime.relative_script_path
-                args = list(runtime.args)
-                configuration_id = runtime.configuration_id
-                launch_profile_name = runtime.launch_profile_name
-                working_directory = (
-                    str(runtime.working_directory)
-                    if runtime.working_directory is not None
-                    else ""
-                )
-                breakpoints = [
-                    NodeDebugBreakpointRequest(
-                        path=breakpoint.path,
-                        line=breakpoint.line,
-                        column=breakpoint.column,
-                        condition=breakpoint.condition,
-                        hit_condition=breakpoint.hit_condition,
-                        log_message=breakpoint.log_message,
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            owner = self._owner_key(session_id, thread_id)
+            # 重启 = 停止旧实例 + 启动新实例，必须整体处于 per-owner 临界区内（R3b 复核
+            # 残留项）：否则 stop 落在另一并发启动的 spawn 窗口时会得到假终态。临界区内
+            # 直接调用启动编排器，绝不能再经 `start()` 重入同一把 asyncio.Lock
+            # （不可重入，重入即自锁）。
+            async with self._owner_lock(owner):
+                self._session_state.ensure_loaded(session_id, thread_id)
+                runtime = self._runtimes.get(owner)
+                if runtime is None:
+                    self._assert_no_unsettled_claim(owner, operation="重启调试")
+                    raise RuntimeError(
+                        f"Node 调试会话不存在: session_id={session_id}, thread_id={thread_id}"
                     )
-                    for breakpoint in runtime.breakpoints.values()
-                    if breakpoint.relocation_status == "current"
-                ]
-            outcome = await self._lifecycle.stop_runtime(runtime)
-            if outcome == "reconcile_required":
-                # 旧实例无法核实终态：保持 reconcile_required，绝不为同一 owner 启动新实例。
-                self._session_state.persist_runtime_state(
-                    session_id, thread_id, runtime
+                async with runtime.state_lock:
+                    path = runtime.relative_script_path
+                    args = list(runtime.args)
+                    configuration_id = runtime.configuration_id
+                    launch_profile_name = runtime.launch_profile_name
+                    working_directory = (
+                        str(runtime.working_directory)
+                        if runtime.working_directory is not None
+                        else ""
+                    )
+                    breakpoints = [
+                        NodeDebugBreakpointRequest(
+                            path=breakpoint.path,
+                            line=breakpoint.line,
+                            column=breakpoint.column,
+                            condition=breakpoint.condition,
+                            hit_condition=breakpoint.hit_condition,
+                            log_message=breakpoint.log_message,
+                        )
+                        for breakpoint in runtime.breakpoints.values()
+                        if breakpoint.relocation_status == "current"
+                    ]
+                outcome = await self._lifecycle.stop_runtime(runtime)
+                if outcome == "reconcile_required":
+                    # 旧实例无法核实终态：保持 reconcile_required，绝不为同一 owner 启动新实例。
+                    self._session_state.persist_runtime_state(
+                        session_id, thread_id, runtime
+                    )
+                    raise RuntimeError(
+                        "旧调试实例无法核实终态，保持 reconcile_required；拒绝重启: "
+                        f"session_id={session_id}, thread_id={thread_id}"
+                    )
+                async with runtime.state_lock:
+                    runtime.status = "exited"
+                result = await self._create_launch_orchestrator().launch(
+                    NodeDebugLaunchRequest(
+                        owner=owner,
+                        path=path,
+                        args=args,
+                        breakpoints=breakpoints,
+                        configuration_id=configuration_id,
+                        launch_profile_name=launch_profile_name,
+                        working_directory=working_directory,
+                        actor=actor,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call_id,
+                    )
                 )
-                raise RuntimeError(
-                    "旧调试实例无法核实终态，保持 reconcile_required；拒绝重启: "
-                    f"session_id={session_id}, thread_id={thread_id}"
-                )
-            async with runtime.state_lock:
-                runtime.status = "exited"
-            result = await self._create_launch_orchestrator().launch(
-                NodeDebugLaunchRequest(
-                    owner=owner,
-                    path=path,
-                    args=args,
-                    breakpoints=breakpoints,
-                    configuration_id=configuration_id,
-                    launch_profile_name=launch_profile_name,
-                    working_directory=working_directory,
-                    actor=actor,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-            )
-            return await self.get_state(*result.owner)
+                return await self._get_state_admitted(*result.owner)
 
     def _create_launch_orchestrator(self) -> NodeDebugLaunchOrchestrator:
         """为本次启动读取最新 service 回调，避免缓存旧的 monkeypatch/运行态。"""

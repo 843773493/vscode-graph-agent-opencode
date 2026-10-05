@@ -41,12 +41,14 @@ class CanonicalBlockAccumulator:
     def __init__(
         self,
         *,
-        turn_id: str,
+        turn_id: str | None,
         execution_id: str,
         producer_id: str,
         model_call_id: str | None = None,
     ) -> None:
-        self.turn_id = _required_text(turn_id, "turn_id")
+        if turn_id is not None and (not isinstance(turn_id, str) or not turn_id):
+            raise ValueError("turn_id 必须是非空字符串或 None")
+        self.turn_id = turn_id
         self.execution_id = _required_text(execution_id, "execution_id")
         self.producer_id = _required_text(producer_id, "producer_id")
         self.model_call_id = _required_text(
@@ -235,7 +237,9 @@ class CanonicalBlockAccumulator:
                         **identity_metadata,
                     },
                     turn_id=self.turn_id,
-                    turn_scope=TurnScope.TURN_MEMBER,
+                    turn_scope=(
+                        TurnScope.TURN_MEMBER if self.turn_id is not None else None
+                    ),
                     # 一个 execution 可能包含多次模型调用；消息组必须绑定单次
                     # model call，否则不同调用的流式 carrier 会互相合并，无法
                     # 与对应的 checkpoint carrier 做 shadow 去重。

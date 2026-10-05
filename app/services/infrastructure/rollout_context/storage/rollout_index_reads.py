@@ -31,22 +31,32 @@ __all__ = ["RolloutIndexMixin"]
 class RolloutIndexMixin:
     def open_read_snapshot(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
         validate_integrity: bool = False,
     ) -> RolloutReadSnapshot:
         """打开带文件锁和 SQLite 事务的只读 snapshot。"""
-        root = self._host.root(thread_id, checkpoint_ns)
-        jsonl_path = self._host.jsonl_path(thread_id, checkpoint_ns)
-        index_path = self._host.index_path(thread_id, checkpoint_ns)
+        root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
+        jsonl_path = self._host.jsonl_path(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
+        index_path = self._host.index_path(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
         if not root.is_dir() or not jsonl_path.is_file() or not index_path.is_file():
-            self.initialize(thread_id, checkpoint_ns)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
         file_lock = _RolloutFileLock(root.parent / ".rollout.write.lock", exclusive=False)
         file_lock.acquire()
         connection: sqlite3.Connection | None = None
         try:
-            connection = self._host._connect(thread_id, checkpoint_ns, read_only=True)
+            connection = self._host._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            )
             self._validate_schema_state(connection)
             self._host._validate_reasoning_projection_connection(connection)
             self._host._require_v2_runtime(connection)
@@ -84,16 +94,23 @@ class RolloutIndexMixin:
                 connection.close()
                 file_lock.release()
                 with (
-                    self._host._lock(thread_id, checkpoint_ns),
-                    self._host._connect(thread_id, checkpoint_ns) as writable,
+                    self._host._lock(
+                        thread_id, checkpoint_ns, session_id=session_id
+                    ),
+                    self._host._connect(
+                        thread_id, checkpoint_ns, session_id=session_id
+                    ) as writable,
                 ):
                     writable.execute(
                         "UPDATE database_meta SET database_state = 'recovery_required', updated_at = ? WHERE singleton_id = 1",
                         (_now(),),
                     )
+                index_path = self._host.index_path(
+                    session_id, checkpoint_ns, thread_id=thread_id
+                )
                 raise RuntimeError(
                     "rollout SQLite integrity_check 失败: "
-                    f"{self._host.index_path(thread_id, checkpoint_ns)}: {integrity}"
+                    f"{index_path}: {integrity}"
                 )
             connection.execute("BEGIN")
             manifest = self._manifest_from_connection(connection, checkpoint_ns)
@@ -112,6 +129,7 @@ class RolloutIndexMixin:
             file_lock.release()
             raise
         return RolloutReadSnapshot(
+            session_id,
             thread_id,
             checkpoint_ns,
             manifest,
@@ -119,15 +137,23 @@ class RolloutIndexMixin:
             file_lock,
         )
 
-    def validate_index(self, thread_id: str, checkpoint_ns: str = "") -> RolloutReadSnapshot:
+    def validate_index(
+        self, session_id: str, thread_id: str, checkpoint_ns: str = ""
+    ) -> RolloutReadSnapshot:
         """执行完整 SQLite integrity_check。"""
-        return self.open_read_snapshot(thread_id, checkpoint_ns, validate_integrity=True)
+        return self.open_read_snapshot(
+            session_id,
+            thread_id,
+            checkpoint_ns,
+            validate_integrity=True,
+        )
 
     def repair_index(
         self,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
+        session_id: str,
         manifest: RolloutManifest | None = None,
     ) -> None:
         del manifest
@@ -142,6 +168,7 @@ class RolloutIndexMixin:
         checkpoint_ns: str,
         items: Sequence[CanonicalItemRecord],
         *,
+        session_id: str,
         commit_kind: str,
         commit_mode: str | None = None,
         outcome: str | None = None,
@@ -152,7 +179,11 @@ class RolloutIndexMixin:
     ) -> tuple[int, int]:
         """通过统一 coordinator 执行 v2 item-bearing 原子提交。"""
         coordinator = V2ItemCommitCoordinator(
-            jsonl_path=self._host.jsonl_path(thread_id, checkpoint_ns),
+            jsonl_path=self._host.jsonl_path(
+                session_id,
+                checkpoint_ns,
+                thread_id=thread_id,
+            ),
             canonical_writer=self._host._insert_canonical_item,
         )
         return coordinator.append(
@@ -200,9 +231,13 @@ class RolloutIndexMixin:
             blobs[1],
         )
 
-    def rollout_id(self, thread_id: str, checkpoint_ns: str = "") -> str:
-        manifest = self.initialize(thread_id, checkpoint_ns)
-        with self._host._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+    def rollout_id(
+        self, thread_id: str, checkpoint_ns: str = "", *, session_id: str
+    ) -> str:
+        manifest = self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._host._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        ) as connection:
             self._host._require_v2_runtime(connection)
         return manifest.rollout_id
 
@@ -211,18 +246,26 @@ class RolloutIndexMixin:
         self,
         thread_id: str,
         checkpoint_ns: str,
+        *,
+        session_id: str | None = None,
     ) -> Iterator[sqlite3.Connection]:
         """读取既有 authority；完全损坏时只报告恢复要求，不创建新库。"""
         try:
             with self._host._connect(
                 thread_id,
                 checkpoint_ns,
+                session_id=session_id,
                 read_only=True,
             ) as connection:
                 yield connection
         except sqlite3.DatabaseError as error:
+            index_path = self._host.index_path(
+                thread_id if session_id is None else session_id,
+                checkpoint_ns,
+                thread_id=thread_id if session_id is not None else None,
+            )
             raise RuntimeError(
                 "recovery_required: rollout SQLite 无法读取；"
                 "必须从已验证的 SQLite backup 执行显式恢复，禁止从 JSONL 重建: "
-                f"{self._host.index_path(thread_id, checkpoint_ns)}"
+                f"{index_path}"
             ) from error

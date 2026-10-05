@@ -74,7 +74,6 @@ from app.domain.itemized.resource_activation.snapshot import (
     resource_activation_provenance_hash,
 )
 
-
 __all__ = [
     "ABSOLUTE_PATH_FIELDS",
     "BOUNDARY_SINGULARITY_FIELDS",

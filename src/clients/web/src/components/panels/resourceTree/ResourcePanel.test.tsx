@@ -76,7 +76,7 @@ describe("后台连接目录", () => {
             resource(2, {
               kind: "terminal",
               name: "终端 / 主终端",
-              metadata: { cwd_relative: "." },
+              metadata: { cwd_relative: ".", retention_scope: "thread", reconciliation_status: "verified", thread_associations: [{ session_id: "ses_resource_tree", thread_id: "thr_actual_child" }] },
             }),
           ]}
           loading={false}

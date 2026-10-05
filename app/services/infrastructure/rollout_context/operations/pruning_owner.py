@@ -41,9 +41,12 @@ class RolloutPruningOwner:
             RolloutPruningPlan,
         )
 
-        self._host.initialize(thread_id, checkpoint_ns)
+        session_id = self._host._session_id_from_owner_scope(thread_id)
+        self._host.initialize(session_id, checkpoint_ns, thread_id=thread_id)
         retained = tuple(dict.fromkeys(retain_checkpoint_ids))
-        with self._host._connect(thread_id, checkpoint_ns) as connection:
+        with self._host._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._host._require_v2_runtime(connection)
             meta = connection.execute(
                 "SELECT active_branch_id, projection_epoch, last_message_sequence FROM database_meta WHERE singleton_id = 1"
@@ -98,15 +101,22 @@ class RolloutPruningOwner:
                     )
                 )
         return RolloutPruningPlan(
-            self._host.rollout_id(thread_id, checkpoint_ns),
-            self._host.initialize(thread_id, checkpoint_ns).committed_sequence,
+            self._host.rollout_id(
+                thread_id, checkpoint_ns, session_id=session_id
+            ),
+            self._host.initialize(
+                session_id, checkpoint_ns, thread_id=thread_id
+            ).committed_sequence,
             tuple(candidates),
         )
 
     def execute_pruning(
         self, thread_id: str, plan: RolloutPruningPlan, checkpoint_ns: str = ""
     ) -> tuple[str, ...]:
-        current = self._host.initialize(thread_id, checkpoint_ns)
+        session_id = self._host._session_id_from_owner_scope(thread_id)
+        current = self._host.initialize(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
         if (
             current.rollout_id != plan.rollout_id
             or current.committed_sequence != plan.committed_sequence
@@ -115,8 +125,12 @@ class RolloutPruningOwner:
         if not plan.candidates:
             return ()
         with (
-            self._host._lock(thread_id, checkpoint_ns),
-            self._host._connect(thread_id, checkpoint_ns) as connection,
+            self._host._lock(
+                thread_id, checkpoint_ns, session_id=session_id
+            ),
+            self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection,
         ):
             self._host._require_v2_runtime(connection)
             transaction_id = uuid4().hex

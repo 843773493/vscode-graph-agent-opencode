@@ -112,7 +112,8 @@ async def process_agent_event_stream(
     input_payload: dict[str, Any],
     config: dict[str, Any],
     session_id: str,
-    turn_id: str,
+    job_id: str,
+    turn_id: str | None,
     agent_id: str,
     custom_tool_skill_sources: dict[str, list[str]],
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
@@ -161,7 +162,7 @@ async def process_agent_event_stream(
     stream_config = build_isolated_stream_config(
         config,
         session_id=session_id,
-        job_id=turn_id,
+        job_id=job_id,
     )
     stream_callbacks = stream_config.get("callbacks")
     if stream_callbacks is None:
@@ -261,7 +262,7 @@ async def process_agent_event_stream(
         input_payload=input_payload,
         stream_config=stream_config,
         session_id=session_id,
-        turn_id=turn_id,
+        job_id=job_id,
         message_stream_runtime=message_stream_runtime,
         cancellation_signal=cancellation_signal,
         idle_model_timeout_seconds=idle_model_timeout_seconds,
@@ -293,7 +294,7 @@ async def process_agent_event_stream(
             validate_stream_event_identity(
                 metadata,
                 session_id=session_id,
-                job_id=turn_id,
+                job_id=job_id,
                 event_type=event_type,
                 name=name,
             )
@@ -560,9 +561,13 @@ async def process_agent_event_stream(
                     tool_name=display_context.tool_name,
                 )
                 activity_bindings: list[tuple[str, str, str | None]] = []
-                if display_context.tool_name in SUBAGENT_TOOL_NAMES:
+                if (
+                    message_stream_runtime.writer is not None
+                    and message_stream_runtime.activities is not None
+                    and display_context.tool_name in SUBAGENT_TOOL_NAMES
+                ):
                     activity_id = (
-                        f"{message_stream_runtime.writer.turn_stream_id}:"
+                        f"{job_id}:"
                         f"subagent:{run_id}"
                     )
                     await message_stream_runtime.activities.started(
@@ -581,9 +586,13 @@ async def process_agent_event_stream(
                 resource_binding = resource_activity_binding_from_metadata(
                     event.get("metadata")
                 )
-                if resource_binding is not None:
+                if (
+                    message_stream_runtime.writer is not None
+                    and message_stream_runtime.activities is not None
+                    and resource_binding is not None
+                ):
                     activity_id = (
-                        f"{message_stream_runtime.writer.turn_stream_id}:"
+                        f"{job_id}:"
                         f"resource:{run_id}"
                     )
                     await message_stream_runtime.activities.started(
@@ -739,6 +748,11 @@ async def process_agent_event_stream(
                     error=result_text if effective_tool_status == "error" else None,
                 )
                 activity_bindings = activity_bindings_by_run_id.pop(run_id, ())
+                activities = message_stream_runtime.activities
+                if activity_bindings and activities is None:
+                    raise RuntimeError(
+                        "message-stream activity runtime 不可在执行中消失"
+                    )
                 for activity_id, activity_kind, resource_id in activity_bindings:
                     detail = activity_result_detail(
                         result_text,
@@ -749,14 +763,14 @@ async def process_agent_event_stream(
                         detail["operation"] = display_context.tool_name
                         if resource_id is not None:
                             detail["resource_id"] = resource_id
-                    await message_stream_runtime.activities.updated(
+                    await activities.updated(
                         activity_id=activity_id,
                         kind=activity_kind,
                         status="stopping",
                         detail=detail,
                     )
                     if effective_tool_status == "error":
-                        await message_stream_runtime.activities.failed(
+                        await activities.failed(
                             activity_id=activity_id,
                             kind=activity_kind,
                             outcome="outcome_unknown",
@@ -764,7 +778,7 @@ async def process_agent_event_stream(
                             detail=detail,
                         )
                     else:
-                        await message_stream_runtime.activities.completed(
+                        await activities.completed(
                             activity_id=activity_id,
                             kind=activity_kind,
                             summary=(

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from app.main import app
+from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
 from tests.contracts.api.openapi_snapshots import (
     OPENAPI_SNAPSHOTS,
     load_openapi_snapshot,
@@ -24,7 +26,6 @@ def test_node_debug_state_requires_explicit_thread_owner(openapi_document) -> No
     assert "thread_id" in schema["required"]
     assert schema["properties"]["thread_id"] == {
         "type": "string",
-        "minLength": 1,
         "title": "Thread Id",
     }
 
@@ -57,3 +58,9 @@ def test_node_debug_action_record_exposes_extension_binding_audit(
 def test_node_debug_openapi_snapshot_matches_routes(snapshot: str) -> None:
     document = load_openapi_snapshot(snapshot)
     assert document == app.openapi(), f"需运行 bun run gen:openapi 更新 {snapshot}"
+
+
+@pytest.mark.parametrize("thread_id", ("", "session_legacy", "not-a-thread"))
+def test_node_debug_state_rejects_noncanonical_thread_owner(thread_id: str) -> None:
+    with pytest.raises(ValidationError, match="thread_id"):
+        NodeDebugStateDTO(session_id="ses_019be93d195b7ce48842923ced187ecb", thread_id=thread_id, status="idle")

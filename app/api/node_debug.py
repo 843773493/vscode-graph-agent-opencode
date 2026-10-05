@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.api.deps import get_node_debug_service, get_request_id, verify_local_token
 from app.api.errors import forbidden_http_error, state_conflict_http_error
 from app.core.exceptions import ForbiddenError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRequest,
@@ -22,10 +24,10 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 
-# Session 级产品入口要求显式 thread_id；main thread 使用值 "main"。
-# 所有 mutation 的 Session 生命周期准入（Session 存在且未删除）由
-# NodeDebugService 入口的 NodeDebugSessionAdmission 统一执行，准入失败在此
-# 映射为 404，不从 API 层重复读取 Session。
+# NodeDebug API 接收 Session-only 或显式 canonical SessionThread 身份；
+# Session-only owner 由 NodeDebugService 从权威 catalog 解析 main thread。
+# mutation 的 Session 生命周期准入（Session 存在且未删除）由统一 admission
+# 执行，准入失败在此映射为 404，不从 API 层重复读取 Session。
 router = APIRouter(prefix="/debug/node", tags=["node-debug"])
 
 # 各入口共用同一异常闭集，与 _configuration_error 的判定分支一一对应。
@@ -67,15 +69,15 @@ async def get_node_debug_capabilities(
 
 @router.get("", response_model=APIResponse[NodeDebugStateDTO], summary="获取 Node 源码调试状态")
 async def get_node_debug_state(
-    session_id: Annotated[str, Query(min_length=1)],
+    session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
         result = await node_debug_service.get_state(session_id, thread_id)
-    except KeyError as error:
+    except (FileNotFoundError, KeyError, SessionDeletionPendingError) as error:
         raise _configuration_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -86,11 +88,11 @@ async def get_node_debug_state(
     summary="列出当前会话的源码调试方案",
 )
 async def list_node_debug_configurations(
-    session_id: Annotated[str, Query(min_length=1)],
+    session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
         result = node_debug_service.list_configurations(session_id, thread_id)
@@ -106,11 +108,11 @@ async def list_node_debug_configurations(
 )
 async def get_node_debug_configuration(
     configuration_id: str,
-    session_id: Annotated[str, Query(min_length=1)],
+    session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
         result = node_debug_service.get_configuration(
@@ -191,11 +193,11 @@ async def activate_node_debug_configuration(
 )
 async def delete_node_debug_configuration(
     configuration_id: str,
-    session_id: Annotated[str, Query(min_length=1)],
+    session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     node_debug_service: Annotated[NodeDebugService, Depends(get_node_debug_service)],
-    thread_id: Annotated[str, Query(min_length=1)],
+    thread_id: CanonicalThreadId | None = None,
 ):
     try:
         result = await node_debug_service.delete_configuration(

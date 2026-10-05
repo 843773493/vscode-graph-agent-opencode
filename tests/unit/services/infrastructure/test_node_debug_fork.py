@@ -52,21 +52,22 @@ def source_store(tmp_path: Path) -> tuple[NodeDebugSessionStore, Path]:
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     session_dir = _create_session(sessions_root, _SESSION_ID)
+    main_thread_id = resolver.main_thread_id(_SESSION_ID)
     store = NodeDebugSessionStore(resolver)
     store.write_configuration(
         _SESSION_ID,
         _configuration(_CONFIGURATION_ID, "主方案", "main.mjs"),
-        "main",
+        main_thread_id,
     )
     store.write_configuration(
         _SESSION_ID,
         _configuration(_CONFIGURATION_ID_2, "备用方案", "other.mjs"),
-        "main",
+        main_thread_id,
     )
     store.write_manifest(
         NodeDebugSessionManifestDTO(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=main_thread_id,
             active_configuration_id=_CONFIGURATION_ID,
             configuration_ids=(_CONFIGURATION_ID, _CONFIGURATION_ID_2),
             updated_at=datetime.now(UTC),
@@ -78,8 +79,12 @@ def source_store(tmp_path: Path) -> tuple[NodeDebugSessionStore, Path]:
 def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
     source_store: tuple[NodeDebugSessionStore, Path],
 ) -> None:
-    store, session_dir = source_store
-    unregistered = session_dir / "debug" / "node" / "configurations" / (
+    store, _session_dir = source_store
+    main_thread_id = store.path_resolver.main_thread_id(_SESSION_ID)
+    main_thread_node = store.path_resolver.resolve_thread_node(
+        _SESSION_ID, store.path_resolver.main_thread_id(_SESSION_ID)
+    )
+    unregistered = main_thread_node / "debug" / "node" / "configurations" / (
         "dbgcfg_33333333333333333333333333333333.json"
     )
     unregistered.write_bytes(
@@ -91,7 +96,7 @@ def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
     context = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=main_thread_id,
         capture_mode="context_fork",
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",
@@ -109,7 +114,7 @@ def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
     history = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=main_thread_id,
         capture_mode="history_prefix_fork",
     )
     assert history.configuration_artifacts == ()
@@ -117,7 +122,7 @@ def test_capture_matrix_is_manifest_bound_and_does_not_copy_runtime_pointer(
     full = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=main_thread_id,
         capture_mode="full_rollout_copy",
     )
     assert [item.configuration_id for item in full.configuration_artifacts] == [
@@ -130,7 +135,8 @@ def test_capture_fails_closed_when_registered_source_drifts(
     source_store: tuple[NodeDebugSessionStore, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, session_dir = source_store
+    store, _session_dir = source_store
+    main_thread_id = store.path_resolver.main_thread_id(_SESSION_ID)
     original = store.read_registered_configuration_payloads
     calls = 0
 
@@ -139,8 +145,11 @@ def test_capture_fails_closed_when_registered_source_drifts(
         result = original(*args, **kwargs)
         calls += 1
         if calls == 1:
+            main_thread_node = store.path_resolver.resolve_thread_node(
+                _SESSION_ID, store.path_resolver.main_thread_id(_SESSION_ID)
+            )
             path = (
-                session_dir
+                main_thread_node
                 / "debug"
                 / "node"
                 / "configurations"
@@ -156,7 +165,7 @@ def test_capture_fails_closed_when_registered_source_drifts(
         capture_source_copy_snapshot(
             store,
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=main_thread_id,
             capture_mode="context_fork",
         )
 
@@ -166,11 +175,12 @@ def test_target_prepublication_rechecks_paths_profile_and_config_revision(
     tmp_path: Path,
 ) -> None:
     store, _session_dir = source_store
+    main_thread_id = store.path_resolver.main_thread_id(_SESSION_ID)
     (tmp_path / "main.mjs").write_text("console.log('main')", encoding="utf-8")
     snapshot = capture_source_copy_snapshot(
         store,
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=main_thread_id,
         capture_mode="context_fork",
         workspace_config_revision="workspace-debug-v1",
         workspace_config_hash="config-hash-v1",

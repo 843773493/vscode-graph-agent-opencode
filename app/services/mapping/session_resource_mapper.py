@@ -63,12 +63,15 @@ class SessionResourceMapper:
             "release_reason": terminal.get("release_reason"),
             "client_count": terminal.get("client_count"),
             "sequence": terminal.get("sequence"),
+            "retention_scope": terminal["retention_scope"],
+            "source_thread": terminal["source_thread"],
+            "thread_associations": terminal["thread_associations"],
+            "owner_revision": terminal["owner_revision"],
+            "reconciliation_status": terminal["reconciliation_status"],
+            "reclaim_at": terminal["reclaim_at"],
+            "error": terminal["error"],
         }
-        if terminal.get("historical_only") is True:
-            metadata["resource_source"] = "历史记录"
-            metadata["status_note"] = "终端管理器中已无该终端，可能已删除或由旧版本清理。"
-            metadata["historical_status"] = terminal.get("historical_status")
-        elif status == "lost":
+        if status == "lost":
             metadata["status_note"] = "终端进程已断开 (lost)，通常是终端管理器重启后无法重新 attach。"
         elif terminal.get("release_reason") == "terminal_manager_startup_cleanup":
             metadata["status_note"] = "终端管理器启动时已自动释放上次遗留的终端进程。"

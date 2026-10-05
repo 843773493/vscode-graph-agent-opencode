@@ -34,6 +34,11 @@ export declare type TerminalAttach = Message<"boxteam.terminal.v1.TerminalAttach
    * @generated from field: optional uint32 after_sequence = 4;
    */
   afterSequence?: number | undefined;
+
+  /**
+   * @generated from field: string grant_token = 5;
+   */
+  grantToken: string;
 };
 
 /**

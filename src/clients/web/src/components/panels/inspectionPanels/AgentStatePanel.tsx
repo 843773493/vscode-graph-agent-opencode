@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { formatDateTime } from "../../../utils/format";
+import type { SessionContextSession } from "../../../api/session/sessionContext";
 import AssemblyContextInspector from "../../contextInspection/AssemblyContextInspector";
 import {
   agentStateInvalidLineNote,
@@ -18,7 +19,7 @@ export default function AgentStatePanel({
   error,
   port,
   workspaceId,
-  sessionId,
+  session,
   active,
 }: {
   jsonl: string;
@@ -28,7 +29,7 @@ export default function AgentStatePanel({
   error: string | null;
   port: number;
   workspaceId: string;
-  sessionId: string;
+  session: SessionContextSession | null;
   active: boolean;
 }) {
   const [frozen, setFrozen] = useState(false);
@@ -49,9 +50,9 @@ export default function AgentStatePanel({
         <button type="button" aria-pressed={!frozen} onClick={() => setFrozen(false)}>当前状态</button>
         <button type="button" aria-pressed={frozen} onClick={() => setFrozen(true)}>冻结请求</button>
       </div>
-      {frozen ? (sessionId && workspaceId ? <AssemblyContextInspector
-        key={`${workspaceId}:${sessionId}`} port={port} workspaceId={workspaceId}
-        sessionId={sessionId} active={active} /> : <p>请先选择会话。</p>) : <>
+      {frozen ? (session && workspaceId ? <AssemblyContextInspector
+        key={`${workspaceId}:${session.session_id}`} port={port} gatewayWorkspaceId={workspaceId}
+        session={session} active={active} /> : <p>请先选择会话。</p>) : <>
       <div className="agent-state-header">
         <div className="agent-state-title">Agent State 调试快照</div>
         <div className="agent-state-meta">

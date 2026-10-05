@@ -103,6 +103,7 @@ async def health(
     scheduler.assert_healthy()
     return APIResponse(
         data=GatewayHealthDTO(
+            gateway_id=request.app.state.gateway_id,
             active_workspace_id=registry.active_workspace_id,
             process_id=os.getpid(),
             development_restart_available=(

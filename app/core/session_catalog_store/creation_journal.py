@@ -10,8 +10,13 @@ preimage 冲突）、冻结父 revision、CAS 发布（唯一可见性提交点�
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
 from app.core.identifier import (
     create_prefixed_id,
@@ -21,6 +26,7 @@ from app.core.identifier import (
 from app.core.session_catalog_store._schema import _CREATION_RECORD_COLUMNS
 from app.core.session_catalog_store.contracts import (
     SessionCatalogNode,
+    SessionCreationPurpose,
     SessionCreationRecord,
 )
 from app.core.session_catalog_store.validators import (
@@ -59,6 +65,18 @@ class CreationJournalMixin:
                 else None
             ),
             display_name=str(row["display_name"]),
+            title_source=str(row["title_source"]),
+            purpose=str(row["purpose"]),
+            graph_id=str(row["graph_id"]),
+            graph_revision=int(row["graph_revision"]),
+            graph_schema_hash=str(row["graph_schema_hash"]),
+            capability_profile_hash=str(row["capability_profile_hash"]),
+            session_metadata_json=str(row["session_metadata_json"]),
+            request_intent_json=(
+                str(row["request_intent_json"])
+                if row["request_intent_json"] is not None
+                else None
+            ),
             created_at=str(row["created_at"]),
             storage_relative_locator=str(row["storage_relative_locator"]),
             preimage_hash=str(row["preimage_hash"]),
@@ -91,7 +109,12 @@ class CreationJournalMixin:
         workspace_id: str,
         parent_node_id: str | None,
         display_name: str,
+        title_source: str = "user",
+        purpose: SessionCreationPurpose,
+        graph_binding: ThreadGraphBindingRecord,
+        session_metadata_json: str,
         preimage_hash: str,
+        request_intent_json: str | None = None,
         created_at: datetime | None = None,
         session_id: str | None = None,
         main_thread_id: str | None = None,
@@ -114,8 +137,41 @@ class CreationJournalMixin:
           main_thread_id / locator 未被既有 nodes 行占用（fail fast，
           UNIQUE 约束兜底）。
         """
+        from app.core.session_control_store.contracts import ThreadGraphBindingRecord
+
+        if not isinstance(graph_binding, ThreadGraphBindingRecord):
+            raise TypeError("graph_binding 必须是 ThreadGraphBindingRecord")
         self._validate_idempotency_key(idempotency_key)
         self._validate_common_fields(workspace_id, display_name)
+        if title_source not in ("default", "user", "auto"):
+            raise ValueError(f"title_source 非法: {title_source!r}")
+        if purpose not in ("normal", "context_fork"):
+            raise ValueError(f"session creation purpose 非法: {purpose!r}")
+        if not isinstance(session_metadata_json, str) or not session_metadata_json:
+            raise ValueError("session_metadata_json 不能为空")
+        try:
+            session_metadata = json.loads(session_metadata_json)
+        except ValueError as error:
+            raise ValueError("session_metadata_json 必须是 JSON 对象") from error
+        if not isinstance(session_metadata, dict):
+            raise ValueError(  # noqa: TRY004 - JSON 根类型属于序列化形态错误。
+                "session_metadata_json 必须是 JSON 对象"
+            )
+        canonical_metadata = json.dumps(
+            session_metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if canonical_metadata != session_metadata_json:
+            raise ValueError("session_metadata_json 必须使用 canonical JSON")
+        if request_intent_json is not None:
+            request_intent = json.loads(request_intent_json)
+            if not isinstance(request_intent, dict):
+                raise ValueError("request_intent_json 必须是 JSON 对象")
+            if json.dumps(request_intent, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")) != request_intent_json:
+                raise ValueError("request_intent_json 必须使用 canonical JSON")
         if created_at is not None and not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
         if created_at is not None and created_at.tzinfo is None:
@@ -155,6 +211,13 @@ class CreationJournalMixin:
         with self.write_transaction() as connection:
             existing = self._fetch_creation_record(connection, idempotency_key)
             if existing is not None:
+                if tuple(existing[field] for field in (
+                    "graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash",
+                )) != graph_binding.as_tuple():
+                    raise RuntimeError(
+                        "session creation record GraphBinding preimage 冲突（同 key 不同 selector，拒绝复用）: "
+                        f"key={idempotency_key!r}"
+                    )
                 if str(existing["preimage_hash"]) != preimage_hash:
                     raise RuntimeError(
                         "session creation record preimage 冲突（同 key 不同 "
@@ -184,6 +247,33 @@ class CreationJournalMixin:
                         f"key={idempotency_key!r}, "
                         f"existing_main_thread_id={existing['main_thread_id']!r}, "
                         f"requested_main_thread_id={main_thread_id!r}"
+                    )
+                if str(existing["title_source"]) != title_source:
+                    raise RuntimeError(
+                        "session creation record title_source 冲突（同 key 幂等"
+                        "复用时拒绝改绑）: "
+                        f"key={idempotency_key!r}, "
+                        f"existing_title_source={existing['title_source']!r}, "
+                        f"requested_title_source={title_source!r}"
+                    )
+                if str(existing["purpose"]) != purpose:
+                    raise RuntimeError(
+                        "session creation record purpose 冲突（同 key 幂等"
+                        "复用时拒绝改绑）: "
+                        f"key={idempotency_key!r}, "
+                        f"existing_purpose={existing['purpose']!r}, "
+                        f"requested_purpose={purpose!r}"
+                    )
+                if str(existing["session_metadata_json"]) != session_metadata_json:
+                    raise RuntimeError(
+                        "session creation record metadata 冲突（同 key 幂等"
+                        "复用时拒绝改绑）: "
+                        f"key={idempotency_key!r}"
+                    )
+                if existing["request_intent_json"] != request_intent_json:
+                    raise RuntimeError(
+                        "session creation record 请求意图冲突（同 key 不同意图，拒绝复用）: "
+                        f"key={idempotency_key!r}"
                     )
                 return self._creation_record_from_row(existing)
             # 插入路径：事务内先验证后写入。
@@ -222,10 +312,13 @@ class CreationJournalMixin:
             connection.execute(
                 "INSERT INTO session_creation_records ("
                 "session_creation_idempotency_key, session_id, main_thread_id, "
-                "workspace_id, parent_node_id, display_name, created_at, "
-                "storage_relative_locator, preimage_hash, parent_revision, "
-                "state, abort_reason, record_created_at, record_updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, ?, ?)",
+                "workspace_id, parent_node_id, display_name, title_source, purpose, "
+                "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
+                "session_metadata_json, request_intent_json, created_at, storage_relative_locator, "
+                "preimage_hash, parent_revision, state, abort_reason, "
+                "record_created_at, record_updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', "
+                "NULL, ?, ?)",
                 (
                     idempotency_key,
                     allocated_session_id,
@@ -233,6 +326,11 @@ class CreationJournalMixin:
                     workspace_id,
                     parent_node_id,
                     display_name,
+                    title_source,
+                    purpose,
+                    *graph_binding.as_tuple(),
+                    session_metadata_json,
+                    request_intent_json,
                     allocated_created_at.isoformat(),
                     locator,
                     preimage_hash,
@@ -262,7 +360,31 @@ class CreationJournalMixin:
                 )
             return self._creation_record_from_row(row)
 
-    def publish_creation_record(self, idempotency_key: str) -> SessionCatalogNode:
+    def list_preparing_creation_records(
+        self,
+        *,
+        workspace_id: str,
+        purpose: SessionCreationPurpose,
+    ) -> list[SessionCreationRecord]:
+        """按冻结 workspace 与 purpose 列出未发布创建记录，供启动恢复使用。"""
+        self._validate_common_fields(workspace_id, "session")
+        if purpose not in ("normal", "context_fork"):
+            raise ValueError(f"session creation purpose 非法: {purpose!r}")
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                f"SELECT {_CREATION_RECORD_COLUMNS} FROM session_creation_records "
+                "WHERE workspace_id = ? AND purpose = ? AND state = 'preparing' "
+                "ORDER BY record_created_at, session_creation_idempotency_key",
+                (workspace_id, purpose),
+            ).fetchall()
+            return [self._creation_record_from_row(row) for row in rows]
+
+    def publish_creation_record(
+        self,
+        idempotency_key: str,
+        *,
+        expected_purpose: SessionCreationPurpose,
+    ) -> SessionCatalogNode:
         """CAS 发布 creation record 并插入可见 node（**唯一可见性提交点**）。
 
         单事务内依次验证：record 存在且 ``state='preparing'``；record 内部
@@ -275,6 +397,10 @@ class CreationJournalMixin:
         整个事务：node 不发布、record 保持 preparing。
         """
         self._validate_idempotency_key(idempotency_key)
+        if expected_purpose not in ("normal", "context_fork"):
+            raise ValueError(
+                f"session creation purpose 非法: {expected_purpose!r}"
+            )
         with self.write_transaction() as connection:
             row = self._fetch_creation_record(connection, idempotency_key)
             if row is None:
@@ -283,6 +409,12 @@ class CreationJournalMixin:
                     f"key={idempotency_key!r}"
                 )
             state = str(row["state"])
+            if str(row["purpose"]) != expected_purpose:
+                raise RuntimeError(
+                    "session creation publish purpose 与 durable record 不一致: "
+                    f"key={idempotency_key!r}, expected={expected_purpose!r}, "
+                    f"actual={row['purpose']!r}"
+                )
             if state == "published":
                 raise RuntimeError(
                     "session creation record 已发布，拒绝重复发布: "
@@ -303,6 +435,7 @@ class CreationJournalMixin:
                 else None
             )
             display_name = str(row["display_name"])
+            title_source = str(row["title_source"])
             created_at_text = str(row["created_at"])
             locator = str(row["storage_relative_locator"])
             try:
@@ -314,6 +447,11 @@ class CreationJournalMixin:
                 ) from error
             # record 内部一致性复验（防绕过软件直改 record）。
             validate_session_id(session_id)
+            if title_source not in ("default", "user", "auto"):
+                raise RuntimeError(
+                    "creation record title_source 非法（record 被外部改动，"
+                    f"fail closed）: {title_source!r}"
+                )
             validate_thread_id(main_thread_id)
             validate_storage_relative_locator(locator)
             self._validate_locator_matches_session(session_id, created_at, locator)
@@ -354,13 +492,14 @@ class CreationJournalMixin:
             )
             connection.execute(
                 "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-                "state, revision, workspace_id, created_at, "
+                "title_source, state, revision, workspace_id, created_at, "
                 "storage_relative_locator, main_thread_id) "
-                "VALUES (?, 'session', ?, ?, 'active', 1, ?, ?, ?, ?)",
+                "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?)",
                 (
                     session_id,
                     parent_node_id,
                     display_name,
+                    title_source,
                     workspace_id,
                     created_at.isoformat(),
                     locator,

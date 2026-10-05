@@ -1,6 +1,6 @@
 ## Purpose
 
-为项目所有 canonical 标识符（`session_id`、`thread_id` 及其它由唯一 id 工厂生成的持久身份）规定**唯一**的位 profile：**UUIDv7（RFC 9562）**。本 capability 是 id **生成位 profile** 的唯一 owner：它规定 id 由哪个显式直接依赖生成、如何 fail-closed、同毫秒内的排序保证、`sessions/YYYY/MM/DD` 日期桶如何从 id 内嵌时间戳推导与复核、时钟回拨行为、校验层命名、JS/浏览器侧的可用性边界，以及存量 v4 身份的一次性显式迁移。它**不**定义 VRN、ResourceIdentity、scope 闭集或拒绝码——那些归 `add-unified-virtual-resource-addressing` 等 change，本 capability 只具名引用。
+为项目所有 canonical 标识符（`session_id`、`thread_id` 及其它由唯一 id 工厂生成的持久身份）规定**唯一**的位 profile：**UUIDv7（RFC 9562）**。本 capability 是 id **生成位 profile** 的唯一 owner：它规定 id 由哪个显式直接依赖生成、如何 fail-closed、同毫秒内的排序保证、`sessions/YYYY/MM/DD` 日期桶如何从 id 内嵌时间戳推导与复核、时钟回拨行为、校验层命名、JS/浏览器侧的可用性边界，以及旧 UUIDv4 身份的拒绝边界。它**不**定义 VRN、ResourceIdentity、scope 闭集或拒绝码——那些归 `add-unified-virtual-resource-addressing` 等 change，本 capability 只具名引用。
 
 ## ADDED Requirements
 
@@ -102,26 +102,26 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **WHEN** 阅读校验层标识与 docstring
 - **THEN** 其中不出现会误导为「当前仍接受 v4」的名称或描述
 
-### Requirement: 存量 UUIDv4 身份必须一次性显式处置且不得双轨
+### Requirement: canonical 身份拒绝 UUIDv4 且不得提供迁移双轨
 
-存量 UUIDv4 身份（`.boxteam/sessions/` 下的 session/thread id、SQLite 主键与相关持久记录）MUST 走**一次性显式处置**：启动/迁移路径遇到 v4 canonical id MUST **fail-closed** 并**隔离**，同时产出**可操作的显式报告**（至少含被隔离 id、物理路径、原因、建议动作）；MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias、MUST NOT 静默吸收。
+canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 和其它非 v7 profile MUST 被明确拒绝。系统不提供旧 UUIDv4 Session Catalog importer、自动隔离/重编号、旧 ID path alias 或扫盘重建。只有旧 `session-catalog-index.json` 而缺少 SQLite catalog 的工作区 MUST fail-closed，保留输入文件且不得初始化空 catalog。
 
 系统 MUST NOT 提供运行时维护开关（例如 `identity_profile_migration_active`）或任何等价的「窗口期接受 `v4|v7`」运行时分叉；canonical 校验器 MUST **始终只接受 `v7`** 位 profile。
 
-#### Scenario: 遇到 v4 id 时 fail-closed 且报告可见
+#### Scenario: validator 拒绝 v4 并接受 v7
 
-- **WHEN** 启动/迁移路径遇到 v4 位 profile 的 canonical 身份
-- **THEN** 它 MUST fail-closed（隔离到既有隔离惯例，例如 `.boxteam/orphaned/`），并产出包含被隔离 id、物理路径、原因与建议动作的显式报告；MUST NOT 静默吸收、MUST NOT 回退 v4、MUST NOT 猜测目标、MUST NOT 扫盘补洞
+- **WHEN** canonical `session_id` 或 `thread_id` validator 收到 v4 或 v7 位 profile
+- **THEN** v4 MUST 被明确拒绝，v7 MUST 被接受；validator MUST NOT 把 v4 重编号或回退接受
 
-#### Scenario: MUST NOT 引入运行时开关
+#### Scenario: 旧 JSON catalog 不触发导入
 
-- **WHEN** 检查 canonical 校验器与启动/迁移路径
-- **THEN** 其中 MUST NOT 存在 `identity_profile_migration_active` 或任何等价门控开关，MUST NOT 存在「窗口期接受 `v4|v7`」的分支；校验器 MUST 只接受 `v7`
+- **WHEN** 工作区只有旧 `session-catalog-index.json`，没有 `session-catalog.sqlite`
+- **THEN** resolver MUST 明确报错、保留 JSON 和原物理数据，且 MUST NOT 初始化空 catalog、双读、扫描磁盘、自动隔离或重编号
 
-#### Scenario: 处置不双读且不波及 v7 身份
+#### Scenario: 不提供运行时 profile 开关或旧 ID alias
 
-- **WHEN** 存量 v4 身份被处置，或校验一个 v7 身份
-- **THEN** 运行路径 MUST NOT 同时按 v4 与 v7 双读同一身份，且 v4 存量处置 MUST NOT 波及合法的 v7 身份
+- **WHEN** 检查 canonical validator 和 Session Catalog 运行路径
+- **THEN** 其中 MUST NOT 存在 `identity_profile_migration_active`、`v4|v7` 窗口期开关、UUIDv4 importer 或旧 ID path alias；校验器 MUST 只接受 v7
 
 ### Requirement: SQLite 主键与索引不因 v7 重建
 
@@ -180,23 +180,23 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 - **WHEN** 某个 session_id 或 thread_id 由 JS/TS 侧（Node 服务进程或浏览器）生成或被提交到 canonical 校验器
 - **THEN** 它 MUST 被拒绝，MUST NOT 以「Node/浏览器拿不到 v7」为由复用本豁免
 
-### Requirement: 以 id 为输入的哈希与幂等键必须在迁移前完成阻断性审计并给出处置
+### Requirement: 任何未来持久身份重写前必须审计 id 哈希与幂等键
 
-存量 v4→v7 重编号会改变任何以 id 为输入的哈希值与幂等键。因此系统 MUST 在**迁移任务开工之前**完成一次**阻断性审计**：逐一判定全仓 `content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入是否**直接或间接**包含 `session_id` / `thread_id` / 资源 id（含 `create_prefixed_id` 产物、`display_uri`、`entry_identity`、catalog payload）。
+本 change 只规定新分配 canonical ID 使用 UUIDv7，并拒绝旧 profile；**不重写存量 ID**。若未来另一个经授权的 change 提出持久身份重写，实施者 MUST 在任何重写任务开工之前完成一次阻断性审计：逐一判定全仓 `content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入是否直接或间接包含 `session_id` / `thread_id` / 资源 id（含 `create_prefixed_id` 产物、`display_uri`、`entry_identity`、catalog payload）。
 
-**审计结论未落定前，迁移任务 MUST NOT 开工。** 任何以 id 为输入的哈希或幂等键 MUST 在 change 内给出明确处置：**随迁移一致重算**，或**该 id 不参与迁移**；MUST NOT 留成「迁移后哈希漂移但无人负责」。
+此类未来重写的审计结论未落定前，重写任务 MUST NOT 开工。任何以 id 为输入的哈希或幂等键 MUST 在该 change 内给出明确处置：随身份重写一致重算，或该 id 不参与重写；MUST NOT 留成「身份变化后哈希漂移但无人负责」。
 
 审计交付物 MUST 包含：命中清单（文件 + 符号）、每条判定依据，以及「已验证哪些哈希**不**含 id」的**负向证据**（缺负向证据即视为审计不完整）。
 
 已实测的现状证据（不作为结论，仅缩小审计范围）：`app/domain/itemized/hashing.py` 的 `content_hash` 输入只有 `{payload_kind, payload}`、`contribution_content_hash` 只有 `{contribution_kind, body}`；而 `app/domain/itemized/hash/plan_hash.py` 的 `context_plan_hash` 显式含 `session_id` / `plan_id` / `ref_id`。
 
-#### Scenario: 审计未落定则迁移不得开工
-- **WHEN** 哈希/幂等键审计的结论尚未落定
-- **THEN** 迁移任务 MUST NOT 执行任何重编号，且 MUST NOT 以「先迁后补」推进
+#### Scenario: 审计未落定则未来身份重写不得开工
+- **WHEN** 某个单独授权的 change 提出持久身份重写，而哈希/幂等键审计结论尚未落定
+- **THEN** 该重写任务 MUST NOT 开工，且 MUST NOT 以「先改后补」推进
 
 #### Scenario: 以 id 为输入的哈希必须给出处置
-- **WHEN** 审计发现某哈希或幂等键直接或间接以 id 为输入
-- **THEN** change 内 MUST 明确其处置为「随迁移一致重算」或「该 id 不参与迁移」，且 MUST 有对应验证
+- **WHEN** 未来身份重写审计发现某哈希或幂等键直接或间接以 id 为输入
+- **THEN** 该重写 change MUST 明确其处置为「随身份重写一致重算」或「该 id 不参与重写」，且 MUST 有对应验证
 
 #### Scenario: 审计必须附负向证据
 - **WHEN** 审计报告声称某哈希不含 id
@@ -204,13 +204,13 @@ v7 的时间有序是本 capability 的核心价值，故 MUST 给出可验证�
 
 ### Requirement: gateway 控制面库必须逐表分类且失效必须显式报告
 
-gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 session 身份的表 MUST 被逐表分类，分类决定处置，MUST NOT 预先假定可静默失效：
+gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 session 身份的表 MUST 被逐表分类，MUST NOT 预先假定可静默失效。本 change 不执行这些表的存量 ID 重写；`migrate` 分类只记录其受身份变化影响，不能触发隐式导入或重写。任何未来单独授权的数据重写都必须先由其 owner 明确提出并验证处置路径。
 
-- `migrate`：需要迁移的表，按与工作区数据同一套一次性显式处置语义处理（无运行时开关；失败即 fail-closed 隔离 + 可操作显式报告，不静默吸收）。
+- `migrate`：承载可能受身份重写影响的数据表；本 change 只登记其影响面，不在运行时迁移或隔离。未来若另立重写 change，owner 必须提供显式且经过测试的处置路径。
 - `explicitly_invalidated`：允许失效重建的表，但 MUST 有**用户可见的显式报告**（哪张表、多少行、为何失效）；MUST NOT 静默重建（对齐「绝不默默失败」/「永不返回虚假的默认值」）。
 - `not_affected`：判定不受影响者，MUST 给出判定依据。
 
-`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非有实测证明其语义是「可安全丢弃的租约」）：租约承担并发互斥，静默丢弃会造成双访问。若需要迁移 MUST 归入 `migrate`；若确需失效 MUST 显式报告并给出互斥安全依据。
+`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非有实测证明其语义是「可安全丢弃的租约」）：租约承担并发互斥，静默丢弃会造成双访问。未来若某个获授权的数据重写触及该表，必须保留互斥语义；任何失效决定都 MUST 显式报告并给出安全依据。
 
 #### Scenario: 控制面表被分类为 explicitly_invalidated 时必须显式报告
 - **WHEN** 某控制面表被分类为 `explicitly_invalidated`
@@ -220,12 +220,12 @@ gateway 控制面库（`app/gateway/control/gateway_state.py` 等）中承载 se
 - **WHEN** 分类处理 `user_access_lease`
 - **THEN** 除非有实测的「可安全丢弃」依据，它 MUST 归入 `migrate`，MUST NOT 被静默失效
 
-### Requirement: 迁移面必须按工厂前缀全集枚举且持久面与非持久面分别登记
+### Requirement: 身份变更影响面必须按工厂前缀全集枚举
 
-迁移面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，实测为 **33 个前缀**的闭合 `Literal`）× **是否进入持久面**的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。每个前缀 MUST 被判定并登记为持久面或非持久面：
+canonical 身份 profile 变更的影响面 MUST 按唯一 id 工厂（`app/core/identifier.py` 的 `IdentifierPrefix`，实测为 **33 个前缀**的闭合 `Literal`）× 是否进入持久面的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 等字面后缀匹配。本 change 不重写历史 ID；该矩阵用于证明 v4 身份存在哪些持久载体，并约束任何未来另行授权的身份重写。
 
-- **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入迁移任务。已实测持久面至少含 `ses`、`thr`、`op`、`strm`、`msg`、`evt`、`snapshot`、`part`、`goal`、`job`、`lease`、`gen`、`grun`、`gwn`、`team`、`ttask`、`tevt`、`comm`、`attempt`、`tooltest`、`patch`、`dbgcfg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`intr`。
-- **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与迁移」并给出负向证据。已实测非持久面为 `req`、`src`、`bgm`、`bgt`、`chan`、`sub`、`robs`。
+- **持久面**（目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段）：MUST 列入影响矩阵，并在未来重写设计中逐项处理。已实测持久面至少含 `ses`、`thr`、`op`、`strm`、`msg`、`evt`、`snapshot`、`part`、`goal`、`job`、`lease`、`gen`、`grun`、`gwn`、`team`、`ttask`、`tevt`、`comm`、`attempt`、`tooltest`、`patch`、`dbgcfg`、`node-bp`、`node-debug-action`、`node-debug-proc`、`intr`。
+- **非持久面**（仅进程内内存/事件总线）：MUST 显式登记为「不参与持久身份重写」并给出负向证据。已实测非持久面为 `req`、`src`、`bgm`、`bgt`、`chan`、`sub`、`robs`。
 
 新增工厂前缀时 MUST 在矩阵补一行并判定持久面，MUST NOT 遗留未判定前缀。
 

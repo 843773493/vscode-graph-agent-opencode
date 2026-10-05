@@ -188,6 +188,7 @@ export interface JobDTO {
   error_message?: string | undefined;
   metadata?: { [key: string]: any } | undefined;
   ended_at?: string | undefined;
+  thread_id: string;
 }
 
 export interface JobDispatchSnapshotDTO {
@@ -202,6 +203,7 @@ export interface JobDispatchSnapshotDTO {
   delivery_policy?: string | undefined;
   enqueue_sequence?: number | undefined;
   queue_snapshot_version?: number | undefined;
+  thread_id: string;
 }
 
 export interface JobProgressDTO {
@@ -643,6 +645,9 @@ export interface PendingRequestDTO {
   updated_at: string | undefined;
   snapshot_version: number;
   gateway_id?: string | undefined;
+  thread_id: string;
+  turn_id?: string | undefined;
+  execution_binding: { [key: string]: any } | undefined;
 }
 
 export interface PendingRequestListDTO {
@@ -843,7 +848,6 @@ export interface SessionCompletedExecutionEventDTO {
 
 export interface SessionContextItemDTO {
   kind: string;
-  locator: string;
   role?: string | undefined;
   record_index?: number | undefined;
   text?: string | undefined;
@@ -854,15 +858,18 @@ export interface SessionContextItemDTO {
   data?: { [key: string]: any } | undefined;
   raw_record?: { [key: string]: any } | undefined;
   truncated?: boolean | undefined;
+  resource_identity?: string | undefined;
+  vrn?: string | undefined;
+  scope?: string | undefined;
+  assembly_ref?: string | undefined;
 }
 
 export interface SessionContextPartialErrorDTO {
-  resource: string;
   error: string;
+  resource_identity: string;
 }
 
 export interface SessionContextReadRequest {
-  resource: string;
   view?: string | undefined;
   include: string[];
   recent_rounds?: number | undefined;
@@ -870,11 +877,15 @@ export interface SessionContextReadRequest {
   cursor?: string | undefined;
   limit?: number | undefined;
   max_chars?: number | undefined;
-  expected_revision?: string | undefined;
+  revision?: string | undefined;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
+  record_index?: number | undefined;
+  assembly_ref?: string | undefined;
 }
 
 export interface SessionContextReadResultDTO {
-  resource: string;
   view: string;
   revision: string;
   compacted?: boolean | undefined;
@@ -888,20 +899,26 @@ export interface SessionContextReadResultDTO {
   items: SessionContextItemDTO[];
   partial_errors: SessionContextPartialErrorDTO[];
   omitted_partial_error_count?: number | undefined;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
+  record_index?: number | undefined;
+  assembly_ref?: string | undefined;
 }
 
 export interface SessionContextSearchMatchDTO {
-  locator: string;
   preview: string;
   source: string;
   revision: string;
   record_index?: number | undefined;
   match_start: number;
   match_end: number;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
 }
 
 export interface SessionContextSearchRequest {
-  resource: string;
   query: string;
   sources: string[];
   match_mode?: string | undefined;
@@ -909,11 +926,13 @@ export interface SessionContextSearchRequest {
   max_results?: number | undefined;
   max_chars?: number | undefined;
   cursor?: string | undefined;
-  expected_revision?: string | undefined;
+  revision?: string | undefined;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
 }
 
 export interface SessionContextSearchResultDTO {
-  resource: string;
   query: string;
   match_mode: string;
   revision: string;
@@ -925,6 +944,9 @@ export interface SessionContextSearchResultDTO {
   matches: SessionContextSearchMatchDTO[];
   partial_errors: SessionContextPartialErrorDTO[];
   omitted_partial_error_count?: number | undefined;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
 }
 
 export interface SessionControlResultDTO {
@@ -936,7 +958,6 @@ export interface SessionControlResultDTO {
 export interface SessionCreateRequest {
   title?: string | undefined;
   agent_id?: string | undefined;
-  title_source?: string | undefined;
   folder_id?: string | undefined;
 }
 
@@ -953,6 +974,10 @@ export interface SessionDTO {
   context_source_session_id?: string | undefined;
   kind?: string | undefined;
   generation_origin?: SessionGenerationOriginDTO | undefined;
+  resource_identity: string;
+  vrn: string;
+  scope: string;
+  thread_id?: string | undefined;
 }
 
 export interface SessionErrorExecutionEventDTO {
@@ -1035,6 +1060,7 @@ export interface SessionForkRequest {
   turn_id?: string | undefined;
   anchor_mode?: string | undefined;
   pinned?: boolean | undefined;
+  place_under_source?: boolean | undefined;
 }
 
 export interface SessionGenerationOriginDTO {
@@ -1231,6 +1257,59 @@ export interface SessionResourceListDTO {
   items: SessionResourceDTO[];
 }
 
+/** 工作区资源由对应领域 owner 保存；Thread 关联与客户端传输连接分别管理。 */
+export interface ResourceThreadRef {
+  session_id: string;
+  thread_id: string;
+}
+
+export interface WorkspaceResourceDTO {
+  resource_id: string;
+  workspace_id: string;
+  kind: string;
+  retention_scope: string;
+  source_thread: ResourceThreadRef | undefined;
+  thread_associations: ResourceThreadRef[];
+  owner_revision: number;
+  status: string;
+  reconciliation_status: string;
+  unattached_since?: string | undefined;
+  reclaim_at?: string | undefined;
+  available_actions: string[];
+  metadata: { [key: string]: any } | undefined;
+  created_at: string;
+  updated_at: string;
+  error?: string | undefined;
+}
+
+export interface WorkspaceResourceListDTO {
+  workspace_id: string;
+  items: WorkspaceResourceDTO[];
+}
+
+export interface TerminalResourceCreateRequest {
+  session_id: string;
+  thread_id?: string | undefined;
+  retention_scope: string;
+  title: string;
+  cwd_relative?: string | undefined;
+  cols?: number | undefined;
+  rows?: number | undefined;
+}
+
+export interface WorkspaceResourceCommandRequest {
+  expected_revision: number;
+  thread?: ResourceThreadRef | undefined;
+}
+
+export interface TerminalTransportGrantDTO {
+  resource_id: string;
+  owner_revision: number;
+  grant_token: string;
+  expires_at: string;
+  resource: WorkspaceResourceDTO | undefined;
+}
+
 export interface SessionStatusChangedExecutionEventDTO {
   event_id: string;
   session_id: string;
@@ -1262,10 +1341,8 @@ export interface SessionTurnBootstrapDTO {
 }
 
 export interface SessionUpdateRequest {
-  title?: string | undefined;
   agent_id?: string | undefined;
   provider_id?: string | undefined;
-  title_source?: string | undefined;
 }
 
 export interface StaleTurnCursorErrorDTO {
@@ -1563,6 +1640,7 @@ export interface TurnDetailDTO {
   detail_truncated?: boolean | undefined;
   detail_next_cursor?: string | undefined;
   activity_stats?: TurnActivityStatsDTO | undefined;
+  root_logical_item_ordinal: number;
 }
 
 export interface TurnHistoryLoadRequest {
@@ -1586,6 +1664,37 @@ export interface TurnHistoryPageDTO {
   has_after?: boolean | undefined;
   projection_epoch: number;
   summaries: TurnSummaryDTO[];
+  internal_executions: InternalExecutionHistoryDTO[];
+}
+
+export interface InternalExecutionHistoryDTO {
+  execution_id: string;
+  job_id: string;
+  status: string;
+  created_at: string | undefined;
+  display_parts: InternalExecutionDisplayPartDTO[];
+  response_parts: TurnResponsePartDTO[];
+  session_id: string;
+  thread_id: string;
+  updated_at: string | undefined;
+}
+
+export interface InternalExecutionDisplayPartDTO {
+  kind: string;
+  text: string;
+  item_id: string;
+  item_sequence: number;
+  provenance: InternalDisplayProvenanceDTO | undefined;
+  created_at: string | undefined;
+  logical_item_ordinal: number;
+}
+
+export interface InternalDisplayProvenanceDTO {
+  source_session_id?: string | undefined;
+  source_thread_id?: string | undefined;
+  delegation_id?: string | undefined;
+  source_execution_id?: string | undefined;
+  source_item_id?: string | undefined;
 }
 
 export interface TurnJobSummaryDTO {
@@ -1639,6 +1748,7 @@ export interface TurnResponseSourceDTO {
   part_ordinal?: number | undefined;
   created_at?: string | undefined;
   elapsed_ms?: number | undefined;
+  logical_item_ordinal?: number | undefined;
 }
 
 export interface TurnSummaryDTO {
@@ -1667,6 +1777,7 @@ export interface TurnSummaryDTO {
   tool_summary: TurnToolSummaryDTO[];
   response_parts: TurnResponsePartDTO[];
   activity_stats?: TurnActivityStatsDTO | undefined;
+  root_logical_item_ordinal: number;
 }
 
 export interface TurnThinkingBlockDTO {
@@ -2879,6 +2990,7 @@ function createBaseJobDTO(): JobDTO {
     error_message: undefined,
     metadata: undefined,
     ended_at: undefined,
+    thread_id: "",
   };
 }
 
@@ -2898,6 +3010,7 @@ export const JobDTO: MessageFns<JobDTO> = {
       error_message: isSet(object.error_message) ? globalThis.String(object.error_message) : undefined,
       metadata: isObject(object.metadata) ? object.metadata : undefined,
       ended_at: isSet(object.ended_at) ? globalThis.String(object.ended_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -2942,6 +3055,9 @@ export const JobDTO: MessageFns<JobDTO> = {
     if (message.ended_at !== undefined) {
       obj.ended_at = message.ended_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -2963,6 +3079,7 @@ export const JobDTO: MessageFns<JobDTO> = {
     message.error_message = object.error_message ?? undefined;
     message.metadata = object.metadata ?? undefined;
     message.ended_at = object.ended_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -2980,6 +3097,7 @@ function createBaseJobDispatchSnapshotDTO(): JobDispatchSnapshotDTO {
     delivery_policy: undefined,
     enqueue_sequence: undefined,
     queue_snapshot_version: undefined,
+    thread_id: "",
   };
 }
 
@@ -2999,6 +3117,7 @@ export const JobDispatchSnapshotDTO: MessageFns<JobDispatchSnapshotDTO> = {
       queue_snapshot_version: isSet(object.queue_snapshot_version)
         ? globalThis.Number(object.queue_snapshot_version)
         : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -3037,6 +3156,9 @@ export const JobDispatchSnapshotDTO: MessageFns<JobDispatchSnapshotDTO> = {
     if (message.queue_snapshot_version !== undefined) {
       obj.queue_snapshot_version = Math.round(message.queue_snapshot_version);
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -3056,6 +3178,7 @@ export const JobDispatchSnapshotDTO: MessageFns<JobDispatchSnapshotDTO> = {
     message.delivery_policy = object.delivery_policy ?? undefined;
     message.enqueue_sequence = object.enqueue_sequence ?? undefined;
     message.queue_snapshot_version = object.queue_snapshot_version ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -5989,6 +6112,9 @@ function createBasePendingRequestDTO(): PendingRequestDTO {
     updated_at: undefined,
     snapshot_version: 0,
     gateway_id: undefined,
+    thread_id: "",
+    turn_id: undefined,
+    execution_binding: undefined,
   };
 }
 
@@ -6015,6 +6141,9 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       snapshot_version: isSet(object.snapshot_version) ? globalThis.Number(object.snapshot_version) : 0,
       gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
+      execution_binding: isObject(object.execution_binding) ? object.execution_binding : undefined,
     };
   },
 
@@ -6074,6 +6203,15 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     if (message.gateway_id !== undefined) {
       obj.gateway_id = message.gateway_id;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.execution_binding !== undefined) {
+      obj.execution_binding = message.execution_binding;
+    }
     return obj;
   },
 
@@ -6100,6 +6238,9 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     message.updated_at = object.updated_at ?? undefined;
     message.snapshot_version = object.snapshot_version ?? 0;
     message.gateway_id = object.gateway_id ?? undefined;
+    message.thread_id = object.thread_id ?? "";
+    message.turn_id = object.turn_id ?? undefined;
+    message.execution_binding = object.execution_binding ?? undefined;
     return message;
   },
 };
@@ -7424,7 +7565,6 @@ export const SessionCompletedExecutionEventDTO: MessageFns<SessionCompletedExecu
 function createBaseSessionContextItemDTO(): SessionContextItemDTO {
   return {
     kind: "",
-    locator: "",
     role: undefined,
     record_index: undefined,
     text: undefined,
@@ -7435,6 +7575,10 @@ function createBaseSessionContextItemDTO(): SessionContextItemDTO {
     data: undefined,
     raw_record: undefined,
     truncated: undefined,
+    resource_identity: undefined,
+    vrn: undefined,
+    scope: undefined,
+    assembly_ref: undefined,
   };
 }
 
@@ -7442,7 +7586,6 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
   fromJSON(object: any): SessionContextItemDTO {
     return {
       kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
-      locator: isSet(object.locator) ? globalThis.String(object.locator) : "",
       role: isSet(object.role) ? globalThis.String(object.role) : undefined,
       record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
       text: isSet(object.text) ? globalThis.String(object.text) : undefined,
@@ -7455,6 +7598,10 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
       data: isObject(object.data) ? object.data : undefined,
       raw_record: isObject(object.raw_record) ? object.raw_record : undefined,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : undefined,
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : undefined,
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : undefined,
+      assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
     };
   },
 
@@ -7462,9 +7609,6 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     const obj: any = {};
     if (message.kind !== "") {
       obj.kind = message.kind;
-    }
-    if (message.locator !== "") {
-      obj.locator = message.locator;
     }
     if (message.role !== undefined) {
       obj.role = message.role;
@@ -7496,6 +7640,18 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     if (message.truncated !== undefined) {
       obj.truncated = message.truncated;
     }
+    if (message.resource_identity !== undefined) {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== undefined) {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== undefined) {
+      obj.scope = message.scope;
+    }
+    if (message.assembly_ref !== undefined) {
+      obj.assembly_ref = message.assembly_ref;
+    }
     return obj;
   },
 
@@ -7505,7 +7661,6 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
   fromPartial<I extends Exact<DeepPartial<SessionContextItemDTO>, I>>(object: I): SessionContextItemDTO {
     const message = createBaseSessionContextItemDTO();
     message.kind = object.kind ?? "";
-    message.locator = object.locator ?? "";
     message.role = object.role ?? undefined;
     message.record_index = object.record_index ?? undefined;
     message.text = object.text ?? undefined;
@@ -7516,29 +7671,33 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     message.data = object.data ?? undefined;
     message.raw_record = object.raw_record ?? undefined;
     message.truncated = object.truncated ?? undefined;
+    message.resource_identity = object.resource_identity ?? undefined;
+    message.vrn = object.vrn ?? undefined;
+    message.scope = object.scope ?? undefined;
+    message.assembly_ref = object.assembly_ref ?? undefined;
     return message;
   },
 };
 
 function createBaseSessionContextPartialErrorDTO(): SessionContextPartialErrorDTO {
-  return { resource: "", error: "" };
+  return { error: "", resource_identity: "" };
 }
 
 export const SessionContextPartialErrorDTO: MessageFns<SessionContextPartialErrorDTO> = {
   fromJSON(object: any): SessionContextPartialErrorDTO {
     return {
-      resource: isSet(object.resource) ? globalThis.String(object.resource) : "",
       error: isSet(object.error) ? globalThis.String(object.error) : "",
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
     };
   },
 
   toJSON(message: SessionContextPartialErrorDTO): unknown {
     const obj: any = {};
-    if (message.resource !== "") {
-      obj.resource = message.resource;
-    }
     if (message.error !== "") {
       obj.error = message.error;
+    }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
     }
     return obj;
   },
@@ -7550,15 +7709,14 @@ export const SessionContextPartialErrorDTO: MessageFns<SessionContextPartialErro
     object: I,
   ): SessionContextPartialErrorDTO {
     const message = createBaseSessionContextPartialErrorDTO();
-    message.resource = object.resource ?? "";
     message.error = object.error ?? "";
+    message.resource_identity = object.resource_identity ?? "";
     return message;
   },
 };
 
 function createBaseSessionContextReadRequest(): SessionContextReadRequest {
   return {
-    resource: "",
     view: undefined,
     include: [],
     recent_rounds: undefined,
@@ -7566,14 +7724,18 @@ function createBaseSessionContextReadRequest(): SessionContextReadRequest {
     cursor: undefined,
     limit: undefined,
     max_chars: undefined,
-    expected_revision: undefined,
+    revision: undefined,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
+    record_index: undefined,
+    assembly_ref: undefined,
   };
 }
 
 export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = {
   fromJSON(object: any): SessionContextReadRequest {
     return {
-      resource: isSet(object.resource) ? globalThis.String(object.resource) : "",
       view: isSet(object.view) ? globalThis.String(object.view) : undefined,
       include: globalThis.Array.isArray(object?.include)
         ? object.include.map((e: any) => globalThis.String(e))
@@ -7585,15 +7747,17 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       limit: isSet(object.limit) ? globalThis.Number(object.limit) : undefined,
       max_chars: isSet(object.max_chars) ? globalThis.Number(object.max_chars) : undefined,
-      expected_revision: isSet(object.expected_revision) ? globalThis.String(object.expected_revision) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
+      assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
     };
   },
 
   toJSON(message: SessionContextReadRequest): unknown {
     const obj: any = {};
-    if (message.resource !== "") {
-      obj.resource = message.resource;
-    }
     if (message.view !== undefined) {
       obj.view = message.view;
     }
@@ -7615,8 +7779,23 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
     if (message.max_chars !== undefined) {
       obj.max_chars = Math.round(message.max_chars);
     }
-    if (message.expected_revision !== undefined) {
-      obj.expected_revision = message.expected_revision;
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.record_index !== undefined) {
+      obj.record_index = Math.round(message.record_index);
+    }
+    if (message.assembly_ref !== undefined) {
+      obj.assembly_ref = message.assembly_ref;
     }
     return obj;
   },
@@ -7626,7 +7805,6 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
   },
   fromPartial<I extends Exact<DeepPartial<SessionContextReadRequest>, I>>(object: I): SessionContextReadRequest {
     const message = createBaseSessionContextReadRequest();
-    message.resource = object.resource ?? "";
     message.view = object.view ?? undefined;
     message.include = object.include?.map((e) => e) || [];
     message.recent_rounds = object.recent_rounds ?? undefined;
@@ -7634,14 +7812,18 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
     message.cursor = object.cursor ?? undefined;
     message.limit = object.limit ?? undefined;
     message.max_chars = object.max_chars ?? undefined;
-    message.expected_revision = object.expected_revision ?? undefined;
+    message.revision = object.revision ?? undefined;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
+    message.record_index = object.record_index ?? undefined;
+    message.assembly_ref = object.assembly_ref ?? undefined;
     return message;
   },
 };
 
 function createBaseSessionContextReadResultDTO(): SessionContextReadResultDTO {
   return {
-    resource: "",
     view: "",
     revision: "",
     compacted: undefined,
@@ -7655,13 +7837,17 @@ function createBaseSessionContextReadResultDTO(): SessionContextReadResultDTO {
     items: [],
     partial_errors: [],
     omitted_partial_error_count: undefined,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
+    record_index: undefined,
+    assembly_ref: undefined,
   };
 }
 
 export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO> = {
   fromJSON(object: any): SessionContextReadResultDTO {
     return {
-      resource: isSet(object.resource) ? globalThis.String(object.resource) : "",
       view: isSet(object.view) ? globalThis.String(object.view) : "",
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
       compacted: isSet(object.compacted) ? globalThis.Boolean(object.compacted) : undefined,
@@ -7683,14 +7869,16 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
       omitted_partial_error_count: isSet(object.omitted_partial_error_count)
         ? globalThis.Number(object.omitted_partial_error_count)
         : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
+      assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
     };
   },
 
   toJSON(message: SessionContextReadResultDTO): unknown {
     const obj: any = {};
-    if (message.resource !== "") {
-      obj.resource = message.resource;
-    }
     if (message.view !== "") {
       obj.view = message.view;
     }
@@ -7730,6 +7918,21 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
     if (message.omitted_partial_error_count !== undefined) {
       obj.omitted_partial_error_count = Math.round(message.omitted_partial_error_count);
     }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.record_index !== undefined) {
+      obj.record_index = Math.round(message.record_index);
+    }
+    if (message.assembly_ref !== undefined) {
+      obj.assembly_ref = message.assembly_ref;
+    }
     return obj;
   },
 
@@ -7738,7 +7941,6 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
   },
   fromPartial<I extends Exact<DeepPartial<SessionContextReadResultDTO>, I>>(object: I): SessionContextReadResultDTO {
     const message = createBaseSessionContextReadResultDTO();
-    message.resource = object.resource ?? "";
     message.view = object.view ?? "";
     message.revision = object.revision ?? "";
     message.compacted = object.compacted ?? undefined;
@@ -7752,32 +7954,46 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
     message.items = object.items?.map((e) => SessionContextItemDTO.fromPartial(e)) || [];
     message.partial_errors = object.partial_errors?.map((e) => SessionContextPartialErrorDTO.fromPartial(e)) || [];
     message.omitted_partial_error_count = object.omitted_partial_error_count ?? undefined;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
+    message.record_index = object.record_index ?? undefined;
+    message.assembly_ref = object.assembly_ref ?? undefined;
     return message;
   },
 };
 
 function createBaseSessionContextSearchMatchDTO(): SessionContextSearchMatchDTO {
-  return { locator: "", preview: "", source: "", revision: "", record_index: undefined, match_start: 0, match_end: 0 };
+  return {
+    preview: "",
+    source: "",
+    revision: "",
+    record_index: undefined,
+    match_start: 0,
+    match_end: 0,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
+  };
 }
 
 export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchDTO> = {
   fromJSON(object: any): SessionContextSearchMatchDTO {
     return {
-      locator: isSet(object.locator) ? globalThis.String(object.locator) : "",
       preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
       source: isSet(object.source) ? globalThis.String(object.source) : "",
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
       record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
       match_start: isSet(object.match_start) ? globalThis.Number(object.match_start) : 0,
       match_end: isSet(object.match_end) ? globalThis.Number(object.match_end) : 0,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
 
   toJSON(message: SessionContextSearchMatchDTO): unknown {
     const obj: any = {};
-    if (message.locator !== "") {
-      obj.locator = message.locator;
-    }
     if (message.preview !== "") {
       obj.preview = message.preview;
     }
@@ -7796,6 +8012,15 @@ export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchD
     if (message.match_end !== 0) {
       obj.match_end = Math.round(message.match_end);
     }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
     return obj;
   },
 
@@ -7804,20 +8029,21 @@ export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchD
   },
   fromPartial<I extends Exact<DeepPartial<SessionContextSearchMatchDTO>, I>>(object: I): SessionContextSearchMatchDTO {
     const message = createBaseSessionContextSearchMatchDTO();
-    message.locator = object.locator ?? "";
     message.preview = object.preview ?? "";
     message.source = object.source ?? "";
     message.revision = object.revision ?? "";
     message.record_index = object.record_index ?? undefined;
     message.match_start = object.match_start ?? 0;
     message.match_end = object.match_end ?? 0;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
     return message;
   },
 };
 
 function createBaseSessionContextSearchRequest(): SessionContextSearchRequest {
   return {
-    resource: "",
     query: "",
     sources: [],
     match_mode: undefined,
@@ -7825,14 +8051,16 @@ function createBaseSessionContextSearchRequest(): SessionContextSearchRequest {
     max_results: undefined,
     max_chars: undefined,
     cursor: undefined,
-    expected_revision: undefined,
+    revision: undefined,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
   };
 }
 
 export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest> = {
   fromJSON(object: any): SessionContextSearchRequest {
     return {
-      resource: isSet(object.resource) ? globalThis.String(object.resource) : "",
       query: isSet(object.query) ? globalThis.String(object.query) : "",
       sources: globalThis.Array.isArray(object?.sources)
         ? object.sources.map((e: any) => globalThis.String(e))
@@ -7842,15 +8070,15 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
       max_results: isSet(object.max_results) ? globalThis.Number(object.max_results) : undefined,
       max_chars: isSet(object.max_chars) ? globalThis.Number(object.max_chars) : undefined,
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
-      expected_revision: isSet(object.expected_revision) ? globalThis.String(object.expected_revision) : undefined,
+      revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
 
   toJSON(message: SessionContextSearchRequest): unknown {
     const obj: any = {};
-    if (message.resource !== "") {
-      obj.resource = message.resource;
-    }
     if (message.query !== "") {
       obj.query = message.query;
     }
@@ -7872,8 +8100,17 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
     if (message.cursor !== undefined) {
       obj.cursor = message.cursor;
     }
-    if (message.expected_revision !== undefined) {
-      obj.expected_revision = message.expected_revision;
+    if (message.revision !== undefined) {
+      obj.revision = message.revision;
+    }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
     }
     return obj;
   },
@@ -7883,7 +8120,6 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
   },
   fromPartial<I extends Exact<DeepPartial<SessionContextSearchRequest>, I>>(object: I): SessionContextSearchRequest {
     const message = createBaseSessionContextSearchRequest();
-    message.resource = object.resource ?? "";
     message.query = object.query ?? "";
     message.sources = object.sources?.map((e) => e) || [];
     message.match_mode = object.match_mode ?? undefined;
@@ -7891,14 +8127,16 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
     message.max_results = object.max_results ?? undefined;
     message.max_chars = object.max_chars ?? undefined;
     message.cursor = object.cursor ?? undefined;
-    message.expected_revision = object.expected_revision ?? undefined;
+    message.revision = object.revision ?? undefined;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
     return message;
   },
 };
 
 function createBaseSessionContextSearchResultDTO(): SessionContextSearchResultDTO {
   return {
-    resource: "",
     query: "",
     match_mode: "",
     revision: "",
@@ -7910,13 +8148,15 @@ function createBaseSessionContextSearchResultDTO(): SessionContextSearchResultDT
     matches: [],
     partial_errors: [],
     omitted_partial_error_count: undefined,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
   };
 }
 
 export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResultDTO> = {
   fromJSON(object: any): SessionContextSearchResultDTO {
     return {
-      resource: isSet(object.resource) ? globalThis.String(object.resource) : "",
       query: isSet(object.query) ? globalThis.String(object.query) : "",
       match_mode: isSet(object.match_mode) ? globalThis.String(object.match_mode) : "",
       revision: isSet(object.revision) ? globalThis.String(object.revision) : "",
@@ -7934,14 +8174,14 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
       omitted_partial_error_count: isSet(object.omitted_partial_error_count)
         ? globalThis.Number(object.omitted_partial_error_count)
         : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
 
   toJSON(message: SessionContextSearchResultDTO): unknown {
     const obj: any = {};
-    if (message.resource !== "") {
-      obj.resource = message.resource;
-    }
     if (message.query !== "") {
       obj.query = message.query;
     }
@@ -7975,6 +8215,15 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
     if (message.omitted_partial_error_count !== undefined) {
       obj.omitted_partial_error_count = Math.round(message.omitted_partial_error_count);
     }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
     return obj;
   },
 
@@ -7985,7 +8234,6 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
     object: I,
   ): SessionContextSearchResultDTO {
     const message = createBaseSessionContextSearchResultDTO();
-    message.resource = object.resource ?? "";
     message.query = object.query ?? "";
     message.match_mode = object.match_mode ?? "";
     message.revision = object.revision ?? "";
@@ -7997,6 +8245,9 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
     message.matches = object.matches?.map((e) => SessionContextSearchMatchDTO.fromPartial(e)) || [];
     message.partial_errors = object.partial_errors?.map((e) => SessionContextPartialErrorDTO.fromPartial(e)) || [];
     message.omitted_partial_error_count = object.omitted_partial_error_count ?? undefined;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
     return message;
   },
 };
@@ -8041,7 +8292,7 @@ export const SessionControlResultDTO: MessageFns<SessionControlResultDTO> = {
 };
 
 function createBaseSessionCreateRequest(): SessionCreateRequest {
-  return { title: undefined, agent_id: undefined, title_source: undefined, folder_id: undefined };
+  return { title: undefined, agent_id: undefined, folder_id: undefined };
 }
 
 export const SessionCreateRequest: MessageFns<SessionCreateRequest> = {
@@ -8049,7 +8300,6 @@ export const SessionCreateRequest: MessageFns<SessionCreateRequest> = {
     return {
       title: isSet(object.title) ? globalThis.String(object.title) : undefined,
       agent_id: isSet(object.agent_id) ? globalThis.String(object.agent_id) : undefined,
-      title_source: isSet(object.title_source) ? globalThis.String(object.title_source) : undefined,
       folder_id: isSet(object.folder_id) ? globalThis.String(object.folder_id) : undefined,
     };
   },
@@ -8061,9 +8311,6 @@ export const SessionCreateRequest: MessageFns<SessionCreateRequest> = {
     }
     if (message.agent_id !== undefined) {
       obj.agent_id = message.agent_id;
-    }
-    if (message.title_source !== undefined) {
-      obj.title_source = message.title_source;
     }
     if (message.folder_id !== undefined) {
       obj.folder_id = message.folder_id;
@@ -8078,7 +8325,6 @@ export const SessionCreateRequest: MessageFns<SessionCreateRequest> = {
     const message = createBaseSessionCreateRequest();
     message.title = object.title ?? undefined;
     message.agent_id = object.agent_id ?? undefined;
-    message.title_source = object.title_source ?? undefined;
     message.folder_id = object.folder_id ?? undefined;
     return message;
   },
@@ -8098,6 +8344,10 @@ function createBaseSessionDTO(): SessionDTO {
     context_source_session_id: undefined,
     kind: undefined,
     generation_origin: undefined,
+    resource_identity: "",
+    vrn: "",
+    scope: "",
+    thread_id: undefined,
   };
 }
 
@@ -8122,6 +8372,10 @@ export const SessionDTO: MessageFns<SessionDTO> = {
       generation_origin: isSet(object.generation_origin)
         ? SessionGenerationOriginDTO.fromJSON(object.generation_origin)
         : undefined,
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -8163,6 +8417,18 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     if (message.generation_origin !== undefined) {
       obj.generation_origin = SessionGenerationOriginDTO.toJSON(message.generation_origin);
     }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.vrn !== "") {
+      obj.vrn = message.vrn;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -8185,6 +8451,10 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     message.generation_origin = (object.generation_origin !== undefined && object.generation_origin !== null)
       ? SessionGenerationOriginDTO.fromPartial(object.generation_origin)
       : undefined;
+    message.resource_identity = object.resource_identity ?? "";
+    message.vrn = object.vrn ?? "";
+    message.scope = object.scope ?? "";
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };
@@ -8698,7 +8968,13 @@ export const SessionFileTreeSettingsDTO: MessageFns<SessionFileTreeSettingsDTO> 
 };
 
 function createBaseSessionForkRequest(): SessionForkRequest {
-  return { mode: undefined, turn_id: undefined, anchor_mode: undefined, pinned: undefined };
+  return {
+    mode: undefined,
+    turn_id: undefined,
+    anchor_mode: undefined,
+    pinned: undefined,
+    place_under_source: undefined,
+  };
 }
 
 export const SessionForkRequest: MessageFns<SessionForkRequest> = {
@@ -8708,6 +8984,7 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
       turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
       anchor_mode: isSet(object.anchor_mode) ? globalThis.String(object.anchor_mode) : undefined,
       pinned: isSet(object.pinned) ? globalThis.Boolean(object.pinned) : undefined,
+      place_under_source: isSet(object.place_under_source) ? globalThis.Boolean(object.place_under_source) : undefined,
     };
   },
 
@@ -8725,6 +9002,9 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
     if (message.pinned !== undefined) {
       obj.pinned = message.pinned;
     }
+    if (message.place_under_source !== undefined) {
+      obj.place_under_source = message.place_under_source;
+    }
     return obj;
   },
 
@@ -8737,6 +9017,7 @@ export const SessionForkRequest: MessageFns<SessionForkRequest> = {
     message.turn_id = object.turn_id ?? undefined;
     message.anchor_mode = object.anchor_mode ?? undefined;
     message.pinned = object.pinned ?? undefined;
+    message.place_under_source = object.place_under_source ?? undefined;
     return message;
   },
 };
@@ -10067,6 +10348,361 @@ export const SessionResourceListDTO: MessageFns<SessionResourceListDTO> = {
   },
 };
 
+function createBaseResourceThreadRef(): ResourceThreadRef {
+  return { session_id: "", thread_id: "" };
+}
+
+export const ResourceThreadRef: MessageFns<ResourceThreadRef> = {
+  fromJSON(object: any): ResourceThreadRef {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+    };
+  },
+
+  toJSON(message: ResourceThreadRef): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResourceThreadRef>, I>>(base?: I): ResourceThreadRef {
+    return ResourceThreadRef.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResourceThreadRef>, I>>(object: I): ResourceThreadRef {
+    const message = createBaseResourceThreadRef();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
+function createBaseWorkspaceResourceDTO(): WorkspaceResourceDTO {
+  return {
+    resource_id: "",
+    workspace_id: "",
+    kind: "",
+    retention_scope: "",
+    source_thread: undefined,
+    thread_associations: [],
+    owner_revision: 0,
+    status: "",
+    reconciliation_status: "",
+    unattached_since: undefined,
+    reclaim_at: undefined,
+    available_actions: [],
+    metadata: undefined,
+    created_at: "",
+    updated_at: "",
+    error: undefined,
+  };
+}
+
+export const WorkspaceResourceDTO: MessageFns<WorkspaceResourceDTO> = {
+  fromJSON(object: any): WorkspaceResourceDTO {
+    return {
+      resource_id: isSet(object.resource_id) ? globalThis.String(object.resource_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      retention_scope: isSet(object.retention_scope) ? globalThis.String(object.retention_scope) : "",
+      source_thread: isSet(object.source_thread) ? ResourceThreadRef.fromJSON(object.source_thread) : undefined,
+      thread_associations: globalThis.Array.isArray(object?.thread_associations)
+        ? object.thread_associations.map((e: any) => ResourceThreadRef.fromJSON(e))
+        : [],
+      owner_revision: isSet(object.owner_revision) ? globalThis.Number(object.owner_revision) : 0,
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      reconciliation_status: isSet(object.reconciliation_status) ? globalThis.String(object.reconciliation_status) : "",
+      unattached_since: isSet(object.unattached_since) ? globalThis.String(object.unattached_since) : undefined,
+      reclaim_at: isSet(object.reclaim_at) ? globalThis.String(object.reclaim_at) : undefined,
+      available_actions: globalThis.Array.isArray(object?.available_actions)
+        ? object.available_actions.map((e: any) => globalThis.String(e))
+        : [],
+      metadata: isObject(object.metadata) ? object.metadata : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : "",
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceResourceDTO): unknown {
+    const obj: any = {};
+    if (message.resource_id !== "") {
+      obj.resource_id = message.resource_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.retention_scope !== "") {
+      obj.retention_scope = message.retention_scope;
+    }
+    if (message.source_thread !== undefined) {
+      obj.source_thread = ResourceThreadRef.toJSON(message.source_thread);
+    }
+    if (message.thread_associations?.length) {
+      obj.thread_associations = message.thread_associations.map((e) => ResourceThreadRef.toJSON(e));
+    }
+    if (message.owner_revision !== 0) {
+      obj.owner_revision = Math.round(message.owner_revision);
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.reconciliation_status !== "") {
+      obj.reconciliation_status = message.reconciliation_status;
+    }
+    if (message.unattached_since !== undefined) {
+      obj.unattached_since = message.unattached_since;
+    }
+    if (message.reclaim_at !== undefined) {
+      obj.reclaim_at = message.reclaim_at;
+    }
+    if (message.available_actions?.length) {
+      obj.available_actions = message.available_actions;
+    }
+    if (message.metadata !== undefined) {
+      obj.metadata = message.metadata;
+    }
+    if (message.created_at !== "") {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== "") {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceResourceDTO>, I>>(base?: I): WorkspaceResourceDTO {
+    return WorkspaceResourceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceResourceDTO>, I>>(object: I): WorkspaceResourceDTO {
+    const message = createBaseWorkspaceResourceDTO();
+    message.resource_id = object.resource_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.kind = object.kind ?? "";
+    message.retention_scope = object.retention_scope ?? "";
+    message.source_thread = (object.source_thread !== undefined && object.source_thread !== null)
+      ? ResourceThreadRef.fromPartial(object.source_thread)
+      : undefined;
+    message.thread_associations = object.thread_associations?.map((e) => ResourceThreadRef.fromPartial(e)) || [];
+    message.owner_revision = object.owner_revision ?? 0;
+    message.status = object.status ?? "";
+    message.reconciliation_status = object.reconciliation_status ?? "";
+    message.unattached_since = object.unattached_since ?? undefined;
+    message.reclaim_at = object.reclaim_at ?? undefined;
+    message.available_actions = object.available_actions?.map((e) => e) || [];
+    message.metadata = object.metadata ?? undefined;
+    message.created_at = object.created_at ?? "";
+    message.updated_at = object.updated_at ?? "";
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceResourceListDTO(): WorkspaceResourceListDTO {
+  return { workspace_id: "", items: [] };
+}
+
+export const WorkspaceResourceListDTO: MessageFns<WorkspaceResourceListDTO> = {
+  fromJSON(object: any): WorkspaceResourceListDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => WorkspaceResourceDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: WorkspaceResourceListDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => WorkspaceResourceDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceResourceListDTO>, I>>(base?: I): WorkspaceResourceListDTO {
+    return WorkspaceResourceListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceResourceListDTO>, I>>(object: I): WorkspaceResourceListDTO {
+    const message = createBaseWorkspaceResourceListDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.items = object.items?.map((e) => WorkspaceResourceDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseTerminalResourceCreateRequest(): TerminalResourceCreateRequest {
+  return {
+    session_id: "",
+    thread_id: undefined,
+    retention_scope: "",
+    title: "",
+    cwd_relative: undefined,
+    cols: undefined,
+    rows: undefined,
+  };
+}
+
+export const TerminalResourceCreateRequest: MessageFns<TerminalResourceCreateRequest> = {
+  fromJSON(object: any): TerminalResourceCreateRequest {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      retention_scope: isSet(object.retention_scope) ? globalThis.String(object.retention_scope) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      cwd_relative: isSet(object.cwd_relative) ? globalThis.String(object.cwd_relative) : undefined,
+      cols: isSet(object.cols) ? globalThis.Number(object.cols) : undefined,
+      rows: isSet(object.rows) ? globalThis.Number(object.rows) : undefined,
+    };
+  },
+
+  toJSON(message: TerminalResourceCreateRequest): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.retention_scope !== "") {
+      obj.retention_scope = message.retention_scope;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.cwd_relative !== undefined) {
+      obj.cwd_relative = message.cwd_relative;
+    }
+    if (message.cols !== undefined) {
+      obj.cols = Math.round(message.cols);
+    }
+    if (message.rows !== undefined) {
+      obj.rows = Math.round(message.rows);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TerminalResourceCreateRequest>, I>>(base?: I): TerminalResourceCreateRequest {
+    return TerminalResourceCreateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalResourceCreateRequest>, I>>(
+    object: I,
+  ): TerminalResourceCreateRequest {
+    const message = createBaseTerminalResourceCreateRequest();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? undefined;
+    message.retention_scope = object.retention_scope ?? "";
+    message.title = object.title ?? "";
+    message.cwd_relative = object.cwd_relative ?? undefined;
+    message.cols = object.cols ?? undefined;
+    message.rows = object.rows ?? undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceResourceCommandRequest(): WorkspaceResourceCommandRequest {
+  return { expected_revision: 0, thread: undefined };
+}
+
+export const WorkspaceResourceCommandRequest: MessageFns<WorkspaceResourceCommandRequest> = {
+  fromJSON(object: any): WorkspaceResourceCommandRequest {
+    return {
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+      thread: isSet(object.thread) ? ResourceThreadRef.fromJSON(object.thread) : undefined,
+    };
+  },
+
+  toJSON(message: WorkspaceResourceCommandRequest): unknown {
+    const obj: any = {};
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    if (message.thread !== undefined) {
+      obj.thread = ResourceThreadRef.toJSON(message.thread);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceResourceCommandRequest>, I>>(base?: I): WorkspaceResourceCommandRequest {
+    return WorkspaceResourceCommandRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceResourceCommandRequest>, I>>(
+    object: I,
+  ): WorkspaceResourceCommandRequest {
+    const message = createBaseWorkspaceResourceCommandRequest();
+    message.expected_revision = object.expected_revision ?? 0;
+    message.thread = (object.thread !== undefined && object.thread !== null)
+      ? ResourceThreadRef.fromPartial(object.thread)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseTerminalTransportGrantDTO(): TerminalTransportGrantDTO {
+  return { resource_id: "", owner_revision: 0, grant_token: "", expires_at: "", resource: undefined };
+}
+
+export const TerminalTransportGrantDTO: MessageFns<TerminalTransportGrantDTO> = {
+  fromJSON(object: any): TerminalTransportGrantDTO {
+    return {
+      resource_id: isSet(object.resource_id) ? globalThis.String(object.resource_id) : "",
+      owner_revision: isSet(object.owner_revision) ? globalThis.Number(object.owner_revision) : 0,
+      grant_token: isSet(object.grant_token) ? globalThis.String(object.grant_token) : "",
+      expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : "",
+      resource: isSet(object.resource) ? WorkspaceResourceDTO.fromJSON(object.resource) : undefined,
+    };
+  },
+
+  toJSON(message: TerminalTransportGrantDTO): unknown {
+    const obj: any = {};
+    if (message.resource_id !== "") {
+      obj.resource_id = message.resource_id;
+    }
+    if (message.owner_revision !== 0) {
+      obj.owner_revision = Math.round(message.owner_revision);
+    }
+    if (message.grant_token !== "") {
+      obj.grant_token = message.grant_token;
+    }
+    if (message.expires_at !== "") {
+      obj.expires_at = message.expires_at;
+    }
+    if (message.resource !== undefined) {
+      obj.resource = WorkspaceResourceDTO.toJSON(message.resource);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TerminalTransportGrantDTO>, I>>(base?: I): TerminalTransportGrantDTO {
+    return TerminalTransportGrantDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TerminalTransportGrantDTO>, I>>(object: I): TerminalTransportGrantDTO {
+    const message = createBaseTerminalTransportGrantDTO();
+    message.resource_id = object.resource_id ?? "";
+    message.owner_revision = object.owner_revision ?? 0;
+    message.grant_token = object.grant_token ?? "";
+    message.expires_at = object.expires_at ?? "";
+    message.resource = (object.resource !== undefined && object.resource !== null)
+      ? WorkspaceResourceDTO.fromPartial(object.resource)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseSessionStatusChangedExecutionEventDTO(): SessionStatusChangedExecutionEventDTO {
   return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
 }
@@ -10270,32 +10906,24 @@ export const SessionTurnBootstrapDTO: MessageFns<SessionTurnBootstrapDTO> = {
 };
 
 function createBaseSessionUpdateRequest(): SessionUpdateRequest {
-  return { title: undefined, agent_id: undefined, provider_id: undefined, title_source: undefined };
+  return { agent_id: undefined, provider_id: undefined };
 }
 
 export const SessionUpdateRequest: MessageFns<SessionUpdateRequest> = {
   fromJSON(object: any): SessionUpdateRequest {
     return {
-      title: isSet(object.title) ? globalThis.String(object.title) : undefined,
       agent_id: isSet(object.agent_id) ? globalThis.String(object.agent_id) : undefined,
       provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : undefined,
-      title_source: isSet(object.title_source) ? globalThis.String(object.title_source) : undefined,
     };
   },
 
   toJSON(message: SessionUpdateRequest): unknown {
     const obj: any = {};
-    if (message.title !== undefined) {
-      obj.title = message.title;
-    }
     if (message.agent_id !== undefined) {
       obj.agent_id = message.agent_id;
     }
     if (message.provider_id !== undefined) {
       obj.provider_id = message.provider_id;
-    }
-    if (message.title_source !== undefined) {
-      obj.title_source = message.title_source;
     }
     return obj;
   },
@@ -10305,10 +10933,8 @@ export const SessionUpdateRequest: MessageFns<SessionUpdateRequest> = {
   },
   fromPartial<I extends Exact<DeepPartial<SessionUpdateRequest>, I>>(object: I): SessionUpdateRequest {
     const message = createBaseSessionUpdateRequest();
-    message.title = object.title ?? undefined;
     message.agent_id = object.agent_id ?? undefined;
     message.provider_id = object.provider_id ?? undefined;
-    message.title_source = object.title_source ?? undefined;
     return message;
   },
 };
@@ -12132,6 +12758,7 @@ function createBaseTurnDetailDTO(): TurnDetailDTO {
     detail_truncated: undefined,
     detail_next_cursor: undefined,
     activity_stats: undefined,
+    root_logical_item_ordinal: 0,
   };
 }
 
@@ -12178,6 +12805,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
       detail_truncated: isSet(object.detail_truncated) ? globalThis.Boolean(object.detail_truncated) : undefined,
       detail_next_cursor: isSet(object.detail_next_cursor) ? globalThis.String(object.detail_next_cursor) : undefined,
       activity_stats: isSet(object.activity_stats) ? TurnActivityStatsDTO.fromJSON(object.activity_stats) : undefined,
+      root_logical_item_ordinal: isSet(object.root_logical_item_ordinal)
+        ? globalThis.Number(object.root_logical_item_ordinal)
+        : 0,
     };
   },
 
@@ -12255,6 +12885,9 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     if (message.activity_stats !== undefined) {
       obj.activity_stats = TurnActivityStatsDTO.toJSON(message.activity_stats);
     }
+    if (message.root_logical_item_ordinal !== 0) {
+      obj.root_logical_item_ordinal = Math.round(message.root_logical_item_ordinal);
+    }
     return obj;
   },
 
@@ -12289,6 +12922,7 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
     message.activity_stats = (object.activity_stats !== undefined && object.activity_stats !== null)
       ? TurnActivityStatsDTO.fromPartial(object.activity_stats)
       : undefined;
+    message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
     return message;
   },
 };
@@ -12379,6 +13013,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     has_after: undefined,
     projection_epoch: 0,
     summaries: [],
+    internal_executions: [],
   };
 }
 
@@ -12395,6 +13030,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       projection_epoch: isSet(object.projection_epoch) ? globalThis.Number(object.projection_epoch) : 0,
       summaries: globalThis.Array.isArray(object?.summaries)
         ? object.summaries.map((e: any) => TurnSummaryDTO.fromJSON(e))
+        : [],
+      internal_executions: globalThis.Array.isArray(object?.internal_executions)
+        ? object.internal_executions.map((e: any) => InternalExecutionHistoryDTO.fromJSON(e))
         : [],
     };
   },
@@ -12428,6 +13066,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.summaries?.length) {
       obj.summaries = message.summaries.map((e) => TurnSummaryDTO.toJSON(e));
     }
+    if (message.internal_executions?.length) {
+      obj.internal_executions = message.internal_executions.map((e) => InternalExecutionHistoryDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -12445,6 +13086,219 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.has_after = object.has_after ?? undefined;
     message.projection_epoch = object.projection_epoch ?? 0;
     message.summaries = object.summaries?.map((e) => TurnSummaryDTO.fromPartial(e)) || [];
+    message.internal_executions = object.internal_executions?.map((e) => InternalExecutionHistoryDTO.fromPartial(e)) ||
+      [];
+    return message;
+  },
+};
+
+function createBaseInternalExecutionHistoryDTO(): InternalExecutionHistoryDTO {
+  return {
+    execution_id: "",
+    job_id: "",
+    status: "",
+    created_at: undefined,
+    display_parts: [],
+    response_parts: [],
+    session_id: "",
+    thread_id: "",
+    updated_at: undefined,
+  };
+}
+
+export const InternalExecutionHistoryDTO: MessageFns<InternalExecutionHistoryDTO> = {
+  fromJSON(object: any): InternalExecutionHistoryDTO {
+    return {
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : "",
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      display_parts: globalThis.Array.isArray(object?.display_parts)
+        ? object.display_parts.map((e: any) => InternalExecutionDisplayPartDTO.fromJSON(e))
+        : [],
+      response_parts: globalThis.Array.isArray(object?.response_parts)
+        ? object.response_parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+        : [],
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+    };
+  },
+
+  toJSON(message: InternalExecutionHistoryDTO): unknown {
+    const obj: any = {};
+    if (message.execution_id !== "") {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.job_id !== "") {
+      obj.job_id = message.job_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.display_parts?.length) {
+      obj.display_parts = message.display_parts.map((e) => InternalExecutionDisplayPartDTO.toJSON(e));
+    }
+    if (message.response_parts?.length) {
+      obj.response_parts = message.response_parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<InternalExecutionHistoryDTO>, I>>(base?: I): InternalExecutionHistoryDTO {
+    return InternalExecutionHistoryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InternalExecutionHistoryDTO>, I>>(object: I): InternalExecutionHistoryDTO {
+    const message = createBaseInternalExecutionHistoryDTO();
+    message.execution_id = object.execution_id ?? "";
+    message.job_id = object.job_id ?? "";
+    message.status = object.status ?? "";
+    message.created_at = object.created_at ?? undefined;
+    message.display_parts = object.display_parts?.map((e) => InternalExecutionDisplayPartDTO.fromPartial(e)) || [];
+    message.response_parts = object.response_parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.updated_at = object.updated_at ?? undefined;
+    return message;
+  },
+};
+
+function createBaseInternalExecutionDisplayPartDTO(): InternalExecutionDisplayPartDTO {
+  return {
+    kind: "",
+    text: "",
+    item_id: "",
+    item_sequence: 0,
+    provenance: undefined,
+    created_at: undefined,
+    logical_item_ordinal: 0,
+  };
+}
+
+export const InternalExecutionDisplayPartDTO: MessageFns<InternalExecutionDisplayPartDTO> = {
+  fromJSON(object: any): InternalExecutionDisplayPartDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : "",
+      item_sequence: isSet(object.item_sequence) ? globalThis.Number(object.item_sequence) : 0,
+      provenance: isSet(object.provenance) ? InternalDisplayProvenanceDTO.fromJSON(object.provenance) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      logical_item_ordinal: isSet(object.logical_item_ordinal) ? globalThis.Number(object.logical_item_ordinal) : 0,
+    };
+  },
+
+  toJSON(message: InternalExecutionDisplayPartDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    if (message.item_id !== "") {
+      obj.item_id = message.item_id;
+    }
+    if (message.item_sequence !== 0) {
+      obj.item_sequence = Math.round(message.item_sequence);
+    }
+    if (message.provenance !== undefined) {
+      obj.provenance = InternalDisplayProvenanceDTO.toJSON(message.provenance);
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.logical_item_ordinal !== 0) {
+      obj.logical_item_ordinal = Math.round(message.logical_item_ordinal);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<InternalExecutionDisplayPartDTO>, I>>(base?: I): InternalExecutionDisplayPartDTO {
+    return InternalExecutionDisplayPartDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InternalExecutionDisplayPartDTO>, I>>(
+    object: I,
+  ): InternalExecutionDisplayPartDTO {
+    const message = createBaseInternalExecutionDisplayPartDTO();
+    message.kind = object.kind ?? "";
+    message.text = object.text ?? "";
+    message.item_id = object.item_id ?? "";
+    message.item_sequence = object.item_sequence ?? 0;
+    message.provenance = (object.provenance !== undefined && object.provenance !== null)
+      ? InternalDisplayProvenanceDTO.fromPartial(object.provenance)
+      : undefined;
+    message.created_at = object.created_at ?? undefined;
+    message.logical_item_ordinal = object.logical_item_ordinal ?? 0;
+    return message;
+  },
+};
+
+function createBaseInternalDisplayProvenanceDTO(): InternalDisplayProvenanceDTO {
+  return {
+    source_session_id: undefined,
+    source_thread_id: undefined,
+    delegation_id: undefined,
+    source_execution_id: undefined,
+    source_item_id: undefined,
+  };
+}
+
+export const InternalDisplayProvenanceDTO: MessageFns<InternalDisplayProvenanceDTO> = {
+  fromJSON(object: any): InternalDisplayProvenanceDTO {
+    return {
+      source_session_id: isSet(object.source_session_id) ? globalThis.String(object.source_session_id) : undefined,
+      source_thread_id: isSet(object.source_thread_id) ? globalThis.String(object.source_thread_id) : undefined,
+      delegation_id: isSet(object.delegation_id) ? globalThis.String(object.delegation_id) : undefined,
+      source_execution_id: isSet(object.source_execution_id)
+        ? globalThis.String(object.source_execution_id)
+        : undefined,
+      source_item_id: isSet(object.source_item_id) ? globalThis.String(object.source_item_id) : undefined,
+    };
+  },
+
+  toJSON(message: InternalDisplayProvenanceDTO): unknown {
+    const obj: any = {};
+    if (message.source_session_id !== undefined) {
+      obj.source_session_id = message.source_session_id;
+    }
+    if (message.source_thread_id !== undefined) {
+      obj.source_thread_id = message.source_thread_id;
+    }
+    if (message.delegation_id !== undefined) {
+      obj.delegation_id = message.delegation_id;
+    }
+    if (message.source_execution_id !== undefined) {
+      obj.source_execution_id = message.source_execution_id;
+    }
+    if (message.source_item_id !== undefined) {
+      obj.source_item_id = message.source_item_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<InternalDisplayProvenanceDTO>, I>>(base?: I): InternalDisplayProvenanceDTO {
+    return InternalDisplayProvenanceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<InternalDisplayProvenanceDTO>, I>>(object: I): InternalDisplayProvenanceDTO {
+    const message = createBaseInternalDisplayProvenanceDTO();
+    message.source_session_id = object.source_session_id ?? undefined;
+    message.source_thread_id = object.source_thread_id ?? undefined;
+    message.delegation_id = object.delegation_id ?? undefined;
+    message.source_execution_id = object.source_execution_id ?? undefined;
+    message.source_item_id = object.source_item_id ?? undefined;
     return message;
   },
 };
@@ -12714,6 +13568,7 @@ function createBaseTurnResponseSourceDTO(): TurnResponseSourceDTO {
     part_ordinal: undefined,
     created_at: undefined,
     elapsed_ms: undefined,
+    logical_item_ordinal: undefined,
   };
 }
 
@@ -12737,6 +13592,9 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
       part_ordinal: isSet(object.part_ordinal) ? globalThis.Number(object.part_ordinal) : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       elapsed_ms: isSet(object.elapsed_ms) ? globalThis.Number(object.elapsed_ms) : undefined,
+      logical_item_ordinal: isSet(object.logical_item_ordinal)
+        ? globalThis.Number(object.logical_item_ordinal)
+        : undefined,
     };
   },
 
@@ -12775,6 +13633,9 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.elapsed_ms !== undefined) {
       obj.elapsed_ms = Math.round(message.elapsed_ms);
     }
+    if (message.logical_item_ordinal !== undefined) {
+      obj.logical_item_ordinal = Math.round(message.logical_item_ordinal);
+    }
     return obj;
   },
 
@@ -12794,6 +13655,7 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     message.part_ordinal = object.part_ordinal ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.elapsed_ms = object.elapsed_ms ?? undefined;
+    message.logical_item_ordinal = object.logical_item_ordinal ?? undefined;
     return message;
   },
 };
@@ -12825,6 +13687,7 @@ function createBaseTurnSummaryDTO(): TurnSummaryDTO {
     tool_summary: [],
     response_parts: [],
     activity_stats: undefined,
+    root_logical_item_ordinal: 0,
   };
 }
 
@@ -12872,6 +13735,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
         ? object.response_parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
         : [],
       activity_stats: isSet(object.activity_stats) ? TurnActivityStatsDTO.fromJSON(object.activity_stats) : undefined,
+      root_logical_item_ordinal: isSet(object.root_logical_item_ordinal)
+        ? globalThis.Number(object.root_logical_item_ordinal)
+        : 0,
     };
   },
 
@@ -12952,6 +13818,9 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     if (message.activity_stats !== undefined) {
       obj.activity_stats = TurnActivityStatsDTO.toJSON(message.activity_stats);
     }
+    if (message.root_logical_item_ordinal !== 0) {
+      obj.root_logical_item_ordinal = Math.round(message.root_logical_item_ordinal);
+    }
     return obj;
   },
 
@@ -12987,6 +13856,7 @@ export const TurnSummaryDTO: MessageFns<TurnSummaryDTO> = {
     message.activity_stats = (object.activity_stats !== undefined && object.activity_stats !== null)
       ? TurnActivityStatsDTO.fromPartial(object.activity_stats)
       : undefined;
+    message.root_logical_item_ordinal = object.root_logical_item_ordinal ?? 0;
     return message;
   },
 };

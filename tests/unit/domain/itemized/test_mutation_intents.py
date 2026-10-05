@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import PayloadKind, SelectionKind, SemanticKind
+from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import (
     AppendCanonicalItemIntent,
     ApplySourceLifecycleDecision,
@@ -15,8 +17,6 @@ from app.domain.itemized.mutation_intents import (
     SwitchToolSetIntent,
     intent_kind,
 )
-from app.domain.itemized.hash.plan_hash import context_plan_hash
-from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
@@ -32,18 +32,21 @@ class TestAppendCanonicalItemIntent:
             owner=_owner(),
             item_id="item-1",
             item_kind="user_message",
+            execution_id="execution-1",
             origin_turn_id="turn-1",
         )
         same = AppendCanonicalItemIntent(
             owner=_owner(),
             item_id="item-1",
             item_kind="user_message",
+            execution_id="execution-1",
             origin_turn_id="turn-1",
         )
         other = AppendCanonicalItemIntent(
             owner=_owner(),
             item_id="item-2",
             item_kind="user_message",
+            execution_id="execution-1",
             origin_turn_id="turn-1",
         )
         assert intent.idempotency_key == same.idempotency_key
@@ -55,6 +58,7 @@ class TestAppendCanonicalItemIntent:
                 owner=_owner(),
                 item_id="item-3",
                 item_kind="tool_call",
+                execution_id="execution-1",
                 origin_turn_id="turn-1",
             )
 
@@ -64,6 +68,7 @@ class TestAppendCanonicalItemIntent:
                 owner=_owner(),
                 item_id="item-4",
                 item_kind="user_message",
+                execution_id="execution-1",
                 origin_turn_id="turn-1",
                 tool_call_id="call-1",
             )
@@ -73,6 +78,7 @@ class TestAppendCanonicalItemIntent:
             owner=_owner(),
             item_id="item-5",
             item_kind="tool_result",
+            execution_id="execution-1",
             origin_turn_id="turn-1",
             tool_call_id="call-1",
         )
@@ -215,6 +221,7 @@ class TestIntentDispatch:
         intents = [
             AppendCanonicalItemIntent(
                 owner=_owner(), item_id="i", item_kind="user_message",
+                execution_id="execution-1",
                 origin_turn_id="t",
             ),
             ApplySourceLifecycleDecision(
@@ -272,12 +279,14 @@ class TestTypedSourceOrdinal:
     def _plan(self, contribution: ContextContribution) -> ContextRequestPlan:
         plan = ContextRequestPlan(
             session_id="ses_" + "a" * 32,
+            thread_id="thread-1",
             plan_id="plan-1",
             refs=(),
             contributions=(contribution,),
         )
         return ContextRequestPlan(
             session_id=plan.session_id,
+            thread_id="thread-1",
             plan_id=plan.plan_id,
             refs=(self._ref(plan, contribution.contribution_id),),
             contributions=plan.contributions,
@@ -329,7 +338,9 @@ class TestTypedSourceOrdinal:
             visibility=ref.visibility,
             protection=ref.protection,
             availability=ref.availability,
-            detail_ref=DetailRef(plan.session_id, "assembly-1", "detail-1"),
+            detail_ref=DetailRef(
+                plan.session_id, plan.thread_id, "assembly-1", "detail-1"
+            ),
             contribution_id="contrib-1",
             contribution_ordinal=0,
         )

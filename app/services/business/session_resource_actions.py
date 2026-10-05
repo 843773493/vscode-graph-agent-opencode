@@ -14,14 +14,6 @@ def background_task_available_actions(
     return ["delete"]
 
 
-def terminal_available_actions(status: str) -> list[SessionResourceAction]:
-    if status == "deleted":
-        return []
-    if status == "running":
-        return ["cancel", "delete"]
-    return ["delete"]
-
-
 def browser_available_actions(
     status: str,
     *,

@@ -116,7 +116,7 @@ class RolloutMaintenanceOwner(
         thread_id: str,
         checkpoint_ns: str,
         *,
-        session_id: str | None = None,
+        session_id: str,
     ) -> _RolloutOperationLock:
         return self._host._lock(thread_id, checkpoint_ns, session_id=session_id)
 
@@ -125,7 +125,7 @@ class RolloutMaintenanceOwner(
         thread_id: str,
         checkpoint_ns: str = "",
         *,
-        session_id: str | None = None,
+        session_id: str,
         read_only: bool = False,
     ) -> sqlite3.Connection:
         return self._host._connect(
@@ -139,6 +139,7 @@ class RolloutMaintenanceOwner(
         self,
         thread_id: str,
         *,
+        session_id: str,
         to_version: int,
         migration_name: str,
         migration_sql: str,
@@ -154,15 +155,19 @@ class RolloutMaintenanceOwner(
         migration_sql = strict_text(migration_sql, field="migration_sql")
         if to_version < 1:
             raise ValueError("SQLite schema version 必须从 1 开始")
-        with self._host._lock(thread_id, checkpoint_ns):
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
             self._migrate_schema_locked(
-                thread_id, checkpoint_ns=checkpoint_ns, to_version=to_version,
+                thread_id, session_id=session_id,
+                checkpoint_ns=checkpoint_ns, to_version=to_version,
                 migration_name=migration_name, migration_sql=migration_sql,
             )
-        return self.validate_index(thread_id, checkpoint_ns)
+        return self.validate_index(session_id, thread_id, checkpoint_ns)
 
     def _migrate_schema_locked(
-        self, thread_id: str, *, checkpoint_ns: str, to_version: int,
+        self, thread_id: str, *, session_id: str,
+        checkpoint_ns: str, to_version: int,
         migration_name: str, migration_sql: str,
         validate_migrated: Callable[[sqlite3.Connection], None] | None = None,
         pending_artifact_audit: bool = False,
@@ -172,8 +177,15 @@ class RolloutMaintenanceOwner(
         if pending_artifact_audit and (to_version != 3 or validate_migrated is None):
             raise ValueError("schema3 artifact 隔离必须同时提供 COMMIT 前验证")
         checksum = _hash_bytes(migration_sql.encode("utf-8"))
-        with self._host._lock(thread_id, checkpoint_ns):
-            with self._host._connect(thread_id, checkpoint_ns, read_only=True) as source:
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            with self._host._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as source:
                 state = source.execute("SELECT database_state FROM database_meta WHERE singleton_id=1").fetchone()
                 artifact_retry = (pending_artifact_audit or allow_failed_retry) and state == ("recovery_required",)
                 if artifact_retry:
@@ -182,10 +194,22 @@ class RolloutMaintenanceOwner(
                         source, allow_older_schema=True,
                         pending_retry=(to_version - 1, to_version, migration_name, checksum),
                     )
-                    self._validate_v2_commit_offsets(source, self._host.jsonl_path(thread_id, checkpoint_ns))
+                    self._validate_v2_commit_offsets(
+                        source,
+                        self._host.jsonl_path(
+                            session_id, checkpoint_ns, thread_id=thread_id
+                        ),
+                    )
             if not artifact_retry:
-                self.initialize(thread_id, checkpoint_ns, _allow_schema_upgrade=True)
-            with self._host._connect(thread_id, checkpoint_ns) as connection:
+                self.initialize(
+                    session_id,
+                    checkpoint_ns,
+                    thread_id=thread_id,
+                    _allow_schema_upgrade=True,
+                )
+            with self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 row = connection.execute(
                     "SELECT schema_version FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
@@ -204,18 +228,23 @@ class RolloutMaintenanceOwner(
                     "当前程序尚未声明目标 SQLite schema 版本: "
                     f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
                 )
-            backup_path = self._host.root(thread_id, checkpoint_ns) / (
+            backup_path = self._host.root(
+                session_id, checkpoint_ns, thread_id=thread_id
+            ) / (
                 f"index.sqlite.migration-{uuid4().hex}.backup"
             )
             self._backup_index_unlocked(
                 thread_id,
                 checkpoint_ns,
+                session_id=session_id,
                 destination=backup_path,
             )
             transaction_id = uuid4().hex
             timestamp = _now()
             try:
-                with self._host._connect(thread_id, checkpoint_ns) as connection:
+                with self._host._connect(
+                    thread_id, checkpoint_ns, session_id=session_id
+                ) as connection:
                     connection.execute("BEGIN IMMEDIATE")
                     migration_cursor = connection.execute(
                         "INSERT INTO schema_migrations(from_version, to_version, migration_name, migration_checksum, status, started_at) VALUES (?, ?, ?, ?, 'started', ?)",
@@ -280,8 +309,11 @@ class RolloutMaintenanceOwner(
                     thread_id,
                     checkpoint_ns,
                     backup_path,
+                    session_id=session_id,
                 )
-                with self._host._connect(thread_id, checkpoint_ns) as connection:
+                with self._host._connect(
+                    thread_id, checkpoint_ns, session_id=session_id
+                ) as connection:
                     failure_time = _now()
                     connection.execute(
                         "INSERT INTO schema_migrations(from_version, to_version, migration_name, migration_checksum, status, started_at, completed_at, error_message) VALUES (?, ?, ?, ?, 'failed', ?, ?, ?)",
@@ -302,38 +334,106 @@ class RolloutMaintenanceOwner(
                     connection.commit()
                 raise
 
-    def _initialize_schema(self, thread_id: str, checkpoint_ns: str) -> None:
+    def _initialize_schema(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        session_id: str,
+    ) -> None:
         del checkpoint_ns
-        with self._host._connect(thread_id) as connection:
+        with self._host._connect(
+            thread_id, session_id=session_id
+        ) as connection:
             initialize_rollout_schema(connection)
 
     def initialize(
         self,
-        thread_id: str,
+        session_id: str,
         checkpoint_ns: str = "",
         *,
+        thread_id: str | None = None,
         validate_jsonl_items: bool = True,
         _allow_schema_upgrade: bool = False,
     ) -> RolloutManifest:
-        thread_id = strict_text(thread_id, field="thread_id")
+        session_id = strict_text(session_id, field="session_id")
+        thread_id = self._host._resolve_thread_identity(session_id, thread_id)
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        with self._host._lock(thread_id, checkpoint_ns):
-            root = self._host.root(thread_id, checkpoint_ns)
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            root = self._host.root(
+                session_id, checkpoint_ns, thread_id=thread_id
+            )
             root.mkdir(parents=True, exist_ok=True)
             if self._is_removed_rollout_layout(root):
                 raise RuntimeError(f"rollout 使用了已移除的旧布局: {root}")
-            # 正常 runtime 的初始化不能把已有 v1 source 当作空库升级或
-            # fallback。v1 原件只能由显式 legacy_import_v1_to_v2 只读读取，
-            # 迁移目标则必须是新建/空的 v2 rollout。
-            existing_index = self._host.index_path(thread_id, checkpoint_ns)
+            # 正常 runtime 只接收显式声明的 v2 rollout；旧格式必须重建。
+            existing_index = self._host.index_path(
+                session_id, checkpoint_ns, thread_id=thread_id
+            )
             needs_schema = True
             if existing_index.is_file() and existing_index.stat().st_size > 0:
                 with self._existing_index_connection(
                     thread_id,
                     checkpoint_ns,
+                    session_id=session_id,
                 ) as existing_connection:
+                    database_tables = {
+                        str(row[0])
+                        for row in existing_connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    }
+                    if "database_meta" in database_tables:
+                        owner_columns = {
+                            str(row[1])
+                            for row in existing_connection.execute(
+                                "PRAGMA table_info(database_meta)"
+                            )
+                        }
+                        execution_columns = {
+                            str(row[1])
+                            for row in existing_connection.execute(
+                                "PRAGMA table_info(executions)"
+                            )
+                        }
+                        if not {"session_id", "thread_id"}.issubset(owner_columns) or not {
+                            "session_id", "thread_id"
+                        }.issubset(execution_columns):
+                            raise RuntimeError(
+                                "thread_owner_schema_unavailable: 检测到旧的 Session 级 rollout SQLite。"
+                                "该开发期数据不提供自动迁移；请备份后删除这个 SessionThread 的 rollout/"
+                                "目录，再让应用按真实 catalog thread_id 重建。"
+                            )
+                        owner_tables = (
+                            "context_assemblies",
+                            "context_plans",
+                            "context_plan_refs",
+                            "context_plan_contributions",
+                            "context_plan_seal_failures",
+                            "context_plan_details",
+                            "tool_set_snapshots",
+                        )
+                        for table in owner_tables:
+                            if table not in database_tables:
+                                raise RuntimeError(
+                                    "thread_owner_schema_unavailable: rollout 缺少 thread owner 表: "
+                                    f"{table}"
+                                )
+                            columns = {
+                                str(row[1])
+                                for row in existing_connection.execute(
+                                    f"PRAGMA table_info({table})"
+                                )
+                            }
+                            if "thread_id" not in columns:
+                                raise RuntimeError(
+                                    "thread_owner_schema_unavailable: rollout 表缺少 thread_id: "
+                                    f"{table}。该开发期 SQLite 不自动迁移，请备份后删除对应 rollout/ 并重建。"
+                                )
                     meta_columns = {
                         str(row[1])
                         for row in existing_connection.execute(
@@ -342,7 +442,7 @@ class RolloutMaintenanceOwner(
                     }
                     if "rollout_format_version" not in meta_columns:
                         raise FormatDispatchError(
-                            "v1_migration_required: rollout 缺少 v2 format dispatch"
+                            "unsupported_legacy_rollout: 缺少 v2 format dispatch"
                         )
                     format_row = existing_connection.execute(
                         "SELECT rollout_format_version FROM database_meta WHERE singleton_id = 1"
@@ -379,7 +479,7 @@ class RolloutMaintenanceOwner(
                             )
                         if "rollout_format_version" not in meta_columns:
                             raise FormatDispatchError(
-                                "v1_migration_required: rollout database_meta 缺少 format row"
+                                "unsupported_legacy_rollout: rollout database_meta 缺少 format row"
                             )
                         # 空的、已创建 v2 schema 继续走下面的 meta 初始化。
                     else:
@@ -393,7 +493,9 @@ class RolloutMaintenanceOwner(
                         self._validate_schema_state(
                             existing_connection, allow_older_schema=_allow_schema_upgrade
                         )
-            path = self._host.jsonl_path(thread_id, checkpoint_ns)
+            path = self._host.jsonl_path(
+                session_id, checkpoint_ns, thread_id=thread_id
+            )
             # 只读历史请求会频繁经过 initialize；已有文件不能重复 touch，
             # 否则会改变 rollout.jsonl 的 mtime，触发工作区文件监听并造成
             # 无意义的资源刷新。首次创建时才建立空的 canonical 文件。
@@ -403,25 +505,35 @@ class RolloutMaintenanceOwner(
                 path.touch()
             # 已有 authoritative meta 的索引只能验证；建表/改表由显式 schema migration 负责。
             if needs_schema:
-                self._initialize_schema(thread_id, checkpoint_ns)
-            self._host._validate_reasoning_projection_schema(thread_id, checkpoint_ns)
-            if not self._host._legacy_migration_is_active((thread_id, checkpoint_ns)):
-                self._reject_unpublished_migration(thread_id, checkpoint_ns)
-            with self._host._connect(thread_id, checkpoint_ns) as connection:
+                self._initialize_schema(
+                    thread_id, checkpoint_ns, session_id=session_id
+                )
+            self._host._validate_reasoning_projection_schema(
+                thread_id, checkpoint_ns, session_id=session_id
+            )
+            self._reject_unpublished_migration(
+                thread_id, checkpoint_ns, session_id=session_id
+            )
+            with self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 meta = connection.execute(
                     "SELECT * FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
                 if meta is None:
-                    rollout_id = self._host._rollout_id(thread_id)
+                    rollout_id = self._host._rollout_id(
+                        session_id, thread_id=thread_id
+                    )
                     timestamp = _now()
                     meta_result = connection.execute(
-                        """INSERT INTO database_meta(singleton_id, rollout_id, session_id,
+                        """INSERT INTO database_meta(singleton_id, rollout_id, session_id, thread_id,
                             schema_version, message_format_version, database_state,
                             last_message_sequence, last_control_sequence, committed_jsonl_offset,
                             projection_epoch, created_at, updated_at, rollout_format_version)
-                            VALUES (1, ?, ?, ?, ?, 'active', 0, 0, 0, 1, ?, ?, ?)""",
+                            VALUES (1, ?, ?, ?, ?, ?, 'active', 0, 0, 0, 1, ?, ?, ?)""",
                         (
                             rollout_id,
+                            session_id,
                             thread_id,
                             storage_version.ROLLOUT_SCHEMA_VERSION,
                             storage_version.MESSAGE_FORMAT_VERSION,
@@ -456,6 +568,15 @@ class RolloutMaintenanceOwner(
                     if migration_result.rowcount != 1:
                         raise RuntimeError("rollout schema migration journal 创建失败")
                 self._ensure_namespace_state(connection, checkpoint_ns, _now())
+                database_owner = connection.execute(
+                    "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+                ).fetchone()
+                expected_owner = (session_id, thread_id)
+                if database_owner != expected_owner:
+                    raise RuntimeError(
+                        "thread_owner_rollout_mismatch: database_meta owner 与实际 rollout 路径不一致; "
+                        f"expected={expected_owner!r}, actual={database_owner!r}"
+                    )
                 active_branch = connection.execute(
                     "SELECT branch_id, head_view_id FROM branches WHERE branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?) AND status = 'active'",
                     (checkpoint_ns,),
@@ -492,8 +613,13 @@ class RolloutMaintenanceOwner(
                             f"rollout active branch head view 更新失败: {active_branch_id}"
                         )
                 self._validate_schema_state(connection, allow_older_schema=_allow_schema_upgrade)
-                if (thread_id, checkpoint_ns) not in self._host._active_fork_materializations:
+                if (
+                    session_id,
+                    thread_id,
+                    checkpoint_ns,
+                ) not in self._host._active_fork_materializations:
                     self._recover_fork_materialization(
+                        session_id,
                         thread_id,
                         checkpoint_ns,
                         connection,
@@ -531,21 +657,27 @@ class RolloutMaintenanceOwner(
                 return self._manifest_from_connection(
                     connection,
                     checkpoint_ns,
-                    allow_migrating=self._host._legacy_migration_is_active(
-                        (thread_id, checkpoint_ns)
-                    ),
                 )
 
     def _reject_unpublished_migration(
-        self, thread_id: str, checkpoint_ns: str,
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        session_id: str,
     ) -> None:
-        """正常 runtime 不清空迁移半成品；恢复只由显式 migration owner 执行。"""
-        with self._host._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        """正常 runtime 不清空未发布半成品；恢复只由对应的发布流程执行。"""
+        with self._host._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             row = connection.execute(
                 "SELECT database_state FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
         if row is not None and row[0] == "migrating":
             raise RuntimeError(
-                "migration-installation-incomplete: target 尚未原子安装；"
-                "保留原始 JSONL/SQLite，必须由显式 legacy migration 恢复审计"
+                "rollout-publication-incomplete: target 尚未原子发布；"
+                "保留原始 JSONL/SQLite，必须由对应的发布流程恢复"
             )

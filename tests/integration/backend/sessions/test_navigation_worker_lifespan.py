@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -12,9 +13,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app import main
-from app.container import AppContainer, build_app_container
-from app.core.path_utils import _cached_session_catalog_components
+from app.container import AppContainer, WorkspaceContainerRegistry
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.path_utils import get_session_path_resolver
 from app.core.sqlite_state import utc_now_text
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
     NavigationMutationIntentDTO,
@@ -33,12 +36,23 @@ from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.workspaces import prepare_default_test_workspace
 
 
-@pytest.fixture(autouse=True)
-def isolate_catalog_component_cache():
-    """每个用例重新装配同一正式工作区，避免沿用上一容器的排空回调。"""
-    _cached_session_catalog_components.cache_clear()
-    yield
-    _cached_session_catalog_components.cache_clear()
+def _build_owned_container(
+    workspace_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest | None = None,
+) -> AppContainer:
+    """预装配使用真实 registry owner，main lifespan 排空后由同一 registry 关闭。"""
+    registry = WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([
+            MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
+        ]),
+        project_root=Path.cwd(),
+    )
+    container = registry.get(registry.workspace_ids[0])
+    if request is not None:
+        request.addfinalizer(registry.close)
+    monkeypatch.setattr(main, "WorkspaceContainerRegistry", lambda **_: registry)
+    return container
 
 
 def _isolate_non_navigation_services(
@@ -46,8 +60,14 @@ def _isolate_non_navigation_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, AsyncMock]:
     """只隔离 lifespan 周边 owner；真实 AppContainer 与目录 worker 保持工作。"""
+    monkeypatch.setenv(
+        "BOXTEAM_MOUNTED_WORKSPACES",
+        json.dumps([{
+            "workspace_id": container.workspace_id,
+            "workspace_root": str(container.workspace_root),
+        }]),
+    )
     async_stubs: dict[str, tuple[object, str, object]] = {
-        "pending_migration": (container.pending_request_store, "migrate_all", 0),
         "mcp_start": (container.mcp_catalog_owner, "start", None),
         "registry_start": (
             container.workspace_file_resource_registry,
@@ -70,6 +90,7 @@ def _isolate_non_navigation_services(
         "goal_resume": (container.goal_runtime_service, "resume_active_goals", None),
         "node_debug_close": (container.node_debug_service, "close", None),
         "config_close": (container.config_service, "close", None),
+        "agent_start": (container.agent_execution_service, "start", None),
         "agent_shutdown": (container.agent_execution_service, "shutdown", None),
         "tool_test_shutdown": (container.tool_test_service, "shutdown", None),
         "trace_stop": (container.trace_event_recorder, "stop", None),
@@ -88,8 +109,6 @@ def _isolate_non_navigation_services(
         (container.config_service, "set_mcp_tool_names", None),
         (container.mcp_catalog_owner, "get_tool_ids", []),
         (container.workspace_activity_service, "prune", 0),
-        (container.workspace_activity_service, "close", None),
-        (container.workspace_source_owner, "close", None),
     ):
         stub = Mock(return_value=result)
         setattr(owner, method_name, stub)
@@ -110,12 +129,8 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
 
-    container = build_app_container(
-        project_root=Path.cwd(),
-        workspace_root=workspace_root,
-    )
+    container = _build_owned_container(workspace_root, monkeypatch, request)
     stubs = _isolate_non_navigation_services(container, monkeypatch)
-    monkeypatch.setattr(main, "build_app_container", lambda **_: container)
     monkeypatch.setattr(main, "configure_application_logging", lambda **_: None)
     monkeypatch.setattr(main, "_model_stream_controller", None)
 
@@ -145,7 +160,9 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
         )
 
     async with main.lifespan(main.app):
-        assert main.app.state.container is container
+        registry = main.app.state.workspace_container_registry
+        assert registry is not None
+        assert registry.get(container.workspace_id) is container
         assert operations.worker_state == "running"
         recovered = queue.get_record(
             gateway_id=scope.gateway_id,
@@ -157,14 +174,20 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
 
     assert operations._worker_task is None
     assert not operations._executor.has_queue_owner
-    assert main.app.state.container is None
+    assert main.app.state.workspace_container_registry is None
 
+    # 前一 lifespan 已关闭连接；重启用新 registry，外部 queue owner 独立持有连接。
+    external_resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
+    external_store = external_resolver.catalog_store
     external_executor = NavigationMutationExecutor(
-        store=operations._store,
+        store=external_store,
         workspace_id=scope.workspace_id,
-        queue=queue,
-        path_resolver=container.session_service.path_resolver,
+        queue=NavigationMutationQueueStore(external_store),
+        path_resolver=external_resolver,
     )
+    restarted = _build_owned_container(workspace_root, monkeypatch, request)
+    restart_stubs = _isolate_non_navigation_services(restarted, monkeypatch)
+    operations = restarted.session_catalog_service.operations
     original_start = operations.start
 
     async def start_with_short_conflict_window() -> None:
@@ -178,12 +201,10 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
 
     assert operations._worker_task is None
     assert not operations._executor.has_queue_owner
-    assert main.app.state.container is None
-    assert stubs["generation_start"].await_count == 2
-    assert stubs["generation_stop"].await_count == 2
-    assert stubs["terminal_stop"].await_count == 2
-    assert stubs["config_close"].await_count == 2
-    assert stubs["mcp_stop"].await_count == 2
+    assert main.app.state.workspace_container_registry is None
+    for group in (stubs, restart_stubs):
+        for name in ("generation_start", "generation_stop", "terminal_stop", "config_close", "mcp_stop"):
+            assert group[name].await_count == 1
 
 
 @pytest.mark.asyncio
@@ -202,10 +223,7 @@ async def test_rejected_retained_session_delete_does_not_block_lifespan_restart(
     monkeypatch.setattr(main, "configure_application_logging", lambda **_: None)
     monkeypatch.setattr(main, "_model_stream_controller", None)
 
-    container = build_app_container(
-        project_root=Path.cwd(),
-        workspace_root=workspace_root,
-    )
+    container = _build_owned_container(workspace_root, monkeypatch, request)
     release_workspace_state = container.workspace_activity_service.close
     _isolate_non_navigation_services(container, monkeypatch)
     resolver = container.session_service.path_resolver
@@ -242,7 +260,6 @@ async def test_rejected_retained_session_delete_does_not_block_lifespan_restart(
     )
     enqueue_request = NavigationMutationEnqueueRequest(intents=[intent])
     operations = container.session_catalog_service.operations
-    monkeypatch.setattr(main, "build_app_container", lambda **_: container)
 
     async with main.lifespan(main.app):
         assert operations.worker_state == "running"
@@ -269,24 +286,21 @@ from pathlib import Path
 import pytest
 
 from app import main
-from app.container import build_app_container
 from app.services.business.session_navigation.operations_service import local_navigation_scope
 from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
+    _build_owned_container,
     _isolate_non_navigation_services,
 )
 
 workspace_root = Path(os.environ["WORKSPACE_ROOT"])
-container = build_app_container(
-    project_root=Path.cwd(), workspace_root=workspace_root
-)
+patches = pytest.MonkeyPatch()
+container = _build_owned_container(workspace_root, patches)
 operations = container.session_catalog_service.operations
 workspace_id = container.session_service.workspace_id
 scope = local_navigation_scope(workspace_id)
 operation_id = "op_" + "d" * 32
 release_workspace_state = container.workspace_activity_service.close
-patches = pytest.MonkeyPatch()
 _isolate_non_navigation_services(container, patches)
-patches.setattr(main, "build_app_container", lambda **_: container)
 patches.setattr(main, "configure_application_logging", lambda **_: None)
 patches.setattr(main, "_model_stream_controller", None)
 
@@ -299,7 +313,7 @@ async def restart_worker():
         assert store.list_pending_subtree_delete_records(workspace_id) == []
         print("navigation_worker_ready")
     assert operations._worker_task is None
-    assert main.app.state.container is None
+    assert main.app.state.workspace_container_registry is None
 
 try:
     asyncio.run(restart_worker())

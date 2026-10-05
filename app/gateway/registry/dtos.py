@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -62,6 +62,16 @@ class RegistryDtosMixin:
                             headers=self._target_headers(target),
                         )
                         if response.status_code == 200:
+                            health_payload = response.json()
+                            if not isinstance(health_payload, dict):
+                                raise TypeError("Workspace 健康响应必须是 JSON 对象")
+                            actual_workspace_id = health_payload.get("workspace_id")
+                            if actual_workspace_id != target.backend_workspace_id:
+                                raise RuntimeError(
+                                    "Workspace 健康响应 backend UUID 不匹配: "
+                                    f"expected={target.backend_workspace_id}, "
+                                    f"actual={health_payload.get('workspace_id')!r}"
+                                )
                             status = "ready"
                             workspace_service_status = "ready"
                             workspace_service_error = None
@@ -71,7 +81,7 @@ class RegistryDtosMixin:
                             workspace_service_error = (
                                 f"健康检查返回 HTTP {response.status_code}"
                             )
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         status = "offline"
                         workspace_service_status = "offline"
                         workspace_service_error = str(error)
@@ -94,7 +104,7 @@ class RegistryDtosMixin:
                         config_payload = config_response.json()
                         config_data = config_payload.get("data")
                         if not isinstance(config_data, dict):
-                            raise ValueError("配置状态接口缺少 data 对象")
+                            raise ValueError("配置状态接口缺少 data 对象")  # noqa: TRY004 — 保留配置健康协议既有拒绝类型。
                         config_reload = GatewayConfigReloadStatusDTO(
                             available=True,
                             healthy=config_data.get("healthy"),
@@ -108,7 +118,7 @@ class RegistryDtosMixin:
                             ),
                             last_error=config_data.get("last_error"),
                         )
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         config_reload = GatewayConfigReloadStatusDTO(
                             available=False,
                             error=str(error),
@@ -170,7 +180,7 @@ class RegistryDtosMixin:
                                 else f"健康检查返回 HTTP {response.status_code}"
                             ),
                         )
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         service_statuses[service] = service_dto(
                             service,
                             "offline",
@@ -185,6 +195,7 @@ class RegistryDtosMixin:
                 )
                 return GatewayWorkspaceDTO(
                     workspace_id=target.workspace_id,
+                    backend_workspace_id=target.backend_workspace_id,
                     parent_workspace_id=target.parent_workspace_id,
                     name=target.name,
                     root_path=target.root_path,
@@ -242,7 +253,7 @@ class RegistryDtosMixin:
                     ),
                     connection_error=target.connection_error,
                     services=service_statuses,
-                    checked_at=datetime.now(timezone.utc).isoformat(),
+                    checked_at=datetime.now(UTC).isoformat(),
                 )
 
             return list(await asyncio.gather(*(build_dto(target) for target in targets)))

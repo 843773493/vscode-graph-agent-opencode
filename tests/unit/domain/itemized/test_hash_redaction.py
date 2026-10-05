@@ -9,10 +9,10 @@ import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.redaction import SessionHashRedactor, validate_hash_redaction
-from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.redaction import SessionHashRedactor, validate_hash_redaction
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import _hash_safe_value, normalize_wire_request
 
@@ -190,6 +190,7 @@ def test_real_plan_and_request_hash_bind_sensitive_markers(
         )
         tool = ToolSetRef.from_tool_snapshot(
             session_id=golden_plan.session_id,
+            thread_id=golden_plan.thread_id,
             snapshot_id="tool-sensitive",
             plan_id="plan-sensitive",
             source_revision="r1",
@@ -199,6 +200,7 @@ def test_real_plan_and_request_hash_bind_sensitive_markers(
         plans.append(
             ContextRequestPlan(
                 session_id=golden_plan.session_id,
+                thread_id=golden_plan.thread_id,
                 plan_id="plan-sensitive",
                 refs=(),
                 tool_set_refs=(tool,),
@@ -225,6 +227,7 @@ def test_marker_snapshot_restores_without_original_body_or_key(
     )
     plan = ContextRequestPlan(
         session_id=omitted_snapshot.session_id,
+        thread_id=omitted_snapshot.thread_id,
         plan_id=omitted_snapshot.plan_id,
         refs=omitted_snapshot.refs,
         selection=omitted_snapshot.selection,

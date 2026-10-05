@@ -32,7 +32,6 @@ from app.services.infrastructure.rollout_context.storage.catalog.tool_result_ide
     _strict_db_text,
     _tool_result_identity,
 )
-
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line as _v2_json_line,
 )
@@ -41,6 +40,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
+    strict_text,
     validate_item_storage_metadata,
 )
 
@@ -152,25 +152,31 @@ class RolloutItemsMixin:
 
     def append_item(
         self,
+        session_id: str,
         thread_id: str,
         item: CanonicalItemRecord,
         *,
+        execution_id: str,
         checkpoint_ns: str = "",
         commit_kind: str = CommitKind.ITEM_CONVERGENCE,
     ) -> int:
         """追加一个 immutable canonical item，并返回 storage commit id。"""
         return self.append_items(
+            session_id,
             thread_id,
             (item,),
+            execution_id=execution_id,
             checkpoint_ns=checkpoint_ns,
             commit_kind=commit_kind,
         )[0]
 
     def append_items(
         self,
+        session_id: str,
         thread_id: str,
         items: Sequence[CanonicalItemRecord],
         *,
+        execution_id: str,
         checkpoint_ns: str = "",
         commit_kind: str = CommitKind.ITEM_CONVERGENCE,
     ) -> tuple[int, ...]:
@@ -183,10 +189,45 @@ class RolloutItemsMixin:
         """
         if not items:
             raise ValueError("append_items 至少需要一个 canonical item")
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        execution_id = strict_text(execution_id, field="execution_id")
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
+                admission_row = connection.execute(
+                    "SELECT turn_id, execution_origin FROM executions "
+                    "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                    (session_id, thread_id, execution_id),
+                ).fetchone()
+                if admission_row is None:
+                    raise RuntimeError(
+                        "canonical append 缺少当前 SessionThread 的 durable execution admission: "
+                        f"session_id={session_id}, thread_id={thread_id}, "
+                        f"execution_id={execution_id}"
+                    )
+                admitted_turn_id = _strict_db_optional_text(
+                    admission_row[0], field="executions.turn_id"
+                )
+                execution_origin = _strict_db_text(
+                    admission_row[1], field="executions.execution_origin"
+                )
+                if execution_origin not in {"user_turn", "internal"}:
+                    raise RuntimeError(
+                        f"canonical append execution_origin 非法: {execution_origin!r}"
+                    )
+                if execution_origin == "user_turn" and admitted_turn_id is None:
+                    raise RuntimeError("user_turn append admission 缺少真实 Turn")
+                if execution_origin == "internal" and admitted_turn_id is not None:
+                    raise RuntimeError("internal append admission 不得绑定 Turn")
+                if any(item.turn_id != admitted_turn_id for item in items):
+                    raise RuntimeError(
+                        "canonical append item Turn attribution 与 durable execution admission 不一致: "
+                        f"execution_id={execution_id}"
+                    )
                 existing_commit_ids: list[int] = []
                 resolved_item_ids: list[str] = []
                 pending: list[CanonicalItemRecord] = []
@@ -195,7 +236,7 @@ class RolloutItemsMixin:
                     existing = connection.execute(
                         "SELECT semantic_kind, payload_kind, status, turn_id, turn_scope, "
                         "message_group_id, wire_role, producer_ref_json, content_hash, "
-                        "created_at, metadata_json, commit_id FROM item_catalog "
+                        "created_at, metadata_json, commit_id, execution_id FROM item_catalog "
                         "WHERE item_id = ?",
                         (item.item_id,),
                     ).fetchone()
@@ -350,6 +391,15 @@ class RolloutItemsMixin:
                         raise RuntimeError(
                             f"canonical item 缺少所属 commit: {item.item_id}"
                         )
+                    stored_execution_id = _strict_db_optional_text(
+                        existing[12],
+                        field=f"item_catalog.execution_id:{item.item_id}",
+                    )
+                    if stored_execution_id is None:
+                        raise RuntimeError(
+                            "既有 canonical item 缺少 execution attribution: "
+                            f"{item.item_id}"
+                        )
                     existing_commit_ids.append(
                         strict_non_negative_int(
                             existing[11], field="item_catalog.commit_id"
@@ -382,12 +432,19 @@ class RolloutItemsMixin:
                     thread_id,
                     checkpoint_ns,
                     pending,
+                    session_id=session_id,
                     commit_kind=commit_kind,
                     subject_id=pending[0].item_id,
                     idempotency_key="items:"
                     + sha256_jcs([item.item_id for item in pending]),
                     begin_transaction=False,
                 )
+                for item in pending:
+                    self._bind_canonical_item_execution(
+                        connection,
+                        item_id=item.item_id,
+                        execution_id=execution_id,
+                    )
                 # canonical sink 可能在 LangGraph 创建下一条 checkpoint view
                 # 之前提交（尤其是 tool_result）。当前 active view 的 item
                 # membership 必须在同一 SQLite 事务内立即可见，否则下一次
@@ -402,9 +459,11 @@ class RolloutItemsMixin:
 
     def ensure_request_items(
         self,
+        session_id: str,
         thread_id: str,
         *,
-        turn_id: str,
+        turn_id: str | None,
+        execution_id: str,
         messages: Sequence[object],
         checkpoint_ns: str = "",
     ) -> tuple[str, ...]:
@@ -419,11 +478,46 @@ class RolloutItemsMixin:
         随后标准 checkpoint 和 stream sink 通过 message/tool-call identity 幂等
         复用它们，避免已 seal 的 assembly 缺少 assistant tool-call 或 ToolMessage。
         """
+        session_id = strict_text(session_id, field="session_id")
+        execution_id = strict_text(execution_id, field="execution_id")
+        if turn_id is not None:
+            turn_id = strict_text(turn_id, field="turn_id")
         candidates: list[CanonicalItemRecord] = []
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as connection:
                 self._require_v2_runtime(connection)
+                admission_row = connection.execute(
+                    "SELECT turn_id, execution_origin FROM executions "
+                    "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                    (session_id, thread_id, execution_id),
+                ).fetchone()
+                if admission_row is None:
+                    raise RuntimeError(
+                        "request item canonicalization 缺少当前 SessionThread 的 durable execution admission: "
+                        f"session_id={session_id}, thread_id={thread_id}, "
+                        f"execution_id={execution_id}"
+                    )
+                admitted_turn_id = _strict_db_optional_text(
+                    admission_row[0], field="executions.turn_id"
+                )
+                execution_origin = _strict_db_text(
+                    admission_row[1], field="executions.execution_origin"
+                )
+                if turn_id != admitted_turn_id:
+                    raise RuntimeError(
+                        "request item Turn 与 durable execution admission 不一致: "
+                        f"execution_id={execution_id}"
+                    )
+                if execution_origin == "user_turn" and turn_id is None:
+                    raise RuntimeError("user_turn request item admission 缺少真实 Turn")
+                if execution_origin == "internal" and turn_id is not None:
+                    raise RuntimeError("internal request item admission 必须 Turn-less")
                 for index, message in enumerate(messages):
                     codec = self._codec()
                     message_role = codec.message_role(message)
@@ -445,15 +539,43 @@ class RolloutItemsMixin:
                     ):
                         continue
                     message_id = self._codec().message_id(message, index)
-                    indexed_turn = connection.execute(
-                        "SELECT turn_id FROM messages WHERE message_id = ?",
+                    indexed_message = connection.execute(
+                        "SELECT turn_id, execution_id FROM messages WHERE message_id = ?",
                         (message_id,),
                     ).fetchone()
+                    catalog_message = connection.execute(
+                        "SELECT turn_id, execution_id FROM item_catalog WHERE item_id = ?",
+                        (f"item-{message_id}",),
+                    ).fetchone()
+                    if indexed_message is not None and catalog_message is None:
+                        raise RuntimeError(
+                            f"message projection 缺少 canonical item: {message_id}"
+                        )
+                    if indexed_message is not None and (
+                        indexed_message[0] != catalog_message[0]
+                        or indexed_message[1] != catalog_message[1]
+                    ):
+                        raise RuntimeError(
+                            f"message projection 与 canonical item attribution 不一致: {message_id}"
+                        )
                     message_turn_id = (
-                        indexed_turn[0]
-                        if indexed_turn is not None
-                        else self._codec().turn_id(message, turn_id, message_id)
+                        indexed_message[0]
+                        if indexed_message is not None
+                        else catalog_message[0]
+                        if catalog_message is not None
+                        else turn_id
                     )
+                    message_execution_id = (
+                        indexed_message[1]
+                        if indexed_message is not None
+                        else catalog_message[1]
+                        if catalog_message is not None
+                        else execution_id
+                    )
+                    if not isinstance(message_execution_id, str) or not message_execution_id:
+                        raise RuntimeError(
+                            f"request message 缺少 canonical execution attribution: {message_id}"
+                        )
                     model_call_id = (
                         codec.tool_message_model_call_id(message, messages[:index])
                         if is_tool_result
@@ -466,6 +588,7 @@ class RolloutItemsMixin:
                         item_sequence=1,
                         message_id=message_id,
                         turn_id=message_turn_id,
+                        execution_id=message_execution_id,
                         timestamp=_now(),
                         model_call_id=model_call_id,
                     )
@@ -511,8 +634,10 @@ class RolloutItemsMixin:
         if not candidates:
             return ()
         self.append_items(
+            session_id,
             thread_id,
             candidates,
+            execution_id=execution_id,
             checkpoint_ns=checkpoint_ns,
             commit_kind=CommitKind.ITEM_CONVERGENCE,
         )
@@ -520,6 +645,7 @@ class RolloutItemsMixin:
 
     def append_control_commit(
         self,
+        session_id: str,
         thread_id: str,
         *,
         outcome: str,
@@ -532,15 +658,20 @@ class RolloutItemsMixin:
         """记录没有 JSONL item 的 control/terminal outcome。"""
         if outcome not in {value.value for value in ControlOutcome}:
             raise ValueError(f"未知 control outcome: {outcome}")
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
                 commit_id, _offset = self._append_v2_records_transaction(
                     connection,
                     thread_id,
                     checkpoint_ns,
                     (),
+                    session_id=session_id,
                     commit_kind=commit_kind,
                     commit_mode=CommitMode.METADATA_ONLY.value,
                     outcome=outcome,
@@ -553,6 +684,7 @@ class RolloutItemsMixin:
 
     def read_items(
         self,
+        session_id: str,
         thread_id: str,
         *,
         checkpoint_ns: str = "",
@@ -568,8 +700,13 @@ class RolloutItemsMixin:
         staging 数据，但不会绕过 locator/hash 校验。
         """
         if snapshot is None:
-            with self._lock(thread_id, checkpoint_ns):
+            with self._lock(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+            ):
                 return self._read_items_unlocked(
+                    session_id,
                     thread_id,
                     checkpoint_ns=checkpoint_ns,
                     item_ids=item_ids,
@@ -577,6 +714,7 @@ class RolloutItemsMixin:
                     _allow_migrating=_allow_migrating,
                 )
         return self._read_items_unlocked(
+            session_id,
             thread_id,
             checkpoint_ns=checkpoint_ns,
             item_ids=item_ids,
@@ -586,6 +724,7 @@ class RolloutItemsMixin:
 
     def _read_items_unlocked(
         self,
+        session_id: str,
         thread_id: str,
         *,
         checkpoint_ns: str = "",
@@ -595,13 +734,20 @@ class RolloutItemsMixin:
     ) -> list[CanonicalItemRecord]:
         """按 SQLite catalog 定位并校验已提交 v2 item，避免扫描 JSONL。"""
         if snapshot is not None and (
-            snapshot.thread_id != thread_id or snapshot.checkpoint_ns != checkpoint_ns
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("item read snapshot 与目标 rollout 不一致")
         owned_connection = None
         if snapshot is None:
-            self.initialize(thread_id, checkpoint_ns)
-            owned_connection = self._connect(thread_id, checkpoint_ns, read_only=True)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            owned_connection = self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            )
         connection = (
             self._snapshot_connection(snapshot)
             if snapshot is not None
@@ -651,7 +797,11 @@ class RolloutItemsMixin:
             if owned_connection is not None:
                 owned_connection.close()
         result: list[CanonicalItemRecord] = []
-        with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+        with self.jsonl_path(
+            session_id,
+            checkpoint_ns,
+            thread_id=thread_id,
+        ).open("rb") as stream:
             for (
                 sequence_value,
                 item_id,

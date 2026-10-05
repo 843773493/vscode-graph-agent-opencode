@@ -13,7 +13,11 @@ from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -183,13 +187,18 @@ def client_base_url(e2e_backend_port: int) -> str:
 @pytest.fixture
 async def client(
     e2e_backend_process: subprocess.Popen[str],
+    e2e_workspace_root_path: str,
     client_base_url: str,
     is_debug: bool
 ) -> AsyncIterator[httpx.AsyncClient]:
+    backend_workspace_id = workspace_backend_id_for_root(e2e_workspace_root_path)
     async with httpx.AsyncClient(
         base_url=client_base_url,
         timeout=30 if not is_debug else None,
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": backend_workspace_id,
+        },
     ) as client:
         yield client
 

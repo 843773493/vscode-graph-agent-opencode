@@ -4,6 +4,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import session_navigation as nav
+from app.services.business.session_navigation.service import (
+    SessionCatalogRevisionChangedError,
+)
 
 
 class _FailingCatalogService:
@@ -97,3 +100,24 @@ async def test_search_maps_malformed_cursor_shape_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_children_maps_snapshot_revision_drift_to_409() -> None:
+    service = _FailingCatalogService(
+        SessionCatalogRevisionChangedError(
+            "revision_changed: 会话目录在异步加载节点元数据期间已更新"
+        )
+    )
+
+    with pytest.raises(HTTPException) as captured:
+        await nav.list_session_catalog_children(
+            parent_node_id=None,
+            limit=100,
+            cursor=None,
+            request_id="req_children",
+            service=service,
+        )
+
+    assert captured.value.status_code == 409
+    assert "revision_changed" in captured.value.detail

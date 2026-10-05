@@ -38,21 +38,33 @@ class FullCopyStagingStorage(RolloutStorage):
         *,
         thread_id: str | None = None,
     ) -> Path:
-        """staging owner 的 rollout 定位：只接受显式 source/target session。
+        """staging owner 只接受 source 与 target 的显式 main Thread。
 
         私有 staging 根是按 target session 建立的单个 rollout 目录（fork 的
         目标就是该 Session 的 main thread）；显式 non-main thread 在此没有
-        独立 staging 根，必须 fail closed 而不是把 thread 当 session 静默解析。
+        独立 staging 根，必须 fail closed。
         """
-        if thread_id is not None:
-            raise ValueError(
-                "fork staging 只承载 target session 的 main thread rollout，"
-                f"不接受显式 thread_id: {thread_id!r}"
-            )
+        resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
         if session_id == self._target:
+            expected_thread_id = self._resolve_thread_identity(self._target, None)
+            if resolved_thread_id != expected_thread_id:
+                raise ValueError(
+                    "fork staging 只承载 target session 的 main thread rollout，"
+                    f"不接受其它 thread_id: {resolved_thread_id!r}"
+                )
             return self._stage_root
         if session_id == self._source:
-            return self._owner.root(session_id, checkpoint_ns)
+            expected_thread_id = self._resolve_thread_identity(self._source, None)
+            if resolved_thread_id != expected_thread_id:
+                raise ValueError(
+                    "fork staging 只读取 source session 的 main thread rollout，"
+                    f"不接受其它 thread_id: {resolved_thread_id!r}"
+                )
+            return self._owner.root(
+                session_id,
+                checkpoint_ns,
+                thread_id=resolved_thread_id,
+            )
         raise ValueError("fork staging 只能访问显式 source/target")
 
     def _require_private_detail_staging(self) -> None:

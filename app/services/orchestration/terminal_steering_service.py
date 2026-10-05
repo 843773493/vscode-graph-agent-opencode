@@ -8,7 +8,11 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.terminal_execution_monitor import (
     TerminalExecutionMonitorClientProtocol,
 )
+from app.core.exceptions import NotFoundError
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.prompting.factory import internal_message_factory
+from app.services.business.workspace_resources.owner import ResourceConflict
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +58,41 @@ class TerminalSteeringService:
             )
 
     async def scan_once(self) -> None:
-        terminals = await self._terminal_client.list_terminals()
+        errors: list[Exception] = []
+        try:
+            await self._terminal_client.sweep_orphans()
+        except ExceptionGroup as error:
+            errors.append(error)
+        terminals = await self._terminal_client.list_resources()
         for terminal in terminals:
             if not self._is_candidate(terminal):
                 continue
-            terminal_id = self._required_string(terminal, "terminal_id")
-            owner_session_id = self._required_string(terminal, "session_id")
-            claim = await self._terminal_client.claim_terminal_steering(terminal_id)
+            try:
+                await self._dispatch_terminal(terminal)
+            except (SessionDeletionPendingError, NotFoundError) as error:
+                logger.info("Terminal 来源 Session 已关闭准入，跳过完成通知: %s", error)
+            except (ConnectionError, TimeoutError, URLError, ResourceConflict) as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("Terminal owner 扫描存在未收敛操作", errors)
+
+    async def _dispatch_terminal(self, terminal: dict[str, object]) -> None:
+        terminal_id = self._required_string(terminal, "terminal_id")
+        owner_session_id = self._required_string(terminal, "session_id")
+        async with self._terminal_client.operation(
+            session_id=owner_session_id,
+            thread_id=self._required_string(terminal, "source_thread_id"),
+            holder_id=f"terminal-monitor:{terminal_id}",
+            operation_id=self._required_string(terminal, "completion_event_id"),
+        ) as operation:
+            claim = await operation.claim_terminal_steering(terminal_id)
             if claim.get("claimed") is not True:
-                continue
+                return
+            dispatched = False
+
+            async def finish() -> None:
+                await operation.finish_terminal_steering(terminal_id, dispatched=dispatched)
+
             try:
                 await self._session_orchestrator.create_and_run_internal(
                     owner_session_id,
@@ -74,25 +104,16 @@ class TerminalSteeringService:
                             "不要仅根据完成通知推断命令成功。"
                         ),
                         metadata={
-                            "terminal_completion_event_id": self._required_string(
-                                terminal,
-                                "completion_event_id",
-                            ),
+                            "terminal_completion_event_id": self._required_string(terminal, "completion_event_id"),
                             "terminal_id": terminal_id,
                         },
                     ),
                     delivery_policy="after_tool_result",
+                    thread_id=self._required_string(terminal, "source_thread_id"),
                 )
-            except BaseException:
-                await self._terminal_client.finish_terminal_steering(
-                    terminal_id,
-                    dispatched=False,
-                )
-                raise
-            await self._terminal_client.finish_terminal_steering(
-                terminal_id,
-                dispatched=True,
-            )
+                dispatched = True
+            finally:
+                await run_cleanup_shielded(finish)
 
     async def _run(self) -> None:
         while True:
@@ -100,9 +121,9 @@ class TerminalSteeringService:
                 await self.scan_once()
             except asyncio.CancelledError:
                 raise
-            except (ConnectionError, TimeoutError, URLError) as error:
+            except (ConnectionError, TimeoutError, URLError, ResourceConflict, ExceptionGroup) as error:
                 logger.warning(
-                    "终端 steering 监控暂时无法连接 terminal manager，将重试: %s",
+                    "终端 owner 监控存在未收敛操作，将重试: %s",
                     error,
                 )
             await asyncio.sleep(self._poll_interval_seconds)
@@ -111,6 +132,8 @@ class TerminalSteeringService:
     def _is_candidate(terminal: dict[str, object]) -> bool:
         return (
             terminal.get("status") in {"running", "completed"}
+            and terminal.get("reconciliation_status") == "verified"
+            and terminal.get("source_thread") in terminal.get("thread_associations", [])
             and terminal.get("model_backgrounded") is True
             and terminal.get("last_command_status") == "completed"
             and terminal.get("completion_observed_by_model") is not True

@@ -32,6 +32,9 @@ function session(): Session {
   return {
     session_id: SESSION_ID,
     workspace_id: "ws_local",
+    resource_identity: `fixture-${SESSION_ID}`,
+    vrn: `boxteam://workspace/ws_local/resources/session/${SESSION_ID}`,
+    scope: "workspace",
     title: "连接恢复测试",
     title_source: "user",
     current_agent_id: "default",
@@ -113,6 +116,7 @@ function appState(): AppState {
       job_id: ACTIVE_JOB_ID,
       session_id: SESSION_ID,
       ordinal: 1,
+      root_logical_item_ordinal: 0,
       revision: 1,
       status: "running",
       created_at: "2026-07-24T00:00:00Z",
@@ -212,6 +216,7 @@ function job(status: Job["status"], errorMessage: string | null = null): Job {
   return {
     job_id: ACTIVE_JOB_ID,
     message_id: "msg_user_active",
+    thread_id: "thr_018f0000000070008000000000000001",
     session_id: SESSION_ID,
     mode: "single_agent",
     status,

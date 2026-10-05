@@ -54,6 +54,8 @@ class ForkIdentityMappingMixin(ForkAcceptanceMappingMixin):
         """
         source_session_id = required_text(source_session_id, field="source_session_id")
         target_session_id = required_text(target_session_id, field="target_session_id")
+        source_thread_id = self._resolve_thread_identity(source_session_id, None)
+        target_thread_id = self._resolve_thread_identity(target_session_id, None)
         fork_id = required_text(fork_id, field="fork_id")
         timestamp = required_text(timestamp, field="timestamp")
         mapped_entity_types = {
@@ -258,7 +260,10 @@ class ForkIdentityMappingMixin(ForkAcceptanceMappingMixin):
                 strict_text(local_id, field="tool_set_snapshots.tool_set_snapshot_id"),
             )
         for overlay_id, epoch, base_ref, delta_ref in connection.execute(
-            "SELECT overlay_id, source_overlay_epoch, base_ref, delta_ref FROM source_overlays ORDER BY overlay_id"
+            "SELECT overlay_id, source_overlay_epoch, base_ref, delta_ref "
+            "FROM source_overlays WHERE session_id = ? AND thread_id = ? "
+            "ORDER BY overlay_id",
+            (target_session_id, target_thread_id),
         ).fetchall():
             overlay_id = strict_text(overlay_id, field="source_overlays.overlay_id")
             epoch = strict_non_negative_int(
@@ -274,6 +279,8 @@ class ForkIdentityMappingMixin(ForkAcceptanceMappingMixin):
                 "source_overlay",
                 overlay_id,
                 lineage_extra={
+                    "source_thread_id": source_thread_id,
+                    "target_thread_id": target_thread_id,
                     "source_overlay_epoch": epoch,
                     "target_overlay_epoch": epoch,
                     "source_base_ref": base_ref,

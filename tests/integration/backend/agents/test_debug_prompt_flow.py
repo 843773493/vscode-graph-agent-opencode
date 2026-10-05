@@ -375,6 +375,15 @@ console.log(JSON.stringify({ result }));
     return fixture_path, worker_path
 
 
+async def _session_main_thread_id(
+    client: httpx.AsyncClient,
+    session_id: str,
+) -> str:
+    response = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
+    assert response.status_code == 200, response.text
+    return response.json()["data"]["thread_id"]
+
+
 @pytest.mark.asyncio
 async def test_prompt_drives_agent_debug_tools_through_real_backend(
     scripted_client: httpx.AsyncClient,
@@ -404,6 +413,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     )
     assert create_response.status_code == 200, create_response.text
     session_id = create_response.json()["data"]["session_id"]
+    main_thread_id = await _session_main_thread_id(scripted_client, session_id)
 
     prompt = (
         f"请调试入口文件 {state.fixture_path} 及其依赖文件 {state.worker_path}，工作目录是 .。"
@@ -538,10 +548,11 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
 
     debug_state_response = await scripted_client.get(
         "/api/v1/debug/node",
-        params={"session_id": session_id, "thread_id": "main"},
+        params={"session_id": session_id},
     )
     assert debug_state_response.status_code == 200, debug_state_response.text
     debug_state = debug_state_response.json()["data"]
+    assert debug_state["thread_id"] == main_thread_id
     assert debug_state["status"] == "exited"
     assert debug_state["active_configuration_name"] == "计数流程调试"
     assert [item["value"] for item in debug_state["evaluations"]] == ["2", "5"]
@@ -577,7 +588,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
         "/api/v1/debug/node/start",
         json={
             "session_id": session_id,
-            "thread_id": "main",
+            "thread_id": main_thread_id,
             "configuration_id": configuration_id,
             "path": fixture_path.name,
         },
@@ -598,7 +609,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             "/api/v1/debug/node/action",
             json={
                 "session_id": session_id,
-                "thread_id": "main",
+                "thread_id": main_thread_id,
                 "action": "evaluate",
                 "params": {"expression": "state.counter += 1"},
             },
@@ -609,7 +620,7 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
             "/api/v1/debug/node/action",
             json={
                 "session_id": session_id,
-                "thread_id": "main",
+                "thread_id": main_thread_id,
                 "action": "continue",
                 "params": {},
             },

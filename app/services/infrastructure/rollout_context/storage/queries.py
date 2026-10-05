@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 from app.core.hashing import sha256_hex as _hash_bytes
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
@@ -34,12 +34,14 @@ class RolloutCheckpointQueriesMixin:
 
     def latest_checkpoint(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         checkpoint_id: str | None,
         *,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> RolloutCheckpointIndex | None:
+        session_id = strict_text(session_id, field="latest_checkpoint.session_id")
         thread_id = strict_text(thread_id, field="latest_checkpoint.thread_id")
         strict_text(
             checkpoint_ns, field="latest_checkpoint.checkpoint_ns", allow_empty=True
@@ -48,7 +50,9 @@ class RolloutCheckpointQueriesMixin:
             checkpoint_id, field="latest_checkpoint.checkpoint_id"
         )
         if snapshot is not None and (
-            snapshot.thread_id != thread_id or snapshot.checkpoint_ns != checkpoint_ns
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("latest_checkpoint snapshot 与目标 rollout 不一致")
 
@@ -69,7 +73,7 @@ class RolloutCheckpointQueriesMixin:
             # ID 写回 target 表或作为新的幂等 identity。
             alias = connection.execute(
                 "SELECT target_local_id FROM fork_identity_mappings WHERE target_session_id = ? AND entity_type = 'checkpoint' AND source_local_id = ? ORDER BY created_at DESC LIMIT 1",
-                (thread_id, requested_id),
+                (session_id, requested_id),
             ).fetchone()
             return (
                 strict_text(alias[0], field="fork_identity_mappings.target_local_id")
@@ -87,8 +91,13 @@ class RolloutCheckpointQueriesMixin:
             )
             return self._checkpoint_index(row) if row else None
         if snapshot is None:
-            self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             row = self._checkpoint_row(
                 connection,
@@ -150,6 +159,7 @@ class RolloutCheckpointQueriesMixin:
         if pending_ids:
             items.extend(
                 self.read_items(
+                    snapshot.session_id,
                     snapshot.thread_id,
                     checkpoint_ns=snapshot.checkpoint_ns,
                     item_ids=pending_ids,
@@ -204,14 +214,8 @@ class RolloutCheckpointQueriesMixin:
                     f"canonical assistant 被多个消息替代: {superseded}"
                 )
             superseded_message_ids.add(superseded)
-        # 注意：snapshot.thread_id 承载的是 Session main thread 的 session 定位 id
-        # （见 root() 只接受 main 语义的 session_id），不是 (session_id, thread_id)
-        # 定位的 thread 半。canonical ref 的 thread 半必须取该 session 的权威 main
-        # thread，不得用 session id 冒充。
-        session_id = strict_text(
-            snapshot.thread_id, field="committed_context_refs.session_id"
-        )
-        thread_id = self._path_resolver.main_thread_id(session_id)
+        session_id = snapshot.session_id
+        thread_id = snapshot.thread_id
         return tuple(
             ContextRef.canonical_item(
                 item,
@@ -225,12 +229,14 @@ class RolloutCheckpointQueriesMixin:
 
     def list_checkpoints(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str | None,
         *,
         before_checkpoint_id: str | None,
         limit: int | None,
     ) -> list[RolloutCheckpointIndex]:
+        session_id = strict_text(session_id, field="list_checkpoints.session_id")
         thread_id = strict_text(thread_id, field="list_checkpoints.thread_id")
         if checkpoint_ns is not None and not isinstance(checkpoint_ns, str):
             raise TypeError("list_checkpoints.checkpoint_ns 必须是字符串或 null")
@@ -242,8 +248,13 @@ class RolloutCheckpointQueriesMixin:
             not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0
         ):
             raise ValueError("checkpoint limit 必须是正整数或 null")
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             before = (
                 connection.execute(
@@ -272,6 +283,7 @@ class RolloutCheckpointQueriesMixin:
 
     def checkpoint_values(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         index: RolloutCheckpointIndex,
@@ -279,10 +291,17 @@ class RolloutCheckpointQueriesMixin:
         snapshot: RolloutReadSnapshot | None = None,
         context_view_id_override: str | None = None,
     ) -> dict[str, object]:
+        session_id = strict_text(session_id, field="checkpoint_values.session_id")
         strict_text(thread_id, field="checkpoint_values.thread_id")
         strict_text(
             checkpoint_ns, field="checkpoint_values.checkpoint_ns", allow_empty=True
         )
+        if snapshot is not None and (
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
+        ):
+            raise ValueError("checkpoint_values snapshot 与目标 rollout 不一致")
         context_view_id_override = strict_optional_text(
             context_view_id_override, field="checkpoint_values.context_view_id_override"
         )
@@ -326,6 +345,7 @@ class RolloutCheckpointQueriesMixin:
                             f"checkpoint messages view 指针非法: {index.checkpoint_id}"
                         )
                     values[channel] = self._messages_for_view(
+                        session_id,
                         thread_id,
                         checkpoint_ns,
                         context_view_id,
@@ -355,11 +375,17 @@ class RolloutCheckpointQueriesMixin:
 
         if snapshot is not None:
             return read(self._snapshot_connection(snapshot))
-        with self._connect(thread_id, checkpoint_ns) as connection:
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+        ) as connection:
             return read(connection)
 
     def load_checkpoint(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         index: RolloutCheckpointIndex,
@@ -367,10 +393,19 @@ class RolloutCheckpointQueriesMixin:
         snapshot: RolloutReadSnapshot | None = None,
         context_view_id_override: str | None = None,
     ) -> Checkpoint:
+        session_id = strict_text(session_id, field="load_checkpoint.session_id")
+        strict_text(thread_id, field="load_checkpoint.thread_id")
+        if snapshot is not None and (
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
+        ):
+            raise ValueError("load_checkpoint snapshot 与目标 rollout 不一致")
         checkpoint = json.loads(index.checkpoint_json)
         if not isinstance(checkpoint, dict):
             raise TypeError("checkpoint core JSON 必须是对象")
         checkpoint["channel_values"] = self.checkpoint_values(
+            session_id,
             thread_id,
             checkpoint_ns,
             index,
@@ -380,7 +415,12 @@ class RolloutCheckpointQueriesMixin:
         checkpoint["channel_versions"] = {}
         checkpoint["updated_channels"] = []
         if snapshot is None:
-            with self._connect(thread_id, checkpoint_ns) as connection:
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
                 rows = connection.execute(
                     "SELECT channel_name, channel_version, updated_index FROM checkpoint_channels WHERE checkpoint_id = ? ORDER BY updated_index",

@@ -4,11 +4,17 @@ import base64
 import json
 import os
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.agents.tools.terminal import (
     _command_for_shell,
     _resolve_terminal_workdir,
@@ -18,6 +24,33 @@ from app.agents.tools.terminal import (
     create_write_stdin_tool,
 )
 from app.agents.tools.terminal_contract import tool_output
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.turn_execution_scope import (
+    TurnExecutionScope,
+    reset_current_turn_execution_scope,
+    set_current_turn_execution_scope,
+)
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
+from tests.support.terminal_owner import (
+    SESSION_A,
+    SESSION_B,
+    THREAD_A,
+    THREAD_B,
+    WORKSPACE_ID,
+    Sessions,
+)
+
+SOURCE_THREAD_ID = THREAD_A
+
+
+def _thread_binding(session_id: str = SESSION_A) -> ThreadRuntimeBinding:
+    return ThreadRuntimeBinding(session_id=session_id, thread_id=SOURCE_THREAD_ID)
 
 
 def test_windows_cmd_wrapper_uses_cmd_syntax(
@@ -90,7 +123,9 @@ def test_terminal_output_marks_port_conflict_as_retryable_environment_issue() ->
 
 
 class _FakeTerminalClient:
-    def __init__(self, *, complete_commands: bool = True) -> None:
+    def __init__(self, root: Path, *, complete_commands: bool = True) -> None:
+        self.root = root
+        self.created_cwds: dict[str, str] = {}
         self.terminals: dict[str, dict[str, Any]] = {}
         self.complete_commands = complete_commands
         self.next_id = 1
@@ -100,21 +135,25 @@ class _FakeTerminalClient:
     async def create_terminal(
         self,
         *,
-        session_id: str,
+        terminal_id: str,
+        owner_revision: int,
         title: str,
         agent_id: str | None = None,
         cwd: str | None = None,
         cols: int = 100,
         rows: int = 30,
     ) -> dict[str, Any]:
-        terminal_id = f"terminal_{self.next_id}"
         self.next_id += 1
         terminal = {
             "terminal_id": terminal_id,
-            "session_id": session_id,
+            "workspace_id": WORKSPACE_ID,
+            "transport_owner_revision": owner_revision,
+            "reconciliation_status": "verified",
+            "created_at": "2026-10-05T00:00:00Z",
+            "updated_at": "2026-10-05T00:00:00Z",
             "title": title,
             "owner_agent_id": agent_id,
-            "cwd": cwd,
+            "cwd_relative": os.path.relpath(cwd or str(self.root), self.root),
             "cols": cols,
             "rows": rows,
             "status": "running",
@@ -122,22 +161,18 @@ class _FakeTerminalClient:
             "buffer": "",
         }
         self.terminals[terminal_id] = terminal
+        self.created_cwds[terminal_id] = cwd or str(self.root)
         self.pending_output[terminal_id] = ""
         return dict(terminal)
 
-    async def get_terminal(self, terminal_id: str) -> dict[str, Any]:
+    async def get_resource(self, terminal_id: str) -> dict[str, Any]:
         return dict(self.terminals[terminal_id])
 
-    async def list_terminals(
-        self,
-        *,
-        session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        return [
-            dict(terminal)
-            for terminal in self.terminals.values()
-            if session_id is None or terminal["session_id"] == session_id
-        ]
+    async def list_resources(self) -> list[dict[str, Any]]:
+        return [dict(terminal) for terminal in self.terminals.values()]
+
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int) -> None:
+        self.terminals[terminal_id]["transport_owner_revision"] = owner_revision
 
     async def read_terminal(self, terminal_id: str) -> dict[str, Any]:
         output = self.pending_output[terminal_id]
@@ -195,7 +230,7 @@ class _FakeTerminalClient:
         self.pending_output[terminal_id] += str(terminal["buffer"])
         return dict(terminal)
 
-    async def kill_terminal(
+    async def stop_resource(
         self,
         terminal_id: str,
         *,
@@ -206,16 +241,52 @@ class _FakeTerminalClient:
         terminal["release_reason"] = reason or "terminal_cancel"
         return {"killed": True, "terminal": dict(terminal)}
 
-    async def delete_terminal(self, terminal_id: str) -> dict[str, Any]:
+    async def delete_resource(self, terminal_id: str) -> dict[str, Any]:
         terminal = self.terminals[terminal_id]
         terminal["status"] = "deleted"
         return {"deleted": True, "terminal": dict(terminal)}
 
 
-def test_exec_command_schema_matches_codex() -> None:
+@dataclass
+class TerminalEnvironment:
+    root: Path
+    client: _FakeTerminalClient
+    owner: TerminalResourceOwner
+    context: ToolInvocationContext
+
+
+@pytest.fixture
+def terminal_env(tmp_path: Path) -> Iterator[TerminalEnvironment]:
+    sessions = Sessions(tmp_path)
+    client = _FakeTerminalClient(tmp_path)
+    owner = TerminalResourceOwner(
+        workspace_root=tmp_path, workspace_id=WORKSPACE_ID, sessions=sessions,
+        threads=sessions, transport=client, leases=ExternalResourceLeaseLedger(),
+        thread_release_fence=sessions.accepts_release,
+    )
+    context = ToolInvocationContext(thread_binding=_thread_binding())
+    admission = ExecutionAdmission(
+        session_id=SESSION_A, thread_id=THREAD_A, execution_id="execution-terminal-test",
+        job_id="job-terminal-test", admission_idempotency_key="admission-terminal-test",
+        execution_origin="internal", turn_id=None,
+    )
+    tool_token = context.set_tool_call_id("tool-call-terminal-test")
+    scope_token = set_current_turn_execution_scope(TurnExecutionScope(admission.execution_id))
+    with (
+        session_thread_owner_scope(MutationIntentOwner(SESSION_A, THREAD_A), langgraph_thread_id=THREAD_A),
+        execution_admission_scope(admission, langgraph_thread_id=THREAD_A),
+    ):
+        try:
+            yield TerminalEnvironment(tmp_path, client, owner, context)
+        finally:
+            context.reset_tool_call_id(tool_token)
+            reset_current_turn_execution_scope(scope_token)
+
+
+def test_exec_command_schema_matches_codex(terminal_env: TerminalEnvironment) -> None:
     tool = create_exec_command_tool(
-        session_id="session_1",
-        terminal_client=_FakeTerminalClient(),  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
 
     schema = tool.args_schema.model_json_schema()
@@ -228,18 +299,21 @@ def test_exec_command_schema_matches_codex() -> None:
         "max_output_tokens",
         "shell",
         "login",
+        "retention_scope",
     }
     assert schema["required"] == ["cmd"]
     assert schema["properties"]["yield_time_ms"]["default"] == 10_000
+    assert schema["properties"]["retention_scope"]["default"] == "thread"
+    assert schema["properties"]["retention_scope"]["enum"] == ["thread", "workspace"]
 
 
 @pytest.mark.asyncio
-async def test_exec_command_creates_independent_terminals_and_applies_options() -> None:
-    client = _FakeTerminalClient()
-    workspace_root = Path("/tmp/workspace").resolve()
+async def test_exec_command_creates_independent_terminals_and_applies_options(terminal_env: TerminalEnvironment) -> None:
+    client = terminal_env.client
+    workspace_root = terminal_env.root
     tool = create_exec_command_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
         workspace_root=workspace_root,
     )
 
@@ -253,7 +327,11 @@ async def test_exec_command_creates_independent_terminals_and_applies_options() 
             "max_output_tokens": 2,
         }
     )
-    second = await tool.ainvoke({"cmd": "printf second", "yield_time_ms": 1})
+    second = await tool.ainvoke({
+        "cmd": "printf second",
+        "yield_time_ms": 1,
+        "retention_scope": "workspace",
+    })
 
     assert first["exit_code"] == 0
     assert "session_id" not in first
@@ -261,17 +339,35 @@ async def test_exec_command_creates_independent_terminals_and_applies_options() 
     assert first["chunk_id"] != first["terminal_id"]
     assert first["original_token_count"] > 2
     assert len(first["output"]) < len("alpha beta gamma delta epsilon")
-    assert client.terminals[first["terminal_id"]]["cwd"] == str(
+    assert client.created_cwds[first["terminal_id"]] == str(
         workspace_root / "parry_arena"
     )
     # 模型可见载荷只承载工作区内相对目录，MUST NOT 出现绝对真实路径（6.3）。
     assert first["cwd_relative"] == "parry_arena"
     assert workspace_root.as_posix() not in json.dumps(first, default=str)
     assert client.terminals[first["terminal_id"]]["status"] == "deleted"
+    assert (await terminal_env.owner.get_resource(first["terminal_id"]))["source_thread_id"] == SOURCE_THREAD_ID
+    assert (await terminal_env.owner.get_resource(first["terminal_id"]))["retention_scope"] == "thread"
     assert "/bin/sh -c pwd" in str(client.writes[0]["data"])
     assert "cd --" not in str(client.writes[0]["data"])
     assert second["cwd_relative"] == "."
-    assert client.terminals[second["terminal_id"]]["cwd"] == str(workspace_root)
+    assert client.created_cwds[second["terminal_id"]] == str(workspace_root)
+    assert (await terminal_env.owner.get_resource(second["terminal_id"]))["retention_scope"] == "workspace"
+
+
+@pytest.mark.asyncio
+async def test_exec_command_requires_trusted_thread_binding_before_create(terminal_env: TerminalEnvironment) -> None:
+    client = terminal_env.client
+    tool = create_exec_command_tool(
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
+    )
+
+    terminal_env.context.thread_binding = None
+    with pytest.raises(RuntimeError, match="ThreadRuntimeBinding"):
+        await tool.ainvoke({"cmd": "pwd"})
+
+    assert client.next_id == 1
 
 
 def test_resolves_relative_workdir_once_against_workspace_root(tmp_path: Path) -> None:
@@ -297,18 +393,21 @@ def test_resolve_terminal_workdir_honors_absolute_path_outside_workspace(
 
 
 @pytest.mark.asyncio
-async def test_write_stdin_uses_model_session_id_as_terminal_id() -> None:
-    client = _FakeTerminalClient()
-    existing = await client.create_terminal(
-        session_id="session_1",
+async def test_write_stdin_uses_model_session_id_as_terminal_id(terminal_env: TerminalEnvironment) -> None:
+    client = terminal_env.client
+    existing = await terminal_env.owner.create_terminal(
+        session_id=SESSION_A,
+        thread_id=SOURCE_THREAD_ID,
+        retention_scope="thread",
         title="user terminal",
+        holder_id="request:terminal-setup", operation_id="terminal-setup",
     )
     existing["last_command"] = "read value"
     existing["last_command_status"] = "running"
-    client.terminals[str(existing["terminal_id"])] = existing
+    client.terminals[str(existing["terminal_id"])].update({"last_command": "read value", "last_command_status": "running"})
     tool = create_write_stdin_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
 
     result = await tool.ainvoke(
@@ -327,11 +426,12 @@ async def test_write_stdin_uses_model_session_id_as_terminal_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_stdin_returns_output_generated_between_tool_calls() -> None:
-    client = _FakeTerminalClient(complete_commands=False)
+async def test_write_stdin_returns_output_generated_between_tool_calls(terminal_env: TerminalEnvironment) -> None:
+    client = terminal_env.client
+    client.complete_commands = False
     exec_tool = create_exec_command_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
     first = await exec_tool.ainvoke({"cmd": "long task", "yield_time_ms": 1})
     terminal_id = first["session_id"]
@@ -341,8 +441,8 @@ async def test_write_stdin_returns_output_generated_between_tool_calls() -> None
     terminal["last_command_status"] = "completed"
     terminal["last_command_exit_code"] = 0
     write_tool = create_write_stdin_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
 
     completed = await write_tool.ainvoke({"session_id": terminal_id})
@@ -353,10 +453,10 @@ async def test_write_stdin_returns_output_generated_between_tool_calls() -> None
     assert client.terminals[terminal_id]["status"] == "deleted"
 
 
-def test_write_stdin_schema_uses_trained_session_id_parameter() -> None:
+def test_write_stdin_schema_uses_trained_session_id_parameter(terminal_env: TerminalEnvironment) -> None:
     tool = create_write_stdin_tool(
-        session_id="session_1",
-        terminal_client=_FakeTerminalClient(),  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
 
     schema = tool.args_schema.model_json_schema()
@@ -371,17 +471,28 @@ def test_write_stdin_schema_uses_trained_session_id_parameter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_extension_tools_are_scoped_to_owner_session() -> None:
-    client = _FakeTerminalClient()
-    owned = await client.create_terminal(session_id="session_1", title="owned")
-    await client.create_terminal(session_id="session_2", title="foreign")
+async def test_terminal_extension_tools_are_scoped_to_owner_session(terminal_env: TerminalEnvironment) -> None:
+    owned = await terminal_env.owner.create_terminal(
+        session_id=SESSION_A,
+        thread_id=SOURCE_THREAD_ID,
+        retention_scope="thread",
+        title="owned",
+        holder_id="request:terminal-setup", operation_id="terminal-setup",
+    )
+    await terminal_env.owner.create_terminal(
+        session_id=SESSION_B,
+        thread_id=THREAD_B,
+        retention_scope="thread",
+        title="foreign",
+        holder_id="request:terminal-setup", operation_id="terminal-setup",
+    )
     list_tool = create_list_terminal_sessions_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
     kill_tool = create_kill_terminal_tool(
-        session_id="session_1",
-        terminal_client=client,  # type: ignore[arg-type]
+        session_id=SESSION_A,
+        terminal_owner=terminal_env.owner, invocation_context=terminal_env.context,
     )
 
     listed = await list_tool.ainvoke({})

@@ -11,6 +11,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.core.session_catalog_store import validate_thread_id
 from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
     reset_current_turn_execution_scope,
@@ -26,8 +27,8 @@ class ThreadRuntimeBinding:
     """Agent 运行时绑定的精确 SessionThread 归属。
 
     归属只能由 Agent 后端在装配时提供，模型参数和工具 schema 都不携带它。
-    调试等按 SessionThread 隔离的扩展工具通过该绑定把精确 owner 传给服务层，
-    不再依赖服务层“裸 session 等价 main”的隐式归一。
+    调试等按 SessionThread 隔离的扩展工具通过该绑定把 canonical owner 传给服务层，
+    不再接受逻辑 main 或 Session ID 作为 thread_id。
     """
 
     session_id: str
@@ -36,8 +37,7 @@ class ThreadRuntimeBinding:
     def __post_init__(self) -> None:
         if not self.session_id.strip():
             raise ValueError("ThreadRuntimeBinding.session_id 不能为空")
-        if not self.thread_id.strip():
-            raise ValueError("ThreadRuntimeBinding.thread_id 不能为空")
+        validate_thread_id(self.thread_id)
 
 
 class ToolInvocationContext:

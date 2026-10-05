@@ -60,7 +60,9 @@ def verify_prepared_detail_upgrade(
         if parsed != record or expiry_time(manifest["created_at"]) is None:
             raise ValueError("暂存 manifest 与预期 record 不一致")
         stage = "session-key-required"
-        session_key = key_store.get(record.session_id, create=False)
+        session_key = key_store.get(
+            record.session_id, record.thread_id, create=False
+        )
         stage = "prepared-authentication"
         payload = backend.decrypt(protected_bytes, record=record)
         require_protected_metadata(payload, record)

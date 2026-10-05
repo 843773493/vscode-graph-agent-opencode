@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.services.infrastructure.rollout_context.assembly.detail_identity import (
+    detail_ref_key,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
     DetailUnavailableError,
@@ -31,18 +36,77 @@ class ForkDetailArtifact:
     protected_bytes: bytes | None = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ForkDetailSourceSnapshot:
+    """已在 source guard 内认证并冻结的 detail 正文。"""
+
+    source_record: DetailRecord = field(repr=False)
+    value_bytes: bytes | None = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_record, DetailRecord):
+            raise TypeError("fork detail source snapshot 必须绑定 DetailRecord")
+        if self.value_bytes is not None:
+            if type(self.value_bytes) is not bytes:
+                raise TypeError("fork detail snapshot 正文必须是 bytes 或 None")
+            value = json.loads(self.value_bytes)
+            if not isinstance(value, dict):
+                raise ValueError("fork detail snapshot value 必须是 JSON object")
+
+
 class ForkDetailCapability:
     """只由 Saver 显式取得；不接受旧 record/locator，不发布文件。"""
 
     def __init__(
-        self, store: ContextPlanDetailStore, backend: ProtectedDetailBackend | None
+        self,
+        store: ContextPlanDetailStore,
+        backend: ProtectedDetailBackend | None,
+        source_snapshots: tuple[ForkDetailSourceSnapshot, ...] | None = None,
     ) -> None:
         self._store = store
         self._backend = backend
+        self._source_snapshots = (
+            None
+            if source_snapshots is None
+            else {
+                detail_ref_key(snapshot.source_record.detail_ref): snapshot
+                for snapshot in source_snapshots
+            }
+        )
+        if self._source_snapshots is not None and len(self._source_snapshots) != len(
+            source_snapshots
+        ):
+            raise ValueError("fork detail snapshot 包含重复的 typed identity")
 
     def require_protected_key(self) -> None:
         if self._backend is None:
             raise DetailUnavailableError("detail-forbidden: protected fork 未注入 key")
+
+    def capture_source_detail(
+        self,
+        *,
+        source_record: DetailRecord,
+    ) -> ForkDetailSourceSnapshot:
+        """在 source 仍受保护时完成认证，后续物化不得再读 source。"""
+        if not isinstance(source_record, DetailRecord):
+            raise TypeError("fork detail snapshot 必须使用 typed record")
+        try:
+            value = self._store.read(
+                session_id=source_record.session_id,
+                thread_id=source_record.thread_id,
+                record=source_record,
+                include_sensitive=source_record.sensitive,
+            )
+        except (RuntimeError, ValueError, TypeError, OSError):
+            if source_record.required:
+                raise DetailUnavailableError(
+                    "detail-unavailable: fork source authentication/retention failed"
+                ) from None
+            return ForkDetailSourceSnapshot(source_record, None)
+        return ForkDetailSourceSnapshot(
+            source_record,
+            canonical_json_bytes(value),
+        )
 
     def prepare_detail(
         self,
@@ -50,6 +114,7 @@ class ForkDetailCapability:
         source_record: DetailRecord,
         target_ref: DetailRef,
         target_session_key: bytes,
+        source_snapshot: ForkDetailSourceSnapshot | None = None,
     ) -> ForkDetailArtifact:
         if not isinstance(source_record, DetailRecord) or not isinstance(
             target_ref, DetailRef
@@ -68,20 +133,29 @@ class ForkDetailCapability:
             raise ValueError("fork target session digest key 必须为 32 bytes")
         if source_record.sensitive:
             self.require_protected_key()
-        # 普通 typed read 是唯一源认证链，涵盖 AES AAD、session HMAC、marker、长度。
-        # 异常在 except 外重抛，避免底层解析异常携带敏感原文/cause/context。
-        failed = False
-        try:
-            value = self._store.read(
-                session_id=source_record.session_id,
-                record=source_record,
-                include_sensitive=source_record.sensitive,
+        if source_snapshot is None and self._source_snapshots is not None:
+            source_snapshot = self._source_snapshots.get(
+                detail_ref_key(source_record.detail_ref)
             )
-        except (RuntimeError, ValueError, TypeError, OSError):
-            failed = True
-        if failed:
+            if source_snapshot is None:
+                raise DetailUnavailableError(
+                    "source-mismatch: fork source snapshot 缺少 detail identity"
+                )
+        frozen_source = source_snapshot or self.capture_source_detail(
+            source_record=source_record
+        )
+        if frozen_source.source_record != source_record:
+            raise DetailUnavailableError(
+                "source-mismatch: fork detail snapshot 与 registry record 不一致"
+            )
+        if frozen_source.value_bytes is None:
             raise DetailUnavailableError(
                 "detail-unavailable: fork source authentication/retention failed"
+            )
+        value = json.loads(frozen_source.value_bytes)
+        if not isinstance(value, dict):
+            raise DetailUnavailableError(
+                "source-mismatch: fork detail snapshot value 不是 JSON object"
             )
         body = value["detail"]
         marker, digest = (body, None)

@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { NodeDebugState } from "../../types/backend";
 import { resolveNodeDebugSourceSelection } from "./nodeDebugViewState";
 
+const mainThreadId = "thr_00000000700070008000000000000001";
+
 function state(overrides: Partial<NodeDebugState> = {}): NodeDebugState {
   return {
     session_id: "ses_debug_view",
-    thread_id: "main",
+    thread_id: mainThreadId,
     status: "idle",
     configurations: [],
     args: [],

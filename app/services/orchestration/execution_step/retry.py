@@ -1,10 +1,9 @@
-"""Agent step 的 runtime build 与 retry/reminder orchestration owner。"""
+"""Agent step 的 retry/reminder orchestration owner。"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,12 +14,12 @@ from app.services.orchestration.agent_stream_helpers import (
     unwrap_json_string_tool_result,
 )
 from app.services.orchestration.event_stream.contracts import (
+    AgentEventSource,
     AgentEventStreamResult,
 )
 from app.services.orchestration.event_stream.processor import (
     process_agent_event_stream,
 )
-from app.services.orchestration.execution_step.ports import StepAgentFactory
 from app.services.orchestration.execution_step.reminders import (
     build_delegated_report_retry_reminder as _build_delegated_report_retry_reminder,
 )
@@ -57,9 +56,10 @@ class StepAgentRetryResult:
 
 async def run_agent_with_retries(
     *,
-    build_agent: StepAgentFactory,
+    agent: AgentEventSource,
     session_id: str,
-    effective_job_id: str,
+    job_id: str,
+    turn_id: str | None,
     resolved_agent_id: str,
     config: dict[str, Any],
     next_input_messages: list[Any],
@@ -78,39 +78,19 @@ async def run_agent_with_retries(
     requires_session_question_reply: bool,
     question_sender_session_id: str | None,
     question_communication_id: str | None,
-    execution_overrides: Mapping[str, object],
-    model_visibility_overrides: Mapping[str, object],
-    preferred_provider_id: str | None,
-    include_team_tools: bool,
 ) -> StepAgentRetryResult:
 
     logger = logging.getLogger(__name__)
 
     logger.info(
-        "[agent_execution_service] agent runtime build begin: job_id=%s",
-        effective_job_id,
-    )
-
-    # runner 的 snapshot context 随 asyncio.to_thread 传播到唯一 Agent factory。
-    agent = await asyncio.to_thread(
-        build_agent,
-        session_id=session_id,
-        agent_id=resolved_agent_id,
-        execution_overrides=execution_overrides,
-        model_visibility_overrides=model_visibility_overrides,
-        preferred_provider_id=preferred_provider_id,
-        include_team_tools=include_team_tools,
-    )
-
-    logger.info(
         "[agent_execution_service] agent runtime ready: job_id=%s",
-        effective_job_id,
+        job_id,
     )
     if progress_reporter is not None:
         progress_reporter("agent_runtime_ready")
     logger.info(
         "[agent_execution_service] agent loop ready: job_id=%s",
-        effective_job_id,
+        job_id,
     )
     if progress_reporter is not None:
         progress_reporter("agent_loop_ready")
@@ -126,14 +106,17 @@ async def run_agent_with_retries(
             input_payload={"messages": next_input_messages},
             config=config,
             session_id=session_id,
-            turn_id=effective_job_id,
+            job_id=job_id,
+            turn_id=turn_id,
             agent_id=resolved_agent_id,
             custom_tool_skill_sources=custom_tool_skill_sources,
             publish=publish,
             session_changes_service=session_changes_service,
             workspace_root=workspace_root,
             message_stream_runtime=message_stream_runtime,
-            cancellation_signal=turn_scope.cancellation_signal,
+            cancellation_signal=(
+                turn_scope.cancellation_signal if turn_scope is not None else None
+            ),
             execution_scope=turn_scope,
             model_timeout_seconds=model_timeout_seconds,
             progress_reporter=progress_reporter,
@@ -156,7 +139,7 @@ async def run_agent_with_retries(
                 "消息流规范化文本与 AgentLoop 最终聚合文本不一致: "
                 "job_id=%s model_call_id=%s normalized_length=%s "
                 "aggregated_length=%s",
-                effective_job_id,
+                job_id,
                 message_stream_runtime.current_model_call_id,
                 len(normalized_final_text),
                 len(stream_result.final_text),
@@ -199,7 +182,7 @@ async def run_agent_with_retries(
             if custom_tool_response_retries > CUSTOM_TOOL_RESPONSE_RETRY_LIMIT:
                 raise RuntimeError(
                     "Agent 返回了最终文本，但没有执行用户请求中的自定义扩展工具。"
-                    f" session_id={session_id} job_id={effective_job_id} "
+                    f" session_id={session_id} job_id={job_id} "
                     f"missing_tools={sorted(missing_custom_tool_names)} "
                     f"retry_limit={CUSTOM_TOOL_RESPONSE_RETRY_LIMIT}"
                 )
@@ -211,7 +194,7 @@ async def run_agent_with_retries(
             logger.warning(
                 "[agent_execution_service] custom tool requested but not executed, retrying: "
                 "job_id=%s missing_tools=%s attempt=%s",
-                effective_job_id,
+                job_id,
                 sorted(missing_custom_tool_names),
                 custom_tool_response_retries,
             )
@@ -224,7 +207,7 @@ async def run_agent_with_retries(
             )
             next_input_messages = [
                 _internal_retry_human_message(
-                    message_id=f"{effective_job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
+                    message_id=f"{job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
                     kind="missing_custom_tool_retry",
                     reminder=reminder,
                     metadata={
@@ -242,7 +225,7 @@ async def run_agent_with_retries(
                 raise RuntimeError(
                     "委派子 Agent 返回了普通最终文本，但没有通过 "
                     "send_message_to_session 向父会话报告。"
-                    f" session_id={session_id} job_id={effective_job_id} "
+                    f" session_id={session_id} job_id={job_id} "
                     f"parent_session_id={parent_session_id} "
                     f"retry_limit={DELEGATED_REPORT_RETRY_LIMIT}"
                 )
@@ -261,8 +244,7 @@ async def run_agent_with_retries(
             next_input_messages = [
                 _internal_retry_human_message(
                     message_id=(
-                        f"{effective_job_id}:delegated_report_retry:"
-                        f"{delegated_report_retries}"
+                        f"{job_id}:delegated_report_retry:{delegated_report_retries}"
                     ),
                     kind="delegated_report_retry",
                     reminder=reminder,
@@ -281,7 +263,7 @@ async def run_agent_with_retries(
                 raise RuntimeError(
                     "Agent 收到跨会话问题后返回了普通文本，但没有通过 "
                     "send_message_to_session 定向回复。"
-                    f" session_id={session_id} job_id={effective_job_id} "
+                    f" session_id={session_id} job_id={job_id} "
                     f"sender_session_id={question_sender_session_id} "
                     f"communication_id={question_communication_id} "
                     f"retry_limit={DELEGATED_REPORT_RETRY_LIMIT}"
@@ -304,7 +286,7 @@ async def run_agent_with_retries(
             next_input_messages = [
                 _internal_retry_human_message(
                     message_id=(
-                        f"{effective_job_id}:session_question_reply_retry:"
+                        f"{job_id}:session_question_reply_retry:"
                         f"{delegated_report_retries}"
                     ),
                     kind="session_question_reply_retry",
@@ -323,7 +305,7 @@ async def run_agent_with_retries(
         if empty_response_retries > EMPTY_RESPONSE_RETRY_LIMIT:
             raise RuntimeError(
                 "Agent 连续返回空的用户可见回复。"
-                f" session_id={session_id} job_id={effective_job_id} "
+                f" session_id={session_id} job_id={job_id} "
                 f"retry_limit={EMPTY_RESPONSE_RETRY_LIMIT}"
             )
 
@@ -331,7 +313,7 @@ async def run_agent_with_retries(
         logger.warning(
             "[agent_execution_service] empty visible response, retrying: "
             "job_id=%s attempt=%s",
-            effective_job_id,
+            job_id,
             empty_response_retries,
         )
         await publish(
@@ -343,7 +325,7 @@ async def run_agent_with_retries(
         )
         next_input_messages = [
             _internal_retry_human_message(
-                message_id=f"{effective_job_id}:empty_response_retry:{empty_response_retries}",
+                message_id=f"{job_id}:empty_response_retry:{empty_response_retries}",
                 kind="empty_response_retry",
                 reminder=reminder,
                 metadata={

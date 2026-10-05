@@ -23,6 +23,7 @@ export default function ChildThreadPanel({
   error,
   loadedAt,
   sessionId,
+  mainThreadId,
   activeThreadId,
   onRefresh,
   onSelectThread,
@@ -33,8 +34,10 @@ export default function ChildThreadPanel({
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
+  /** 当前会话在权威 catalog 中解析出的 canonical main thread ID。 */
+  mainThreadId: string | null;
   /** 当前调试 owner 的 thread id。 */
-  activeThreadId: string;
+  activeThreadId: string | null;
   onRefresh: () => void;
   onSelectThread: (threadId: string) => void;
 }) {
@@ -120,13 +123,16 @@ export default function ChildThreadPanel({
             <article
               className="child-thread-item child-thread-owner-item"
               role="listitem"
-              data-thread-id="main"
+              data-thread-id={mainThreadId ?? undefined}
             >
               <div className="child-thread-row">
                 <button
                   type="button"
                   className="child-thread-main"
-                  onClick={() => onSelectThread("main")}
+                  onClick={() => {
+                    if (mainThreadId) onSelectThread(mainThreadId);
+                  }}
+                  disabled={!mainThreadId}
                   title="切换调试 owner：主线程"
                   aria-label="切换到主线程调试"
                 >
@@ -139,7 +145,9 @@ export default function ChildThreadPanel({
                     <small>main · 当前会话默认调试 owner</small>
                   </span>
                   <span className="child-thread-status child-thread-status-running">
-                    {activeThreadId === "main" ? "当前调试" : "主线程"}
+                    {mainThreadId !== null && mainThreadId === activeThreadId
+                      ? "当前调试"
+                      : "主线程"}
                   </span>
                 </button>
               </div>

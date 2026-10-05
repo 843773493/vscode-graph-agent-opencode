@@ -28,6 +28,10 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueResultDTO,
     NavigationMutationIntentDTO,
 )
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
@@ -74,6 +78,14 @@ class _SessionService:
         payload["title"] = self.path_resolver.get_node(session_id).name
         payload.setdefault("workspace_id", "ws-test")
         payload.setdefault("current_agent_id", "test-agent")
+        payload.update(
+            resource_identity=session_resource_identity(
+                payload["workspace_id"],
+                session_id,
+            ),
+            vrn=session_resource_vrn(payload["workspace_id"], session_id),
+            scope="workspace",
+        )
         return SessionDTO.model_validate(payload)
 
 
@@ -1264,3 +1276,89 @@ async def test_delete_mark_commits_before_physical_drain_and_recovers_settlement
     finally:
         delete_service._drain = original_drain
         await stack.service.stop()
+
+def test_queue_enqueue_changes_backup_generation_not_navigation_revision(
+    navigation_workspace: Path,
+) -> None:
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    intent = stack.create_folder_intent(
+        seed="queue_without_node_change", sequence=1, name="尚未执行"
+    )
+    before_generation = stack.store.current_generation()
+    before_revision = stack.resolver.revision
+
+    _enqueue_without_worker(stack, [intent])
+
+    assert stack.store.current_generation() == before_generation + 1
+    assert stack.resolver.revision == before_revision
+
+async def test_create_folder_intent_uses_durable_queue(
+    navigation_workspace: Path,
+) -> None:
+    """公开 folder intent 被接受并由 durable worker 提交。"""
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    intent = stack.create_folder_intent(
+        seed="public_create_folder", sequence=1, name="队列目录"
+    )
+    accepted = await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
+    )
+    assert accepted.accepted_count == 1
+    assert accepted.receipts[0].operation_id == intent.client_operation_id
+    assert accepted.receipts[0].state == "queued"
+
+    [terminal] = await stack.settle(intent.client_operation_id)
+    assert terminal.state == "committed"
+    created_id = stack.node_id(intent.client_operation_id)
+    with stack.store.read_transaction() as connection:
+        rows = connection.execute(
+            "SELECT operation_id, kind, state FROM navigation_mutation_records"
+        ).fetchall()
+    assert [(row["kind"], row["state"]) for row in rows] == [
+        ("create_folder", "committed")
+    ]
+    assert stack.resolver.get_node(created_id).kind == "folder"
+
+async def test_delete_receipt_uses_revision_after_all_node_updates(
+    navigation_workspace: Path,
+) -> None:
+    """递归删除回执读取同一 mark 事务中多行触发器推进后的实际 revision。"""
+    stack = _Stack(navigation_workspace / ".boxteam" / "sessions")
+    root_id: str | None = None
+    parent_node_id: str | None = None
+    for sequence, name in enumerate(("根", "子", "孙"), start=1):
+        intent = stack.create_folder_intent(
+            seed=f"multi_delete_{sequence}",
+            sequence=sequence,
+            name=name,
+            parent_node_id=parent_node_id,
+        )
+        await stack.enqueue(
+            NavigationMutationEnqueueRequest(intents=[intent]), stack.scope
+        )
+        await stack.settle(intent.client_operation_id)
+        created_node_id = stack.node_id(intent.client_operation_id)
+        if root_id is None:
+            root_id = created_node_id
+        parent_node_id = created_node_id
+
+    assert root_id is not None
+    before_delete = stack.resolver.revision
+    deletion = NavigationMutationIntentDTO(
+        client_operation_id=operation_id("multi_node_delete"),
+        client_sequence=1,
+        kind="delete_folder",
+        base_catalog_revision=before_delete,
+        target_node_id=root_id,
+        recursive=True,
+    )
+    await stack.enqueue(
+        NavigationMutationEnqueueRequest(intents=[deletion]), stack.scope
+    )
+    record = await stack.service.await_terminal(
+        deletion.client_operation_id, stack.scope
+    )
+
+    assert record.state == "committed"
+    assert record.committed_catalog_revision == before_delete + 3
+    assert stack.resolver.revision == before_delete + 6

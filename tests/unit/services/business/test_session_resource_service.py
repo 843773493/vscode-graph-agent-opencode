@@ -4,14 +4,12 @@ import asyncio
 import json
 
 import pytest
-from langchain_core.messages import HumanMessage
 
 from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.checkpoint_config import build_checkpoint_config
+from app.domain.itemized.enums import PayloadKind
 from app.services.business.message_service import MessageService
 from app.services.business.session_resource_actions import (
     browser_available_actions,
-    terminal_available_actions,
 )
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
@@ -32,17 +30,27 @@ from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from tests.support.message_service import build_message_service
 
 
-class FakeTerminalManagerClient:
+def _terminal_snapshot(record: dict[str, object]) -> dict[str, object]:
+    ref = {"session_id": record["session_id"], "thread_id": "thr_018f0000000070008000000000000001"}
+    return {
+        "retention_scope": "thread", "source_thread": ref, "thread_associations": [ref],
+        "owner_revision": 1, "reconciliation_status": "verified", "reclaim_at": None,
+        "error": None, **record,
+    }
+
+
+class FakeTerminalResourceOwner:
     def __init__(self, terminals: list[dict[str, object]] | None = None) -> None:
-        self.terminals = terminals or []
+        self.terminals = [_terminal_snapshot(record) for record in terminals or []]
         self.deleted_terminal_ids: list[str] = []
         self.killed_terminal_ids: list[str] = []
         self.listed_session_ids: list[str | None] = []
+        self.cleaned_session_ids: list[str] = []
 
     def attach_url(self, terminal_id: str) -> str:
         return f"http://127.0.0.1:8013/?terminalId={terminal_id}"
 
-    async def list_terminals(
+    async def list_resources(
         self,
         *,
         session_id: str | None = None,
@@ -51,22 +59,27 @@ class FakeTerminalManagerClient:
         return [
             terminal
             for terminal in self.terminals
-            if session_id is None or terminal.get("session_id") == session_id
+            if session_id is None or any(
+                ref["session_id"] == session_id for ref in terminal["thread_associations"]
+            )
         ]
 
-    async def delete_terminal(self, terminal_id: str) -> dict[str, object]:
-        self.deleted_terminal_ids.append(terminal_id)
-        return {"deleted": True, "terminal_id": terminal_id}
+    async def get_resource(self, terminal_id: str) -> dict[str, object]:
+        return next(record for record in self.terminals if record["terminal_id"] == terminal_id)
 
-    async def kill_terminal(self, terminal_id: str) -> dict[str, object]:
-        self.killed_terminal_ids.append(terminal_id)
-        return {
-            "terminal": {
-                "terminal_id": terminal_id,
-                "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
-                "status": "cancelled",
-            }
-        }
+    async def command(
+        self, resource_id: str, *, action: str, expected_revision: int,
+        holder_id: str, operation_id: str,
+    ) -> dict[str, object]:
+        assert action == "stop"
+        assert holder_id == f"request:{operation_id}"
+        self.killed_terminal_ids.append(resource_id)
+        return {**await self.get_resource(resource_id), "status": "terminated"}
+
+    async def cleanup_session(self, session_id: str) -> int:
+        self.cleaned_session_ids.append(session_id)
+        self.deleted_terminal_ids.extend(str(record["terminal_id"]) for record in self.terminals)
+        return len(self.terminals)
 
 
 class FakeBrowserManagerClient:
@@ -122,15 +135,6 @@ class FakeBrowserManagerClient:
         }
 
 
-class FakeHistoricalTerminalRecordReader:
-    def read_records(
-        self,
-        *,
-        session_id: str,
-        active_terminals: list[dict[str, object]],
-        agent_state_records: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        return []
 
 
 class FakeMessageService:
@@ -141,12 +145,6 @@ class FakeMessageService:
         return []
 
 
-class FailingHistoryMessageService(FakeMessageService):
-    async def list_agent_state_records(
-        self,
-        session_id: str,
-    ) -> list[dict[str, object]]:
-        raise AssertionError("工作区资源快速列表不应读取 Agent 历史状态")
 
 
 class FakeSessionService:
@@ -171,7 +169,7 @@ def _resource_mapper() -> SessionResourceMapper:
 def _provider_registry(
     *,
     task_registry: BackgroundTaskRegistry,
-    terminal_manager: FakeTerminalManagerClient,
+    terminal_manager: FakeTerminalResourceOwner,
     browser_manager: FakeBrowserManagerClient,
     message_service: FakeMessageService | MessageService,
 ) -> SessionResourceProviderRegistry:
@@ -183,9 +181,7 @@ def _provider_registry(
                 resource_mapper=mapper,
             ),
             TerminalResourceProvider(
-                terminal_manager=terminal_manager,
-                historical_reader=FakeHistoricalTerminalRecordReader(),
-                message_service=message_service,
+                terminal_owner=terminal_manager,
                 resource_mapper=mapper,
             ),
             BrowserResourceProvider(
@@ -206,8 +202,8 @@ def test_deleted_terminal_resource_explains_historical_status():
         "ended_at": "2026-07-05T01:02:05+00:00",
     }
     resource = _resource_mapper().terminal_to_resource(
-        terminal,
-        available_actions=terminal_available_actions(str(terminal["status"])),
+        _terminal_snapshot(terminal),
+        available_actions=[],
     )
 
     assert resource.status == "deleted"
@@ -250,8 +246,8 @@ def test_terminal_resource_projection_excludes_real_path():
         "cwd_relative": "app",
     }
     resource = _resource_mapper().terminal_to_resource(
-        terminal,
-        available_actions=terminal_available_actions(str(terminal["status"])),
+        _terminal_snapshot(terminal),
+        available_actions=[],
     )
 
     assert resource.metadata["cwd_relative"] == "app"
@@ -325,11 +321,9 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
         "status": "terminated",
     }
     provider = TerminalResourceProvider(
-        terminal_manager=FakeTerminalManagerClient(
+        terminal_owner=FakeTerminalResourceOwner(
             terminals=[terminal, terminated_terminal]
         ),
-        historical_reader=FakeHistoricalTerminalRecordReader(),
-        message_service=FailingHistoryMessageService(),
         resource_mapper=_resource_mapper(),
     )
 
@@ -337,14 +331,14 @@ async def test_terminal_fast_listing_skips_slow_agent_history() -> None:
 
     assert [resource.resource_id for resource in resources] == ["term_live"]
     assert resources[0].status == "running"
-    assert provider._terminal_manager.listed_session_ids == [
+    assert provider._owner.listed_session_ids == [
         "ses_019b94653e71714b8d406f83ab3d2b3b"
     ]
 
 
 @pytest.mark.asyncio
 async def test_terminal_control_rejects_resource_outside_session_owner_list() -> None:
-    terminal_manager = FakeTerminalManagerClient(
+    terminal_manager = FakeTerminalResourceOwner(
         terminals=[
             {
                 "terminal_id": "term_other_session",
@@ -354,21 +348,20 @@ async def test_terminal_control_rejects_resource_outside_session_owner_list() ->
         ]
     )
     provider = TerminalResourceProvider(
-        terminal_manager=terminal_manager,
-        historical_reader=FakeHistoricalTerminalRecordReader(),
-        message_service=FakeMessageService(),
+        terminal_owner=terminal_manager,
         resource_mapper=_resource_mapper(),
     )
 
     for action in ("cancel", "delete"):
-        with pytest.raises(ValueError, match="不属于当前 session"):
+        with pytest.raises(ValueError, match="不属于当前 Session"):
             await provider.control(
                 session_id="ses_current",
                 resource_id="term_other_session",
                 action=action,
+                operation_id="request-resource-test",
             )
 
-    assert terminal_manager.listed_session_ids == ["ses_current", "ses_current"]
+    assert terminal_manager.listed_session_ids == []
     assert terminal_manager.killed_terminal_ids == []
     assert terminal_manager.deleted_terminal_ids == []
 
@@ -422,6 +415,7 @@ async def test_browser_provider_resumes_cold_recycled_browser():
         session_id="ses_019b94653e71714b8d406f83ab3d2b3b",
         resource_id="browser_cold",
         action="resume",
+        operation_id="request-resource-test",
     )
 
     assert result.status == "running"
@@ -457,7 +451,7 @@ async def test_browser_provider_excludes_deleted_records(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalManagerClient(),
+            terminal_manager=FakeTerminalResourceOwner(),
             browser_manager=browser_manager,
             message_service=FakeMessageService(),
         ),
@@ -494,7 +488,7 @@ async def test_list_includes_closed_background_task_history(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalManagerClient(),
+            terminal_manager=FakeTerminalResourceOwner(),
             browser_manager=FakeBrowserManagerClient(),
             message_service=FakeMessageService(),
         ),
@@ -534,7 +528,7 @@ async def test_list_excludes_deleted_background_task_history(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalManagerClient(),
+            terminal_manager=FakeTerminalResourceOwner(),
             browser_manager=FakeBrowserManagerClient(),
             message_service=FakeMessageService(),
         ),
@@ -565,7 +559,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         task_name="emit_system_time_messages",
         runner=long_running_task,
     )
-    terminal_client = FakeTerminalManagerClient(
+    terminal_client = FakeTerminalResourceOwner(
         terminals=[
             {
                 "terminal_id": "term_cleanup",
@@ -600,7 +594,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
     assert job_service.deleted_session_id == session_id
     assert registry.list_handles(session_id) == []
     assert terminal_client.deleted_terminal_ids == ["term_cleanup"]
-    assert terminal_client.listed_session_ids == [session_id]
+    assert terminal_client.cleaned_session_ids == [session_id]
     assert browser_client.deleted_browser_ids == ["browser_cleanup"]
     assert handle.status == "deleted"
 
@@ -614,21 +608,13 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=sessions_dir)
-    config = build_checkpoint_config(session_id)
-    await saver.aput(
-        config,
-        {
-            "channel_values": {
-                "messages": [
-                    HumanMessage(content="请监控另一个会话的最终回复"),
-                ]
-            },
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-cancel-monitor",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
+    owner = saver.resolve_main_thread_owner(session_id)
+    saver.accept_turn(
+        session_id, thread_id=owner.thread_id, accepted_ingress_id="request-cancel-monitor",
+        acceptance_idempotency_key="acceptance-cancel-monitor", job_id="job-cancel-monitor",
+        admission_idempotency_key="admission-cancel-monitor", payload="请监控另一个会话的最终回复",
+        payload_kind=PayloadKind.TEXT, turn_id="turn-cancel-monitor",
+        root_item_id="item-cancel-monitor", initial_execution_id="execution-cancel-monitor",
     )
 
     registry = BackgroundTaskRegistry(
@@ -653,7 +639,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         job_service=FakeJobService(count=0),
         provider_registry=_provider_registry(
             task_registry=registry,
-            terminal_manager=FakeTerminalManagerClient(),
+            terminal_manager=FakeTerminalResourceOwner(),
             browser_manager=FakeBrowserManagerClient(),
             message_service=message_service,
         ),
@@ -664,6 +650,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         kind="background_task",
         resource_id=handle.task_id,
         action="cancel",
+        operation_id="request-resource-test",
     )
 
     assert result.status == "cancelled"

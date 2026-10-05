@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
@@ -35,7 +36,9 @@ class SessionHarness:
         self.session_id = f"ses_{create_uuid_hex()}"
         self.main_thread_id = f"thr_{create_uuid_hex()}"
         self.store = SessionControlStore(tmp_path / name / "session-control.sqlite")
-        self.store.initialize_main_thread(self.main_thread_id, DEFAULT_CREATED_AT)
+        self.store.initialize_main_thread(
+            self.main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         self.store.initialize_fence("active", 1)
         self.gate = SessionLifecycleGate(tmp_path)
         self.facade = CommunicationLedgerService(

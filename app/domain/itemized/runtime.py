@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import ControlOutcome, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import ITEM_STATUSES as _ITEM_STATUSES
 from app.domain.itemized.schema import PROTECTIONS as _PROTECTIONS
@@ -60,6 +60,8 @@ class TurnRecord:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionRecord:
+    session_id: str
+    thread_id: str
     execution_id: str
     turn_id: str
     attempt: int
@@ -67,6 +69,8 @@ class ExecutionRecord:
     resumed_from_execution_id: str | None = None
 
     def __post_init__(self) -> None:
+        _non_empty_string(self.session_id, "session_id")
+        _non_empty_string(self.thread_id, "thread_id")
         _non_empty_string(self.execution_id, "execution_id")
         _non_empty_string(self.turn_id, "turn_id")
         if (
@@ -81,6 +85,8 @@ class ExecutionRecord:
 
 @dataclass(frozen=True, slots=True)
 class ModelCallRecord:
+    session_id: str
+    thread_id: str
     model_call_id: str
     execution_id: str
     attempt: int
@@ -89,7 +95,13 @@ class ModelCallRecord:
     provider_request_id: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("model_call_id", "execution_id", "provider"):
+        for name in (
+            "session_id",
+            "thread_id",
+            "model_call_id",
+            "execution_id",
+            "provider",
+        ):
             _non_empty_string(getattr(self, name), name)
         if (
             not isinstance(self.attempt, int)
@@ -99,6 +111,36 @@ class ModelCallRecord:
             raise ItemSchemaError("model call attempt 必须是正整数")
         if self.outcome not in {value.value for value in ControlOutcome}:
             raise ItemSchemaError(f"未知 model_call outcome: {self.outcome}")
+
+
+@dataclass(frozen=True, slots=True)
+class TurnExecutionLink:
+    """在同一 SessionThread 内把 Turn 与 execution 绑定。"""
+
+    session_id: str
+    thread_id: str
+    turn_id: str
+    execution_id: str
+    execution_role: str
+    execution_ordinal: int
+    link_idempotency_key: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "session_id",
+            "thread_id",
+            "turn_id",
+            "execution_id",
+            "execution_role",
+            "link_idempotency_key",
+        ):
+            _non_empty_string(getattr(self, name), name)
+        if (
+            not isinstance(self.execution_ordinal, int)
+            or isinstance(self.execution_ordinal, bool)
+            or self.execution_ordinal <= 0
+        ):
+            raise ItemSchemaError("TurnExecutionLink.execution_ordinal 必须是正整数")
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,4 +227,11 @@ class ItemDraft:
             wire_role=self.wire_role,
         )
 
-__all__ = ["ExecutionRecord", "ItemDraft", "ModelCallRecord", "ProvenanceEdge", "TurnRecord"]
+__all__ = [
+    "ExecutionRecord",
+    "ItemDraft",
+    "ModelCallRecord",
+    "ProvenanceEdge",
+    "TurnExecutionLink",
+    "TurnRecord",
+]

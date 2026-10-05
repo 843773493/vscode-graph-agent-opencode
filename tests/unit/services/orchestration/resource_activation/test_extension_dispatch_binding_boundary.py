@@ -54,6 +54,7 @@ def _plan(tool_snapshot: list[dict[str, object]]) -> ContextRequestPlan:
     manifest_ref = ToolSetRef.from_tool_snapshot(
         snapshot_id="tool-set:boundary",
         session_id=SESSION_ID,
+        thread_id="main",
         plan_id=PLAN_ID,
         tools=tool_snapshot,
         source_revision="tool-rev:boundary",
@@ -72,6 +73,7 @@ def _plan(tool_snapshot: list[dict[str, object]]) -> ContextRequestPlan:
     )
     return ContextRequestPlan(
         session_id=SESSION_ID,
+        thread_id="main",
         plan_id=PLAN_ID,
         refs=(),
         tool_set_refs=(manifest_ref,),

@@ -11,6 +11,17 @@ from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.routes._shared import get_registry
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server import bootstrap
+from app.gateway.workspace_ids import build_managed_local_workspace_id
+
+
+@pytest.fixture(autouse=True)
+def _stub_workspace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bootstrap,
+        "resolve_backend_workspace_id",
+        lambda *_: "00000000-0000-4000-8000-000000000001",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -35,12 +46,6 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
         "no_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
-from app.gateway.server import bootstrap
-from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id,
-)
-
-
 def _local_target(workspace_id: str = "workspace-local") -> WorkspaceTarget:
     return WorkspaceTarget(
         workspace_id=workspace_id,
@@ -48,6 +53,7 @@ def _local_target(workspace_id: str = "workspace-local") -> WorkspaceTarget:
         root_path="/workspace/local",
         backend_url="http://127.0.0.1:18010",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
 
@@ -187,6 +193,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
             root_path=str(default_root),
             backend_url=backend_url,
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             removable=False,
             system_default=True,
         )
@@ -200,6 +207,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
             root_path=str(optional_root),
             backend_url="http://127.0.0.1:18110",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         activate=False,
@@ -216,7 +224,8 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
                 "workspace_api": backend_url,
                 "terminal_manager": "http://127.0.0.1:18012",
                 "browser_manager": "http://127.0.0.1:18015",
-            }
+            },
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
     monkeypatch.setattr(

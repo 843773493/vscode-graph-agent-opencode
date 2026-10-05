@@ -1,11 +1,16 @@
 import { useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
+  GatewayUserAccess,
   GatewayWorkspace,
   Session,
-  SessionCatalogNode,
   WorkspaceNavigationNode,
 } from "../../types/backend";
+import type {
+  SessionCatalogOutboxRuntime,
+  SessionCatalogOutboxSnapshot,
+} from "../../hooks/session/sessionCatalogOutboxRuntime";
+import type { CatalogProjectedNode } from "../../state/session/sessionCatalogProjection";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import SessionActivityIndicator from "./SessionActivityIndicator";
 import {
@@ -55,6 +60,9 @@ interface SessionResourceExplorerProps {
   ) => Promise<void>;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
+  sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
+  gatewayUserAccess?: GatewayUserAccess | null;
   onSelectSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   onStatusChange: (message: string) => void;
   onOpenWorkspaceMenu: (workspace: GatewayWorkspace, x: number, y: number) => void;
@@ -94,6 +102,9 @@ export default function SessionResourceExplorer({
   onSessionFolderDeleted,
   catalogSyncKeys,
   catalogRefreshVersions,
+  sessionCatalogOutboxRuntime,
+  sessionCatalogOutboxSnapshot,
+  gatewayUserAccess,
   onSelectSession,
   onStatusChange,
   onOpenWorkspaceMenu,
@@ -117,6 +128,7 @@ export default function SessionResourceExplorer({
     useState<Set<string>>(new Set());
   const explorer = useSessionResourceExplorer({
     apiPort,
+    workspaces,
     activeWorkspaceId,
     searchOpen,
     searchQuery,
@@ -125,6 +137,9 @@ export default function SessionResourceExplorer({
     catalogSyncKeys,
     catalogRefreshVersions,
     generatorResources,
+    sessionCatalogOutboxRuntime,
+    sessionCatalogOutboxSnapshot,
+    gatewayUserAccess,
   });
   const workspacesById = new Map(
     workspaces.map((workspace) => [workspace.workspace_id, workspace]),
@@ -351,7 +366,7 @@ export default function SessionResourceExplorer({
 
   const renderCatalogNode = (
     workspaceId: string,
-    node: SessionCatalogNode,
+    node: CatalogProjectedNode,
     depth: number,
   ): ReactNode => {
     const workspace = workspacesById.get(workspaceId);
@@ -496,6 +511,15 @@ export default function SessionResourceExplorer({
           >
             <span className={`codicon ${isFolder ? "codicon-folder" : "codicon-comment-discussion"}`} aria-hidden="true" />
             <span className="session-resource-label">{node.name}</span>
+            {node.pending_state !== null ? (
+              <span
+                className="session-resource-pending-state"
+                data-pending-state={node.pending_state}
+                title={`目录变更状态：${node.pending_state === "accepted" ? "已持久受理，等待提交" : node.pending_state}`}
+              >
+                {node.pending_state === "accepted" ? "等待提交" : "同步中"}
+              </span>
+            ) : null}
             {timePresentation ? (
               <time
                 className="session-resource-time"

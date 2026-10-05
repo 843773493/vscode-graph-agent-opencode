@@ -15,12 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import (
-    contribution_content_hash,
-)
-from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
     EpochReason,
@@ -32,6 +26,12 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_hash,
 )
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash.plan_hash import context_plan_hash
+from app.domain.itemized.hashing import (
+    contribution_content_hash,
+)
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
     resolve_contribution_for_ref,
@@ -42,7 +42,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -105,7 +104,9 @@ def _install_demo_snapshot(manager: ContextSourceManager, content: str) -> None:
     )
 
 
-def _create_session_node(root: Path, session_id: str, parent_node_id: str | None = None):
+def _create_session_node(
+    root: Path, session_id: str, parent_node_id: str | None = None
+):
     seed_catalog_session_bundle(
         root,
         session_id,
@@ -168,7 +169,8 @@ def _register(
 ) -> int:
     """经唯一 owner 注册；返回 registry 分配的 typed source_ordinal。"""
     saver.register_context_contribution(session_id, contribution)
-    for row in saver._storage.list_context_contributions(session_id):
+    thread_id = saver._storage.main_thread_id(session_id)
+    for row in saver._storage.list_context_contributions(session_id, thread_id):
         if row["contribution_id"] == contribution.contribution_id:
             ordinal = row["source_ordinal"]
             assert isinstance(ordinal, int) and not isinstance(ordinal, bool)
@@ -177,7 +179,8 @@ def _register(
 
 
 def _rows(saver: RolloutCheckpointSaver, session_id: str) -> list[dict]:
-    return list(saver._storage.list_context_contributions(session_id))
+    thread_id = saver._storage.main_thread_id(session_id)
+    return list(saver._storage.list_context_contributions(session_id, thread_id))
 
 
 # ---------------------------------------------------------------- 对抗 key
@@ -185,7 +188,9 @@ def _rows(saver: RolloutCheckpointSaver, session_id: str) -> list[dict]:
 
 class TestAdversarialControlKeys:
     def test_same_name_keys_do_not_change_plan_hash_or_registry_slot(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         clean = _contribution("contribution-clean", metadata={"source_ref": "c"})
         adversarial = _contribution(
@@ -198,12 +203,17 @@ class TestAdversarialControlKeys:
         ordinal_clean = _register(saver, MAIN_SESSION_ID, clean)
         assert ordinal_clean == 0
         plan_clean = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-1",
+            MAIN_SESSION_ID,
+            plan_id="plan-1",
         )
 
         # 同一 session 内只换 metadata：SQL 清理后经全新 owner（重启等价）
         # 重注册对抗孪生，typed 事实逐字段相同。
-        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(MAIN_SESSION_ID),
+            "",
+            session_id=MAIN_SESSION_ID,
+        ) as probe:
             database_path = probe.execute("PRAGMA database_list").fetchone()[2]
         tamper = sqlite3.connect(database_path)
         try:
@@ -216,7 +226,8 @@ class TestAdversarialControlKeys:
         # SQL 清理后重注册：registry slot 仍从 0 起且与清理前一致。
         assert ordinal_adversarial == ordinal_clean
         plan_adversarial = restarted.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-1",
+            MAIN_SESSION_ID,
+            plan_id="plan-1",
         )
         # metadata 是开放 provenance，不进入 plan hash preimage；typed 事实
         # 相同则 hash、selection、ordinal binding 全部一致。
@@ -230,7 +241,8 @@ class TestAdversarialControlKeys:
         ]
 
     def test_selection_only_flag_has_no_role_power(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # typed selection_role=direct 说它可独立候选：metadata 的 selection_only
         # 键不能把它降级为 manifest backing。
@@ -250,16 +262,22 @@ class TestAdversarialControlKeys:
         _register(saver, MAIN_SESSION_ID, overlay_without_flag)
 
         plan = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-2",
+            MAIN_SESSION_ID,
+            plan_id="plan-2",
         )
         ref_ids = {ref.ref_id for ref in plan.refs if ref.ref_type == "request_only"}
         assert "full-with-flag" in ref_ids
         assert "overlay:ov-1:base" not in ref_ids
 
-    def test_observation_extensions_are_inert_for_decisions(self) -> None:
+    def test_observation_extensions_are_inert_for_decisions(
+        self,
+        saver: RolloutCheckpointSaver,
+    ) -> None:
         owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=MAIN_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
         )
+
         def observation(**extensions: object) -> SourceObservation:
             return SourceObservation(
                 owner=owner,
@@ -282,13 +300,15 @@ class TestAdversarialControlKeys:
         assert clean.observation_id == adversarial.observation_id
         clean_delta = build_source_lifecycle_decision(clean, decision_kind="delta")
         adversarial_delta = build_source_lifecycle_decision(
-            adversarial, decision_kind="delta",
+            adversarial,
+            decision_kind="delta",
         )
         assert clean_delta == adversarial_delta
 
     def test_stable_prefix_inputs_are_typed_only(self) -> None:
         """stable prefix 的输入只有 typed 字段：metadata/_extensions 同名
         key 不改变 frame 字节与前缀 hash（A2 合同的联合锚定）。"""
+
         def frame(item_ref: AppendedItemRef) -> ProviderProfileItemFrame:
             return ProviderProfileItemFrame(
                 ordinal=1,
@@ -334,10 +354,16 @@ class TestMissingTypedFieldsFailClosed:
             ledger.add_contribution(_contribution("no-ordinal", source_ordinal=None))
 
     def test_restore_rejects_registry_row_with_null_ordinal(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         _register(saver, MAIN_SESSION_ID, _contribution("null-ordinal"))
-        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(MAIN_SESSION_ID),
+            "",
+            session_id=MAIN_SESSION_ID,
+        ) as probe:
             database_path = probe.execute("PRAGMA database_list").fetchone()[2]
         tamper = sqlite3.connect(database_path)
         try:
@@ -351,7 +377,8 @@ class TestMissingTypedFieldsFailClosed:
         restarted = _restarted(sessions_root)
         with pytest.raises((ValueError, RuntimeError), match="source_ordinal"):
             restarted.compose_committed_context_plan(
-                MAIN_SESSION_ID, plan_id="plan-3",
+                MAIN_SESSION_ID,
+                plan_id="plan-3",
             )
 
     def test_contribution_requires_identity_and_revision(self) -> None:
@@ -361,10 +388,13 @@ class TestMissingTypedFieldsFailClosed:
             replace(_contribution("ok", source_ordinal=0), source_revision="")
 
     def test_tracked_restore_without_revision_fails_closed(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=MAIN_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
         )
         manager = ContextSourceManager(owner=owner, control_state_port=saver)
         manager.register(
@@ -382,7 +412,11 @@ class TestMissingTypedFieldsFailClosed:
         batch = manager.prepare_pending()
         assert batch is not None
         manager.commit_model_call_pending(batch)
-        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(MAIN_SESSION_ID),
+            "",
+            session_id=MAIN_SESSION_ID,
+        ) as probe:
             database_path = probe.execute("PRAGMA database_list").fetchone()[2]
         tamper = sqlite3.connect(database_path)
         try:
@@ -423,7 +457,9 @@ class TestMissingTypedFieldsFailClosed:
             base_delta_role="base",
             source_overlay_epoch=1,
             included=True,
-            detail_ref=DetailRef("assembly-1", "assembly-1", "detail-ov"),
+            detail_ref=DetailRef(
+                "assembly-1", "thread-1", "assembly-1", "detail-ov"
+            ),
             contribution_id="overlay:ov:base",
             contribution_ordinal=0,
             source_revision=overlay.source_revision,
@@ -442,7 +478,7 @@ def _ref_for(contribution: ContextContribution, plan_id: str):
     return ContextRef.request_only_ref(
         contribution.contribution_id,
         session_id="assembly-1",
-        thread_id=MAIN_THREAD_ID,
+        thread_id="thr_019bfb6b5f3c72178c7e8393ce89e7a6",
         plan_id=plan_id,
         source_revision=contribution.source_revision,
         semantic_kind=SemanticKind.EXTENSION.value,
@@ -458,7 +494,9 @@ def _ref_for(contribution: ContextContribution, plan_id: str):
 
 class TestRegistryStabilityAcrossRestart:
     def test_ordinals_stable_and_continuous_after_restart(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         first = _register(saver, MAIN_SESSION_ID, _contribution("c-1"))
         second = _register(saver, MAIN_SESSION_ID, _contribution("c-2"))
@@ -467,11 +505,15 @@ class TestRegistryStabilityAcrossRestart:
         restarted = _restarted(sessions_root)
         third = _register(restarted, MAIN_SESSION_ID, _contribution("c-3"))
         assert third == 2
-        rows = {row["contribution_id"]: row["source_ordinal"] for row in _rows(restarted, MAIN_SESSION_ID)}
+        rows = {
+            row["contribution_id"]: row["source_ordinal"]
+            for row in _rows(restarted, MAIN_SESSION_ID)
+        }
         assert rows == {"c-1": 0, "c-2": 1, "c-3": 2}
 
     def test_replace_keeps_same_registry_slot(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # middleware prompt-slot 的 typed 合同：replaceable slot 原位更新，
         # 不产生第二行、不漂移 registry slot。
@@ -502,7 +544,8 @@ class TestRegistryStabilityAcrossRestart:
         assert rows[0]["source_revision"] == "rev-b"
 
     def test_typed_replaceable_source_enables_in_place_revision_update(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # (a) typed replacement_policy=replaceable 时替换链路生效：同一 owner
         # slot 原位更新 revision，不产生第二行、不漂移 registry slot。
@@ -522,7 +565,8 @@ class TestRegistryStabilityAcrossRestart:
         assert rows[0]["source_revision"] == "rev-updated"
 
     def test_metadata_only_replaceable_key_is_no_longer_replaceable(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # (b) 只放 metadata 键、没有 typed 字段时不再被视为可替换：旧
         # metadata 路径已物理下线，内容漂移必须显式报 identity 冲突。
@@ -546,7 +590,8 @@ class TestRegistryStabilityAcrossRestart:
         assert rows[0]["source_revision"] == "rev-metadata-only-replaceable"
 
     def test_reregistration_of_same_source_is_idempotent(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # prepare 链路以原对象（source_ordinal=None）重注册同一 source：
         # registry 分配的 typed ordinal 不属于 caller 内容，不得触发
@@ -564,13 +609,18 @@ class TestRegistryStabilityAcrossRestart:
             saver.register_context_contribution(MAIN_SESSION_ID, drifted)
 
     def test_owner_threads_are_isolated(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         main_ordinal = _register(
-            saver, MAIN_SESSION_ID, _contribution("shared-id"),
+            saver,
+            MAIN_SESSION_ID,
+            _contribution("shared-id"),
         )
         child_ordinal = _register(
-            saver, CHILD_SESSION_ID, _contribution("shared-id"),
+            saver,
+            CHILD_SESSION_ID,
+            _contribution("shared-id"),
         )
         assert (main_ordinal, child_ordinal) == (0, 0)
         main_ids = {row["contribution_id"] for row in _rows(saver, MAIN_SESSION_ID)}
@@ -579,13 +629,16 @@ class TestRegistryStabilityAcrossRestart:
         assert child_ids == {"shared-id"}
         # CSM 控制状态同轮隔离：main 的 tracking 事实不出现在 child owner。
         main_owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=MAIN_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
         )
         child_owner = ContextSourceOwnerKey(
-            session_id=CHILD_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=CHILD_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(CHILD_SESSION_ID),
         )
         main_manager = ContextSourceManager(
-            owner=main_owner, control_state_port=saver,
+            owner=main_owner,
+            control_state_port=saver,
         )
         main_manager.register(
             ContextSourceDescriptor(
@@ -597,7 +650,8 @@ class TestRegistryStabilityAcrossRestart:
             )
         )
         child_manager = ContextSourceManager(
-            owner=child_owner, control_state_port=saver,
+            owner=child_owner,
+            control_state_port=saver,
         )
         with pytest.raises(KeyError):
             child_manager.source_observation_state("skill:main-only")
@@ -608,7 +662,8 @@ class TestRegistryStabilityAcrossRestart:
 
 class TestComposerThreadIdentity:
     def test_request_only_refs_carry_catalog_main_thread_id(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # composer 不持有 resolver，thread identity 只能由唯一 owner 从权威
         # catalog 解析后显式传入；request-only ref 必须携带该 main_thread_id，
@@ -616,16 +671,16 @@ class TestComposerThreadIdentity:
         _register(saver, MAIN_SESSION_ID, _contribution("thread-identity"))
         expected_thread_id = saver._resolve_main_thread_control(MAIN_SESSION_ID)[1]
         plan = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-thread",
+            MAIN_SESSION_ID,
+            plan_id="plan-thread",
         )
-        request_only_refs = [
-            ref for ref in plan.refs if ref.ref_type == "request_only"
-        ]
+        request_only_refs = [ref for ref in plan.refs if ref.ref_type == "request_only"]
         assert request_only_refs
         assert {ref.thread_id for ref in request_only_refs} == {expected_thread_id}
 
     def test_canonical_refs_carry_catalog_main_thread_id(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         # committed_context_refs 从已提交 item 生成 canonical ref 时，thread 半
         # 必须取 catalog 权威 main_thread_id，不能把承载 session 定位的
@@ -667,12 +722,15 @@ class TestComposerThreadIdentity:
 
 class TestSealedTypedFieldConsumption:
     def test_explicit_tracked_rebind_freezes_old_item_bytes(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         """6.2-B：显式 tracked rebind 在同一 owner 事务冻结旧 registration、
         追加当前 effective entry 的完整 activation；旧 source item 逐字节不变。"""
         owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=MAIN_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
         )
         manager = ContextSourceManager(
             owner=owner,
@@ -691,7 +749,9 @@ class TestSealedTypedFieldConsumption:
         )
 
         def _install(
-            entry_layer: str, body: str, display_uri: str,
+            entry_layer: str,
+            body: str,
+            display_uri: str,
         ) -> SkillCatalogBinding:
             binding = SkillCatalogBinding(
                 name="demo",
@@ -720,7 +780,11 @@ class TestSealedTypedFieldConsumption:
         assert batch is not None
         manager.commit_model_call_pending(batch)
 
-        with saver._storage._connect(MAIN_SESSION_ID, "") as probe:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(MAIN_SESSION_ID),
+            "",
+            session_id=MAIN_SESSION_ID,
+        ) as probe:
             database_path = probe.execute("PRAGMA database_list").fetchone()[2]
         conn = sqlite3.connect(database_path)
         try:
@@ -736,9 +800,7 @@ class TestSealedTypedFieldConsumption:
             conn.close()
         assert len(old_rows) == 1
         # 真断言：旧 item 的正文与 hash 逐字节冻结。
-        assert old_projection == [
-            (old_rows[0][0], old_rows[0][1], "gateway body\n")
-        ]
+        assert old_projection == [(old_rows[0][0], old_rows[0][1], "gateway body\n")]
 
         # 同名 workspace 高优先级 effective entry 出现（不同 source identity）。
         manager.register(
@@ -796,10 +858,12 @@ class TestSealedTypedFieldConsumption:
         assert states["skill:workspace:demo"].tracking_status == "tracked"
 
     def test_rewind_reconciles_only_from_frozen_control_state(
-        self, saver: RolloutCheckpointSaver,
+        self,
+        saver: RolloutCheckpointSaver,
     ) -> None:
         owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID, thread_id=MAIN_THREAD_ID,
+            session_id=MAIN_SESSION_ID,
+            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
         )
         manager = ContextSourceManager(owner=owner, control_state_port=saver)
         manager.register(
@@ -867,7 +931,9 @@ class TestSealedTypedFieldConsumption:
             )
 
     def test_restart_restore_consumes_only_registry_typed_fields(
-        self, saver: RolloutCheckpointSaver, sessions_root: Path,
+        self,
+        saver: RolloutCheckpointSaver,
+        sessions_root: Path,
     ) -> None:
         _register(
             saver,
@@ -883,13 +949,15 @@ class TestSealedTypedFieldConsumption:
             ),
         )
         before = saver.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-6",
+            MAIN_SESSION_ID,
+            plan_id="plan-6",
         )
         before_hash = context_plan_hash(before)
 
         restarted = _restarted(sessions_root)
         after = restarted.compose_committed_context_plan(
-            MAIN_SESSION_ID, plan_id="plan-6",
+            MAIN_SESSION_ID,
+            plan_id="plan-6",
         )
         # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal 键与
         # 对抗 selection_only/selection_role/replacement_policy 键均为 inert，
@@ -904,7 +972,8 @@ class TestSealedTypedFieldConsumption:
 
     @pytest.mark.asyncio
     async def test_out_of_order_watch_consumes_authoritative_revision(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         from tests.unit.services.infrastructure.test_context_source_reactor import (
             _reactor_fixture,
@@ -929,36 +998,47 @@ class TestSealedTypedFieldConsumption:
             # 消费时以来源 owner 的权威内存快照 revision 裁决。
             latest_visible_committed_revision = registration.revision
             _write_skill(tmp_path / "workspace", "v2\n")
-            mid_revision = registry.refresh(
-                "boxteam://workspace/skill/demo"
-            ).revision
+            mid_revision = registry.refresh("boxteam://workspace/skill/demo").revision
             assert mid_revision != latest_visible_committed_revision
-            assert manager.mark_pending_observation(
-                "skill:demo", mid_revision,
-            ) is True
+            assert (
+                manager.mark_pending_observation(
+                    "skill:demo",
+                    mid_revision,
+                )
+                is True
+            )
             _write_skill(tmp_path / "workspace", "v3\n")
-            fresh_revision = registry.refresh(
-                "boxteam://workspace/skill/demo"
-            ).revision
+            fresh_revision = registry.refresh("boxteam://workspace/skill/demo").revision
             assert fresh_revision != mid_revision
-            assert manager.mark_pending_observation(
-                "skill:demo", fresh_revision,
-            ) is True
+            assert (
+                manager.mark_pending_observation(
+                    "skill:demo",
+                    fresh_revision,
+                )
+                is True
+            )
             # 乱序：v2 的事件晚于 v3 到达，标记被回写为旧 revision；
             # 消费时以来源 owner 的权威内存快照 revision 裁决。
-            assert manager.mark_pending_observation(
-                "skill:demo", mid_revision,
-            ) is True
+            assert (
+                manager.mark_pending_observation(
+                    "skill:demo",
+                    mid_revision,
+                )
+                is True
+            )
             assert manager.pending_observation_count() == 1
 
             observations = tuple(reactor.drain())
             assert [item.revision for item in observations] == [fresh_revision]
             # 消费是 owner 的显式动作：正文只从权威内存快照读取。
-            assert manager.observe(
-                observations[0].source_id,
-                reactor.content_for(observations[0]),
-                revision=observations[0].revision,
-            ) is True
+            assert (
+                manager.observe(
+                    observations[0].source_id,
+                    reactor.content_for(observations[0]),
+                    revision=observations[0].revision,
+                )
+                is True
+            )
             batch = manager.prepare_pending()
             assert batch is not None
             assert [delta.revision for delta in batch.deltas] == [fresh_revision]

@@ -33,9 +33,7 @@ def file_tree_settings() -> FileTreeFixture:
         shutil.rmtree(output_root)
     workspace_root = output_root / "workspace"
     sessions_root = workspace_root / ".boxteam" / "sessions"
-    from app.core.path_utils import _cached_session_catalog_components
 
-    _cached_session_catalog_components.cache_clear()
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     session_ids = (

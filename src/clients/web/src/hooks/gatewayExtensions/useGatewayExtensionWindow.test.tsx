@@ -80,6 +80,7 @@ function entry(
       kind,
       name: `${kind}-${resourceId}`,
       status,
+      metadata: kind === "terminal" ? { retention_scope: "thread", reconciliation_status: "verified", thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }] } : {},
     },
   } as unknown as GatewayExtensionResourceEntry;
 }
@@ -98,7 +99,7 @@ function sessionResource(
     created_at: "2026-09-21T00:00:00Z",
     updated_at: "2026-09-21T00:00:00Z",
     available_actions: ["cancel"],
-    metadata: {},
+    metadata: kind === "terminal" ? { retention_scope: "thread", reconciliation_status: "verified", thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }] } : {},
   };
 }
 
@@ -409,7 +410,7 @@ describe("useGatewayExtensionWindow 预览标签选择", () => {
     );
     expect(tab.attachUrl).toBe(
       "http://127.0.0.1:8011/api/gateway/attach/terminal/?" +
-        `workspaceId=${selected.workspace_id}&terminalId=${selected.resource.resource_id}&embedded=1`,
+        `workspaceId=${selected.workspace_id}&terminalId=${selected.resource.resource_id}&sessionId=s1&threadId=thr_actual_child&embedded=1`,
     );
   });
 

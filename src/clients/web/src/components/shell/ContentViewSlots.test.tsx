@@ -21,6 +21,7 @@ function slot(overrides: SlotOverrides = {}) {
     contentView: "default",
     apiPort: 8010,
     workspaceId: "gw_demo",
+    session: null,
     sessionId: "session-1",
     hasActiveSession: true,
     activeSessionCacheKey: "gw_demo:session-1",

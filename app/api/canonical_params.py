@@ -5,9 +5,8 @@ app.core.session_catalog_store 的唯一 canonical 验证器校验；非法形�
 pydantic/FastAPI 统一转成 422，不做清洗、截断或旧 ID 别名。
 校验器只有一套，本模块只提供 Annotated 复用类型。
 
-thread_id 不走本模块：产品入口的 thread 身份允许字面量 `main`（main
-thread），与 `thr_` 前缀的 canonical 形态不同，其形态校验由 thread 目录
-解析器在业务层统一执行（app/core/session_catalog_resolver）。
+thread_id 也通过唯一 canonical thread 验证器校验；Session-only 入口必须在业务
+service 内通过权威 catalog resolver 取得冻结的 main ID。
 """
 
 from __future__ import annotations
@@ -16,9 +15,9 @@ from typing import Annotated
 
 from pydantic import BeforeValidator
 
-from app.core.session_catalog_store import validate_session_id
+from app.core.session_catalog_store import validate_session_id, validate_thread_id
 
-__all__ = ["CanonicalSessionId"]
+__all__ = ["CanonicalSessionId", "CanonicalThreadId"]
 
 
 def _validate_canonical_session_id(value: object) -> str:
@@ -33,4 +32,19 @@ def _validate_canonical_session_id(value: object) -> str:
 CanonicalSessionId = Annotated[
     str,
     BeforeValidator(_validate_canonical_session_id),
+]
+
+
+def _validate_canonical_thread_id(value: object) -> str:
+    """唯一 thread 验证器抛出的 TypeError 统一转为 ValueError（pydantic → 422）。"""
+    try:
+        validate_thread_id(value)
+    except TypeError as error:
+        raise ValueError(str(error)) from error
+    return value
+
+
+CanonicalThreadId = Annotated[
+    str,
+    BeforeValidator(_validate_canonical_thread_id),
 ]

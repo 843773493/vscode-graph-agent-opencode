@@ -67,9 +67,7 @@ export function terminalStatusToJSON(object: TerminalStatus): string {
 
 export interface TerminalSession {
   terminal_id: string;
-  session_id: string;
   title: string;
-  cwd: string;
   cols: number;
   rows: number;
   status: TerminalStatus;
@@ -77,6 +75,11 @@ export interface TerminalSession {
   metadata: { [key: string]: any } | undefined;
   created_at: string | undefined;
   updated_at: string | undefined;
+  workspace_id: string;
+  cwd_relative: string;
+  transport_owner_revision: number;
+  exit_code?: number | undefined;
+  last_command_exit_code?: number | undefined;
 }
 
 export interface TerminalJsonMessage {
@@ -87,9 +90,7 @@ export interface TerminalJsonMessage {
 function createBaseTerminalSession(): TerminalSession {
   return {
     terminal_id: "",
-    session_id: "",
     title: "",
-    cwd: "",
     cols: 0,
     rows: 0,
     status: 0,
@@ -97,6 +98,11 @@ function createBaseTerminalSession(): TerminalSession {
     metadata: undefined,
     created_at: undefined,
     updated_at: undefined,
+    workspace_id: "",
+    cwd_relative: "",
+    transport_owner_revision: 0,
+    exit_code: undefined,
+    last_command_exit_code: undefined,
   };
 }
 
@@ -104,9 +110,7 @@ export const TerminalSession: MessageFns<TerminalSession> = {
   fromJSON(object: any): TerminalSession {
     return {
       terminal_id: isSet(object.terminal_id) ? globalThis.String(object.terminal_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       title: isSet(object.title) ? globalThis.String(object.title) : "",
-      cwd: isSet(object.cwd) ? globalThis.String(object.cwd) : "",
       cols: isSet(object.cols) ? globalThis.Number(object.cols) : 0,
       rows: isSet(object.rows) ? globalThis.Number(object.rows) : 0,
       status: isSet(object.status) ? terminalStatusFromJSON(object.status) : 0,
@@ -114,6 +118,15 @@ export const TerminalSession: MessageFns<TerminalSession> = {
       metadata: isObject(object.metadata) ? object.metadata : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      cwd_relative: isSet(object.cwd_relative) ? globalThis.String(object.cwd_relative) : "",
+      transport_owner_revision: isSet(object.transport_owner_revision)
+        ? globalThis.Number(object.transport_owner_revision)
+        : 0,
+      exit_code: isSet(object.exit_code) ? globalThis.Number(object.exit_code) : undefined,
+      last_command_exit_code: isSet(object.last_command_exit_code)
+        ? globalThis.Number(object.last_command_exit_code)
+        : undefined,
     };
   },
 
@@ -122,14 +135,8 @@ export const TerminalSession: MessageFns<TerminalSession> = {
     if (message.terminal_id !== "") {
       obj.terminal_id = message.terminal_id;
     }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
     if (message.title !== "") {
       obj.title = message.title;
-    }
-    if (message.cwd !== "") {
-      obj.cwd = message.cwd;
     }
     if (message.cols !== 0) {
       obj.cols = Math.round(message.cols);
@@ -152,6 +159,21 @@ export const TerminalSession: MessageFns<TerminalSession> = {
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.cwd_relative !== "") {
+      obj.cwd_relative = message.cwd_relative;
+    }
+    if (message.transport_owner_revision !== 0) {
+      obj.transport_owner_revision = Math.round(message.transport_owner_revision);
+    }
+    if (message.exit_code !== undefined) {
+      obj.exit_code = Math.round(message.exit_code);
+    }
+    if (message.last_command_exit_code !== undefined) {
+      obj.last_command_exit_code = Math.round(message.last_command_exit_code);
+    }
     return obj;
   },
 
@@ -161,9 +183,7 @@ export const TerminalSession: MessageFns<TerminalSession> = {
   fromPartial<I extends Exact<DeepPartial<TerminalSession>, I>>(object: I): TerminalSession {
     const message = createBaseTerminalSession();
     message.terminal_id = object.terminal_id ?? "";
-    message.session_id = object.session_id ?? "";
     message.title = object.title ?? "";
-    message.cwd = object.cwd ?? "";
     message.cols = object.cols ?? 0;
     message.rows = object.rows ?? 0;
     message.status = object.status ?? 0;
@@ -171,6 +191,11 @@ export const TerminalSession: MessageFns<TerminalSession> = {
     message.metadata = object.metadata ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
+    message.workspace_id = object.workspace_id ?? "";
+    message.cwd_relative = object.cwd_relative ?? "";
+    message.transport_owner_revision = object.transport_owner_revision ?? 0;
+    message.exit_code = object.exit_code ?? undefined;
+    message.last_command_exit_code = object.last_command_exit_code ?? undefined;
     return message;
   },
 };

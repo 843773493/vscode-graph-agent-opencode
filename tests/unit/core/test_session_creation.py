@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core import sqlite_state
+from app.core import session_creation, sqlite_state
 from app.core.identifier import create_uuid_hex
 from app.core.session_catalog_store import (
     SessionCatalogStore,
@@ -23,6 +23,7 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import (
+    ForkCompletionProof,
     SessionCreationResult,
     SessionCreationService,
     build_session_creation_manifest,
@@ -38,6 +39,7 @@ from tests.support.canonical_id_at import (
     session_id_for_name_at,
     thread_id_for_name_at,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 WORKSPACE_ID = "ws-create"
 _SESSION_ID_PATH_PLACEHOLDER = "ses_00000000000070008000000000000000"
@@ -84,12 +86,14 @@ async def do_create(
     parent_node_id: str | None = None,
     metadata: dict[str, object] | None = None,
 ) -> SessionCreationResult:
-    return await service.create(
+    record = await service.prepare(
         idempotency_key=key,
         title=title,
         parent_node_id=parent_node_id,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata=metadata if metadata is not None else make_metadata(),
     )
+    return await service.publish_prepared(record)
 
 
 def create_manual_record(
@@ -111,6 +115,9 @@ def create_manual_record(
         workspace_id=WORKSPACE_ID,
         parent_node_id=parent_node_id,
         title=title,
+        title_source="user",
+        purpose="normal",
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata=effective_metadata,
     )
     created_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
@@ -119,6 +126,15 @@ def create_manual_record(
         workspace_id=WORKSPACE_ID,
         parent_node_id=parent_node_id,
         display_name=title,
+        title_source="user",
+        purpose="normal",
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
+        session_metadata_json=json.dumps(
+            effective_metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         preimage_hash=preimage_hash,
         created_at=created_at,
         session_id=session_id_for_name_at(key, created_at),
@@ -134,6 +150,7 @@ def build_session_directory(
     """按服务相同格式手工构造 session 目录（staging/日期桶恢复测试用）。"""
     manifest = build_session_creation_manifest(record, metadata)
     directory.mkdir(parents=True, exist_ok=True)
+    (directory / "threads").mkdir()
     (directory / "session.json").write_bytes(
         serialize_session_creation_manifest(manifest)
     )
@@ -142,6 +159,7 @@ def build_session_directory(
         control.initialize_main_thread(
             record.main_thread_id,
             datetime.fromisoformat(record.created_at),
+            TEST_THREAD_GRAPH_BINDING,
         )
         control.initialize_fence("active", 1)
         control.verify_matches_catalog_main_thread(record.main_thread_id)
@@ -180,6 +198,24 @@ def sessions_root_beyond_vfs_limit(tmp_path: Path) -> Path:
             / ".staging"
             / _SESSION_ID_PATH_PLACEHOLDER
             / "session-control.sqlite"
+        )
+    return sessions_root
+
+
+def sessions_root_rollout_beyond_vfs_limit(tmp_path: Path) -> Path:
+    """按真实根与 VFS 预算有限填充，让 rollout index sidecar 确实超限。"""
+    sessions_root = tmp_path.resolve() / "sessions"
+    rollout_sidecar = (
+        sessions_root / "1970/01/01" / _SESSION_ID_PATH_PLACEHOLDER
+        / "rollout/index.sqlite-journal"
+    )
+    padding_bytes = max(
+        0, sqlite_vfs_max_pathname() + 1 - len(str(rollout_sidecar).encode("utf-8"))
+    )
+    for offset in range(0, padding_bytes, 200):
+        sessions_root = (
+            sessions_root.parent / ("x" * min(200, padding_bytes - offset))
+            / sessions_root.name
         )
     return sessions_root
 
@@ -255,6 +291,48 @@ async def test_deep_sessions_root_rejected_before_record_or_staging(
         store.close()
 
 
+async def test_rollout_index_path_budget_checked_before_record_or_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions_root = sessions_root_rollout_beyond_vfs_limit(tmp_path)
+    rollout_database = (
+        sessions_root / "1970/01/01" / _SESSION_ID_PATH_PLACEHOLDER
+        / "rollout/index.sqlite"
+    )
+    validated_rollouts: list[Path] = []
+
+    def validate_rollout_budget(database_path: Path) -> None:
+        # 隔离更长的 quarantine control 路径；control 超限由相邻测试覆盖。
+        if database_path.name == "index.sqlite":
+            validated_rollouts.append(database_path)
+            validate_sqlite_path_budget(database_path)
+
+    monkeypatch.setattr(
+        session_creation, "validate_sqlite_path_budget", validate_rollout_budget
+    )
+    store = SessionCatalogStore(
+        tmp_path / "catalog" / "session-catalog.sqlite", sessions_root
+    )
+    service = SessionCreationService(
+        store=store,
+        sessions_root=sessions_root,
+        workspace_id=WORKSPACE_ID,
+        gate=NavigationTopologyGate(sessions_root),
+    )
+    try:
+        with pytest.raises(ValueError, match=r"rollout/index\.sqlite"):
+            await do_create(service)
+        assert validated_rollouts == [rollout_database]
+        assert count_rows(store, "session_creation_records") == 0
+        assert not sessions_root.exists()
+        assert not (
+            sessions_root.parent / "orphaned" / "session-creation"
+        ).exists()
+    finally:
+        store.close()
+
+
 @pytest.fixture
 def sessions_root(tmp_path: Path) -> Path:
     # parent 即 .boxteam/ 根：orphaned 隔离区落位 .boxteam/orphaned/。
@@ -310,6 +388,125 @@ async def test_create_full_flow_publishes_session(
     assert record.state == "published"
     assert record.abort_reason is None
     assert record.session_id == result.session_id
+
+
+async def test_context_fork_request_intent_is_frozen_without_entering_business_manifest(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    metadata = make_metadata(kind="context_fork", context_source_session_id=make_node_id())
+    request_intent = {"mode": "context_fork", "pinned": False, "turn_id": None}
+    kwargs = {
+        "idempotency_key": "fork-intent-key", "title": "冻结请求的分叉",
+        "title_source": "auto", "parent_node_id": None, "purpose": "context_fork",
+        "session_metadata": metadata, "request_intent": request_intent,
+        "graph_binding": TEST_THREAD_GRAPH_BINDING,
+    }
+    record = await service.prepare(**kwargs)
+    assert json.loads(record.request_intent_json) == request_intent
+    assert await service.prepare(**kwargs) == record
+    assert service.read_prepared_session_metadata(record) == metadata
+    manifest = json.loads((sessions_root / ".staging" / record.session_id / "session.json").read_text())
+    assert set(manifest) == _STRIPPED_MANIFEST_KEYS
+    assert "request_intent" not in manifest and "request_intent_json" not in manifest
+    with pytest.raises(RuntimeError, match="preimage 冲突"):
+        await service.prepare(**{**kwargs, "request_intent": {**request_intent, "pinned": True}})
+    assert store.get_creation_record("fork-intent-key") == record
+
+
+async def test_context_fork_publish_requires_committed_completion_proof(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    metadata = make_metadata(
+        kind="context_fork", context_source_session_id=make_node_id()
+    )
+    record = await service.prepare(
+        idempotency_key="fork-key",
+        title="分叉会话",
+        title_source="auto",
+        parent_node_id=None,
+        purpose="context_fork",
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
+        session_metadata=metadata,
+    )
+
+    assert record.purpose == "context_fork"
+    assert record.session_metadata_json == json.dumps(
+        metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    assert service.read_prepared_session_metadata(record) == metadata
+    assert service.list_preparing_creation_records(purpose="context_fork") == [record]
+    staging = sessions_root / ".staging" / record.session_id
+    staged_materialization = staging / "rollout"
+    staged_materialization.mkdir()
+    (staged_materialization / "checkpoint.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="completion proof"):
+        await service.publish_prepared(record)
+
+    proof = ForkCompletionProof(
+        target_session_id=record.session_id,
+        fork_id="fork-1",
+        materialization_id="materialization-1",
+    )
+    unexpected_node = staging / "unexpected"
+    unexpected_node.mkdir()
+    with pytest.raises(RuntimeError, match="条目集与预期不一致"):
+        await service.publish_prepared(record, fork_completion=proof)
+    unexpected_node.rmdir()
+
+    result = await service.publish_prepared(record, fork_completion=proof)
+    assert result.record_state == "published"
+    assert store.get_creation_record("fork-key").state == "published"
+    published_materialization = (
+        date_bucket_dir(sessions_root, record.storage_relative_locator)
+        / "rollout"
+        / "checkpoint.json"
+    )
+    assert published_materialization.read_text(encoding="utf-8") == "{}"
+
+
+async def test_context_fork_cas_failure_preserves_prepared_state_until_abort(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    parent = store.create_folder(make_node_id(), WORKSPACE_ID, None, "父")
+    record = await service.prepare(
+        idempotency_key="fork-cas-key",
+        title="分叉会话",
+        title_source="auto",
+        parent_node_id=parent.node_id,
+        purpose="context_fork",
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
+        session_metadata=make_metadata(
+            kind="context_fork", context_source_session_id=make_node_id()
+        ),
+    )
+    store.rename_node(parent.node_id, "漂移")
+    proof = ForkCompletionProof(
+        target_session_id=record.session_id,
+        fork_id="fork-2",
+        materialization_id="materialization-2",
+    )
+    with pytest.raises(RuntimeError, match="CAS 失败") as error:
+        await service.publish_prepared(record, fork_completion=proof)
+
+    target = date_bucket_dir(sessions_root, record.storage_relative_locator)
+    assert target.is_dir()
+    assert store.get_creation_record("fork-cas-key").state == "preparing"
+    assert not (
+        sessions_root.parent / "orphaned" / "session-creation" / record.session_id
+    ).exists()
+
+    aborted = await service.abort_prepared(record, str(error.value))
+    assert aborted.state == "aborted"
+    assert not target.exists()
+    assert (
+        sessions_root.parent / "orphaned" / "session-creation" / record.session_id
+    ).is_dir()
 
 
 async def test_create_writes_stripped_session_json(
@@ -370,9 +567,29 @@ async def test_create_places_directory_in_date_bucket_and_clears_staging(
     assert sorted(p.name for p in session_dir.iterdir()) == [
         "session-control.sqlite",
         "session.json",
+        "threads",
     ]
+    assert not tuple((session_dir / "threads").iterdir())
     # staging 区已清空（目录被 rename 走）
     assert not (sessions_root / ".staging" / result.session_id).exists()
+
+
+async def test_recovery_rejects_unregistered_child_thread_in_prepared_session(
+    service: SessionCreationService,
+    sessions_root: Path,
+    store: SessionCatalogStore,
+) -> None:
+    record = create_manual_record(store)
+    staging = sessions_root / ".staging" / record.session_id
+    build_session_directory(staging, record, make_metadata())
+    (staging / "threads" / "thr_019db1f0-0000-7000-8000-000000000001").mkdir()
+
+    with pytest.raises(RuntimeError, match="prepared Session 不得包含 child thread"):
+        await do_create(service)
+
+    assert staging.is_dir()
+    assert not date_bucket_dir(sessions_root, record.storage_relative_locator).exists()
+    assert store.get_creation_record("key-1").state == "preparing"
 
 
 async def test_create_under_folder_parent(
@@ -450,6 +667,74 @@ async def test_create_conflicting_preimage_on_preparing_rejected(
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("purpose", "kind", "has_context_source"),
+    [
+        ("normal", "context_fork", True),
+        ("normal", "normal", True),
+        ("context_fork", "normal", False),
+        ("context_fork", "context_fork", False),
+    ],
+)
+async def test_create_rejects_purpose_metadata_mismatch_before_state_change(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    purpose: str,
+    kind: str,
+    has_context_source: bool,
+) -> None:
+    metadata = make_metadata(
+        kind=kind,
+        context_source_session_id=(make_node_id() if has_context_source else None),
+    )
+    with pytest.raises(ValueError, match="purpose 与 session_metadata"):
+        await service.prepare(
+            idempotency_key="mismatched-envelope",
+            title="标题",
+            parent_node_id=None,
+            purpose=purpose,  # type: ignore[arg-type]
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
+            session_metadata=metadata,
+        )
+    with pytest.raises(KeyError):
+        store.get_creation_record("mismatched-envelope")
+
+
+async def test_published_record_rejects_purpose_metadata_mismatch(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+) -> None:
+    metadata = make_metadata(
+        kind="context_fork", context_source_session_id=make_node_id()
+    )
+    record = create_manual_record(store, metadata=metadata)
+    store.publish_creation_record("key-1", expected_purpose="normal")
+
+    with pytest.raises(RuntimeError, match="purpose 与 session_metadata"):
+        await service.publish_prepared(record)
+
+
+async def test_publish_rejects_durable_purpose_metadata_mismatch(
+    service: SessionCreationService,
+    store: SessionCatalogStore,
+    sessions_root: Path,
+) -> None:
+    metadata = make_metadata(
+        kind="context_fork", context_source_session_id=make_node_id()
+    )
+    record = create_manual_record(store, metadata=metadata)
+    staging = sessions_root / ".staging" / record.session_id
+    build_session_directory(staging, record, metadata)
+
+    with pytest.raises(RuntimeError, match="purpose 与 session_metadata"):
+        await service.publish_prepared(record)
+
+    assert store.get_creation_record("key-1").state == "preparing"
+    assert count_rows(store, "nodes") == 0
+    assert staging.is_dir()
+
+
+
 async def test_create_missing_metadata_key_rejected_before_state_change(
     service: SessionCreationService, store: SessionCatalogStore
 ) -> None:
@@ -476,10 +761,11 @@ async def test_create_non_dict_metadata_rejected(
     service: SessionCreationService,
 ) -> None:
     with pytest.raises(TypeError, match="session_metadata"):
-        await service.create(
+        await service.prepare(
             idempotency_key="key-1",
             title="标题",
             parent_node_id=None,
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
             session_metadata=["not", "a", "dict"],  # type: ignore[arg-type]
         )
 
@@ -687,7 +973,7 @@ async def test_recovery_record_already_published(
 ) -> None:
     """崩溃点4：publish 后崩溃 → 重入 record published 幂等返回。"""
     record = create_manual_record(store)
-    node = store.publish_creation_record("key-1")
+    node = store.publish_creation_record("key-1", expected_purpose="normal")
     result = await do_create(service)
     assert result.record_state == "published"
     assert result.session_id == record.session_id
@@ -699,7 +985,7 @@ async def test_recovery_published_record_missing_node_fails_closed(
 ) -> None:
     """恢复变体：record published 但 nodes 行缺失（外部改动）→ fail closed。"""
     create_manual_record(store)
-    store.publish_creation_record("key-1")
+    store.publish_creation_record("key-1", expected_purpose="normal")
     record = store.get_creation_record("key-1")
     connection = sqlite3.connect(store.database_path)
     try:
@@ -729,13 +1015,12 @@ async def test_recovery_aborted_record_rejected(
 # ----------------------------------------------------------------------
 
 
-async def test_cas_failure_parent_drift_quarantines_and_aborts(
+async def test_cas_failure_parent_drift_preserves_until_explicit_abort(
     service: SessionCreationService,
     store: SessionCatalogStore,
     sessions_root: Path,
 ) -> None:
-    """CAS 失败：父节点 revision 漂移 → 日期桶隔离到 orphaned + record
-    aborted + nodes 无行。"""
+    """CAS 失败先保留现场；调用方显式 abort 后再隔离并终结记录。"""
     parent = store.create_folder(
         make_node_id(), WORKSPACE_ID, None, "父"
     )
@@ -746,9 +1031,18 @@ async def test_cas_failure_parent_drift_quarantines_and_aborts(
     # 手工制造父节点 revision 漂移
     store.rename_node(parent.node_id, "漂移")
     target = date_bucket_dir(sessions_root, record.storage_relative_locator)
-    with pytest.raises(RuntimeError, match="CAS 失败"):
+    with pytest.raises(RuntimeError, match="CAS 失败") as error:
         await do_create(service, parent_node_id=parent.node_id)
-    # 日期桶目录按冻结 Session ID 定点回收到 orphaned 隔离区。
+    assert target.is_dir()
+    preparing = store.get_creation_record("key-1")
+    assert preparing.state == "preparing"
+    assert not (
+        sessions_root.parent / "orphaned" / "session-creation" / record.session_id
+    ).exists()
+
+    # Fork 调用方释放 retention 后才调用 abort，provider 再定点隔离。
+    aborted = await service.abort_prepared(preparing, str(error.value))
+    assert aborted.state == "aborted"
     assert not target.exists()
     quarantined = (
         sessions_root.parent / "orphaned" / "session-creation" / record.session_id
@@ -757,8 +1051,6 @@ async def test_cas_failure_parent_drift_quarantines_and_aborts(
     assert (quarantined / "session.json").is_file()
     assert (quarantined / "session-control.sqlite").is_file()
     # record aborted（含原因）且 nodes 无行
-    aborted = store.get_creation_record("key-1")
-    assert aborted.state == "aborted"
     assert aborted.abort_reason is not None
     assert "漂移" in aborted.abort_reason
     with pytest.raises(KeyError):
@@ -767,7 +1059,7 @@ async def test_cas_failure_parent_drift_quarantines_and_aborts(
     assert not (sessions_root / ".staging" / record.session_id).exists()
 
 
-async def test_cas_failure_locator_occupied_quarantines_and_aborts(
+async def test_cas_failure_locator_occupied_preserves_until_explicit_abort(
     service: SessionCreationService,
     store: SessionCatalogStore,
     sessions_root: Path,
@@ -780,9 +1072,9 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
     # 直连 SQL 注入同 locator 的既有 node（record 尚未发布，占用合法存在）
     store.connection.execute(
         "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-        "state, revision, workspace_id, created_at, "
+        "title_source, state, revision, workspace_id, created_at, "
         "storage_relative_locator, main_thread_id) "
-        "VALUES (?, 'session', NULL, '占位', 'active', 1, ?, ?, ?, ?)",
+        "VALUES (?, 'session', NULL, '占位', 'user', 'active', 1, ?, ?, ?, ?)",
         (
             make_node_id(),
             WORKSPACE_ID,
@@ -791,11 +1083,14 @@ async def test_cas_failure_locator_occupied_quarantines_and_aborts(
             f"thr_{create_uuid_hex()}",
         ),
     )
-    with pytest.raises(RuntimeError, match="CAS 失败"):
+    with pytest.raises(RuntimeError, match="CAS 失败") as error:
         await do_create(service)
-    assert not date_bucket_dir(
-        sessions_root, record.storage_relative_locator
-    ).exists()
+    target = date_bucket_dir(sessions_root, record.storage_relative_locator)
+    assert target.is_dir()
+    assert store.get_creation_record("key-1").state == "preparing"
+    aborted = await service.abort_prepared(record, str(error.value))
+    assert aborted.state == "aborted"
+    assert not target.exists()
     assert (
         sessions_root.parent / "orphaned" / "session-creation" / record.session_id
     ).is_dir()
@@ -877,6 +1172,8 @@ def test_preimage_hash_deterministic_and_sensitive() -> None:
         "workspace_id": WORKSPACE_ID,
         "parent_node_id": None,
         "title": "标题",
+        "purpose": "normal",
+        "graph_binding": TEST_THREAD_GRAPH_BINDING,
         "session_metadata": make_metadata(),
     }
     assert compute_session_creation_preimage_hash(**kwargs) == (
@@ -897,6 +1194,9 @@ def test_preimage_hash_deterministic_and_sensitive() -> None:
     # title / parent / metadata 任一变化都改变 preimage
     assert compute_session_creation_preimage_hash(
         **{**kwargs, "title": "其他标题"}
+    ) != compute_session_creation_preimage_hash(**kwargs)
+    assert compute_session_creation_preimage_hash(
+        **{**kwargs, "purpose": "context_fork"}
     ) != compute_session_creation_preimage_hash(**kwargs)
     assert compute_session_creation_preimage_hash(
         **{**kwargs, "parent_node_id": make_node_id()}

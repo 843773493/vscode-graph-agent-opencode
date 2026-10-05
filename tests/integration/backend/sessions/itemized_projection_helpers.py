@@ -163,10 +163,12 @@ def _project(saver: RolloutCheckpointSaver, session_id: str, assembly_id: str) -
 @pytest.fixture
 def overlay_source(projection_saver):
     saver, session_id, _ = projection_saver
+    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
     base = [{"type": "text", "text": "AGENTS 稳定 base A"}]
     delta = [{"type": "text", "text": "AGENTS diff A→B"}]
     source = SimpleNamespace(
         session_id=session_id,
+        thread_id=thread_id,
         checkpoint_ns="",
         overlay_id="overlay-agents",
         source_kind="workspace_policy",
@@ -182,5 +184,11 @@ def overlay_source(projection_saver):
         status="active",
         idempotency_key="overlay-A-B",
     )
-    saver.register_source_overlay(source, base_content=base, delta_content=delta)
+    saver.register_source_overlay(
+        source,
+        session_id=session_id,
+        thread_id=thread_id,
+        base_content=base,
+        delta_content=delta,
+    )
     return source

@@ -2,6 +2,7 @@ import { getSession, listSessions } from "../../api";
 import { listSessionCatalogChildren } from "../../api/session/sessionCatalog";
 import type { Session } from "../../types/backend";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 const generations = new Map<string, number>();
 const inFlightRequests = new Map<string, Promise<WorkspaceSessionListSnapshot>>();
@@ -19,9 +20,10 @@ export interface WorkspaceSessionListSnapshot {
 
 export async function fetchWorkspaceSessionListSnapshot(
   apiPort: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { force?: boolean } = {},
 ): Promise<WorkspaceSessionListSnapshot> {
+  const workspaceId = workspaceTarget.workspace_id;
   const scopeKey = workspaceSessionScopeKey(apiPort, workspaceId);
   const inFlight = inFlightRequests.get(scopeKey);
   if (inFlight) {
@@ -47,7 +49,7 @@ export async function fetchWorkspaceSessionListSnapshot(
     // 会话目录索引是会话位置的权威来源。工作区后端刚恢复或旧版本迁移后，
     // /sessions 可能暂时返回空页，但目录索引已经可读；此时回填根级会话的
     // 完整 DTO，避免刷新后把有效导航误投影成“暂无会话”。
-    const catalogPage = await listSessionCatalogChildren(apiPort, workspaceId);
+    const catalogPage = await listSessionCatalogChildren(apiPort, workspaceTarget);
     const catalogSessionIds = catalogPage.items
       .filter((node) => node.kind === "session" && node.session_id)
       .map((node) => node.session_id as string);

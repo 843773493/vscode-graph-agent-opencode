@@ -3,6 +3,8 @@ import type {
   SessionContextReadResultDTO,
 } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
+import type { SessionContextSession } from "../../api/session/sessionContext";
+
 export type ContextItem = SessionContextItemDTO;
 export interface InspectionPage {
   items: ContextItem[];
@@ -32,9 +34,11 @@ export function textField(data: unknown, name: string): string {
 export function appendInspectionPage(
   previous: InspectionPage,
   page: SessionContextReadResultDTO,
-  resource: string,
+  resource: SessionContextSession,
 ): InspectionPage {
-  if (page.resource !== resource || !page.revision) throw new Error("上下文响应 resource/revision 不匹配");
+  if (page.resource_identity !== resource.resource_identity || page.vrn !== resource.vrn || page.scope !== resource.scope || !page.revision) {
+    throw new Error("上下文响应 resource_identity/vrn/scope/revision 不匹配");
+  }
   if (previous.revision && previous.revision !== page.revision) throw new Error("上下文分页 revision 已变化，请重新加载");
   if (page.partial_errors.length || page.omitted_partial_error_count) throw new Error("上下文返回不完整错误，请重新加载");
   if (page.has_more && (!page.next_cursor || page.next_cursor === previous.nextCursor)) throw new Error("上下文分页 cursor 未推进");
@@ -48,7 +52,8 @@ export function appendInspectionPage(
       fragment += item.text;
       if (!item.truncated) {
         const restored = objectField(JSON.parse(fragment));
-        if (restored.kind !== item.kind.slice(0, -6) || restored.locator !== item.locator) {
+        if (restored.kind !== item.kind.slice(0, -6) || restored.resource_identity !== item.resource_identity || restored.vrn !== item.vrn
+          || restored.scope !== item.scope || restored.assembly_ref !== item.assembly_ref) {
           throw new Error("上下文分片 identity 不一致");
         }
         items.push(restored as unknown as ContextItem);

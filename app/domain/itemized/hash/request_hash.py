@@ -89,6 +89,8 @@ def context_request_hash(
             "ref": {
                 "ref_type": entry.ref.ref_type,
                 "ref_id": entry.ref.ref_id,
+                "session_id": entry.ref.session_id,
+                "thread_id": entry.ref.thread_id,
                 "source_revision": entry.ref.source_revision,
                 "content_length": entry.ref.content_length,
                 "content_hash": entry.ref.content_hash,
@@ -108,6 +110,8 @@ def context_request_hash(
                 {
                     "ref_id": ref.ref_id,
                     "ref_type": ref.ref_type,
+                    "session_id": ref.session_id,
+                    "thread_id": ref.thread_id,
                     "semantic_kind": ref.semantic_kind,
                     "payload_kind": ref.payload_kind,
                     "status": ref.status,

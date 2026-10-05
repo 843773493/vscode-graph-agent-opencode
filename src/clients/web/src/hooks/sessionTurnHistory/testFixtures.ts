@@ -26,6 +26,9 @@ export function session(): Session {
   return {
     session_id: SESSION_ID,
     workspace_id: WORKSPACE_ID,
+    resource_identity: `fixture-${SESSION_ID}`,
+    vrn: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
+    scope: "workspace",
     title: "渐进 Turn 历史",
     current_agent_id: "default",
     created_at: "2026-07-28T00:00:00Z",
@@ -39,6 +42,7 @@ export function latestTurn(): NonNullable<SessionTurnBootstrap["latest_turn"]> {
     job_id: "job_latest",
     session_id: SESSION_ID,
     ordinal: 3,
+    root_logical_item_ordinal: 20,
     revision: 1,
     status: "completed",
     created_at: "2026-07-28T00:00:03Z",
@@ -65,6 +69,7 @@ export function turnDetail(epoch: number): TurnDetail {
     job_id: "job_latest",
     session_id: SESSION_ID,
     ordinal: 3,
+    root_logical_item_ordinal: 20,
     revision: 1,
     status: "completed",
     created_at: "2026-07-28T00:00:03Z",
@@ -85,6 +90,9 @@ function turnBootstrapSession(): SessionTurnBootstrap["session"] {
   return {
     session_id: SESSION_ID,
     workspace_id: WORKSPACE_ID,
+    resource_identity: `fixture-${SESSION_ID}`,
+    vrn: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
+    scope: "workspace",
     title: "渐进 Turn 历史",
     current_agent_id: "default",
     created_at: "2026-07-28T00:00:00Z",
@@ -108,6 +116,22 @@ export function bootstrap(
     event_cursor: `event-${projectionEpoch}`,
     projection_epoch: projectionEpoch,
   };
+}
+
+export function emptyHistoryPageResponse(
+  requestId: string,
+  projectionEpoch = 1,
+): Response {
+  return Response.json({
+    code: 0,
+    message: "ok",
+    request_id: requestId,
+    data: {
+      items: [],
+      internal_executions: [],
+      projection_epoch: projectionEpoch,
+    },
+  });
 }
 
 export function appState(): AppState {

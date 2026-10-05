@@ -1,32 +1,7 @@
-"""ThreadResidency：thread 级 30 分钟 idle 卸载判定与 debug 进程 idle blocker 登记。
+"""ThreadRuntime 的唯一 admission、lease、generation fence 与 idle scope owner。
 
-对应 OpenSpec ``add-context-injection-lifecycle`` 任务 2.8 与
-``add-itemized-rollout-context`` 任务 8.8/8.8-A 的 residency 基础设施切片：
-
-- 可注入单调时钟（默认 ``time.monotonic``）是 idle 计时的唯一依据；墙钟只进快照
-  展示字段，绝不参与 idle 判定。产品阈值 30 分钟不缩短，测试用 fake clock 验证
-  29:59/30:00 边界。
-- debug owner 核实的 ``launch_pending|starting|running|paused|stopping`` 进程 claim
-  与 ``reconcile_required`` 映射为精确 ``(session_id, thread_id)`` 的 idle blocker：
-  blocker 活跃期间不累计 idle；核实终态且 lease 结清（blocker 解除）后从解除时刻
-  重新起算。
-- backend 重启恢复：评估时通过 :class:`ResidencyBlockerSource` 向 debug owner 拉取
-  磁盘上的活跃 durable claim，全新 tracker 也不会把有活跃占用的 thread 虚报为
-  cold-eligible。
-- generation-only unload 回调：thread 无 blocker 且跨过阈值时调用既有 owner callback；
-  进程内资源的唯一释放合同仍是 ``app/core/lifecycle.py`` 的 ``LifetimeScope``。
-- scope-owning runtime 入口：按精确 ``(session_id, thread_id)`` single-flight 建立
-  runtime，以显式 lease 阻止 idle unload，并由 tracker 在 idle 时关闭其唯一 scope。
-
-红线（8.8-A，落地为注释与代码边界）：
-
-1. residency owner 不据 scope close、PID/端口重用或内存缺项推断进程停止；进程事实
-   只能由 debug owner 以 durable claim + OS 起始身份核实后，经 blocker 上报进入本模块。
-2. idle unload 不新增 item、epoch 或上下文到期状态：本轮无 CSM 接线，unload 回调只
-   释放进程内 runtime 资源，不触碰任何上下文账目（后续 CSM 接入轮必须保持该边界）。
-3. 迟到 callback 不得写旧 generation：generation-only callback 仍须在写回前核验
-   精确 thread/generation；scope-owning runtime 在关闭开始或失败后立即 fence 旧代。
-   本切片只提供 owner API，不接入生产 GraphBinding/admission。
+按精确 SessionThread 懒构建、跨 Turn 复用；换代和卸载只在 lease 排空后
+关闭 LifetimeScope。debug blocker 仍由外部资源 owner 核实，不从 scope 推断。
 """
 
 from __future__ import annotations
@@ -35,14 +10,22 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Hashable, Sequence
+from contextvars import Context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from app.core.lifecycle import LifetimeScope
+from app.core.shielded_cleanup import run_cleanup_shielded
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 
 logger = logging.getLogger(__name__)
+
+
+class ThreadUnloadBlocked(RuntimeError):
+    """卸载线性化前出现新 blocker；runtime owner 保留。"""
 
 #: 产品阈值：连续 30 分钟无活动且无 blocker 才允许 idle unload（1800 秒）。
 #: 测试必须用 fake clock 推进到 29:59（仍 resident）与 30:00（cold-eligible）验证
@@ -73,52 +56,17 @@ class ResidencyBlocker:
     reason: str
 
 
-@dataclass(frozen=True, slots=True)
-class ThreadResidencyGeneration:
-    """一次 ``register_generation`` 登记的 resident runtime 代令牌。"""
-
-    session_id: str
-    thread_id: str
-    generation: int
-
-
-@dataclass(frozen=True, slots=True)
-class ThreadUnloadRequest:
-    """unload 回调的入参：携带决策时刻的 generation 令牌与 idle 事实。
-
-    回调持有方据此释放该 generation 的 ``LifetimeScope``；回调内若要把任何状态
-    写回 thread，必须先用该令牌向真实 owner 重新核验当前代（迟到 callback 不得
-    写旧 generation）。
-    """
-
-    session_id: str
-    thread_id: str
-    generation: int
-    idle_seconds: float
-
-
-#: owner 注册的卸载回调：同步或异步；抛错原样向上传播，绝不被吞。
-UnloadCallback: TypeAlias = Callable[[ThreadUnloadRequest], object]
-
 RuntimeValue_co = TypeVar("RuntimeValue_co", covariant=True)
 LeaseValue = TypeVar("LeaseValue")
 TaskResult = TypeVar("TaskResult")
 
 
-@dataclass(frozen=True, slots=True)
-class ThreadRuntime(Generic[RuntimeValue_co]):
-    """一个精确 thread 独占的进程内 runtime 及其唯一释放 scope。"""
-
-    value: RuntimeValue_co
-    lifetime_scope: LifetimeScope
-
-
 class ThreadRuntimeBuilder(Protocol[RuntimeValue_co]):
-    """按调用方显式给出的 session/thread pair 构建 thread runtime。"""
+    """在 owner 已持有的 scope 中构建精确 thread runtime。"""
 
     def __call__(
-        self, session_id: str, thread_id: str
-    ) -> ThreadRuntime[RuntimeValue_co] | Awaitable[ThreadRuntime[RuntimeValue_co]]: ...
+        self, session_id: str, thread_id: str, lifetime_scope: LifetimeScope
+    ) -> RuntimeValue_co | Awaitable[RuntimeValue_co]: ...
 
 
 @dataclass(slots=True)
@@ -126,10 +74,12 @@ class _ThreadRuntimeSlot:
     session_id: str
     thread_id: str
     generation: int
+    generation_key: Hashable
     value: object
     lifetime_scope: LifetimeScope
     active_leases: int = 0
     closing: bool = False
+    drained: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class ThreadRuntimeLease(Generic[LeaseValue]):
@@ -227,25 +177,22 @@ class _ThreadResidencyState:
 
     session_id: str
     thread_id: str
-    #: 0 = tracker 尚未见到任何 resident runtime 登记；owner 每次 register_generation 递增。
+    #: 每次真实建图成功后取得进程内唯一代际令牌；尚未建图时为 0。
     generation: int = 0
     #: ``None`` = 正被 blocker 阻断（idle 不累计）；否则为最近一次"无 blocker"起算锚点。
     unblocked_since: float | None = None
     #: 当前 generation 已触发过 unload 的标记（防止同一代重复卸载）。
     unloaded_generation: int | None = None
-    #: 在飞卸载标记：该 generation 的 unload 回调正在进行中（await 窗口内）。
-    #: 并发 sweep 据此去重，确保同一代回调至多触发一次。
-    unloading_generation: int | None = None
     #: push 登记的 blocker（key → 脱敏视图）；pull 源在评估时另行查询。
     blockers: dict[str, ResidencyBlocker] = field(default_factory=dict)
     #: 墙钟展示用：最近一次 idle 锚点重置时刻。
     last_activity_at: datetime | None = None
-    #: 新 runtime owner 的资源槽；generation-only 调用方仍走既有 unload callback。
+    #: 唯一真实 runtime 资源槽，由 generation scope 持有。
     runtime: _ThreadRuntimeSlot | None = None
-    #: 明确禁止手动 generation API 与 scope-owning runtime API 混用。
-    runtime_managed: bool = False
     #: 同一精确 thread 的并发首次 admission 共享一个构建任务。
     runtime_build: asyncio.Task[_ThreadRuntimeSlot] | None = None
+    #: 编译开始前已由 owner 持有；构建和清理双失败时仍保留供重试。
+    runtime_build_scope: LifetimeScope | None = None
     #: 正在完成的 scope close；新 admission 等它收敛后再决定是否重建。
     runtime_unload: asyncio.Task[None] | None = None
     #: 已开始 admission、尚未拿到 lease 的等待者也阻止 idle unload。
@@ -253,11 +200,10 @@ class _ThreadResidencyState:
 
 
 class ThreadResidencyTracker:
-    """30 分钟 idle 卸载判定器：blocker 登记、idle 记账与 unload 回调缝。
+    """精确 thread 的 runtime、lease 与 30 分钟 idle scope owner。
 
     单事件循环假设：全部同步方法内部无 ``await``，同步记账不需要加锁；``sweep``
-    在回调 ``await`` 期间不修改遍历集合（先快照再遍历），并以 per-thread 的在飞
-    标记（``unloading_generation``）保证同一代的 unload 回调至多触发一次。
+    先快照再遍历，并以 per-thread 的在飞 task 合并构建和关闭。
     """
 
     def __init__(
@@ -266,18 +212,17 @@ class ThreadResidencyTracker:
         clock: ResidencyClock = time.monotonic,
         wall_clock: WallClock | None = None,
         idle_timeout_seconds: float = THREAD_IDLE_UNLOAD_SECONDS,
-        unload_callback: UnloadCallback | None = None,
     ) -> None:
         if idle_timeout_seconds <= 0:
-            raise ValueError(
-                f"idle 阈值必须是正数: {idle_timeout_seconds!r}"
-            )
+            raise ValueError(f"idle 阈值必须是正数: {idle_timeout_seconds!r}")
         self._clock = clock
         self._wall_clock = wall_clock or (lambda: datetime.now(UTC))
         self._idle_timeout_seconds = idle_timeout_seconds
-        self._unload_callback = unload_callback
+        self._closing = False
         self._blocker_sources: list[ResidencyBlockerSource] = []
+        self._unload_listeners: list[Callable[[str, str, int], Awaitable[None]]] = []
         self._states: dict[tuple[str, str], _ThreadResidencyState] = {}
+        self._next_generation = 0
 
     # ---- 装配期（app/container.py） ----
 
@@ -290,17 +235,13 @@ class ThreadResidencyTracker:
             )
         self._blocker_sources.append(source)
 
-    def set_unload_callback(self, callback: UnloadCallback) -> None:
-        """装配期注册 unload 回调（runtime owner 释放可重建资源的唯一入口）。
-
-        与构造参数等价；供 container 先建 tracker、后建 runtime owner 的装配
-        顺序使用。重复注册以后一次为准，不做双轨兼容。
-        """
-        if not callable(callback):
-            raise TypeError(f"UnloadCallback 必须可调用: {type(callback)!r}")
-        self._unload_callback = callback
-
     # ---- owner / 活动入口 ----
+
+    def add_unload_listener(
+        self, listener: Callable[[str, str, int], Awaitable[None]],
+    ) -> None:
+        """外部领域 owner 的真实清理回执先于进程内 scope 释放。"""
+        self._unload_listeners.append(listener)
 
     def record_activity(self, session_id: str, thread_id: str) -> None:
         """记录 thread 活动：未被阻断时把 idle 起算锚点重置为当前时刻。
@@ -308,31 +249,11 @@ class ThreadResidencyTracker:
         阻断期间 idle 本就不累计，锚点保持 ``None``，由 blocker 解除时刻统一重启
         计时（OpenSpec 2.8：解除后重新起算）。
         """
-        state = self._ensure_state(session_id, thread_id)
+        state = self._states.get((session_id, thread_id))
+        if state is None:
+            return
         if state.unblocked_since is not None:
             self._mark_unblocked(state)
-
-    def register_generation(
-        self, session_id: str, thread_id: str
-    ) -> ThreadResidencyGeneration:
-        """登记新一代 resident runtime（generation 递增并清除上一代的卸载标记）。
-
-        新一代意味着旧的已卸载 runtime 已被 owner 重建；上一代的 unload 结果不再
-        约束新一代。
-        """
-        state = self._ensure_state(session_id, thread_id)
-        if state.runtime_managed:
-            raise RuntimeError(
-                "ThreadRuntime 已由 acquire_runtime 管理，不能手动登记 generation: "
-                f"session_id={session_id}, thread_id={thread_id}"
-            )
-        state.generation += 1
-        state.unloaded_generation = None
-        return ThreadResidencyGeneration(
-            session_id=state.session_id,
-            thread_id=state.thread_id,
-            generation=state.generation,
-        )
 
     def is_current_generation(
         self, session_id: str, thread_id: str, generation: int
@@ -347,130 +268,145 @@ class ThreadResidencyTracker:
         if state is None or generation <= 0:
             return False
         runtime = state.runtime
-        if runtime is not None and runtime.generation == generation:
-            return not runtime.closing and runtime.lifetime_scope.state == "open"
         return (
-            state.generation == generation
-            and state.unloaded_generation != generation
+            runtime is not None
+            and runtime.generation == generation
+            and not runtime.closing
+            and runtime.lifetime_scope.state == "open"
         )
 
-    async def acquire_runtime(
+    async def acquire(
         self,
-        session_id: str,
-        thread_id: str,
+        pair: MutationIntentOwner,
+        admission: ExecutionAdmission,
+        generation_key: Hashable,
         builder: ThreadRuntimeBuilder[RuntimeValue_co],
     ) -> ThreadRuntimeLease[RuntimeValue_co]:
-        """取得精确 thread 的 runtime lease，首次或 cold admission 时 single-flight 建图。
-
-        session/thread 必须由 admission 调用方显式传入。构建失败原样传播且不
-        登记 generation，下一次调用可以重试；等待中的 admission 也计作 pending
-        lease，所以 idle sweep 不会抢先关闭刚构建的 scope。
-        """
-        if not session_id or not thread_id:
-            raise ValueError("ThreadRuntime owner 必须显式提供 session_id 与 thread_id")
+        """从真实 committed admission 取得 lease，slot 不保留任何 execution 身份。"""
+        if not isinstance(pair, MutationIntentOwner) or not isinstance(
+            admission, ExecutionAdmission
+        ):
+            raise TypeError(
+                "ThreadRuntime acquire 要求 typed pair 与真实 ExecutionAdmission"
+            )
+        if (pair.session_id, pair.thread_id) != (
+            admission.session_id,
+            admission.thread_id,
+        ):
+            raise ValueError("ThreadRuntime pair 与 execution admission owner 冲突")
+        hash(generation_key)
         if not callable(builder):
-            raise TypeError(f"ThreadRuntimeBuilder 必须可调用: {type(builder)!r}")
-        state = self._ensure_state(session_id, thread_id)
-        if state.generation > 0 and not state.runtime_managed:
-            raise RuntimeError(
-                "已手动登记的 generation 不能切换为 acquire_runtime 管理: "
-                f"session_id={session_id}, thread_id={thread_id}"
-            )
-        state.runtime_managed = True
-
-        while True:
-            unload = state.runtime_unload
-            if unload is not None:
-                await asyncio.shield(unload)
-                continue
-
-            runtime = state.runtime
-            if runtime is not None:
-                if runtime.closing or runtime.lifetime_scope.state != "open":
-                    unload = self._start_runtime_unload(state, runtime)
-                    await asyncio.shield(unload)
+            raise TypeError("ThreadRuntimeBuilder 必须可调用")
+        if self._closing:
+            raise RuntimeError("ThreadResidencyTracker 正在关闭，拒绝新 admission")
+        state = self._ensure_state(pair.session_id, pair.thread_id)
+        state.pending_runtime_leases += 1
+        try:
+            while True:
+                if self._closing:
+                    raise RuntimeError(
+                        "ThreadResidencyTracker 正在关闭，拒绝新 admission"
+                    )
+                if state.runtime_unload is not None:
+                    await asyncio.shield(state.runtime_unload)
                     continue
-                runtime.active_leases += 1
-                state.unblocked_since = None
-                return ThreadRuntimeLease(
-                    self,
-                    runtime,
-                    cast(RuntimeValue_co, runtime.value),
-                )
-
-            state.pending_runtime_leases += 1
-            build = state.runtime_build
-            if build is None:
-                build = asyncio.create_task(
-                    self._build_runtime(
-                        state,
-                        cast(ThreadRuntimeBuilder[object], builder),
-                    ),
-                    name=(
-                        f"thread-runtime-builder:{state.session_id}:{state.thread_id}"
-                    ),
-                )
-                state.runtime_build = build
-                build.add_done_callback(self._consume_task_exception)
-            try:
-                runtime = await asyncio.shield(build)
-            except BaseException:
-                state.pending_runtime_leases -= 1
-                raise
-
+                runtime = state.runtime
+                if runtime is not None:
+                    if (
+                        runtime.generation_key != generation_key
+                        or runtime.closing
+                        or runtime.lifetime_scope.state != "open"
+                    ):
+                        await asyncio.shield(self._start_runtime_unload(state, runtime))
+                        continue
+                    runtime.active_leases += 1
+                    runtime.drained.clear()
+                    state.unblocked_since = None
+                    return ThreadRuntimeLease(
+                        self, runtime, cast(RuntimeValue_co, runtime.value)
+                    )
+                build = state.runtime_build
+                if build is None:
+                    if state.runtime_build_scope is not None:
+                        # 旧编译失败的资源未关闭时，不能物化下一代。
+                        await asyncio.shield(self._start_runtime_unload(state, None))
+                        continue
+                    scope = LifetimeScope(
+                        f"thread-runtime:{state.session_id}:{state.thread_id}:"
+                        f"{self._next_generation + 1}"
+                    )
+                    state.runtime_build_scope = scope
+                    # 长期 builder/reactor 不继承首次 invocation 的 admission、collector 或 scope。
+                    build = asyncio.create_task(
+                        self._build_runtime(
+                            state,
+                            generation_key,
+                            cast(ThreadRuntimeBuilder[object], builder),
+                            scope,
+                        ),
+                        name=f"thread-runtime-builder:{state.session_id}:{state.thread_id}",
+                        context=Context(),
+                    )
+                    state.runtime_build = build
+                    build.add_done_callback(self._consume_task_exception)
+                await asyncio.shield(build)
+        finally:
             state.pending_runtime_leases -= 1
-            if state.runtime is not runtime or runtime.closing:
-                # 显式关闭或代际 fence 可能已替换 owner slot；按精确 owner 重试，不能返回旧 runtime。
-                continue
-            runtime.active_leases += 1
-            state.unblocked_since = None
-            return ThreadRuntimeLease(
-                self,
-                runtime,
-                cast(RuntimeValue_co, runtime.value),
-            )
+            if not self._has_runtime_users(state):
+                self._observe(state)
+            self._drop_cold_state(state)
 
     async def _build_runtime(
         self,
         state: _ThreadResidencyState,
+        generation_key: Hashable,
         builder: ThreadRuntimeBuilder[object],
+        scope: LifetimeScope,
     ) -> _ThreadRuntimeSlot:
         task = asyncio.current_task()
         try:
-            result = builder(state.session_id, state.thread_id)
+            result = builder(state.session_id, state.thread_id, scope)
             if inspect.isawaitable(result):
-                result = await cast(Awaitable[ThreadRuntime[object]], result)
-            if not isinstance(result, ThreadRuntime):
-                raise TypeError(
-                    f"ThreadRuntimeBuilder 必须返回 ThreadRuntime: {type(result)!r}"
-                )
-            if not isinstance(result.lifetime_scope, LifetimeScope):
-                raise TypeError(
-                    "ThreadRuntime.lifetime_scope 必须是 LifetimeScope: "
-                    f"{type(result.lifetime_scope)!r}"
-                )
-            if result.lifetime_scope.state != "open":
+                result = await cast(Awaitable[object], result)
+            if scope.state != "open":
                 raise RuntimeError(
                     "ThreadRuntimeBuilder 返回的 scope 不可用: "
-                    f"state={result.lifetime_scope.state}"
+                    f"state={scope.state}"
                 )
 
-            generation = state.generation + 1
+            self._next_generation += 1
+            generation = self._next_generation
             runtime = _ThreadRuntimeSlot(
                 session_id=state.session_id,
                 thread_id=state.thread_id,
                 generation=generation,
-                value=result.value,
-                lifetime_scope=result.lifetime_scope,
+                generation_key=generation_key,
+                value=result,
+                lifetime_scope=scope,
             )
+            runtime.drained.set()
             state.runtime = runtime
+            state.runtime_build_scope = None
             state.generation = generation
             state.unloaded_generation = None
             state.unblocked_since = None
+            if not state.pending_runtime_leases:
+                self._observe(state)
             return runtime
+        except BaseException as build_error:
+            try:
+                await run_cleanup_shielded(scope.close)
+            except BaseException as close_error:  # noqa: BLE001 - 保留取消与清理双失败。
+                # scope 仍由 state 持有；两个原始错误都必须对调用方可见。
+                raise BaseExceptionGroup(
+                    "ThreadRuntime 构建与资源释放均失败", [build_error, close_error]
+                ) from None
+            state.runtime_build_scope = None
+            raise
         finally:
             if state.runtime_build is task:
                 state.runtime_build = None
+            self._drop_cold_state(state)
 
     def _release_runtime_lease(self, runtime: _ThreadRuntimeSlot) -> None:
         state = self._states.get((runtime.session_id, runtime.thread_id))
@@ -487,6 +423,8 @@ class ThreadResidencyTracker:
                 f"generation={runtime.generation}"
             )
         runtime.active_leases -= 1
+        if runtime.active_leases == 0:
+            runtime.drained.set()
         if runtime.active_leases == 0 and state.pending_runtime_leases == 0:
             # 从 lease 释放时刻重启 idle；pull blocker 查询失败时保留错误且不计 idle。
             state.unblocked_since = None
@@ -495,17 +433,22 @@ class ThreadResidencyTracker:
     def _start_runtime_unload(
         self,
         state: _ThreadResidencyState,
-        runtime: _ThreadRuntimeSlot,
+        runtime: _ThreadRuntimeSlot | None,
+        *,
+        require_unblocked: bool = True,
     ) -> asyncio.Task[None]:
         if state.runtime_unload is not None:
             return state.runtime_unload
-        runtime.closing = True
+        scope = runtime.lifetime_scope if runtime is not None else state.runtime_build_scope
+        if scope is None:
+            raise RuntimeError("ThreadRuntime 关闭缺少 owner scope")
         task = asyncio.create_task(
-            self._close_runtime(state, runtime),
+            self._close_runtime(state, runtime, scope, require_unblocked=require_unblocked),
             name=(
-                f"thread-runtime-close:{runtime.session_id}:{runtime.thread_id}:"
-                f"{runtime.generation}"
+                f"thread-runtime-close:{state.session_id}:{state.thread_id}:"
+                f"{state.generation}"
             ),
+            context=Context(),
         )
         state.runtime_unload = task
         task.add_done_callback(self._consume_task_exception)
@@ -514,20 +457,76 @@ class ThreadResidencyTracker:
     async def _close_runtime(
         self,
         state: _ThreadResidencyState,
-        runtime: _ThreadRuntimeSlot,
+        runtime: _ThreadRuntimeSlot | None,
+        scope: LifetimeScope,
+        *,
+        require_unblocked: bool,
     ) -> None:
         task = asyncio.current_task()
         try:
-            await runtime.lifetime_scope.close()
-            if state.runtime is runtime and state.generation == runtime.generation:
+            if runtime is not None:
+                await runtime.drained.wait()
+                if require_unblocked and self._observe(state):
+                    raise ThreadUnloadBlocked("Thread runtime 新增活跃 blocker，卸载已阻断")
+                # 从核实 blocker 到关闭准入之间没有 await；新 claim 必须先消费这道门。
+                runtime.closing = True
+                for listener in self._unload_listeners:
+                    await listener(runtime.session_id, runtime.thread_id, runtime.generation)
+            await scope.close()
+            if state.runtime_build_scope is scope:
+                state.runtime_build_scope = None
+            if runtime is not None and state.runtime is runtime:
                 state.runtime = None
                 state.unloaded_generation = runtime.generation
         except BaseException:
-            runtime.closing = False
+            if runtime is not None:
+                runtime.closing = False
             raise
         finally:
             if state.runtime_unload is task:
                 state.runtime_unload = None
+            self._drop_cold_state(state)
+
+    def is_unloading_generation(
+        self, session_id: str, thread_id: str, generation: int,
+    ) -> bool:
+        """领域 owner 的释放回执只接受 tracker 当前正在卸载的精确代。"""
+        state = self._states.get((session_id, thread_id))
+        return bool(
+            state is not None and state.runtime_unload is not None
+            and state.runtime is not None and state.runtime.closing
+            and state.runtime.generation == generation
+        )
+
+    def _drop_cold_state(self, state: _ThreadResidencyState) -> None:
+        """清理成功只留下全局单调令牌；失败 owner 与活跃 blocker 必须仍可重试。"""
+        if (
+            state.runtime is None and state.runtime_build is None
+            and state.runtime_build_scope is None and state.runtime_unload is None
+            and not state.pending_runtime_leases and not state.blockers
+            and self._states.get((state.session_id, state.thread_id)) is state
+        ):
+            del self._states[(state.session_id, state.thread_id)]
+
+    async def close(self) -> None:
+        """关闭进程内所有 generation；真实构建、lease 和 scope 未排空前不返回。"""
+        self._closing = True
+        errors: list[Exception] = []
+        for state in tuple(self._states.values()):
+            build = state.runtime_build
+            if build is not None:
+                try:
+                    await asyncio.shield(build)
+                except Exception as error:  # noqa: BLE001
+                    errors.append(error)
+            try:
+                runtime = state.runtime
+                if runtime is not None or state.runtime_build_scope is not None:
+                    await asyncio.shield(self._start_runtime_unload(state, runtime, require_unblocked=False))
+            except Exception as error:  # noqa: BLE001 - 排空其它 owner 后汇总显式抛出。
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("ThreadRuntime 关闭失败", errors)
 
     @staticmethod
     def _consume_task_exception(task: asyncio.Task[TaskResult]) -> None:
@@ -560,11 +559,22 @@ class ThreadResidencyTracker:
             raise ValueError("blocker kind 不能为空")
         if not reason:
             raise ValueError("blocker reason 不能为空（脱敏话术也必须说明阻断原因）")
+        self.assert_blocker_admission(session_id, thread_id)
         state = self._ensure_state(session_id, thread_id)
         state.blockers[blocker_key] = ResidencyBlocker(kind=kind, reason=reason)
         state.unblocked_since = None
 
-    def release_blocker(self, session_id: str, thread_id: str, *, blocker_key: str) -> None:
+    def assert_blocker_admission(self, session_id: str, thread_id: str) -> None:
+        """领域 owner 必须在持久登记或外部副作用前调用；同步准入不跨 await。"""
+        state = self._states.get((session_id, thread_id))
+        if state is not None and state.runtime is not None and (
+            state.runtime.closing or state.runtime.lifetime_scope.state != "open"
+        ):
+            raise ThreadUnloadBlocked("Thread runtime 正在卸载，拒绝新增外部 blocker")
+
+    def release_blocker(
+        self, session_id: str, thread_id: str, *, blocker_key: str
+    ) -> None:
         """解除一个 blocker；解除最后一个后从当前时刻重新起算 idle。
 
         解除不存在的 key 是幂等无操作（pull 源可能已先于 push 看到解除）。
@@ -580,27 +590,26 @@ class ThreadResidencyTracker:
         ):
             # 解除时重新查询 pull 源，避免 blocker 未被观察到时把阻断时长计入 idle。
             self._observe(state)
+        self._drop_cold_state(state)
 
     # ---- 查询与评估 ----
 
     def snapshot(self, session_id: str, thread_id: str) -> ThreadResidencySnapshot:
-        """只读快照：汇总 push/pull blocker 与 idle 记账，绝不触发 unload 回调。"""
-        state = self._ensure_state(session_id, thread_id)
+        """只读快照：汇总 push/pull blocker 与 idle 记账，绝不关闭 scope。"""
+        state = self._states.get((session_id, thread_id))
+        if state is None:
+            # 冷 Thread 的只读观察不制造永久记账项。
+            state = _ThreadResidencyState(session_id=session_id, thread_id=thread_id)
         blockers = self._observe(state)
         return self._build_snapshot(state, blockers)
 
     async def sweep(self) -> tuple[ThreadResidencySnapshot, ...]:
-        """评估全部已知 thread；对 cold-eligible 的触发 owner 的 unload 回调。
-
-        回调抛错原样向上传播（fail-loud），对应 thread 不标记卸载，下次 sweep 可重试；
-        只有回调成功返回后才标记 ``unloaded_generation``。标记严格按**回调前快照**
-        的 generation 做 CAS：回调 await 期间若 owner 登记了新一代（generation
-        递增），说明新一代已是当前代，绝不把新一代错标为已卸载；同一代已由另一个
-        并发 sweep 在飞卸载时，本调用方不重复触发回调。
-        """
+        """关闭全部 cold-eligible 的真实 scope；同代去重，失败保留 scope 并显式抛出。"""
         fired: list[ThreadResidencySnapshot] = []
         for key in list(self._states):
-            state = self._states[key]
+            state = self._states.get(key)
+            if state is None:
+                continue
             snapshot = await self._sweep_thread(state)
             if snapshot is not None:
                 fired.append(snapshot)
@@ -625,52 +634,13 @@ class ThreadResidencyTracker:
                 # 同代 scope 已由另一个 sweep 关闭；不重复触发。
                 return None
             unload = self._start_runtime_unload(state, runtime)
-            await asyncio.shield(unload)
+            try:
+                await asyncio.shield(unload)
+            except ThreadUnloadBlocked:
+                return None
             return self._build_snapshot(state, blockers)
 
-        callback = self._unload_callback
-        if callback is None:
-            # 没有 owner 回调就没有可释放的 LifetimeScope：保持 resident，
-            # 不虚报卸载。
-            return None
-        # 回调前快照要卸载的代；提交时一律按该快照代 CAS，绝不在回调后重读当前代。
-        target_generation = state.generation
-        if not self._begin_unload_flight(state, target_generation):
-            # 同一代已由并发 sweep 在飞卸载：不重复触发回调。
-            return None
-        request = ThreadUnloadRequest(
-            session_id=state.session_id,
-            thread_id=state.thread_id,
-            generation=target_generation,
-            idle_seconds=idle_seconds,
-        )
-        try:
-            result = callback(request)
-            if inspect.isawaitable(result):
-                await result
-        finally:
-            # 无论回调成功或抛错都清位；抛错原样向上传播，不标记卸载。
-            if state.unloading_generation == target_generation:
-                state.unloading_generation = None
-        # 跨代守卫：仅当该 thread 仍是发起本次 sweep 的同一代时才提交卸载标记。
-        # 若 await 窗口内 owner 已登记新一代（甚至已被另一 sweep 完整卸载），迟到的
-        # 旧代回调 MUST NOT 覆盖/清掉新一代的 unloaded_generation（绝不写旧代）。
-        if state.generation == target_generation:
-            state.unloaded_generation = target_generation
-        return self._build_snapshot(state, blockers)
-
-    @staticmethod
-    def _begin_unload_flight(
-        state: _ThreadResidencyState, target_generation: int
-    ) -> bool:
-        """原子登记 target_generation 的在飞卸载；同一代已在飞时返回 False。
-
-        同步段无 ``await``，单事件循环下同一代至多一个调用方登记成功。
-        """
-        if state.unloading_generation == target_generation:
-            return False
-        state.unloading_generation = target_generation
-        return True
+        return None
 
     # ---- 内部记账 ----
 
@@ -701,7 +671,9 @@ class ThreadResidencyTracker:
         if collected:
             state.unblocked_since = None
         elif state.unblocked_since is None:
-            if self._has_runtime_users(state):
+            if self._has_runtime_users(state) or (
+                state.runtime is None and state.runtime_build_scope is None
+            ):
                 return tuple(collected.values())
             # 从阻断到解除的第一次观察：从解除（观察）时刻重新起算。push 路径已在
             # release_blocker 精确起算过，这里覆盖 pull 恢复路径。
@@ -724,7 +696,7 @@ class ThreadResidencyTracker:
         if state.generation <= 0:
             # 没有 owner 登记过的 runtime generation 就没有可卸载的 LifetimeScope。
             return False
-        if state.runtime_build is not None or state.pending_runtime_leases:
+        if state.runtime_build_scope is not None or state.pending_runtime_leases:
             return False
         if state.runtime_unload is not None:
             return False
@@ -741,7 +713,6 @@ class ThreadResidencyTracker:
         blockers: tuple[ResidencyBlocker, ...],
     ) -> ThreadResidencySnapshot:
         idle_seconds = self._idle_seconds(state)
-        cold = state.unloaded_generation == state.generation and state.generation > 0
         if blockers:
             deadline: datetime | None = None
         elif idle_seconds is not None:
@@ -752,21 +723,18 @@ class ThreadResidencyTracker:
         execution_state = "+".join(sorted({blocker.kind for blocker in blockers}))
         if not execution_state:
             execution_state = "active" if self._has_runtime_users(state) else "idle"
-        if state.runtime_managed:
-            runtime = state.runtime
-            if state.runtime_build is not None:
-                residency: ThreadResidencyStateName = "loading"
-            elif state.runtime_unload is not None or (
-                runtime is not None
-                and (runtime.closing or runtime.lifetime_scope.state != "open")
-            ):
-                residency = "unloading"
-            elif runtime is None:
-                residency = "cold"
-            else:
-                residency = "resident"
+        runtime = state.runtime
+        if state.runtime_build is not None:
+            residency: ThreadResidencyStateName = "loading"
+        elif state.runtime_build_scope is not None or state.runtime_unload is not None or (
+            runtime is not None
+            and (runtime.closing or runtime.lifetime_scope.state != "open")
+        ):
+            residency = "unloading"
+        elif runtime is None:
+            residency = "cold"
         else:
-            residency = "cold" if state.generation == 0 or cold else "resident"
+            residency = "resident"
         return ThreadResidencySnapshot(
             session_id=state.session_id,
             thread_id=state.thread_id,
@@ -786,13 +754,9 @@ __all__ = [
     "ResidencyBlocker",
     "ResidencyBlockerSource",
     "ResidencyClock",
-    "ThreadResidencyGeneration",
     "ThreadResidencySnapshot",
     "ThreadResidencyTracker",
-    "ThreadRuntime",
     "ThreadRuntimeBuilder",
     "ThreadRuntimeLease",
-    "ThreadUnloadRequest",
-    "UnloadCallback",
     "WallClock",
 ]

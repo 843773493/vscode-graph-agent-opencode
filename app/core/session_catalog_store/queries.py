@@ -15,7 +15,10 @@ from app.core.session_catalog_store._schema import (
     _LOCATOR_PREFIX,
     _NODE_COLUMNS,
 )
-from app.core.session_catalog_store.contracts import SessionCatalogNode
+from app.core.session_catalog_store.contracts import (
+    CatalogMaintenanceRequiredError,
+    SessionCatalogNode,
+)
 from app.core.session_catalog_store.validators import (
     validate_path_budget,
     validate_storage_relative_locator,
@@ -39,6 +42,22 @@ class CatalogQueriesMixin:
         """返回节点投影；不存在抛 KeyError。"""
         with self.read_transaction() as connection:
             return self._node_from_row(self._require_node(connection, node_id))
+
+    def read_nodes_snapshot(self) -> tuple[int, list[SessionCatalogNode]]:
+        """在同一只读事务中返回 navigation revision 与全部节点行。"""
+        with self.read_transaction() as connection:
+            generation_row = connection.execute(
+                "SELECT navigation_revision FROM catalog_metadata "
+                "WHERE singleton_id = 1"
+            ).fetchone()
+            if generation_row is None:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog 缺少 navigation revision 记录"
+                )
+            rows = connection.execute(
+                f"SELECT {_NODE_COLUMNS} FROM nodes ORDER BY node_id"
+            ).fetchall()
+            return int(generation_row[0]), [self._node_from_row(row) for row in rows]
 
     def list_children(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TypeVar
 
 import httpx
@@ -31,12 +32,14 @@ class GatewaySessionContextClient:
         gateway_url: str | None = None,
         timeout_seconds: float | None = None,
         config_service: ConfigService | None = None,
+        local_token_supplier: Callable[[], str],
     ) -> None:
         self._connection = GatewayTransportConnection(
             gateway_url=gateway_url,
             timeout_seconds=timeout_seconds,
             config_service=config_service,
         )
+        self._local_token_supplier = local_token_supplier
 
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
         return await self._request(
@@ -84,11 +87,9 @@ class GatewaySessionContextClient:
             raise WorkspaceSessionContextAccessError(
                 "workspace_id 不能为空；请使用 Gateway inventory 返回的工作区 ID"
             )
-        headers = (
-            {"X-BoxTeam-Workspace-Id": workspace_id.strip()}
-            if workspace_id is not None
-            else None
-        )
+        headers = {"X-Local-Token": self._local_token_supplier()}
+        if workspace_id is not None:
+            headers["X-BoxTeam-Workspace-Id"] = workspace_id.strip()
         async with httpx.AsyncClient(
             base_url=self._connection.resolve_gateway_url(),
             timeout=self._connection.resolve_timeout_seconds(),

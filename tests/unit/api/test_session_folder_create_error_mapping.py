@@ -1,20 +1,8 @@
-"""冻结 ``POST /session-catalog/folders`` 的失败分类与同族三入口一致。
-
-``create_folder`` 原先走只返回原始 record 的**单条** ``_submit``，不经
-``_submit_batch`` 的 ``_raise_for_rejected`` 归口，导致被拒 operation 以裸
-``RuntimeError`` 冒泡成 500（隔离副本实测 ``error_code=node_not_found`` 却回 500）。
-本文件分两层锁住修复后的唯一归口：
-
-1. 真实 SQLite catalog + 真实 ``SessionCatalogService`` + 真实 HTTP 封套，证明
-   客户端传不存在的父节点落 404 且 detail 无 Python repr 引号；
-2. handler 级 stub 覆盖，证明 ``ValueError``（形态/语义冲突）与 ``RuntimeError``
-   （在途导航冲突）都归一到 409，且空目录创建仍是 200，成功契约不变。
-
-按 tests/unit/api 规范：依赖覆盖隔离 + 不启动真实后端进程。
-"""
+"""验证会话文件夹写入使用 durable navigation operation。"""
 
 from __future__ import annotations
 
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,8 +14,13 @@ from app import main
 from app.api import session_navigation as navigation_api
 from app.api.deps import get_session_catalog_service, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
-from app.schemas.internal_v2.session_navigation import SessionFolderCreateRequest
+from app.schemas.internal_v2.session_navigation.operations import (
+    NavigationMutationEnqueueRequest,
+)
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.queue_store import (
+    NavigationMutationConflictError,
+)
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -48,14 +41,15 @@ class _SessionServiceFacade:
         raise KeyError(f"会话目录节点不存在: {session_id}")
 
 
-class _RejectingCatalogService:
-    """按指定异常模拟 create_folder 的服务端拒绝。"""
+class _RejectingQueueService:
+    """按指定 admission 异常模拟 durable queue service。"""
 
     def __init__(self, error: Exception) -> None:
-        self._error = error
+        self.workspace_id = WORKSPACE_ID
+        self.error = error
 
-    async def create_folder(self, payload: SessionFolderCreateRequest):
-        raise self._error
+    async def submit_operation_batch(self, payload, scope):
+        raise self.error
 
 
 @pytest.fixture()
@@ -90,117 +84,161 @@ def _client(service: object) -> tuple[FastAPI, TestClient]:
     return test_app, TestClient(test_app, raise_server_exceptions=False)
 
 
-def test_create_folder_unknown_parent_maps_to_404_not_500(
+def _headers(request_id: str) -> dict[str, str]:
+    return {
+        "X-Local-Token": "local-dev-token",
+        "X-Request-ID": request_id,
+        "X-BoxTeam-Gateway-Id": "gateway_test",
+        "X-BoxTeam-Navigation-Actor": "user:test-user",
+    }
+
+
+def _create_folder_payload(
+    *,
+    operation_id: str,
+    catalog_revision: int,
+    name: str,
+    parent_node_id: str | None = None,
+) -> dict[str, object]:
+    intent: dict[str, object] = {
+        "client_operation_id": operation_id,
+        "client_sequence": 1,
+        "kind": "create_folder",
+        "base_catalog_revision": catalog_revision,
+        "name": name,
+    }
+    if parent_node_id is not None:
+        intent["parent_node_id"] = parent_node_id
+    return NavigationMutationEnqueueRequest.model_validate(
+        {"intents": [intent]}
+    ).model_dump(mode="json")
+
+
+def _wait_for_terminal(client: TestClient, operation_id: str) -> dict[str, object]:
+    for attempt in range(100):
+        response = client.get(
+            "/api/v1/session-catalog/operations",
+            params={"operation_id": operation_id},
+            headers=_headers(f"req_status_{attempt}"),
+        )
+        assert response.status_code == 200, response.text
+        items = response.json()["data"]["items"]
+        if items and items[0]["state"] in {
+            "committed",
+            "rejected",
+            "cancelled",
+            "dependency_failed",
+        }:
+            return items[0]
+        time.sleep(0.05)
+    raise AssertionError(f"导航 operation 未到终态: {operation_id}")
+
+
+def test_unknown_parent_is_reported_by_durable_rejection(
     service: SessionCatalogService,
 ) -> None:
-    """客户端传不存在的父节点 → 404 + 纯文本 detail（原 500 + RuntimeError 类名）。"""
+    operation_id = "op_" + "a" * 32
     test_app, client = _client(service)
     try:
         with client:
             response = client.post(
-                "/api/v1/session-catalog/folders",
-                json={"name": "子目录", "parent_folder_id": MISSING_NODE},
-                headers={"X-Request-ID": "req_create_missing"},
+                "/api/v1/session-catalog/operations:enqueue",
+                json=_create_folder_payload(
+                    operation_id=operation_id,
+                    catalog_revision=service.path_resolver.revision,
+                    name="子目录",
+                    parent_node_id=MISSING_NODE,
+                ),
+                headers=_headers("req_create_missing"),
             )
+            assert response.status_code == 202, response.text
+            assert response.json()["request_id"] == "req_create_missing"
+            assert response.json()["data"]["accepted_count"] == 1
+            assert (
+                response.json()["data"]["receipts"][0]["operation_id"] == operation_id
+            )
+            receipt = _wait_for_terminal(client, operation_id)
     finally:
         test_app.dependency_overrides.clear()
 
-    assert response.status_code == 404
-    assert response.json() == {
-        "detail": f"会话目录节点不存在: {MISSING_NODE}",
-        "request_id": "req_create_missing",
-    }
-    assert "RuntimeError" not in response.text
-
-
-@pytest.mark.parametrize(
-    ("error", "expected_detail"),
-    [
-        (ValueError("目标节点不是会话文件夹: f1"), "目标节点不是会话文件夹: f1"),
-        (RuntimeError("导航 operation 被拒绝"), "导航 operation 被拒绝"),
-    ],
-)
-def test_create_folder_rejection_maps_to_409(
-    error: Exception,
-    expected_detail: str,
-) -> None:
-    """形态/语义冲突与在途导航冲突都落 409，与同族三入口同一分类。"""
-    test_app, client = _client(_RejectingCatalogService(error))
-    try:
-        with client:
-            response = client.post(
-                "/api/v1/session-catalog/folders",
-                json={"name": "子目录"},
-                headers={"X-Request-ID": "req_create_conflict"},
-            )
-    finally:
-        test_app.dependency_overrides.clear()
-
-    assert response.status_code == 409
-    assert response.json() == {
-        "detail": expected_detail,
-        "request_id": "req_create_conflict",
-    }
-
-
-def test_create_folder_success_returns_root_page(service: SessionCatalogService) -> None:
-    """正常创建仍是 200 + 根页，修复不改变成功契约。"""
-    test_app, client = _client(service)
-    try:
-        with client:
-            response = client.post(
-                "/api/v1/session-catalog/folders",
-                json={"name": "正常目录"},
-                headers={"X-Request-ID": "req_create_ok"},
-            )
-    finally:
-        test_app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["data"]["items"][-1]["name"] == "正常目录"
-
-
-class _RejectingUpdateService:
-    """按指定异常模拟 PATCH /session-catalog/folders/{folder_id} 的服务端拒绝。"""
-
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    async def update_folder(self, folder_id: str, payload):
-        raise self._error
+    assert receipt["state"] == "rejected"
+    assert receipt["error_code"] == "node_not_found"
+    assert receipt["error_detail"] == f"会话目录节点不存在: {MISSING_NODE}"
+    assert "KeyError" not in str(receipt["error_detail"])
 
 
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_detail"),
     [
-        # 未知节点：与同族 create/delete/assign/move 一致落 404。
-        (KeyError("会话文件夹不存在: f1"), 404, "会话文件夹不存在: f1"),
-        # 改名/移动的形态非法：409（改前被落成 400）。
-        (ValueError("目标节点不是会话文件夹: f1"), 409, "目标节点不是会话文件夹: f1"),
-        # 在途导航/CAS 冲突：409（改前被落成 400，且 detail 带 repr 引号）。
-        (RuntimeError("导航 operation 被拒绝"), 409, "导航 operation 被拒绝"),
+        (
+            KeyError("会话目录 operation 不存在: op_missing"),
+            400,
+            "会话目录 operation 不存在: op_missing",
+        ),
+        (ValueError("导航 intent 形态非法"), 400, "导航 intent 形态非法"),
+        (TypeError("导航 intent 类型非法"), 400, "导航 intent 类型非法"),
+        (
+            NavigationMutationConflictError("operation preimage 冲突"),
+            409,
+            "operation preimage 冲突",
+        ),
     ],
 )
-def test_update_folder_maps_failures_consistently(
+def test_enqueue_preserves_admission_error_mapping(
     error: Exception,
     expected_status: int,
     expected_detail: str,
 ) -> None:
-    """PATCH folder 的失败分类必须与同族四入口一致（404/409），不得是 400。"""
-    test_app, client = _client(_RejectingUpdateService(error))
+    test_app, client = _client(_RejectingQueueService(error))
     try:
         with client:
-            response = client.patch(
-                "/api/v1/session-catalog/folders/ses_example",
-                json={"name": "新名"},
-                headers={"X-Request-ID": "req_update_conflict"},
+            response = client.post(
+                "/api/v1/session-catalog/operations:enqueue",
+                json=_create_folder_payload(
+                    operation_id="op_" + "b" * 32,
+                    catalog_revision=0,
+                    name="冲突目录",
+                ),
+                headers=_headers("req_enqueue_error"),
             )
     finally:
         test_app.dependency_overrides.clear()
 
-    assert response.status_code == expected_status, response.text
+    assert response.status_code == expected_status
     assert response.json() == {
         "detail": expected_detail,
-        "request_id": "req_update_conflict",
+        "request_id": "req_enqueue_error",
     }
-    assert "RuntimeError" not in response.text
+
+
+def test_create_folder_returns_durable_receipt_and_commits_to_catalog(
+    service: SessionCatalogService,
+) -> None:
+    operation_id = "op_" + "c" * 32
+    test_app, client = _client(service)
+    try:
+        with client:
+            response = client.post(
+                "/api/v1/session-catalog/operations:enqueue",
+                json=_create_folder_payload(
+                    operation_id=operation_id,
+                    catalog_revision=service.path_resolver.revision,
+                    name="正常目录",
+                ),
+                headers=_headers("req_create_ok"),
+            )
+            assert response.status_code == 202, response.text
+            assert response.json()["request_id"] == "req_create_ok"
+            receipt = _wait_for_terminal(client, operation_id)
+            export_response = client.get(
+                "/api/v1/session-catalog/export",
+                headers=_headers("req_catalog_export"),
+            )
+    finally:
+        test_app.dependency_overrides.clear()
+
+    assert receipt["state"] == "committed"
+    assert receipt["kind"] == "create_folder"
+    assert export_response.status_code == 200, export_response.text
+    folders = export_response.json()["data"]["items"]
+    assert any(item["node_id"] == receipt["created_node_id"] for item in folders)

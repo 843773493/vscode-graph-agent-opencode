@@ -9,6 +9,7 @@ message TerminalAttach {
   optional uint32 cols = 2;
   optional uint32 rows = 3;
   optional uint32 after_sequence = 4;
+  string grant_token = 5;
 }
 
 message TerminalDetach {

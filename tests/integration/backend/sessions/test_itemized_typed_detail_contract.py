@@ -58,7 +58,9 @@ def test_plain_request_recovery_requires_explicit_source_identity(
     )
     # 新 plan 的 source locator 指向旧 selection，最终 detail 则必须重新分配。
     source = (
-        DetailRef(session_id, "unrelated-assembly", "unrelated-detail")
+        DetailRef(
+            session_id, draft.thread_id, "unrelated-assembly", "unrelated-detail"
+        )
         if change_identity
         else first.selection[2].detail_ref
     )
@@ -97,7 +99,9 @@ def test_plain_request_recovery_requires_explicit_source_identity(
         entry = second.selection[2]
         assert entry.ref.source_ref == first.selection[2].detail_ref
         assert entry.detail_ref != entry.ref.source_ref
-        entry.detail_ref.require_owner(session_id, second.assembly_id)
+        entry.detail_ref.require_owner(
+            session_id, second.thread_id, second.assembly_id
+        )
         assert (
             _project(restarted, session_id, first.assembly_id)["native"]["request"]
             == _project(restarted, session_id, second.assembly_id)["native"]["request"]
@@ -130,8 +134,10 @@ def test_sealed_detail_shape_is_typed_and_not_part_of_context_ref(
         assert not hasattr(entry.ref, "detail_ref")
         assert "detail_ref" not in entry.ref.to_dict()
         ref = entry.detail_ref
-        ref.require_owner(session_id, snapshot.assembly_id)
-        assert set(ref.to_dict()) == {"session_id", "assembly_id", "detail_id"}
+        ref.require_owner(session_id, snapshot.thread_id, snapshot.assembly_id)
+        assert set(ref.to_dict()) == {
+            "session_id", "thread_id", "assembly_id", "detail_id"
+        }
         path = session / detail_relative_path(ref)
         assert path.name == ref.detail_id and path.suffix == ""
         payload = json.loads(path.read_text(encoding="utf-8"))

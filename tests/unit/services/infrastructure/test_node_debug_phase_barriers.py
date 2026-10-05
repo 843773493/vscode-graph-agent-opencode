@@ -36,7 +36,10 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.catalog_session_bundle import (
+    fixture_main_thread_id,
+    seed_catalog_session_bundle,
+)
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
@@ -44,6 +47,8 @@ from tests.support.node_debug_dependencies import (
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
 _OTHER_SESSION_ID = "ses_00000000400070008000000000000002"
 _CONFIGURATION_ID = "dbgcfg_44444444444444444444444444444444"
+_PARENT_MAIN_THREAD_ID = fixture_main_thread_id(_PARENT_SESSION_ID)
+_OTHER_MAIN_THREAD_ID = fixture_main_thread_id(_OTHER_SESSION_ID)
 
 
 class _FixedPortConfig:
@@ -85,7 +90,12 @@ def _free_port() -> int:
 
 
 def _create_session(sessions_root: Path, session_id: str) -> Path:
-    return seed_catalog_session_bundle(sessions_root, session_id, title=session_id).directory
+    return seed_catalog_session_bundle(
+        sessions_root,
+        session_id,
+        title=session_id,
+        main_thread_id=fixture_main_thread_id(session_id),
+    ).directory
 
 
 def _service(
@@ -122,14 +132,22 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
     service = _service(tmp_path, resolver, port=_free_port())
 
     try:
-        for session_id, name in (
-            (_PARENT_SESSION_ID, "主方案"),
-            (_OTHER_SESSION_ID, "另一个方案"),
+        for session_id, thread_id, name in (
+            (
+                _PARENT_SESSION_ID,
+                resolver.main_thread_id(_PARENT_SESSION_ID),
+                "主方案",
+            ),
+            (
+                _OTHER_SESSION_ID,
+                resolver.main_thread_id(_OTHER_SESSION_ID),
+                "另一个方案",
+            ),
         ):
             created = await service.create_configuration(
                 NodeDebugConfigurationCreateRequest(
                     session_id=session_id,
-                    thread_id="main",
+                    thread_id=thread_id,
                     name=name,
                     script_path="entry.mjs",
                 )
@@ -138,7 +156,7 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
 
         first = await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=resolver.main_thread_id(_PARENT_SESSION_ID),
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -149,19 +167,22 @@ async def test_fixed_inspector_port_conflict_is_owner_isolated(tmp_path: Path) -
         with pytest.raises(RuntimeError, match="启动 Node Inspector 失败"):
             await service.start(
                 session_id=_OTHER_SESSION_ID,
-                thread_id="main",
+                thread_id=resolver.main_thread_id(_OTHER_SESSION_ID),
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             )
 
-        first_after_conflict = await service.get_state(_PARENT_SESSION_ID, "main")
+        parent_thread_id = resolver.main_thread_id(_PARENT_SESSION_ID)
+        first_after_conflict = await service.get_state(
+            _PARENT_SESSION_ID, parent_thread_id
+        )
         assert first_after_conflict.status == "running"
         assert first_after_conflict.pid == first.pid
         assert first_after_conflict.session_id == _PARENT_SESSION_ID
-        assert first_after_conflict.thread_id == "main"
+        assert first_after_conflict.thread_id == parent_thread_id
         second_claim = service._session_store.read_launch_claim(  # type: ignore[union-attr]
-            _OTHER_SESSION_ID, "main"
+            _OTHER_SESSION_ID, resolver.main_thread_id(_OTHER_SESSION_ID)
         )
         assert second_claim is not None
         assert second_claim.phase == "settled"
@@ -184,12 +205,13 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     _create_session(sessions_root, _PARENT_SESSION_ID)
+    main_thread_id = resolver.main_thread_id(_PARENT_SESSION_ID)
     port = _free_port()
     service = _service(tmp_path, resolver, port=port, timeout=0.5)
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=main_thread_id,
             name="phase barrier",
             script_path="entry.mjs",
         )
@@ -208,7 +230,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     start_task = asyncio.create_task(
         service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=main_thread_id,
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -218,12 +240,12 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
         await start_task
 
     claim = service._session_store.read_launch_claim(  # type: ignore[union-attr]
-        _PARENT_SESSION_ID, "main"
+        _PARENT_SESSION_ID, main_thread_id
     )
     assert claim is not None
     assert claim.phase == "launch_pending"
     assert claim.pid is None
-    runtime = service._runtimes[(_PARENT_SESSION_ID, "main")]
+    runtime = service._runtimes[(_PARENT_SESSION_ID, main_thread_id)]
     process = runtime.process
     assert process is not None
     assert process.returncode is None
@@ -231,10 +253,10 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     # 新 backend 只能把“无 PID 的 launch_pending”提升为
     # reconcile_required，不能把同端口上碰巧存在的实例当成旧 owner。
     restored = _service(tmp_path, resolver, port=port, timeout=0.5)
-    blocked = await restored.get_state(_PARENT_SESSION_ID, "main")
+    blocked = await restored.get_state(_PARENT_SESSION_ID, main_thread_id)
     assert blocked.status == "reconcile_required"
     blocked_claim = restored._session_store.read_launch_claim(  # type: ignore[union-attr]
-        _PARENT_SESSION_ID, "main"
+        _PARENT_SESSION_ID, main_thread_id
     )
     assert blocked_claim is not None
     assert blocked_claim.phase == "reconcile_required"
@@ -257,7 +279,7 @@ async def test_spawn_pid_barrier_recovery_does_not_kill_reused_port_process(
     try:
         await asyncio.sleep(0.1)
         assert foreign.returncode is None
-        still_blocked = await restored.get_state(_PARENT_SESSION_ID, "main")
+        still_blocked = await restored.get_state(_PARENT_SESSION_ID, main_thread_id)
         assert still_blocked.status == "reconcile_required"
         assert foreign.returncode is None
     finally:
@@ -277,7 +299,7 @@ def _spawned_claim(*, pid: int, marker: str) -> NodeDebugLaunchClaimDTO:
     return claim_with_spawn_identity(
         new_launch_claim(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             configuration_id=_CONFIGURATION_ID,
             inspector_host="127.0.0.1",
             inspector_port=9229,

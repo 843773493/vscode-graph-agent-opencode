@@ -252,21 +252,18 @@ class NodeDebugConfigurationRegistry:
     def copy_configuration(
         self,
         *,
-        source_session_id: str,
+        source_configuration: NodeDebugConfigurationDTO,
         target_session_id: str,
-        configuration_id: str,
-        source_thread_id: str,
         target_thread_id: str,
         name: str | None = None,
         activate: bool = False,
     ) -> NodeDebugConfigurationDTO:
-        source = self.get(source_session_id, source_thread_id, configuration_id)
         self.ensure_loaded(target_session_id, target_thread_id)
-        target_name = (name or source.name).strip()
+        target_name = (name or source_configuration.name).strip()
         self.assert_unique_name(target_session_id, target_name, thread_id=target_thread_id)
         now = datetime.now(UTC)
         copied = self._configuration_factory.validate_configuration(
-            source.model_copy(
+            source_configuration.model_copy(
                 update={
                     "configuration_id": create_prefixed_id("dbgcfg"),
                     "name": target_name,

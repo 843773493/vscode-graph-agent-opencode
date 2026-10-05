@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 source, destination = (Path(value) for value in sys.argv[1:3])
-for name in ("index.sqlite", "index.sqlite-wal", "index.sqlite-journal"):
+for name in sys.argv[3:]:
     path = source / name
     if path.is_symlink():
         raise RuntimeError("source SQLite symlink forbidden")
@@ -26,7 +26,9 @@ for name in ("index.sqlite", "index.sqlite-wal", "index.sqlite-journal"):
 """
 
 
-def copy_live_sqlite_snapshot(source: Path, destination: Path) -> None:
+def copy_live_sqlite_snapshot(
+    source: Path, destination: Path, *, filenames: tuple[str, ...] = SQLITE_COPY_FILES,
+) -> None:
     """调用方持有 rollout 共享锁；父进程不 open/close live DB/WAL/journal。
 
     只复制已发布 source 的权威 SQLite 字节，SHM 在私有副本中重建。
@@ -34,7 +36,7 @@ def copy_live_sqlite_snapshot(source: Path, destination: Path) -> None:
     copyfile/copytree；正文 detail 与密钥不经过该子进程。
     """
     result = subprocess.run(
-        [sys.executable, "-I", "-c", _COPY_SCRIPT, str(source), str(destination)],
+        [sys.executable, "-I", "-c", _COPY_SCRIPT, str(source), str(destination), *filenames],
         check=False,
         capture_output=True,
         timeout=30,

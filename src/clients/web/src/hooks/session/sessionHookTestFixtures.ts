@@ -1,10 +1,29 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Session } from "../../types/backend";
+import type { GatewayUserAccess, Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import {
+  addCatalogOutboxIntent,
+  applyCatalogOutboxReceipts,
+  assignCatalogOutboxOperationSequence,
+  createCatalogOutbox,
+  markCatalogOutboxOperationPersisted,
+  pruneReconciledCatalogOutbox,
+  type CatalogOutboxIntent,
+  type CatalogOutboxOptions,
+} from "../../state/session/sessionCatalogOutbox";
+import type {
+  CatalogOutboxDispatchOutcome,
+  CatalogOutboxDriver,
+} from "./sessionCatalogOutboxDriver";
+import type {
+  SessionCatalogOutboxHandle,
+  SessionCatalogOutboxRuntime,
+  SessionCatalogOutboxSnapshot,
+} from "./sessionCatalogOutboxRuntime";
 import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { useSessionGeneratorResources } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { useSessionLifecycleActions } from "./useSessionLifecycleActions";
@@ -18,6 +37,7 @@ import {
   type SessionViewStateHost,
 } from "./useSessionViewState";
 import { invalidateGatewayToken } from "../../api/http";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 /**
  * 会话级 hook 测试共享夹具。
@@ -36,6 +56,27 @@ const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "document",
 );
+export const TEST_WORKSPACE_REQUEST_TARGET: GatewayWorkspaceRequestTarget = {
+  workspace_id: "ws-test",
+  backend_workspace_id: "00000000-0000-0000-0000-000000000001",
+  connection_kind: "local",
+};
+const DEFAULT_WORKSPACE_REQUEST_TARGETS = [TEST_WORKSPACE_REQUEST_TARGET] as const;
+const TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID = new Map<
+  string,
+  readonly GatewayWorkspaceRequestTarget[]
+>([[TEST_WORKSPACE_REQUEST_TARGET.workspace_id, DEFAULT_WORKSPACE_REQUEST_TARGETS]]);
+
+function testWorkspaceTargetsFor(
+  gatewayWorkspaceId: string | null,
+): readonly GatewayWorkspaceRequestTarget[] {
+  if (gatewayWorkspaceId === null) return DEFAULT_WORKSPACE_REQUEST_TARGETS;
+  const cached = TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID.get(gatewayWorkspaceId);
+  if (cached) return cached;
+  const targets = [{ ...TEST_WORKSPACE_REQUEST_TARGET, workspace_id: gatewayWorkspaceId }];
+  TEST_WORKSPACE_TARGETS_BY_GATEWAY_ID.set(gatewayWorkspaceId, targets);
+  return targets;
+}
 
 /** 统一的后端响应信封，request_id 必须是合法非空字符串。 */
 export function apiResponse(data: unknown, status = 200): Response {
@@ -95,13 +136,231 @@ export function installGatewayFetch(
         method,
         init,
       });
-      if (response === undefined) {
-        throw new Error(`测试收到未声明请求: ${method} ${parsed.pathname}`);
+      if (response !== undefined) return await response;
+      const breadcrumbPrefix = "/api/v1/session-catalog/breadcrumb/";
+      if (method === "GET" && parsed.pathname.startsWith(breadcrumbPrefix)) {
+        const sessionId = decodeURIComponent(parsed.pathname.slice(breadcrumbPrefix.length));
+        return sessionCatalogBreadcrumbResponse(sessionId);
       }
-      return await response;
+      if (method === "GET" && parsed.pathname === "/api/v1/session-catalog/children") {
+        return catalogChildrenResponse(
+          "catalog-revision-4",
+          [],
+          parsed.searchParams.get("parent_node_id"),
+          4,
+        );
+      }
+      throw new Error(`测试收到未声明请求: ${method} ${parsed.pathname}`);
     },
     { preconnect: originalFetch.preconnect },
   ) as typeof fetch;
+}
+
+export function testGatewayUserAccess(): GatewayUserAccess {
+  return {
+    kind: "guest",
+    user_id: "",
+    lease_generation: 0,
+    expires_at: "",
+    takeover: false,
+  };
+}
+
+export interface TestCatalogMutationResult {
+  state?: "committed" | "rejected" | "cancelled" | "dependency_failed";
+  errorCode?: string;
+  errorDetail?: string;
+}
+
+export interface TestSessionCatalogOutboxRuntime {
+  runtime: SessionCatalogOutboxRuntime;
+  errors: string[];
+  pruneCalls: Array<{ catalogRevision: number; operationIds: readonly string[] | undefined }>;
+  submitted: Array<{
+    workspaceId: string;
+    intent: CatalogOutboxIntent;
+    options: CatalogOutboxOptions;
+  }>;
+}
+
+/** 生命周期与资源树 hook 的确定性 outbox 桩；实际状态转移仍复用生产纯状态机。 */
+export function createTestSessionCatalogOutboxRuntime(options: {
+  result?: (intent: CatalogOutboxIntent) => TestCatalogMutationResult;
+  dispatchOutcome?: CatalogOutboxDispatchOutcome;
+} = {}): TestSessionCatalogOutboxRuntime {
+  const listeners = new Set<() => void>();
+  const handles = new Map<string, SessionCatalogOutboxHandle>();
+  const entries = new Map<string, {
+    gatewayWorkspaceId: string;
+    principal: string;
+    partitionKey: string;
+    outbox: ReturnType<typeof createCatalogOutbox>;
+  }>();
+  const errors: string[] = [];
+  const pruneCalls: TestSessionCatalogOutboxRuntime["pruneCalls"] = [];
+  const submitted: TestSessionCatalogOutboxRuntime["submitted"] = [];
+  let nextOperationId = 1;
+  let snapshot: SessionCatalogOutboxSnapshot = new Map();
+
+  const publish = (handle: SessionCatalogOutboxHandle, outbox: ReturnType<typeof createCatalogOutbox>) => {
+    const key = `${handle.gatewayWorkspaceId}\u0000${handle.partition.principal}`;
+    entries.set(key, {
+      gatewayWorkspaceId: handle.gatewayWorkspaceId,
+      principal: handle.partition.principal,
+      partitionKey: handle.partitionKey,
+      outbox,
+    });
+    snapshot = new Map(entries);
+    for (const listener of listeners) listener();
+  };
+
+  const openWorkspace: SessionCatalogOutboxRuntime["openWorkspace"] = async (
+    workspaceTarget,
+    access,
+  ) => {
+    const gatewayWorkspaceId = workspaceTarget.workspace_id;
+    const backendWorkspaceId = workspaceTarget.backend_workspace_id;
+    if (!backendWorkspaceId) throw new Error("测试 Gateway workspace target 缺少 backend_workspace_id");
+    const principal = access.kind === "guest"
+      ? "guest"
+      : access.user_id ? `user:${access.user_id}` : "";
+    if (!principal) throw new Error("测试 outbox 缺少认证主体");
+    const scope = `${gatewayWorkspaceId}\u0000${principal}`;
+    const existing = handles.get(scope);
+    if (existing) return existing;
+
+    let outbox = createCatalogOutbox({
+      gatewayId: "gateway-test",
+      workspaceId: backendWorkspaceId,
+      principal,
+    });
+    let handle!: SessionCatalogOutboxHandle;
+    const driver: CatalogOutboxDriver = {
+      restore: async () => outbox,
+      reload: async () => outbox,
+      current: () => outbox,
+      applyIntent: async (operationId, intent, intentOptions) => {
+        outbox = addCatalogOutboxIntent(outbox, operationId, intent, intentOptions);
+        const sequence = outbox.operations.length;
+        outbox = assignCatalogOutboxOperationSequence(outbox, operationId, sequence);
+        outbox = markCatalogOutboxOperationPersisted(outbox, operationId);
+        const result = options.result?.(intent) ?? {};
+        const state = result.state ?? "committed";
+        outbox = applyCatalogOutboxReceipts(outbox, [{
+          operation_id: operationId,
+          client_sequence: sequence,
+          queue_seq: sequence,
+          kind: intent.kind,
+          state,
+          created_node_id: intent.kind === "create_folder" ? `fld_${operationId}` : null,
+          committed_catalog_revision: state === "committed"
+            ? intentOptions.baseCatalogRevision + 1
+            : null,
+          error_code: result.errorCode ?? (state === "committed" ? null : "test_rejection"),
+          error_detail: result.errorDetail ?? null,
+          pending_settlement: false,
+          receipt_revision: sequence,
+          updated_at: "2026-10-04T00:00:00Z",
+        }]);
+        publish(handle, outbox);
+        return "accepted";
+      },
+      reconcile: async () => outbox,
+      deactivate: () => undefined,
+      prune: async (catalogRevision, operationIds) => {
+        pruneCalls.push({ catalogRevision, operationIds });
+        outbox = pruneReconciledCatalogOutbox(outbox, catalogRevision, operationIds);
+        publish(handle, outbox);
+        return outbox;
+      },
+    };
+    const initialOutbox = outbox;
+    handle = {
+      gatewayWorkspaceId,
+      workspaceTarget,
+      partition: initialOutbox.partition,
+      partitionKey: `${initialOutbox.partition.gatewayId}\u0000${initialOutbox.partition.workspaceId}\u0000${initialOutbox.partition.principal}`,
+      driver,
+    };
+    handles.set(scope, handle);
+    publish(handle, outbox);
+    return handle;
+  };
+
+  const submit: SessionCatalogOutboxRuntime["submit"] = async (
+    workspaceTarget,
+    access,
+    intent,
+    intentOptions,
+  ) => {
+    const handle = await openWorkspace(workspaceTarget, access);
+    const operationId = `test_catalog_operation_${nextOperationId++}`;
+    submitted.push({ workspaceId: workspaceTarget.workspace_id, intent, options: intentOptions });
+    const actualOutcome = await handle.driver.applyIntent(operationId, intent, intentOptions);
+    return {
+      handle,
+      operationId,
+      dispatchOutcome: options.dispatchOutcome ?? actualOutcome,
+    };
+  };
+
+  const waitForTerminal: SessionCatalogOutboxRuntime["waitForTerminal"] = async (
+    handle,
+    operationId,
+  ) => {
+    const operation = handle.driver.current().operations.find(
+      (item) => item.client_operation_id === operationId,
+    );
+    if (!operation) throw new Error(`测试 outbox 缺少 operation: ${operationId}`);
+    if (operation.state !== "committed") {
+      throw new Error(
+        `会话目录操作 ${operationId} 被 ${operation.state}：`
+        + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim(),
+      );
+    }
+    return operation;
+  };
+
+  const runtime: SessionCatalogOutboxRuntime = {
+    getSnapshot: () => snapshot,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    openWorkspace,
+    waitForTerminal,
+    submit,
+    applyAndWait: async (...args) => {
+      const result = await submit(...args);
+      const operation = await waitForTerminal(result.handle, result.operationId);
+      return { ...result, operation };
+    },
+    reportError(message) {
+      errors.push(message);
+    },
+    activatePrincipal() {},
+    dispose() {},
+  };
+
+  return { runtime, errors, pruneCalls, submitted };
+}
+
+function sessionCatalogBreadcrumbResponse(sessionId: string): Response {
+  return apiResponse({
+    revision: "catalog-revision-3",
+    catalog_revision: 3,
+    items: [{
+      node_id: sessionId,
+      kind: "session",
+      name: sessionId,
+      parent_node_id: null,
+      session_id: sessionId,
+      has_children: false,
+      node_revision: 2,
+      state: "active",
+      session: null,
+    }],
+  });
 }
 
 /** 安装只有计时器与空监听器的 window 桩；用 restoreSessionHookGlobals 还原。 */
@@ -226,8 +485,16 @@ export function mountSessionLifecycleActions(options: {
   workspaceId: string;
   state: AppState;
   abortCurrentStream?: () => void;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
+  workspaceRequestTargets?: readonly GatewayWorkspaceRequestTarget[];
 }): { state: () => AppState; actions: LifecycleActions } {
-  const { apiPort, currentSession, workspaceId, abortCurrentStream } = options;
+  const {
+    apiPort,
+    currentSession,
+    workspaceId,
+    abortCurrentStream,
+    sessionCatalogOutboxRuntime = createTestSessionCatalogOutboxRuntime().runtime,
+  } = options;
   const mirror = createStateMirror(options.state);
   let actions: LifecycleActions | null = null;
   function Harness(): React.ReactNode {
@@ -236,6 +503,7 @@ export function mountSessionLifecycleActions(options: {
       currentSession,
       activeGatewayWorkspaceId: workspaceId,
       currentSessionGatewayWorkspaceId: workspaceId,
+      workspaceRequestTargets: options.workspaceRequestTargets ?? testWorkspaceTargetsFor(workspaceId),
       currentSessionCacheKey: sessionScopeKey(
         workspaceId,
         currentSession?.session_id ?? "",
@@ -244,6 +512,8 @@ export function mountSessionLifecycleActions(options: {
       setState: mirror.setState,
       abortCurrentStream: abortCurrentStream ?? (() => undefined),
       invalidateAgentState: () => undefined,
+      sessionCatalogOutboxRuntime,
+      gatewayUserAccess: testGatewayUserAccess(),
     });
     return null;
   }
@@ -347,9 +617,13 @@ export type SessionResourceExplorerHandle = ReturnType<
 export function explorerProps(
   overrides: Partial<ResourceExplorerProps> = {},
 ): ResourceExplorerProps {
+  const activeWorkspaceId = overrides.activeWorkspaceId === undefined
+    ? "ws-test"
+    : overrides.activeWorkspaceId;
   return {
     apiPort: 49_400,
-    activeWorkspaceId: "ws-test",
+    workspaces: overrides.workspaces ?? testWorkspaceTargetsFor(activeWorkspaceId),
+    activeWorkspaceId,
     searchOpen: false,
     searchQuery: "",
     currentSessionId: "",
@@ -464,9 +738,11 @@ export function catalogChildrenResponse(
   revision: string,
   items: unknown[] = [],
   parentNodeId: string | null = null,
+  catalogRevision = 3,
 ): Response {
   return apiResponse({
     revision,
+    catalog_revision: catalogRevision,
     parent_node_id: parentNodeId,
     items,
     cursor: null,
@@ -477,30 +753,6 @@ export function catalogChildrenResponse(
 /** 会话列表的整表响应（无分页）。 */
 export function sessionsListResponse(items: Session[]): Response {
   return apiResponse({ items, has_more: false, next_cursor: null });
-}
-
-/** 删除会话成功的响应。 */
-export function deleteSessionResponse(sessionId: string): Response {
-  return apiResponse({ session_id: sessionId });
-}
-
-/**
- * 会话删除类用例的常用 fetch 桩：DELETE /api/v1/sessions/{id} 与列表重读。
- * 两个响应都可传静态 Response 或按调用次数生成的工厂。
- */
-export function installSessionDeleteFetch(options: {
-  deleteResponse: Response | (() => Response);
-  listResponse: Response | (() => Response);
-}): void {
-  const pick = (value: Response | (() => Response)): Response =>
-    typeof value === "function" ? (value as () => Response)() : value;
-  installGatewayFetch(({ path, method }) => {
-    if (path.startsWith("/api/v1/sessions/") && method === "DELETE") {
-      return pick(options.deleteResponse);
-    }
-    if (path === "/api/v1/sessions") return pick(options.listResponse);
-    return undefined;
-  });
 }
 
 /**

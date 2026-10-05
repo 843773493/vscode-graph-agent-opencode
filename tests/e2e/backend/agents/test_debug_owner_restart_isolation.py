@@ -56,7 +56,7 @@ async def test_owner_restart_preserves_same_session_child_and_other_session(
     )
     assert other_response.status_code == 200, other_response.text
     other_session_id = other_response.json()["data"]["session_id"]
-    other_owner = (other_session_id, "main")
+    other_owner = (other_session_id, resolver.main_thread_id(other_session_id))
 
     fixture_path, breakpoint_line = _write_debug_fixture(workspace_root)
     service, store = _build_debug_service(
@@ -119,7 +119,10 @@ async def test_owner_restart_preserves_same_session_child_and_other_session(
         assert child_manifest_before is not None
         assert other_manifest_before is not None
 
-        restarted = await service.restart(parent_main.session_id, thread_id="main")
+        restarted = await service.restart(
+            parent_main.session_id,
+            thread_id=parent_main.thread_id,
+        )
         assert restarted.status == "paused"
 
         child_after = await service.get_state(child.session_id, child.thread_id)

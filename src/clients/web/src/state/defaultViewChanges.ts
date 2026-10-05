@@ -17,5 +17,6 @@ export function shouldLoadDefaultViewChangesHint({
     && timeline?.phase === "ready"
     && timeline.projectionState === "ready"
     && timeline.orderedTurnIds.length === 0
+    && timeline.internalExecutions.length === 0
     && conversationCount === 0;
 }

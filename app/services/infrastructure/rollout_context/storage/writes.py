@@ -98,12 +98,14 @@ class RolloutWriteMixin:
 
     def pending_writes(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         checkpoint_id: str,
         *,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> list[PendingWrite]:
+        strict_text(session_id, field="pending_writes.session_id")
         strict_text(thread_id, field="pending_writes.thread_id")
         strict_text(
             checkpoint_ns, field="pending_writes.checkpoint_ns", allow_empty=True
@@ -138,15 +140,19 @@ class RolloutWriteMixin:
         if snapshot is not None:
             self._require_v2_runtime(self._snapshot_connection(snapshot))
             return read(self._snapshot_connection(snapshot))
-        with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._require_v2_runtime(connection)
             return read(connection)
 
     def copy_pending_writes(
         self,
         *,
+        source_session_id: str,
         source_thread_id: str,
         source_checkpoint_id: str,
+        target_session_id: str,
         target_thread_id: str,
         target_checkpoint_id: str,
         checkpoint_ns: str = "",
@@ -159,11 +165,17 @@ class RolloutWriteMixin:
         source_thread_id = strict_text(
             source_thread_id, field="copy_pending_writes.source_thread_id"
         )
+        source_session_id = strict_text(
+            source_session_id, field="copy_pending_writes.source_session_id"
+        )
         source_checkpoint_id = strict_text(
             source_checkpoint_id, field="copy_pending_writes.source_checkpoint_id"
         )
         target_thread_id = strict_text(
             target_thread_id, field="copy_pending_writes.target_thread_id"
+        )
+        target_session_id = strict_text(
+            target_session_id, field="copy_pending_writes.target_session_id"
         )
         target_checkpoint_id = strict_text(
             target_checkpoint_id, field="copy_pending_writes.target_checkpoint_id"
@@ -173,7 +185,9 @@ class RolloutWriteMixin:
             field="copy_pending_writes.checkpoint_ns",
             allow_empty=True,
         )
-        source_root = self.root(source_thread_id, checkpoint_ns)
+        source_root = self.root(
+            source_session_id, checkpoint_ns, thread_id=source_thread_id
+        )
         if not source_root.is_dir():
             raise KeyError(source_thread_id)
         source_lock = _RolloutFileLock(
@@ -182,7 +196,11 @@ class RolloutWriteMixin:
         )
         source_lock.acquire()
         try:
-            with self._connect(source_thread_id, checkpoint_ns) as connection:
+            with self._connect(
+                source_thread_id,
+                checkpoint_ns,
+                session_id=source_session_id,
+            ) as connection:
                 raw_rows = connection.execute(
                     "SELECT task_id, task_path, write_index, channel, serializer_name, value_blob, value_length, value_hash, status, created_at FROM pending_writes WHERE checkpoint_id = ? ORDER BY task_path, write_index",
                     (source_checkpoint_id,),
@@ -192,9 +210,17 @@ class RolloutWriteMixin:
             source_lock.release()
         if not rows:
             return
-        with self._lock(target_thread_id, checkpoint_ns):
-            self.initialize(target_thread_id, checkpoint_ns)
-            with self._connect(target_thread_id, checkpoint_ns) as connection:
+        with self._lock(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
+        ):
+            self.initialize(
+                target_session_id, checkpoint_ns, thread_id=target_thread_id
+            )
+            with self._connect(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+            ) as connection:
                 checkpoint_exists = connection.execute(
                     "SELECT 1 FROM checkpoints WHERE checkpoint_id = ? AND checkpoint_ns = ?",
                     (target_checkpoint_id, checkpoint_ns),
@@ -246,6 +272,7 @@ class RolloutWriteMixin:
     def append_writes(
         self,
         *,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         checkpoint_id: str,
@@ -253,6 +280,7 @@ class RolloutWriteMixin:
         task_id: str,
         task_path: str,
     ) -> None:
+        strict_text(session_id, field="append_writes.session_id")
         strict_text(thread_id, field="append_writes.thread_id")
         strict_text(
             checkpoint_ns,
@@ -262,9 +290,11 @@ class RolloutWriteMixin:
         strict_text(checkpoint_id, field="append_writes.checkpoint_id")
         strict_text(task_id, field="append_writes.task_id")
         strict_text(task_path, field="append_writes.task_path")
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 for index, (channel, value) in enumerate(writes):
                     serializer, blob, length, digest = self._encode(value)
                     channel = strict_text(channel, field="pending_writes.channel")
@@ -311,8 +341,10 @@ class RolloutWriteMixin:
     def copy_turn_finalizations(
         self,
         *,
+        source_session_id: str,
         source_thread_id: str,
         source_checkpoint_id: str | None,
+        target_session_id: str,
         target_thread_id: str,
         checkpoint_ns: str = "",
     ) -> int:
@@ -330,10 +362,16 @@ class RolloutWriteMixin:
         不可变 message_id 在目标 rollout 中定位对应消息；找不到的消息跳过，
         以支持按 Turn 截断的 context fork。
         """
+        strict_text(
+            source_session_id, field="copy_turn_finalizations.source_session_id"
+        )
         strict_text(source_thread_id, field="copy_turn_finalizations.source_thread_id")
         strict_optional_text(
             source_checkpoint_id,
             field="copy_turn_finalizations.source_checkpoint_id",
+        )
+        strict_text(
+            target_session_id, field="copy_turn_finalizations.target_session_id"
         )
         strict_text(target_thread_id, field="copy_turn_finalizations.target_thread_id")
         strict_text(
@@ -341,7 +379,9 @@ class RolloutWriteMixin:
             field="copy_turn_finalizations.checkpoint_ns",
             allow_empty=True,
         )
-        source_root = self.root(source_thread_id, checkpoint_ns)
+        source_root = self.root(
+            source_session_id, checkpoint_ns, thread_id=source_thread_id
+        )
         if not source_root.is_dir():
             raise KeyError(source_thread_id)
         source_lock = _RolloutFileLock(
@@ -350,10 +390,12 @@ class RolloutWriteMixin:
         )
         source_lock.acquire()
         try:
-            with self._connect(source_thread_id, checkpoint_ns) as source_connection:
-                # 该路径只复制已提交的 v2 派生 final pointer；v1 message-line
-                # 必须先经显式 legacy_import_v1_to_v2 staging，不能由 fork
-                # 正常运行时偷偷重新打开旧事实源。
+            with self._connect(
+                source_thread_id,
+                checkpoint_ns,
+                session_id=source_session_id,
+            ) as source_connection:
+                # 该路径只复制已提交的 v2 派生 final pointer；旧格式不属于 fork 输入。
                 self._require_v2_runtime(source_connection)
                 if source_checkpoint_id is not None:
                     source_view_row = source_connection.execute(
@@ -412,9 +454,17 @@ class RolloutWriteMixin:
         if not source_rows:
             return 0
 
-        with self._lock(target_thread_id, checkpoint_ns):
-            self.initialize(target_thread_id, checkpoint_ns)
-            with self._connect(target_thread_id, checkpoint_ns) as target_connection:
+        with self._lock(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
+        ):
+            self.initialize(
+                target_session_id, checkpoint_ns, thread_id=target_thread_id
+            )
+            with self._connect(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+            ) as target_connection:
                 self._require_v2_runtime(target_connection)
                 timestamp = _now()
                 transaction_id = uuid4().hex
@@ -536,12 +586,16 @@ class RolloutWriteMixin:
                 target_connection.commit()
                 return copied
 
-    def delete_thread(self, thread_id: str) -> None:
-        rollout = self.root(thread_id)
-        self._active_fork_materializations.discard((thread_id, ""))
+    def delete_thread(self, session_id: str, *, thread_id: str) -> None:
+        rollout = self.root(session_id, thread_id=thread_id)
+        self._active_fork_materializations.difference_update(
+            key
+            for key in tuple(self._active_fork_materializations)
+            if key[:2] == (session_id, thread_id)
+        )
         if not rollout.exists():
             return
-        self.release_fork_retentions(thread_id)
-        with self._lock(thread_id, ""):
+        self.release_fork_retentions(session_id)
+        with self._lock(thread_id, "", session_id=session_id):
             if rollout.exists():
                 shutil.rmtree(rollout)

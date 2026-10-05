@@ -13,9 +13,11 @@ from app.gateway.runtime.process import (
     SshLocalForwardSpec,
     allocate_local_port_in_range,
     is_local_port_available,
+    resolve_backend_workspace_id,
     resolve_python_executable,
     ssh_tunnel_port_range_from_env,
     start_local_backend_process,
+    start_local_node_service_process,
     start_workspace_ssh_port_forward_process,
 )
 
@@ -64,6 +66,70 @@ def test_resolve_python_executable_rejects_relative_path(
 
     with pytest.raises(ValueError, match="必须是绝对路径"):
         resolve_python_executable(Path("/workspace"))
+
+
+def test_resolve_backend_workspace_id_consumes_canonical_single_line_cli_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_id = "00000000-0000-4000-8000-000000000001"
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=f"{expected_id}\n", stderr="")
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.resolve_python_executable",
+        lambda _: Path("/project/.venv/bin/python"),
+    )
+    monkeypatch.setattr("app.gateway.runtime.process.subprocess.run", fake_run)
+
+    assert resolve_backend_workspace_id(tmp_path, tmp_path) == expected_id
+    assert calls[0][0] == [
+        "/project/.venv/bin/python",
+        "-m",
+        "app.core.workspace_identity",
+        "--workspace-root",
+        str(tmp_path.resolve()),
+    ]
+    assert calls[0][1]["cwd"] == tmp_path.resolve()
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr", "message"),
+    [
+        (2, "", "invalid workspace\n", "执行失败"),
+        (0, "00000000-0000-4000-8000-000000000001\n", "warning\n", "stderr 必须为空"),
+        (0, "00000000-0000-4000-8000-000000000001", "", "只输出一行"),
+        (0, "00000000-0000-4000-8000-000000000001\nextra\n", "", "只输出一行"),
+        (0, "00000000-0000-4000-8000-000000000001\n", "unexpected output", "stderr 必须为空"),
+        (0, "00000000-0000-4000-8000-00000000000A\n", "", "非标准 UUID 文本"),
+    ],
+)
+def test_resolve_backend_workspace_id_rejects_invalid_cli_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.resolve_python_executable",
+        lambda _: Path("/project/.venv/bin/python"),
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.process.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+    )
+
+    with pytest.raises((RuntimeError, TypeError, ValueError), match=message):
+        resolve_backend_workspace_id(tmp_path, tmp_path)
 
 
 def test_validate_workspace_root_access_rejects_unwritable_root(
@@ -288,10 +354,15 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
         "app.gateway.runtime.process._spawn_logged_process",
         fake_spawn,
     )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
 
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        workspace_root=tmp_path / "workspace",
+        workspace_root=workspace_root,
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         port=41000,
         log_dir=tmp_path / "logs",
     )
@@ -326,10 +397,15 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
         "app.gateway.runtime.process._spawn_logged_process",
         fake_spawn,
     )
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
 
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        workspace_root=tmp_path / "workspace",
+        workspace_root=workspace_root,
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         port=41001,
         log_dir=tmp_path / "logs",
         extra_env={"WORKSPACE_ONLY_SETTING": "present"},
@@ -347,6 +423,57 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
         )
     )
     assert environment["WORKSPACE_ONLY_SETTING"] == "present"
+    assert environment["BOXTEAM_MOUNTED_WORKSPACES"] == (
+        '[{"workspace_id":"00000000-0000-4000-8000-000000000001",'
+        f'"workspace_root":"{workspace_root}"}}]'
+    )
+
+
+def test_only_terminal_manager_receives_backend_workspace_uuid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "project"
+    terminal_backend = project_root / "src/workspace-services/terminal/server/backend.js"
+    browser_backend = project_root / "src/workspace-services/browser/server/backend.js"
+    terminal_backend.parent.mkdir(parents=True)
+    browser_backend.parent.mkdir(parents=True)
+    terminal_backend.touch()
+    browser_backend.touch()
+    commands: list[list[str]] = []
+
+    def fake_spawn(command: list[str], **_: object) -> _Process:
+        commands.append(command)
+        return _Process(timeout_once=False)
+
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", "/node")
+    monkeypatch.setattr(
+        "app.gateway.runtime.process._spawn_logged_process",
+        fake_spawn,
+    )
+
+    terminal = start_local_node_service_process(
+        project_root=project_root,
+        workspace_root=tmp_path,
+        service="terminal",
+        terminal_workspace_id="00000000-0000-4000-8000-000000000001",
+        port=41002,
+        log_dir=tmp_path / "logs",
+    )
+    browser = start_local_node_service_process(
+        project_root=project_root,
+        workspace_root=tmp_path,
+        service="browser",
+        port=41003,
+        log_dir=tmp_path / "logs",
+    )
+    terminal.detach()
+    browser.detach()
+
+    assert commands[0][commands[0].index("--workspace-id") + 1] == (
+        "00000000-0000-4000-8000-000000000001"
+    )
+    assert "--workspace-id" not in commands[1]
 
 
 def test_workspace_ssh_port_forward_reuses_alias_and_long_lived_options(

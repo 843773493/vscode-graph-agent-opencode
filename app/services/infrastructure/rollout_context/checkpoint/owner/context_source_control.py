@@ -8,9 +8,9 @@ CSM 不执行 I/O：它只持有 :class:`ContextSourceControlStatePort`。本模
 - ``ContextSourceControlOwnerMixin``：混入唯一 ``RolloutCheckpointSaver``，
   把 typed 控制状态端口暴露给 CSM，业务层不得旁路 RolloutStorage。
 
-owner 粒度是精确 ``(session_id, thread_id)``：main thread 使用
-``MAIN_THREAD_ID`` 并落在 Session 节点的 rollout 库；durable child thread
-必须解析到它自己的节点，状态不共享、不互相覆盖。
+owner 粒度是精确 ``(session_id, thread_id)``：main 与 child thread 都使用
+catalog 中的 canonical Thread ID，并落在对应 Thread 节点的 rollout 库；状态
+不共享、不互相覆盖。
 
 TODO: OpenSpec 2.4/3.6 要求 rewind/compaction 事务提交 checkpoint-versioned
 CSM 控制状态，并按目标 checkpoint 恢复 tracking state。当前实现只提供每个
@@ -34,7 +34,6 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceControlState,
     ContextSourceOwnerKey,
     ContextSourceTrackingStatus,
@@ -143,57 +142,41 @@ class ContextSourceControlStorageMixin:
             raise ValueError("CSM 控制状态 session_id 必须是非空字符串")
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("CSM 控制状态 thread_id 必须是非空字符串")
-        if thread_id == MAIN_THREAD_ID:
-            self._path_resolver.resolve_session_node(session_id)
-            return session_id
-        if thread_id == session_id:
-            raise ValueError(
-                "CSM 控制状态 main thread 必须使用 MAIN_THREAD_ID，"
-                f"不能把裸 session_id 当作 thread_id 持久化: {session_id}"
-            )
-        node_path = self._path_resolver.resolve_thread_node(session_id, thread_id)
-        if node_path.name != thread_id:
-            raise RuntimeError(
-                "CSM 控制状态 thread 节点物理目录名与稳定 ID 不一致: "
-                f"session_id={session_id}, thread_id={thread_id}, path={node_path}"
-            )
-        return thread_id
+        resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        self._resolve_thread_node(session_id, resolved_thread_id)
+        return resolved_thread_id
 
     def _context_source_rollout_owner_or_none(
         self,
         session_id: str,
         thread_id: str,
     ) -> str | None:
-        """返回 durable rollout owner 节点 ID；合成 SessionThread 返回 None。
+        """返回 durable Thread ID；没有 catalog Session 的合成 owner 返回 None。
 
         只有「会话不在权威目录索引中」这一种情况会被识别为没有 durable owner
         （例如工具清单检查用的 ``tools_inspection_session``：它从不落盘，也不是
-        目录损坏）。catalog 模式下未登记的 non-main thread（thread_catalog
-        无对应 child 行）必须显式失败：OpenSpec 8.5 落地前其物理形态不存在，
-        静默短路会把「请求了不存在的 thread」伪装成「该 thread 没有控制状态」。
-        索引已登记但物理节点/manifest 损坏时严格解析仍抛 RuntimeError，
-        本方法不吞掉这类错误。
+        目录损坏）。已登记 Session 下缺失的 Thread 必须显式失败，不能静默短路
+        为「该 Thread 没有控制状态」。物理节点/manifest 损坏时严格解析仍抛
+        RuntimeError，本方法不吞掉这类错误。
         """
         try:
-            self._path_resolver.resolve_session_node(session_id)
+            self._resolve_session_node(session_id)
         except KeyError:
             return None
-        if thread_id != MAIN_THREAD_ID and thread_id != session_id:
-            try:
-                self._path_resolver.resolve_thread_node(session_id, thread_id)
-            except KeyError as error:
-                raise RuntimeError(
-                    "非 main thread 物理形态未落地，拒绝把未登记 child thread "
-                    "当作无控制状态短路（fail closed）: "
-                    f"session_id={session_id}, thread_id={thread_id}"
-                ) from error
-        return self._context_source_rollout_owner(session_id, thread_id)
+        try:
+            return self._context_source_rollout_owner(session_id, thread_id)
+        except KeyError as error:
+            raise RuntimeError(
+                "catalog 中不存在精确 SessionThread owner，拒绝把未登记 Thread "
+                "当作无控制状态短路（fail closed）: "
+                f"session_id={session_id}, thread_id={thread_id}"
+            ) from error
 
     def context_source_control_owner_available(
         self,
         session_id: str,
         *,
-        thread_id: str = MAIN_THREAD_ID,
+        thread_id: str,
     ) -> bool:
         """该 SessionThread 是否有可用的 durable rollout owner。"""
         return (
@@ -229,8 +212,12 @@ class ContextSourceControlStorageMixin:
                 f"CSM 控制状态要求 active rollout: database_state={database_state}"
             )
 
-    def _context_source_control_index_ready(self, rollout_thread_id: str) -> bool:
-        index_path = self.index_path(rollout_thread_id, "")
+    def _context_source_control_index_ready(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> bool:
+        index_path = self.index_path(session_id, "", thread_id=thread_id)
         return index_path.is_file() and index_path.stat().st_size > 0
 
     @staticmethod
@@ -271,21 +258,25 @@ class ContextSourceControlStorageMixin:
         self,
         session_id: str,
         *,
-        thread_id: str = MAIN_THREAD_ID,
+        thread_id: str,
     ) -> tuple[ContextSourceControlState, ...]:
         """读取该 SessionThread 的全部控制状态，不建库、不执行恢复副作用。"""
-        rollout_thread_id = self._context_source_rollout_owner_or_none(
-            session_id,
-            thread_id,
+        resolved_thread_id = self._context_source_rollout_owner_or_none(
+            session_id, thread_id
         )
-        if rollout_thread_id is None:
+        if resolved_thread_id is None:
             # 合成 SessionThread 没有 ContextStore，也就没有可恢复的持久化
             # 控制状态；这是短路而不是吞错，索引损坏仍会抛 RuntimeError。
             return ()
-        if not self._context_source_control_index_ready(rollout_thread_id):
+        if not self._context_source_control_index_ready(session_id, resolved_thread_id):
             # 既有库尚未建立（或为空文件）：没有任何可恢复的控制状态。
             return ()
-        with self._connect(rollout_thread_id, "", read_only=True) as connection:
+        with self._connect(
+            resolved_thread_id,
+            "",
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
             if not self._context_source_control_table_exists(connection):
@@ -317,15 +308,20 @@ class ContextSourceControlStorageMixin:
                 "write_context_source_control_state 需要 ContextSourceControlState"
             )
         owner = state.owner
-        rollout_thread_id = self._context_source_rollout_owner(
+        thread_id = self._context_source_rollout_owner(
             owner.session_id,
             owner.thread_id,
         )
-        if not self._context_source_control_index_ready(rollout_thread_id):
+        if not self._context_source_control_index_ready(owner.session_id, thread_id):
             # 只有库尚不存在时建立完整 v2 库（initialize 自己负责取锁）；
             # 既有库绝不走 initialize()，避免截断在途 Turn 的未提交 JSONL 尾部。
-            self.initialize(rollout_thread_id, "", validate_jsonl_items=False)
-        with self._connect(rollout_thread_id, "") as connection:
+            self.initialize(
+                owner.session_id,
+                "",
+                thread_id=thread_id,
+                validate_jsonl_items=False,
+            )
+        with self._connect(thread_id, "", session_id=owner.session_id) as connection:
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
             self._ensure_context_source_control_schema(connection)
@@ -440,15 +436,20 @@ class ContextSourceControlStorageMixin:
                 "apply_source_lifecycle_decision.item 必须是 CanonicalItemRecord 或 None"
             )
         owner = decision.owner
-        rollout_thread_id = self._context_source_rollout_owner(
+        thread_id = self._context_source_rollout_owner(
             owner.session_id,
             owner.thread_id,
         )
-        if not self._context_source_control_index_ready(rollout_thread_id):
-            self.initialize(rollout_thread_id, "", validate_jsonl_items=False)
+        if not self._context_source_control_index_ready(owner.session_id, thread_id):
+            self.initialize(
+                owner.session_id,
+                "",
+                thread_id=thread_id,
+                validate_jsonl_items=False,
+            )
         with (
-            self._lock(rollout_thread_id, ""),
-            self._connect(rollout_thread_id, "") as connection,
+            self._lock(thread_id, "", session_id=owner.session_id),
+            self._connect(thread_id, "", session_id=owner.session_id) as connection,
         ):
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
@@ -532,9 +533,10 @@ class ContextSourceControlStorageMixin:
                     connection.execute("BEGIN IMMEDIATE")
                     commit_id, _offset = self._append_v2_records_transaction(
                         connection,
-                        rollout_thread_id,
+                        thread_id,
                         "",
                         (prepared_item,),
+                        session_id=owner.session_id,
                         commit_kind=CommitKind.ITEM_CONVERGENCE.value,
                         subject_id=prepared_item.item_id,
                         idempotency_key=decision.idempotency_key,

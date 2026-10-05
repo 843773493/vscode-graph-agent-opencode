@@ -4,7 +4,10 @@ import re
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.core.job_event_bus import EventType
-from app.schemas.internal_v2.session import SessionUpdateRequest
+from app.services.business.session_navigation.service import (
+    AutoSessionTitleMutationResult,
+    SessionCatalogService,
+)
 from app.services.business.session_service import SessionService
 
 TITLE_MAX_WORDS = 8
@@ -44,9 +47,11 @@ class SessionTitleService:
         self,
         *,
         session_service: SessionService,
+        session_catalog_service: SessionCatalogService,
         job_event_bus: JobEventBusProtocol,
     ) -> None:
         self._session_service = session_service
+        self._session_catalog_service = session_catalog_service
         self._bus = job_event_bus
 
     async def maybe_auto_title_before_first_message(
@@ -55,18 +60,22 @@ class SessionTitleService:
         session_id: str,
         job_id: str,
         user_message: str,
-    ) -> str | None:
+    ) -> AutoSessionTitleMutationResult:
         session = await self._session_service.get(session_id)
         if session.title_source != "default":
-            return None
+            return AutoSessionTitleMutationResult("not_applicable", session)
         if session.title.strip() not in SessionService.DEFAULT_SESSION_TITLES:
-            return None
+            return AutoSessionTitleMutationResult("not_applicable", session)
 
         title = build_session_title_from_first_message(user_message)
-        updated = await self._session_service.update(
+        result = await self._session_catalog_service.auto_title_session(
             session_id,
-            SessionUpdateRequest(title=title, title_source="auto"),
+            expected_title=session.title,
+            title=title,
         )
+        if result.outcome != "applied":
+            return result
+        updated = result.session
         await self._bus.publish(
             job_id=job_id,
             event_type=EventType.STATUS_CHANGE,
@@ -78,4 +87,4 @@ class SessionTitleService:
             },
             agent_id="session_title_service",
         )
-        return updated.title
+        return result

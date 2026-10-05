@@ -2,8 +2,9 @@
 
 本模块实现 design.md §9 定义的 Session 创建流：
 **gate 内 create-or-get record（冻结身份/locator/preimage）→ staging 完整
-准备（剥离版 session.json + session-control.sqlite）→ durability barrier →
-原子 rename 到冻结日期桶 → gate 内 CAS publish（唯一可见性提交点）**。
+准备（剥离版 session.json、session-control.sqlite 与唯一 main thread 节点）
+→ durability barrier → 原子 rename 到冻结日期桶 → gate 内 CAS publish
+（唯一可见性提交点）**。
 
 红线（模块边界，违反即失去本轮资格）：
 
@@ -21,14 +22,10 @@
   staging 目录名 = ``migration_id``。
   两者共享 ``sessions/.staging/`` 父目录，但各自只触碰自己的子目录，
   残留互不扫描、互不吸收；幂等 key 只用于 journal 查询与进程内 key lock。
-- **CAS 失败定点回收**：publish CAS 失败（父节点漂移/删除/目标被占）时，
-  把日期桶目录隔离到 ``.boxteam/orphaned/session-creation/<session_id>/`` 后
-  abort record 并抛错；调用方须换新 idempotency_key 重试，不静默改绑。
-  选隔离而非 rename 回 staging 的理由：(1) record 已终态 aborted，同 key
-  重试必被拒，保留在 staging 会与活动 Session 的物理数据冲突；(2)
-  orphaned/ 隔离区保留可诊断审计（对齐 app/core/AGENTS.md「无法可靠归属的
-  旧数据移入 .boxteam/orphaned/」与 R12 迁移机器的隔离惯例）；(3) 回收后
-  staging 区干净。
+- **CAS 失败定点回收**：publish CAS 失败后保留 preparing record 与物理目录；
+  fork 调用方先释放真实 retention，再调用 ``abort_prepared`` 将唯一 stage/target
+  隔离到 ``.boxteam/orphaned/session-creation/<session_id>/``。普通创建也显式
+  调用同一 abort 入口，不静默改绑或遗失审计现场。
 - **并发边界**：进程内同 key 并发由 per-key ``asyncio.Lock`` 串行收敛
   到同一结果；gate 为进程内原语，跨进程互斥归 8.1-C（构造时可注入共享
   workspace gate；``gate=None`` 时自建进程内 gate，仅适合测试/单进程）。
@@ -48,11 +45,11 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from app.core.atomic_fs import (
     atomic_write_bytes as _atomic_write_bytes,
@@ -67,15 +64,17 @@ from app.core.key_lock_pool import KeyLockPool
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
+    SessionCreationPurpose,
     SessionCreationRecord,
     validate_path_budget,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
-from app.core.session_control_store import SessionControlStore
+from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.sqlite_state import validate_sqlite_path_budget
 
 __all__ = [
+    "ForkCompletionProof",
     "SessionCreationResult",
     "SessionCreationService",
     "build_session_creation_manifest",
@@ -137,12 +136,41 @@ def validate_session_metadata_keys(session_metadata: dict[str, object]) -> None:
         )
 
 
+def _validate_creation_purpose_metadata(
+    purpose: SessionCreationPurpose,
+    session_metadata: dict[str, object],
+) -> None:
+    """校验创建 purpose 与 session kind/source 的唯一对应合同。"""
+    kind = session_metadata["kind"]
+    context_source_session_id = session_metadata["context_source_session_id"]
+    if purpose == "normal":
+        valid = kind == "normal" and context_source_session_id is None
+    elif purpose == "context_fork":
+        valid = (
+            kind == "context_fork"
+            and isinstance(context_source_session_id, str)
+            and bool(context_source_session_id)
+        )
+    else:
+        raise ValueError(f"session creation purpose 非法: {purpose!r}")
+    if not valid:
+        raise ValueError(
+            "session creation purpose 与 session_metadata 不匹配: "
+            f"purpose={purpose!r}, kind={kind!r}, "
+            f"context_source_session_id={context_source_session_id!r}"
+        )
+
+
 def compute_session_creation_preimage_hash(
     *,
     workspace_id: str,
     parent_node_id: str | None,
     title: str,
+    title_source: str = "user",
+    purpose: SessionCreationPurpose,
+    graph_binding: ThreadGraphBindingRecord,
     session_metadata: dict[str, object],
+    request_intent: dict[str, object] | None = None,
 ) -> str:
     """计算 preimage_hash = sha256(canonical JSON of preimage 四元组)。
 
@@ -151,12 +179,22 @@ def compute_session_creation_preimage_hash(
     ``session_metadata`` 值必须 JSON 可序列化（``datetime`` 等对象须先转
     文本，否则 ``json.dumps`` 抛 ``TypeError`` fail fast）。
     """
+    if not isinstance(graph_binding, ThreadGraphBindingRecord):
+        raise TypeError("graph_binding 必须是 ThreadGraphBindingRecord")
     payload = {
         "workspace_id": workspace_id,
         "parent_node_id": parent_node_id,
         "title": title,
+        "title_source": title_source,
+        "purpose": purpose,
+        "graph_binding": asdict(graph_binding),
         "session_metadata": session_metadata,
     }
+    # 创建控制意图只归 creation ledger/preimage，不展开到业务 session.json。
+    if request_intent is not None:
+        if not isinstance(request_intent, dict):
+            raise TypeError("session creation request_intent 必须是对象")
+        payload["request_intent"] = request_intent
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -164,6 +202,44 @@ def compute_session_creation_preimage_hash(
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _serialize_session_creation_metadata(
+    session_metadata: dict[str, object],
+) -> str:
+    """将已校验 metadata 以稳定 canonical JSON 冻结到 creation journal。"""
+    validate_session_metadata_keys(session_metadata)
+    return json.dumps(
+        session_metadata,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ForkCompletionProof:
+    """fork rollout journal 已为目标 Session durable committed 的窄证明。"""
+
+    target_session_id: str
+    fork_id: str
+    materialization_id: str
+    journal_state: Literal["committed"] = "committed"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "target_session_id",
+            "fork_id",
+            "materialization_id",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} 不能为空")
+        if self.journal_state != "committed":
+            raise ValueError(
+                "fork completion journal_state 必须为 committed: "
+                f"{self.journal_state!r}"
+            )
 
 
 def build_session_creation_manifest(
@@ -218,30 +294,13 @@ class SessionCreationResult:
 
 
 class SessionCreationService:
-    """SQLite catalog Session 创建流编排。
+    """以同一 creation journal 管理普通创建与 context fork 的准备和发布。
 
-    ``create`` 状态机（幂等：同 key 重入按 record 状态分支收敛）：
-
-    1. gate exclusive 内 ``create_or_get_creation_record``（新 record 或
-       幂等取既有）→ 出 gate。published → 校验 nodes 行一致后幂等返回；
-       aborted → RuntimeError（含 reason，换新 key 重试）；preparing →
-       恢复/继续。
-    2. preparing 时先探目标日期桶：已存在且内容与预期一致 → 视为
-       rename 已完成（rename 后、publish 前崩溃的恢复窗口），直接进入
-       步骤 4；不一致 → fail closed。目标不存在 → 步骤 3。
-    3. staging 准备（gate 外）：``.staging/<session_id>/`` 已存在 → 逐文件校验
-       （session.json 字节、session-control main row/fence、条目集）复用；
-       不存在 → 完整准备 + durability barrier（文件 fsync + 目录 fsync）。
-    4. 原子 rename staging → 冻结日期桶（父目录链 mkdir + fsync）。
-    5. gate exclusive 内 ``publish_creation_record``（CAS）。CAS 失败 →
-       定点回收日期桶目录到 orphaned → abort record → RuntimeError
-       （含原因；调用方换新 key 重试）。
-
-    恢复语义覆盖四个崩溃点：record 后/staging 前（staging 不存在 → 重
-    准备）；staging 后/rename 前（staging 校验复用 → 继续 rename）；
-    rename 后/publish 前（目标已存在且一致 → 直接 publish）；publish 后
-    （record published → 幂等返回）。staging 准备**中途**崩溃留下不完整
-    staging 时重入 fail closed（见模块 docstring「准备中断窗口」）。
+    ``prepare`` 冻结 purpose/metadata 并完整准备 staging；``publish_prepared``
+    将 prepared 物理树 rename 到 record locator，再以 catalog CAS 发布。fork
+    必须持有 committed journal 的 :class:`ForkCompletionProof` 才能发布。CAS
+    失败保留 preparing record 和物理目录；调用方先释放 fork retention，再用
+    ``abort_prepared`` 定点隔离并终结 record。
     """
 
     def __init__(
@@ -277,33 +336,53 @@ class SessionCreationService:
     # 公开入口
     # ------------------------------------------------------------------
 
-    async def create(
+    async def prepare(
         self,
         *,
         idempotency_key: str,
         title: str,
+        title_source: str = "user",
         parent_node_id: str | None,
         session_metadata: dict[str, object],
-    ) -> SessionCreationResult:
-        """执行（或幂等恢复）一次新模型 Session 创建。
+        graph_binding: ThreadGraphBindingRecord,
+        purpose: SessionCreationPurpose = "normal",
+        request_intent: dict[str, object] | None = None,
+    ) -> SessionCreationRecord:
+        """冻结创建 envelope 并准备物理目录，保留 Session 为不可见状态。
 
         ``title`` 写入 catalog ``display_name`` 与 preimage，**不写入**
         session.json；``session_metadata`` 为剥离 manifest 的调用方六字段
-        （见 :func:`validate_session_metadata_keys`）。
+        （见 :func:`validate_session_metadata_keys`）。重复 key 只能以完全相同
+        purpose 与 preimage 重入；已 published record 原样返回供 publish 幂等收敛。
         """
         self._validate_create_inputs(
             idempotency_key=idempotency_key,
             title=title,
+            title_source=title_source,
             parent_node_id=parent_node_id,
+            purpose=purpose,
+            graph_binding=graph_binding,
             session_metadata=session_metadata,
+        )
+        session_metadata_json = _serialize_session_creation_metadata(
+            session_metadata
         )
         preimage_hash = compute_session_creation_preimage_hash(
             workspace_id=self._workspace_id,
             parent_node_id=parent_node_id,
             title=title,
+            title_source=title_source,
+            purpose=purpose,
+            graph_binding=graph_binding,
             session_metadata=session_metadata,
+            request_intent=request_intent,
         )
-        # 进程内同 key 串行：并发同 key create 收敛到同一结果；gate 只包
+        request_intent_json = (
+            json.dumps(request_intent, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"))
+            if request_intent is not None else None
+        )
+        # 进程内同 key 串行：并发同 key prepare 收敛到同一 record；gate 只包
         # 住两个 catalog 短临界区（锁序 gate → 单 SQLite 写事务）。
         async with self._key_lock(idempotency_key):
             async with self._gate.exclusive():
@@ -312,43 +391,195 @@ class SessionCreationService:
                     workspace_id=self._workspace_id,
                     parent_node_id=parent_node_id,
                     display_name=title,
+                    title_source=title_source,
+                    purpose=purpose,
+                    graph_binding=graph_binding,
+                    session_metadata_json=session_metadata_json,
                     preimage_hash=preimage_hash,
+                    request_intent_json=request_intent_json,
                 )
             if record.state == "published":
-                return self._result_for_published(record)
+                return record
             if record.state == "aborted":
                 raise RuntimeError(
                     "session creation record 已中止，调用方须换新 "
                     f"idempotency_key 重试: key={idempotency_key!r}, "
                     f"reason={record.abort_reason!r}"
                 )
-            # record.state == preparing：恢复或继续。
+            frozen_metadata = self._session_metadata_from_record(record)
+            self._verify_record_preimage(record, frozen_metadata)
+            staging = self._staging_dir(record.session_id)
             target = self._date_bucket_dir(record.storage_relative_locator)
-            if target.exists() or target.is_symlink():
-                # rename 后、publish 前崩溃的恢复窗口：目标内容一致才继续。
-                self._verify_session_directory(
-                    target,
-                    record,
-                    session_metadata,
-                    stage="恢复(目标日期桶已存在)",
-                )
-                staging = self._staging_dir(record.session_id)
-                if staging.exists() or staging.is_symlink():
+            if staging.exists() or staging.is_symlink():
+                if target.exists() or target.is_symlink():
                     raise RuntimeError(
-                        "目标日期桶与 staging 同时存在（外部改动，fail "
-                        f"closed）: key={idempotency_key!r}, "
-                        f"target={target}, staging={staging}"
+                        "prepared 日期桶与 staging 同时存在（外部改动，"
+                        "fail closed）: "
+                        f"key={idempotency_key!r}, target={target}, staging={staging}"
                     )
-                return await self._publish_in_gate(
-                    record, idempotency_key
-                )
-            # 步骤 2/3：staging 准备 + 原子 rename（gate 外）。
-            self._prepare_staging(record, session_metadata)
-            self._rename_staging_to_target(
-                record, session_metadata
+                prepared = staging
+            elif target.exists() or target.is_symlink():
+                prepared = target
+            else:
+                self._prepare_staging(record, frozen_metadata)
+                prepared = staging
+            self._verify_session_directory(
+                prepared,
+                record,
+                frozen_metadata,
+                stage="prepared Session 复验",
             )
-            # 步骤 4：gate exclusive 内 CAS publish（唯一可见性提交点）。
-            return await self._publish_in_gate(record, idempotency_key)
+            return record
+
+    async def publish_prepared(
+        self,
+        record: SessionCreationRecord,
+        *,
+        fork_completion: ForkCompletionProof | None = None,
+    ) -> SessionCreationResult:
+        """仅在准备 envelope 与 fork proof 完整时 CAS 发布 Session。"""
+        if not isinstance(record, SessionCreationRecord):
+            raise TypeError(
+                f"record 必须是 SessionCreationRecord: {record!r}"
+            )
+        async with self._key_lock(record.session_creation_idempotency_key):
+            current = self._require_record_capability(record)
+            self._validate_fork_completion(current, fork_completion)
+            if current.state == "published":
+                self._session_metadata_from_record(current)
+                return self._result_for_published(current)
+            if current.state == "aborted":
+                raise RuntimeError(
+                    "session creation record 已中止，拒绝发布: "
+                    f"key={current.session_creation_idempotency_key!r}, "
+                    f"reason={current.abort_reason!r}"
+                )
+            metadata = self.read_prepared_session_metadata(current)
+            prepared = self._prepared_directory(current)
+            target = self._date_bucket_dir(current.storage_relative_locator)
+            if prepared == self._staging_dir(current.session_id):
+                self._rename_staging_to_target(current, metadata)
+            elif prepared != target:
+                raise RuntimeError(
+                    "prepared Session path 与冻结 locator 不一致（fail closed）: "
+                    f"session_id={current.session_id}, prepared={prepared}, "
+                    f"target={target}"
+                )
+            try:
+                async with self._gate.exclusive():
+                    node = self._store.publish_creation_record(
+                        current.session_creation_idempotency_key,
+                        expected_purpose=current.purpose,
+                    )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "session creation publish CAS 失败；preparing record 与物理树"
+                    "已保留，调用方必须先释放真实 retention，再显式 abort/quarantine: "
+                    f"key={current.session_creation_idempotency_key!r}: {error}"
+                ) from error
+            return SessionCreationResult(
+                session_id=current.session_id,
+                main_thread_id=current.main_thread_id,
+                storage_relative_locator=current.storage_relative_locator,
+                node=node,
+                record_state="published",
+            )
+
+    async def abort_prepared(
+        self,
+        record: SessionCreationRecord,
+        reason: str,
+    ) -> SessionCreationRecord:
+        """先定点隔离 prepared 物理树，再把 preparing record 终结为 aborted。"""
+        if not isinstance(record, SessionCreationRecord):
+            raise TypeError(
+                f"record 必须是 SessionCreationRecord: {record!r}"
+            )
+        if not isinstance(reason, str):
+            raise TypeError(f"abort reason 必须是字符串: {reason!r}")
+        if not reason:
+            raise ValueError("abort reason 不能为空")
+        async with self._key_lock(record.session_creation_idempotency_key):
+            current = self._require_record_capability(record)
+            if current.state == "aborted":
+                return current
+            if current.state == "published":
+                raise RuntimeError(
+                    "session creation record 已发布，不可 abort: "
+                    f"key={current.session_creation_idempotency_key!r}"
+                )
+            self._quarantine_prepared(current)
+            return self._store.abort_creation_record(
+                current.session_creation_idempotency_key,
+                reason,
+            )
+
+    def list_preparing_creation_records(
+        self,
+        *,
+        purpose: SessionCreationPurpose,
+    ) -> list[SessionCreationRecord]:
+        """返回本 workspace 对应 purpose 的 durable preparing record。"""
+        return self._store.list_preparing_creation_records(
+            workspace_id=self._workspace_id,
+            purpose=purpose,
+        )
+
+    def read_prepared_session_metadata(
+        self,
+        record: SessionCreationRecord,
+    ) -> dict[str, object]:
+        """从 record 精确 locator 对应的 stage/frozen manifest 恢复 metadata。"""
+        current = self._require_record_capability(record)
+        if current.state != "preparing":
+            raise RuntimeError(
+                "读取 prepared metadata 要求 preparing record: "
+                f"session_id={current.session_id}, state={current.state}"
+            )
+        directory = self._prepared_directory(current)
+        manifest_path = directory / _SESSION_MANIFEST_NAME
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise RuntimeError(
+                "prepared session.json 无法读取（fail closed）: "
+                f"path={manifest_path}: {error}"
+            ) from error
+        if not isinstance(manifest, dict):
+            raise RuntimeError(  # noqa: TRY004 - 磁盘数据损坏属于语义冲突。
+                f"prepared session.json 必须是 JSON 对象: {manifest_path}"
+            )
+        try:
+            metadata = {
+                key: manifest[key]
+                for key in _METADATA_CALLER_KEYS
+            }
+        except KeyError as error:
+            raise RuntimeError(
+                "prepared session.json 缺少冻结 metadata 字段（fail closed）: "
+                f"path={manifest_path}, field={error.args[0]!r}"
+            ) from error
+        validate_session_metadata_keys(metadata)
+        try:
+            _validate_creation_purpose_metadata(current.purpose, metadata)
+        except ValueError as error:
+            raise RuntimeError(
+                "prepared purpose 与 session_metadata 不匹配（fail closed）: "
+                f"session_id={current.session_id}"
+            ) from error
+        if _serialize_session_creation_metadata(metadata) != current.session_metadata_json:
+            raise RuntimeError(
+                "prepared session.json metadata 与 durable creation envelope 不一致"
+                f"（fail closed）: session_id={current.session_id}"
+            )
+        self._verify_record_preimage(current, metadata)
+        self._verify_session_directory(
+            directory,
+            current,
+            metadata,
+            stage="prepared metadata 恢复",
+        )
+        return metadata
 
     # ------------------------------------------------------------------
     # 输入校验
@@ -359,10 +590,13 @@ class SessionCreationService:
         *,
         idempotency_key: str,
         title: str,
+        title_source: str,
         parent_node_id: str | None,
+        purpose: SessionCreationPurpose,
+        graph_binding: ThreadGraphBindingRecord,
         session_metadata: dict[str, object],
     ) -> None:
-        """create 入参校验（在任何状态变更之前 fail fast）。"""
+        """prepare 入参校验（在任何状态变更之前 fail fast）。"""
         if not isinstance(idempotency_key, str):
             raise TypeError(
                 f"idempotency_key 必须是字符串: {idempotency_key!r}"
@@ -371,19 +605,178 @@ class SessionCreationService:
             raise ValueError("idempotency_key 不能为空")
         if not isinstance(title, str) or not title:
             raise ValueError(f"title 不能为空: {title!r}")
+        if title_source not in ("default", "user", "auto"):
+            raise ValueError(f"title_source 非法: {title_source!r}")
+        if purpose not in ("normal", "context_fork"):
+            raise ValueError(f"session creation purpose 非法: {purpose!r}")
         if parent_node_id is not None and not isinstance(parent_node_id, str):
             raise TypeError(
                 f"parent_node_id 必须是字符串或 None: {parent_node_id!r}"
             )
         validate_session_metadata_keys(session_metadata)
+        _validate_creation_purpose_metadata(purpose, session_metadata)
         # preimage 计算兼作 JSON 可序列化校验（不可序列化值 fail fast）。
         compute_session_creation_preimage_hash(
             workspace_id=self._workspace_id,
             parent_node_id=parent_node_id,
             title=title,
+            title_source=title_source,
+            purpose=purpose,
+            graph_binding=graph_binding,
             session_metadata=session_metadata,
         )
         self._validate_filesystem_budget()
+
+    def _require_record_capability(
+        self,
+        record: SessionCreationRecord,
+    ) -> SessionCreationRecord:
+        """校验传入 record 与同 workspace durable row 的冻结字段完全相同。"""
+        if not isinstance(record, SessionCreationRecord):
+            raise TypeError(
+                f"record 必须是 SessionCreationRecord: {record!r}"
+            )
+        current = self._store.get_creation_record(
+            record.session_creation_idempotency_key
+        )
+        immutable_fields = (
+            "session_creation_idempotency_key",
+            "session_id",
+            "main_thread_id",
+            "workspace_id",
+            "parent_node_id",
+            "display_name",
+            "title_source",
+            "purpose",
+            "graph_id",
+            "graph_revision",
+            "graph_schema_hash",
+            "capability_profile_hash",
+            "session_metadata_json",
+            "request_intent_json",
+            "created_at",
+            "storage_relative_locator",
+            "preimage_hash",
+            "parent_revision",
+            "record_created_at",
+        )
+        if any(
+            getattr(record, field) != getattr(current, field)
+            for field in immutable_fields
+        ):
+            raise RuntimeError(
+                "SessionCreationRecord capability 与 durable row 不一致，"
+                f"拒绝使用: key={record.session_creation_idempotency_key!r}"
+            )
+        if current.workspace_id != self._workspace_id:
+            raise RuntimeError(
+                "SessionCreationRecord workspace 不属于当前 service: "
+                f"record={current.workspace_id!r}, service={self._workspace_id!r}"
+            )
+        if current.purpose not in ("normal", "context_fork"):
+            raise RuntimeError(
+                "durable creation purpose 非法（record 被外部改动，fail closed）: "
+                f"purpose={current.purpose!r}"
+            )
+        return current
+
+    @staticmethod
+    def _session_metadata_from_record(
+        record: SessionCreationRecord,
+    ) -> dict[str, object]:
+        try:
+            metadata = json.loads(record.session_metadata_json)
+        except ValueError as error:
+            raise RuntimeError(
+                "durable creation metadata 无法解析（record 被外部改动，"
+                f"fail closed）: key={record.session_creation_idempotency_key!r}"
+            ) from error
+        if not isinstance(metadata, dict):
+            raise RuntimeError(  # noqa: TRY004 - journal 数据损坏属于语义冲突。
+                "durable creation metadata 必须是 JSON 对象（fail closed）: "
+                f"key={record.session_creation_idempotency_key!r}"
+            )
+        validate_session_metadata_keys(metadata)
+        try:
+            _validate_creation_purpose_metadata(record.purpose, metadata)
+        except ValueError as error:
+            raise RuntimeError(
+                "durable creation purpose 与 session_metadata 不匹配 "
+                "（fail closed）: "
+                f"key={record.session_creation_idempotency_key!r}"
+            ) from error
+        if _serialize_session_creation_metadata(metadata) != record.session_metadata_json:
+            raise RuntimeError(
+                "durable creation metadata 不是 canonical JSON（fail closed）: "
+                f"key={record.session_creation_idempotency_key!r}"
+            )
+        return metadata
+
+    @staticmethod
+    def _verify_record_preimage(
+        record: SessionCreationRecord,
+        metadata: dict[str, object],
+    ) -> None:
+        actual = compute_session_creation_preimage_hash(
+            workspace_id=record.workspace_id,
+            parent_node_id=record.parent_node_id,
+            title=record.display_name,
+            title_source=record.title_source,
+            purpose=record.purpose,
+            graph_binding=record.graph_binding,
+            session_metadata=metadata,
+            request_intent=(
+                json.loads(record.request_intent_json)
+                if record.request_intent_json is not None else None
+            ),
+        )
+        if actual != record.preimage_hash:
+            raise RuntimeError(
+                "durable creation preimage 与 envelope 不一致（record 被外部改动，"
+                f"fail closed）: key={record.session_creation_idempotency_key!r}"
+            )
+
+    def _prepared_directory(self, record: SessionCreationRecord) -> Path:
+        staging = self._staging_dir(record.session_id)
+        target = self._date_bucket_dir(record.storage_relative_locator)
+        staging_exists = staging.exists() or staging.is_symlink()
+        target_exists = target.exists() or target.is_symlink()
+        if staging_exists and target_exists:
+            raise RuntimeError(
+                "prepared 日期桶与 staging 同时存在（外部改动，fail closed）: "
+                f"session_id={record.session_id}, target={target}, staging={staging}"
+            )
+        if not staging_exists and not target_exists:
+            raise RuntimeError(
+                "durable preparing record 对应的物理 Session 缺失: "
+                f"session_id={record.session_id}, target={target}, staging={staging}"
+            )
+        directory = staging if staging_exists else target
+        if not directory.is_dir() or directory.is_symlink():
+            raise RuntimeError(
+                "prepared Session 不是普通目录（fail closed）: "
+                f"session_id={record.session_id}, path={directory}"
+            )
+        return directory
+
+    @staticmethod
+    def _validate_fork_completion(
+        record: SessionCreationRecord,
+        proof: ForkCompletionProof | None,
+    ) -> None:
+        if record.purpose == "normal":
+            if proof is not None:
+                raise ValueError("普通 Session creation 不接受 fork completion proof")
+            return
+        if proof is None:
+            raise ValueError("context_fork publish 必须提供 committed completion proof")
+        if not isinstance(proof, ForkCompletionProof):
+            raise TypeError(f"fork_completion 类型非法: {proof!r}")
+        if proof.target_session_id != record.session_id:
+            raise RuntimeError(
+                "fork completion target 与 prepared Session 不一致: "
+                f"proof={proof.target_session_id}, record={record.session_id}"
+            )
 
     def _key_lock(self, idempotency_key: str) -> asyncio.Lock:
         """按 key 取进程内串行锁（固定分片，同 key 恒命中同一把）。"""
@@ -412,6 +805,13 @@ class SessionCreationService:
             for suffix in ("", "-journal", "-wal", "-shm"):
                 validate_path_budget(base, f"{relative_database}{suffix}")
             validate_sqlite_path_budget(base / relative_database)
+
+        rollout_database = f"1970/01/01/{session_id}/rollout/index.sqlite"
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            validate_path_budget(
+                self._sessions_root, f"{rollout_database}{suffix}"
+            )
+        validate_sqlite_path_budget(self._sessions_root / rollout_database)
 
     def _date_bucket_dir(self, storage_relative_locator: str) -> Path:
         relative = storage_relative_locator[len("sessions/"):]
@@ -457,9 +857,11 @@ class SessionCreationService:
         # docstring「准备中断窗口」）。
         _atomic_write_bytes(staging / _SESSION_MANIFEST_NAME, manifest_bytes)
         self._initialize_control_database(staging, record)
-        # durability barrier：session.json（文件+父目录）与控制库（文件）
-        # 已各自 fsync；此处补 staging 目录与 .staging 父目录 fsync
-        # （新建 <session_id> 目录条目的持久性）。
+        threads_root = staging / "threads"
+        threads_root.mkdir()
+        _fsync_directory(threads_root)
+        # durability barrier：session.json、控制库与 child-thread 根目录均已
+        # 持久化；此处补 staging 目录与 .staging 父目录 fsync。
         _fsync_directory(staging)
         _fsync_directory(staging.parent)
 
@@ -480,6 +882,7 @@ class SessionCreationService:
             store.initialize_main_thread(
                 record.main_thread_id,
                 datetime.fromisoformat(record.created_at),
+                graph_binding=record.graph_binding,
             )
             store.initialize_fence("active", 1)
             store.verify_matches_catalog_main_thread(record.main_thread_id)
@@ -507,15 +910,53 @@ class SessionCreationService:
                 f"{directory}"
             )
         entries = sorted(entry.name for entry in directory.iterdir())
-        expected_entries = sorted(
-            [_SESSION_MANIFEST_NAME, CONTROL_DATABASE_NAME]
+        required_entries = {
+            _SESSION_MANIFEST_NAME,
+            CONTROL_DATABASE_NAME,
+            "threads",
+        }
+        allowed_entries = (
+            required_entries | {"rollout", ".rollout.write.lock", "debug"}
+            if record.purpose == "context_fork"
+            else required_entries
         )
-        if entries != expected_entries:
+        if not required_entries.issubset(entries) or set(entries) - allowed_entries:
             raise RuntimeError(
                 f"{stage}: 条目集与预期不一致（外部改动或上次准备中断，"
                 f"fail closed）: path={directory}, "
-                f"expected={expected_entries}, actual={entries}"
+                f"required={sorted(required_entries)}, actual={entries}"
             )
+        rollout_lock = directory / ".rollout.write.lock"
+        if rollout_lock.is_symlink() or (rollout_lock.exists() and not rollout_lock.is_file()):
+            raise RuntimeError(f"{stage}: rollout lock 必须是普通文件: {rollout_lock}")
+        debug_root = directory / "debug"
+        if debug_root.is_symlink() or (debug_root.exists() and not debug_root.is_dir()):
+            raise RuntimeError(f"{stage}: debug 必须是普通目录: {debug_root}")
+
+        threads_root = directory / "threads"
+        if threads_root.is_symlink() or not threads_root.is_dir():
+            raise RuntimeError(
+                f"{stage}: threads 必须是普通目录: "
+                f"path={threads_root}"
+            )
+        thread_entries = sorted(entry.name for entry in threads_root.iterdir())
+        if thread_entries:
+            raise RuntimeError(
+                f"{stage}: prepared Session 不得包含 child thread: "
+                f"path={threads_root}, actual={thread_entries}"
+            )
+        rollout_root = directory / "rollout"
+        if rollout_root.exists() or rollout_root.is_symlink():
+            if rollout_root.is_symlink() or not rollout_root.is_dir():
+                raise RuntimeError(
+                    f"{stage}: prepared Session rollout 必须是普通目录: "
+                    f"path={rollout_root}"
+                )
+            if record.purpose != "context_fork":
+                raise RuntimeError(
+                    f"{stage}: normal Session 不得包含 rollout: path={rollout_root}"
+                )
+
         manifest_path = directory / _SESSION_MANIFEST_NAME
         expected_bytes = self._expected_manifest_bytes(record, session_metadata)
         try:
@@ -557,7 +998,8 @@ class SessionCreationService:
             ) from error
         try:
             rows = connection.execute(
-                "SELECT thread_id FROM thread_catalog WHERE kind = 'main'"
+                "SELECT thread_id, graph_id, graph_revision, graph_schema_hash, "
+                "capability_profile_hash FROM thread_catalog WHERE kind = 'main'"
             ).fetchall()
             if len(rows) != 1 or str(rows[0][0]) != record.main_thread_id:
                 raise RuntimeError(
@@ -565,6 +1007,12 @@ class SessionCreationService:
                     f"path={control_path}, "
                     f"rows={[str(row[0]) for row in rows]}, "
                     f"expected={record.main_thread_id!r}"
+                )
+            if tuple(rows[0][1:]) != record.graph_binding.as_tuple():
+                raise RuntimeError(
+                    f"{stage}: session-control GraphBinding 与冻结 record 不一致: "
+                    f"path={control_path}, actual={tuple(rows[0][1:])!r}, "
+                    f"expected={record.graph_binding.as_tuple()!r}"
                 )
             fence_rows = connection.execute(
                 "SELECT state, generation FROM lifecycle_fence WHERE id = 1"
@@ -597,6 +1045,7 @@ class SessionCreationService:
             "state": "active",
             "parent_node_id": record.parent_node_id,
             "display_name": record.display_name,
+            "title_source": record.title_source,
             "workspace_id": record.workspace_id,
             "created_at": record.created_at,
             "storage_relative_locator": record.storage_relative_locator,
@@ -607,6 +1056,7 @@ class SessionCreationService:
             "state": node.state,
             "parent_node_id": node.parent_node_id,
             "display_name": node.display_name,
+            "title_source": node.title_source,
             "workspace_id": node.workspace_id,
             "created_at": node.created_at,
             "storage_relative_locator": node.storage_relative_locator,
@@ -662,15 +1112,10 @@ class SessionCreationService:
             )
         target = self._date_bucket_dir(record.storage_relative_locator)
         if target.exists() or target.is_symlink():
-            # 校验与 rename 之间目标被外部放置：内容一致 → 视为 rename 已
-            # 完成（清理已校验一致的冗余 staging 副本后继续 publish）；
-            # 不一致 → fail closed。
-            self._verify_session_directory(
-                target, record, session_metadata, stage=stage
+            raise RuntimeError(
+                f"{stage}: 目标日期桶已存在，拒绝覆盖或丢弃 staging: "
+                f"target={target}, staging={staging}"
             )
-            shutil.rmtree(staging)
-            _fsync_directory(staging.parent)
-            return
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.rename(staging, target)
@@ -682,45 +1127,27 @@ class SessionCreationService:
         _fsync_directory(target.parent)
         _fsync_directory(staging.parent)
 
-    async def _publish_in_gate(
-        self,
-        record: SessionCreationRecord,
-        idempotency_key: str,
-    ) -> SessionCreationResult:
-        """gate exclusive 内 CAS publish；失败定点回收 + abort。"""
-        try:
-            async with self._gate.exclusive():
-                node = self._store.publish_creation_record(idempotency_key)
-        except RuntimeError as error:
-            # CAS 失败：定点回收日期桶目录到 orphaned 隔离区（物理回收
-            # 失败则保持 record preparing 并直接抛错，人工核账）。
-            self._quarantine_target(record)
-            self._store.abort_creation_record(idempotency_key, str(error))
-            raise RuntimeError(
-                "session creation publish CAS 失败，已定点回收日期桶目录并 "
-                "abort record，调用方须换新 idempotency_key 重试: "
-                f"key={idempotency_key!r}: {error}"
-            ) from error
-        return SessionCreationResult(
-            session_id=record.session_id,
-            main_thread_id=record.main_thread_id,
-            storage_relative_locator=record.storage_relative_locator,
-            node=node,
-            record_state="published",
-        )
-
-    def _quarantine_target(
+    def _quarantine_prepared(
         self,
         record: SessionCreationRecord,
     ) -> None:
-        """CAS 失败后的定点回收：日期桶目录 → orphaned/session-creation/<session_id>。"""
-        stage = "CAS 失败定点回收"
+        """把唯一 prepared stage/target 定点移入 orphaned/session-creation。"""
+        stage = "prepared creation 隔离"
+        staging = self._staging_dir(record.session_id)
         target = self._date_bucket_dir(record.storage_relative_locator)
-        if not target.is_dir() or target.is_symlink():
+        staging_exists = staging.exists() or staging.is_symlink()
+        target_exists = target.exists() or target.is_symlink()
+        if staging_exists and target_exists:
             raise RuntimeError(
-                f"{stage}: 日期桶目录缺失或不是目录，无法定点回收"
-                f"（外部改动，fail closed）: session_id={record.session_id!r}, "
-                f"target={target}"
+                f"{stage}: staging 与冻结日期桶同时存在，拒绝隔离: "
+                f"staging={staging}, target={target}"
+            )
+        if not staging_exists and not target_exists:
+            return
+        source = staging if staging_exists else target
+        if not source.is_dir() or source.is_symlink():
+            raise RuntimeError(
+                f"{stage}: prepared 目录缺失或不是普通目录: {source}"
             )
         quarantine_target = self._orphaned_dir(record.session_id)
         if quarantine_target.exists() or quarantine_target.is_symlink():
@@ -729,11 +1156,11 @@ class SessionCreationService:
             )
         quarantine_target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.rename(target, quarantine_target)
+            os.rename(source, quarantine_target)
         except OSError as error:
             raise RuntimeError(
-                f"{stage}: 日期桶目录隔离失败: {target} -> "
+                f"{stage}: prepared 目录隔离失败: {source} -> "
                 f"{quarantine_target}: {error}"
             ) from error
         _fsync_directory(quarantine_target.parent)
-        _fsync_directory(target.parent)
+        _fsync_directory(source.parent)

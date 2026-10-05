@@ -5,7 +5,7 @@ session/thread 身份」约束为 UUIDv7 位 profile。§7.1 已声明两类**�
 身份**显式豁免、允许继续使用 UUIDv4：
 
 1. Node 服务进程（`BOXTEAM_NODE_BIN`，无 `crypto.randomUUIDv7`）生成的
-   `term_`/`browser_`/`screenshot_`/`download_`/`page_`/`preset_`、以及浏览器
+   `browser_`/`screenshot_`/`download_`/`page_`/`preset_`、以及浏览器
    （无 `Bun.randomUUIDv7`）生成的 `inline:` 附件 file id；
 2. **运行时非工厂前缀** `runtime_lease_<uuid4>` 与 `target_generation_<uuid4>`
    （§7.1c）：二者经实测**不是** `IdentifierPrefix` 工厂前缀，MUST NOT 被当作
@@ -42,7 +42,6 @@ class Exemption:
 # Node 服务进程（无 crypto.randomUUIDv7）与浏览器（无 Bun.randomUUIDv7）
 # 生成的本地 id（§7.1）。每条含具名载体与 §7.1 声明的「非 canonical」注释锚点。
 _JS_EXEMPTIONS: tuple[Exemption, ...] = (
-    Exemption("node-terminal", "term_", "src/workspace-services/terminal/server/terminalManager.js", "非 canonical"),
     Exemption("node-browser", "browser_", "src/workspace-services/browser/server/browserManager.js", "非 canonical"),
     Exemption("node-browser", "screenshot_", "src/workspace-services/browser/server/browserStateStore.js", "非 canonical"),
     Exemption("node-browser", "download_", "src/workspace-services/browser/server/browserStateStore.js", "非 canonical"),

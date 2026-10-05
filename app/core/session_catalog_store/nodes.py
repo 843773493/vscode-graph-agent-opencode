@@ -64,6 +64,11 @@ class CatalogNodesMixin:
                 else None
             ),
             display_name=str(row["display_name"]),
+            title_source=(
+                str(row["title_source"])
+                if row["title_source"] is not None
+                else None
+            ),
             state=str(row["state"]),
             revision=int(row["revision"]),
             workspace_id=str(row["workspace_id"]),
@@ -250,12 +255,14 @@ class CatalogNodesMixin:
         created_at: datetime,
         storage_relative_locator: str,
         main_thread_id: str,
+        title_source: str = "user",
     ) -> SessionCatalogNode:
         """创建 session 节点；locator 日期必须等于 created_at 的 UTC 日期。"""
         validate_session_id(node_id)
         validate_thread_id(main_thread_id)
         validate_storage_relative_locator(storage_relative_locator)
         self._validate_common_fields(workspace_id, display_name)
+        self._validate_title_source(title_source)
         if not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
         if created_at.tzinfo is None:
@@ -277,13 +284,14 @@ class CatalogNodesMixin:
             self._require_mutable_parent(connection, parent_node_id, workspace_id)
             connection.execute(
                 "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-                "state, revision, workspace_id, created_at, "
+                "title_source, state, revision, workspace_id, created_at, "
                 "storage_relative_locator, main_thread_id) "
-                "VALUES (?, 'session', ?, ?, 'active', 1, ?, ?, ?, ?)",
+                "VALUES (?, 'session', ?, ?, ?, 'active', 1, ?, ?, ?, ?)",
                 (
                     node_id,
                     parent_node_id,
                     display_name,
+                    title_source,
                     workspace_id,
                     created_at.isoformat(),
                     storage_relative_locator,
@@ -299,13 +307,64 @@ class CatalogNodesMixin:
         if not display_name:
             raise ValueError(f"显示名不能为空: {display_name!r}")
         with self.write_transaction() as connection:
-            self._require_node(connection, node_id)
-            connection.execute(
-                "UPDATE nodes SET display_name = ?, revision = revision + 1 "
-                "WHERE node_id = ?",
-                (display_name, node_id),
-            )
+            node = self._require_node(connection, node_id)
+            if str(node["kind"]) == "session":
+                connection.execute(
+                    "UPDATE nodes SET display_name = ?, title_source = 'user', "
+                    "revision = revision + 1 WHERE node_id = ?",
+                    (display_name, node_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE nodes SET display_name = ?, revision = revision + 1 "
+                    "WHERE node_id = ?",
+                    (display_name, node_id),
+                )
             return self._node_from_row(self._require_node(connection, node_id))
+
+    @staticmethod
+    def _validate_title_source(title_source: str) -> None:
+        if title_source not in ("default", "user", "auto"):
+            raise ValueError(f"title_source 非法: {title_source!r}")
+
+    def apply_auto_title_mutation(
+        self,
+        node_id: str,
+        *,
+        expected_revision: int,
+        expected_title: str,
+        new_title: str,
+        connection: sqlite3.Connection,
+    ) -> SessionCatalogNode | None:
+        """仅在默认来源、原标题和节点 revision 同时匹配时自动改名。"""
+        if not isinstance(expected_revision, int) or isinstance(
+            expected_revision, bool
+        ):
+            raise TypeError(f"expected_revision 必须是整数: {expected_revision!r}")
+        if not isinstance(expected_title, str) or not expected_title:
+            raise ValueError(f"expected_title 不能为空: {expected_title!r}")
+        if not isinstance(new_title, str) or not new_title:
+            raise ValueError(f"new_title 不能为空: {new_title!r}")
+        node = self._require_node(connection, node_id)
+        if (
+            str(node["kind"]) != "session"
+            or str(node["state"]) != "active"
+            or str(node["title_source"]) != "default"
+            or str(node["display_name"]) != expected_title
+            or int(node["revision"]) != expected_revision
+        ):
+            return None
+        self._require_display_name_available(connection, node_id, new_title)
+        updated = connection.execute(
+            "UPDATE nodes SET display_name = ?, title_source = 'auto', "
+            "revision = revision + 1 WHERE node_id = ? AND kind = 'session' "
+            "AND state = 'active' AND title_source = 'default' "
+            "AND display_name = ? AND revision = ?",
+            (new_title, node_id, expected_title, expected_revision),
+        )
+        if updated.rowcount != 1:
+            return None
+        return self._node_from_row(self._require_node(connection, node_id))
 
     def move_node(
         self,
@@ -418,6 +477,8 @@ class CatalogNodesMixin:
                 )
                 updates.append("display_name = ?")
                 params.append(new_display_name)
+                if str(row["kind"]) == "session":
+                    updates.append("title_source = 'user'")
             params.append(node_id)
             active.execute(
                 f"UPDATE nodes SET {', '.join(updates)} WHERE node_id = ?",

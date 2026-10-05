@@ -7,7 +7,7 @@ from dataclasses import fields, replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef, selection_ref_identity
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,
@@ -91,11 +91,11 @@ def _validate_contribution_bindings(
     draft: ContextRequestPlan, snapshot: ContextAssemblySnapshot
 ) -> None:
     """omitted 可保留已存在的映射，但不能借跳过正文校验补造贡献身份。"""
-    sources = {(ref.ref_type, ref.ref_id): ref for ref in draft.refs}
+    sources = {selection_ref_identity(ref): ref for ref in draft.refs}
     for entry in snapshot.selection:
         if entry.contribution_id is None:
             continue
-        source = sources.get((entry.ref.ref_type, entry.ref.ref_id))
+        source = sources.get(selection_ref_identity(entry.ref))
         if source is None or source.ref_type != "request_only":
             raise ValueError("plan-order-integrity: contribution binding 缺少 request-only source")
         contribution = resolve_contribution_for_ref(source, draft.contributions)

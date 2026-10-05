@@ -1,6 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from pathlib import Path
+
 import pytest
+
+from app.core.path_utils import workspace_context
+from app.core.workspace_identity import load_or_create_workspace_id
+from tests.harness.python.run_context import TestRunContext
+from tests.support.workspaces import prepare_default_test_workspace
+
+
+@pytest.fixture
+def workspace_scope(request: pytest.FixtureRequest) -> Iterator[tuple[str, Path]]:
+    """需要 workspace 上下文的单测显式启用；不给无归属调用补默认值。"""
+    root = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    prepare_default_test_workspace(
+        workspace_root=root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    workspace_id = load_or_create_workspace_id(root)
+    with workspace_context(workspace_id, root):
+        yield workspace_id, root
 
 
 class _TestSessionLifecycleGuard:

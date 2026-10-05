@@ -21,19 +21,9 @@ export declare type TerminalSession = Message<"boxteam.terminal.v1.TerminalSessi
   terminalId: string;
 
   /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
    * @generated from field: string title = 3;
    */
   title: string;
-
-  /**
-   * @generated from field: string cwd = 4;
-   */
-  cwd: string;
 
   /**
    * @generated from field: uint32 cols = 5;
@@ -69,6 +59,31 @@ export declare type TerminalSession = Message<"boxteam.terminal.v1.TerminalSessi
    * @generated from field: google.protobuf.Timestamp updated_at = 11;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string workspace_id = 12;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string cwd_relative = 13;
+   */
+  cwdRelative: string;
+
+  /**
+   * @generated from field: uint64 transport_owner_revision = 14;
+   */
+  transportOwnerRevision: bigint;
+
+  /**
+   * @generated from field: optional int32 exit_code = 15;
+   */
+  exitCode?: number | undefined;
+
+  /**
+   * @generated from field: optional int32 last_command_exit_code = 16;
+   */
+  lastCommandExitCode?: number | undefined;
 };
 
 /**

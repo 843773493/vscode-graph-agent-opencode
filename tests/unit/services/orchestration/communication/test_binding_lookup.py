@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
@@ -34,7 +35,9 @@ async def test_resolves_bound_communication_from_target_store(tmp_path: Path) ->
     session_dir.mkdir()
     store = SessionControlStore(session_dir / "session-control.sqlite")
     try:
-        store.initialize_main_thread(main_thread_id, datetime.now(UTC))
+        store.initialize_main_thread(
+            main_thread_id, datetime.now(UTC), TEST_THREAD_GRAPH_BINDING
+        )
         store.initialize_fence("active", 1)
         store.create_or_get_communication_inbox(
             session_id=session_id,
@@ -82,7 +85,10 @@ async def test_missing_communication_returns_none(tmp_path: Path) -> None:
     lookup = SessionControlStoreWaitBindingLookup(
         path_resolver=_FakePathResolver(tmp_path)
     )
-    assert await lookup.resolve(
-        target_session_id=f"ses_{create_uuid_hex()}",
-        communication_id=f"comm_{uuid.uuid4().hex}",
-    ) is None
+    assert (
+        await lookup.resolve(
+            target_session_id=f"ses_{create_uuid_hex()}",
+            communication_id=f"comm_{uuid.uuid4().hex}",
+        )
+        is None
+    )

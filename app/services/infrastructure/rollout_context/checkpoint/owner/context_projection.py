@@ -7,12 +7,12 @@ from collections.abc import Mapping
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import (
     contribution_content_hash,
     payload_content_length,
     sha256_jcs,
 )
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
@@ -30,12 +30,15 @@ class ContextProjectionOwnerMixin:
     """负责已 seal plan 的正文来源校验和 assembly detail locator 绑定。"""
 
     @staticmethod
-    def _require_context_plan_owner(session_id: str, plan: ContextRequestPlan) -> None:
-        """先验证调用方 owner；即使没有 refs，也不能初始化或读取另一 session。"""
-        if plan.session_id != session_id:
+    def _require_context_plan_owner(
+        session_id: str, thread_id: str, plan: ContextRequestPlan
+    ) -> None:
+        """先验证调用方的完整 SessionThread owner。"""
+        if (plan.session_id, plan.thread_id) != (session_id, thread_id):
             raise ValueError(
-                "source-mismatch: context plan session owner 不一致: "
-                f"plan={plan.session_id}, requested={session_id}"
+                "source-mismatch: context plan session/thread owner 不一致: "
+                f"plan=({plan.session_id},{plan.thread_id}), "
+                f"requested=({session_id},{thread_id})"
             )
 
     def _validate_snapshot_sources(
@@ -51,6 +54,7 @@ class ContextProjectionOwnerMixin:
         )
         items = self._storage.read_items(
             snapshot.session_id,
+            snapshot.thread_id,
             checkpoint_ns=checkpoint_ns,
             item_ids=tuple(entry.ref.ref_id for entry in entries),
         )
@@ -59,6 +63,7 @@ class ContextProjectionOwnerMixin:
             resolve_selected_item(entry, by_id)
         self._request_content_for_plan(
             snapshot.session_id,
+            snapshot.thread_id,
             checkpoint_ns,
             snapshot.as_sealed_plan(),
             None,
@@ -67,12 +72,13 @@ class ContextProjectionOwnerMixin:
     def project_context_plan_to_native(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
         """从同一已提交 selection 直接编码 Responses input，不经过 LangChain。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         from app.services.infrastructure.rollout_context.provider.native_request import (
             project_native_request,
         )
@@ -80,6 +86,7 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         committed = self._committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
         )
@@ -91,23 +98,27 @@ class ContextProjectionOwnerMixin:
         return project_native_request(
             committed,
             self._storage.read_items(
-                session_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids
+                session_id, thread_id, checkpoint_ns=checkpoint_ns, item_ids=item_ids
             ),
-            self._request_content_for_plan(session_id, checkpoint_ns, committed, None),
+            self._request_content_for_plan(
+                session_id, thread_id, checkpoint_ns, committed, None
+            ),
         )
 
     def project_context_plan_to_history_with_diagnostics(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
     ) -> tuple[list[BaseMessage], tuple[str, ...]]:
         """history 保留 selection loss，同时避免读取 request-only 正文。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         messages, _, losses = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
             include_request_only=False,
@@ -118,12 +129,13 @@ class ContextProjectionOwnerMixin:
     def _request_content_for_plan(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
         plan: ContextRequestPlan,
         explicit_content: Mapping[str, object] | None,
     ) -> dict[str, object]:
         """只从 assembly-bound detail 恢复正文，并校验显式输入的一致性。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             raise ValueError("context plan 未 sealed，不能解析 request-only 正文")
         # sealed identity 不再读取可能属于其它 plan/revision 的实时 source cache。
@@ -166,12 +178,13 @@ class ContextProjectionOwnerMixin:
                 raise DetailUnavailableError(
                     f"detail-unavailable: sealed request-only 缺少 typed detail: {ref_id}"
                 )
-            detail_ref.require_owner(session_id, plan.assembly_id)
+            detail_ref.require_owner(session_id, thread_id, plan.assembly_id)
             detail_record = self._request_source_record(
-                session_id, checkpoint_ns, detail_ref, ref
+                session_id, thread_id, checkpoint_ns, detail_ref, ref
             )
             detail_envelope = self._detail_store.read(
                 session_id=session_id,
+                thread_id=thread_id,
                 record=detail_record,
                 include_sensitive=ref.protection == "protected",
             )
@@ -276,15 +289,19 @@ class ContextProjectionOwnerMixin:
     def _request_source_record(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
         detail_ref: DetailRef,
         ref: ContextRef,
     ) -> DetailRecord:
         """request source 的 typed owner 与用途必须在读取正文前一致。"""
-        detail_ref.require_owner(session_id)
+        detail_ref.require_owner(session_id, thread_id)
         record = detail_record_from_mapping(
             self._storage.get_context_plan_detail(
-                session_id, detail_ref=detail_ref, checkpoint_ns=checkpoint_ns
+                session_id,
+                thread_id,
+                detail_ref=detail_ref,
+                checkpoint_ns=checkpoint_ns,
             )
         )
         if (
@@ -308,15 +325,17 @@ class ContextProjectionOwnerMixin:
     def _recover_request_source(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
         ref: ContextRef,
         contribution_id: str | None,
     ) -> object:
         """新 assembly 复用旧 sealed source 的详情，绝不读取当前源文件。"""
         if isinstance(ref.source_ref, DetailRef):
-            ref.source_ref.require_owner(session_id)
+            ref.source_ref.require_owner(session_id, thread_id)
         for snapshot in self._storage.list_context_assemblies(
             session_id,
+            thread_id,
             checkpoint_ns=checkpoint_ns,
         ):
             for entry in snapshot.selection:
@@ -358,12 +377,15 @@ class ContextProjectionOwnerMixin:
                     raise DetailUnavailableError(
                         f"detail-unavailable: recovered source 缺少 typed detail: {ref.ref_id}"
                     )
-                entry.detail_ref.require_owner(session_id, snapshot.assembly_id)
+                entry.detail_ref.require_owner(
+                    session_id, thread_id, snapshot.assembly_id
+                )
                 record = self._request_source_record(
-                    session_id, checkpoint_ns, entry.detail_ref, ref
+                    session_id, thread_id, checkpoint_ns, entry.detail_ref, ref
                 )
                 envelope = self._detail_store.read(
                     session_id=session_id,
+                    thread_id=thread_id,
                     record=record,
                     include_sensitive=ref.protection == "protected",
                 )
@@ -375,6 +397,7 @@ class ContextProjectionOwnerMixin:
     def _bind_request_detail_refs(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
         plan: ContextRequestPlan,
         *,
@@ -391,7 +414,7 @@ class ContextProjectionOwnerMixin:
         同一 source identity 的旧 sealed detail，不读取当前源文件，
         也不把正文写入 canonical item。
         """
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "unsealed" or plan.assembly_id is not None:
             raise ValueError(
                 "plan-order-integrity: 只能为 unsealed plan 分配 detail binding"
@@ -428,8 +451,16 @@ class ContextProjectionOwnerMixin:
                 contribution.body
                 if contribution is not None and contribution.body is not None
                 else self._plan_request_content.get(
-                    (session_id, checkpoint_ns, plan.plan_id, content_key),
-                    self._request_only_content.get((session_id, checkpoint_ns, content_key)),
+                    (
+                        session_id,
+                        thread_id,
+                        checkpoint_ns,
+                        plan.plan_id,
+                        content_key,
+                    ),
+                    self._request_only_content.get(
+                        (session_id, thread_id, checkpoint_ns, content_key)
+                    ),
                 )
             )
             if request_only_content is not None:
@@ -437,6 +468,7 @@ class ContextProjectionOwnerMixin:
             if body is None:
                 body = self._recover_request_source(
                     session_id,
+                    thread_id,
                     checkpoint_ns,
                     ref,
                     contribution.contribution_id if contribution is not None else None,
@@ -474,6 +506,7 @@ class ContextProjectionOwnerMixin:
             for ref, body in pending:
                 record = self._detail_store.write(
                     session_id=session_id,
+                    thread_id=thread_id,
                     assembly_id=assembly_id,
                     detail_kind="request_source",
                     retention_class="request_replay",
@@ -499,11 +532,14 @@ class ContextProjectionOwnerMixin:
         except BaseException:
             self._storage.mark_context_plan_details_unavailable(
                 session_id,
+                thread_id,
                 detail_refs=registered,
                 checkpoint_ns=checkpoint_ns,
             )
             for record in records:
-                self._detail_store.remove(session_id=session_id, record=record)
+                self._detail_store.remove(
+                    session_id=session_id, thread_id=thread_id, record=record
+                )
             raise
         return plan, tuple(records), detail_by_ref
 

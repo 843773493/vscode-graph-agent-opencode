@@ -7,10 +7,10 @@ from collections.abc import Callable
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import CommitKind, CommitMode, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     optional_detail_ref_key,
 )
@@ -46,6 +46,8 @@ def _assert_one_row(cursor, *, context: str) -> None:
 class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
     def seal_context_assembly(
         self,
+        session_id: str,
+        thread_id: str,
         snapshot: ContextAssemblySnapshot,
         *,
         seal_idempotency_key: str,
@@ -62,8 +64,12 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         activation 的调用方）不写 activation 行，行为与接入前一致。
         """
         detail_key = optional_detail_ref_key(detail_ref)
+        if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
+            raise ValueError("source-mismatch: assembly seal owner 不一致")
         if detail_ref is not None:
-            detail_ref.require_owner(snapshot.session_id, snapshot.assembly_id)
+            detail_ref.require_owner(
+                snapshot.session_id, snapshot.thread_id, snapshot.assembly_id
+            )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("assembly.checkpoint_ns 必须是字符串")
         if not snapshot.sealed:
@@ -77,9 +83,13 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
             raise ValueError(
                 f"context assembly hash 校验失败，拒绝 seal: {snapshot.assembly_id}: {error}"
             ) from error
-        with self._lock(snapshot.session_id, checkpoint_ns):
-            self.initialize(snapshot.session_id, checkpoint_ns)
-            with self._connect(snapshot.session_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(
+                session_id, checkpoint_ns, thread_id=thread_id
+            )
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
                 # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
@@ -92,8 +102,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     detail_key=detail_key,
                 )
                 existing = connection.execute(
-                    "SELECT plan_hash, request_hash, status, detail_ref, snapshot_json FROM context_assemblies WHERE assembly_id = ?",
-                    (snapshot.assembly_id,),
+                    "SELECT plan_hash, request_hash, status, detail_ref, snapshot_json FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
+                    (session_id, thread_id, snapshot.assembly_id),
                 ).fetchone()
                 if existing is not None:
                     # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
@@ -143,41 +153,49 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         return non_negative_int(commit_row[0], field="commit_id")
                     raise ValueError("assembly-idempotency-conflict: assembly_id 已存在但输入不一致")
                 turn = connection.execute(
-                    "SELECT turn_id, status FROM turn_records WHERE turn_id = ?",
-                    (snapshot.turn_id,),
-                ).fetchone()
-                if turn is None:
-                    raise KeyError(f"assembly Turn 不存在: {snapshot.turn_id}")
-                if required_text(turn[1], field="turn.status") not in {
-                    TurnStatus.OPEN.value,
-                    TurnStatus.ACTIVE.value,
-                }:
-                    raise ValueError(
-                        "turn_not_resumable: sealed assembly 只能绑定可 dispatch Turn: "
-                        f"{snapshot.turn_id} status={turn[1]}"
-                    )
+                    "SELECT status FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
+                    (snapshot.session_id, snapshot.thread_id, snapshot.turn_id),
+                ).fetchone() if snapshot.turn_id is not None else None
+                if snapshot.turn_id is not None:
+                    if turn is None:
+                        raise KeyError(f"assembly Turn 不存在: {snapshot.turn_id}")
+                    if required_text(turn[0], field="turn.status") not in {
+                        TurnStatus.OPEN.value,
+                        TurnStatus.ACTIVE.value,
+                    }:
+                        raise ValueError(
+                            "turn_not_resumable: sealed assembly 只能绑定可 dispatch Turn: "
+                            f"{snapshot.turn_id} status={turn[0]}"
+                        )
                 execution = connection.execute(
-                    "SELECT turn_id FROM executions WHERE execution_id = ?",
-                    (snapshot.execution_id,),
+                    "SELECT turn_id, execution_origin FROM executions "
+                    "WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                    (snapshot.session_id, snapshot.thread_id, snapshot.execution_id),
                 ).fetchone()
                 if (
                     execution is None
-                    or required_text(execution[0], field="execution.turn_id")
-                    != snapshot.turn_id
+                    or execution[0] != snapshot.turn_id
+                    or required_text(execution[1], field="execution.execution_origin")
+                    != ("internal" if snapshot.turn_id is None else "user_turn")
                 ):
-                    raise ValueError("assembly execution 不存在或不属于 snapshot Turn")
+                    raise ValueError(
+                        "assembly execution 不存在或不属于 snapshot session/thread/Turn"
+                    )
                 validate_assembly_details(connection, snapshot, checkpoint_ns, detail_key)
                 commit_id, _offset = self._append_v2_records_transaction(
                     connection,
-                    snapshot.session_id,
+                    thread_id,
                     checkpoint_ns,
                     (),
+                    session_id=session_id,
                     commit_kind=CommitKind.ASSEMBLY_SEALED.value,
                     commit_mode=CommitMode.METADATA_ONLY.value,
                     subject_id=snapshot.assembly_id,
                     idempotency_key=f"assembly:{snapshot.assembly_id}",
                     begin_transaction=False,
                     metadata={
+                        "session_id": snapshot.session_id,
+                        "thread_id": snapshot.thread_id,
                         "assembly_id": snapshot.assembly_id,
                         "plan_hash": snapshot.plan_hash,
                         "request_hash": snapshot.request_hash,
@@ -185,10 +203,11 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 )
                 timestamp = _now()
                 cursor = connection.execute(
-                    "INSERT INTO context_assemblies(assembly_id, session_id, turn_id, execution_id, plan_id, plan_hash, request_hash, history_view_revision, source_overlay_epoch, snapshot_json, model_call_id, status, detail_ref, created_at, sealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)",
+                    "INSERT INTO context_assemblies(assembly_id, session_id, thread_id, turn_id, execution_id, plan_id, plan_hash, request_hash, history_view_revision, source_overlay_epoch, snapshot_json, model_call_id, status, detail_ref, created_at, sealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', ?, ?, ?)",
                     (
                         snapshot.assembly_id,
-                        snapshot.session_id,
+                        session_id,
+                        thread_id,
                         snapshot.turn_id,
                         snapshot.execution_id,
                         snapshot.plan_id,

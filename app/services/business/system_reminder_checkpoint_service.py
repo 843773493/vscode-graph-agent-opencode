@@ -16,9 +16,6 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
 )
 from app.prompting import internal_message_factory
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
-)
 
 
 def build_user_interrupt_reminder(
@@ -78,6 +75,7 @@ def submit_checkpoint_reminder(
     *,
     checkpointer: object,
     session_id: str,
+    thread_id: str,
     reminder: str,
     response_metadata: Mapping[str, object],
     checkpoint_source: str,
@@ -86,6 +84,8 @@ def submit_checkpoint_reminder(
     """向唯一 source intent owner 提交一次 pending runtime reminder。"""
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("checkpoint reminder session_id 必须是非空字符串")
+    if not isinstance(thread_id, str) or not thread_id:
+        raise ValueError("checkpoint reminder thread_id 必须是非空字符串")
     if not isinstance(reminder, str):
         raise TypeError("checkpoint reminder reminder 必须是字符串")
     if not isinstance(response_metadata, Mapping):
@@ -112,7 +112,7 @@ def submit_checkpoint_reminder(
     decision = ApplySourceLifecycleDecision(
         owner=MutationIntentOwner(
             session_id=session_id,
-            thread_id=MAIN_THREAD_ID,
+            thread_id=thread_id,
         ),
         source_id=source_id,
         source_kind="checkpoint_reminder",
@@ -140,6 +140,7 @@ def persist_interrupt_checkpoint(
     *,
     checkpointer: object | None,
     session_id: str,
+    thread_id: str,
     active_tool_name: str | None,
     checkpoint_source: str = "interrupt",
     event_identity: str | None = None,
@@ -174,6 +175,7 @@ def persist_interrupt_checkpoint(
     submit_checkpoint_reminder(
         checkpointer=checkpointer,
         session_id=session_id,
+        thread_id=thread_id,
         reminder=reminder,
         response_metadata={
             "phase": phase,

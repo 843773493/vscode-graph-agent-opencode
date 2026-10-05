@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
 from uuid import UUID, uuid4
 
 WORKSPACE_IDENTITY_FILE_NAME = "workspace-identity.json"
-# TODO: 旧版本固定后端 ID 的存量迁移完成后，移除这些仅用于一次性修复的值。
-LEGACY_BACKEND_WORKSPACE_IDS = frozenset({"ws_local", "ws_custom_tool_fixture"})
 
 
 def workspace_identity_path(workspace_root: Path) -> Path:
@@ -52,8 +51,8 @@ def _read_workspace_id(identity_path: Path) -> str:
     return validate_workspace_id(workspace_id, source=identity_path)
 
 
-def _create_workspace_id(identity_path: Path) -> str:
-    workspace_id = str(uuid4())
+def _create_workspace_id(identity_path: Path, workspace_id: str | None = None) -> str:
+    workspace_id = validate_workspace_id(workspace_id) if workspace_id else str(uuid4())
     try:
         descriptor = os.open(
             identity_path,
@@ -86,3 +85,56 @@ def load_or_create_workspace_id(workspace_root: Path) -> str:
     if identity_path.exists():
         raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
     return _create_workspace_id(identity_path)
+
+
+def bind_workspace_id(workspace_root: Path, workspace_id: str) -> str:
+    """校验并绑定挂载契约中的 UUID；仅缺少身份文件时按显式 ID 初始化。"""
+
+    expected_id = validate_workspace_id(workspace_id)
+    identity_path = workspace_identity_path(workspace_root)
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    if identity_path.is_file():
+        actual_id = _read_workspace_id(identity_path)
+        if actual_id != expected_id:
+            raise RuntimeError(
+                "挂载工作区 UUID 与工作区身份文件不一致: "
+                f"expected={expected_id}, actual={actual_id}, identity={identity_path}"
+            )
+        return actual_id
+    if identity_path.exists():
+        raise RuntimeError(f"Workspace 后端身份路径不是文件: {identity_path}")
+    actual_id = _create_workspace_id(identity_path, expected_id)
+    if actual_id != expected_id:
+        raise RuntimeError(
+            "并发初始化得到的 Workspace 后端 UUID 与 mount 契约不一致: "
+            f"expected={expected_id}, actual={actual_id}, identity={identity_path}"
+        )
+    return actual_id
+
+
+def _absolute_workspace_root(value: str) -> Path:
+    workspace_root = Path(value)
+    if not workspace_root.is_absolute():
+        raise argparse.ArgumentTypeError(
+            f"--workspace-root 必须是绝对路径: {value!r}"
+        )
+    return workspace_root
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="读取或初始化显式 Workspace 的后端 UUID。"
+    )
+    parser.add_argument(
+        "--workspace-root",
+        required=True,
+        type=_absolute_workspace_root,
+        help="Workspace 根目录绝对路径",
+    )
+    args = parser.parse_args(argv)
+    print(load_or_create_workspace_id(args.workspace_root))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

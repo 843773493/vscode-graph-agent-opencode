@@ -15,6 +15,7 @@ import {
 } from "../sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../sessionEventStream/waitForReconnect";
 import { errorMessage } from "../../utils/errorMessage";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 function markActivity(
   event: SessionActivity,
@@ -39,12 +40,12 @@ function markActivity(
 
 export function useWorkspaceSessionActivity({
   apiPort,
-  workspaceId,
+  workspaceTarget,
   currentSessionCacheKey,
   setState,
 }: {
   apiPort: number | null;
-  workspaceId: string | null;
+  workspaceTarget: GatewayWorkspaceRequestTarget | null;
   currentSessionCacheKey: string | null;
   setState: SetAppState;
 }): void {
@@ -52,7 +53,8 @@ export function useWorkspaceSessionActivity({
   currentSessionCacheKeyRef.current = currentSessionCacheKey;
 
   useEffect(() => {
-    if (!apiPort || !workspaceId) return;
+    if (!apiPort || !workspaceTarget) return;
+    const workspaceId = workspaceTarget.workspace_id;
     const controller = new AbortController();
     let cursor = 0;
     let reconnectAttempt = 0;
@@ -67,7 +69,7 @@ export function useWorkspaceSessionActivity({
         refreshTimer = null;
         if (!refreshPending || controller.signal.aborted) return;
         refreshPending = false;
-        void refreshWorkspaceSessionList(apiPort, workspaceId, setState).catch(
+        void refreshWorkspaceSessionList(apiPort, workspaceTarget, setState).catch(
           (error: unknown) => {
             // 卸载/中止后不得再写状态：定时器回调只在仍存活时才会走到这里，
             // 但刷新请求本身可能在卸载之后才失败。
@@ -97,12 +99,12 @@ export function useWorkspaceSessionActivity({
 
     const connect = async () => {
       try {
-        const initial = await listSessionActivity(apiPort, workspaceId, {
+        const initial = await listSessionActivity(apiPort, workspaceTarget, {
           limit: 1000,
         });
         const lastInitialEvent = initial.items[initial.items.length - 1];
         cursor = Number(initial.next_cursor ?? lastInitialEvent?.event_seq ?? 0);
-        await streamSessionActivity(apiPort, workspaceId, {
+        await streamSessionActivity(apiPort, workspaceTarget, {
           after: cursor,
           signal: controller.signal,
           onEvent: receive,
@@ -118,7 +120,7 @@ export function useWorkspaceSessionActivity({
         if (error instanceof SessionActivityCursorGoneError) {
           cursor = 0;
           try {
-            await refreshWorkspaceSessionList(apiPort, workspaceId, setState);
+            await refreshWorkspaceSessionList(apiPort, workspaceTarget, setState);
           } catch (refreshError: unknown) {
             const message = errorMessage(refreshError);
             setState((previous) => ({
@@ -161,5 +163,5 @@ export function useWorkspaceSessionActivity({
       controller.abort();
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     };
-  }, [apiPort, workspaceId, setState]);
+  }, [apiPort, workspaceTarget, setState]);
 }

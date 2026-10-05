@@ -7,13 +7,13 @@ from dataclasses import replace
 
 import pytest
 
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -56,7 +56,8 @@ def omitted_source(fork_workspace, session_bundle_factory, forbid_detail_body, r
     with RolloutCheckpointSaver(sessions) as saver:
         accepted = saver.accept_turn(
             SOURCE_SESSION_ID, accepted_ingress_id="source-ingress",
-            acceptance_idempotency_key="source-root", payload="真实来源 root", payload_kind="text",
+            acceptance_idempotency_key="source-root", job_id="source-job",
+            admission_idempotency_key="source-admission", payload="真实来源 root", payload_kind="text",
         )
         mode = getattr(request, "param", "alias")
         role = mode.removeprefix("overlay-") if mode.startswith("overlay-") else "none"

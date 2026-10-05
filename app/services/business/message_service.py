@@ -15,6 +15,8 @@ from app.abstractions.session_context import AgentContextState
 from app.agents.cache_preserving_summarization import apply_summarization_event
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.common import CursorPage, MessageRole
 from app.schemas.internal_v2.message import (
@@ -56,6 +58,19 @@ class MessageService(MessageContentProjectionMixin):
         """解析会话的权威 main thread id；缺指针时保持 KeyError 语义。"""
         return self._main_thread_resolver(session_id)
 
+    async def _load_checkpoint_tuple(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> CheckpointTuple | None:
+        if self._checkpointer is None:
+            return None
+        owner = MutationIntentOwner(session_id=session_id, thread_id=thread_id)
+        with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+            return await self._checkpointer.aget_tuple(
+                build_checkpoint_config(thread_id)
+            )
+
     async def list(
         self,
         session_id: str,
@@ -63,11 +78,7 @@ class MessageService(MessageContentProjectionMixin):
         cursor: str | None = None,
     ) -> CursorPage[MessageDTO]:
         thread_id = self._resolve_main_thread_id(session_id)
-        checkpoint_tuple = (
-            await self._checkpointer.aget_tuple(build_checkpoint_config(session_id))
-            if self._checkpointer is not None
-            else None
-        )
+        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return CursorPage(items=[], next_cursor=None, has_more=False)
         return visible_message_page(
@@ -147,14 +158,14 @@ class MessageService(MessageContentProjectionMixin):
             )
         return self._dedupe_consecutive_agent_state_records(records)
 
-    async def get_agent_context_state(self, session_id: str) -> AgentContextState:
+    async def get_agent_context_state(
+        self, session_id: str, thread_id: str
+    ) -> AgentContextState:
         """读取应用压缩事件后，模型当前实际使用的消息上下文。"""
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent Context")
 
-        checkpoint_tuple = await self._checkpointer.aget_tuple(
-            build_checkpoint_config(session_id)
-        )
+        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return {
                 "records": [],
@@ -253,6 +264,7 @@ class MessageService(MessageContentProjectionMixin):
         return submit_checkpoint_reminder(
             checkpointer=self._checkpointer,
             session_id=session_id,
+            thread_id=self._resolve_main_thread_id(session_id),
             reminder=reminder,
             response_metadata=response_metadata,
             checkpoint_source=checkpoint_source,
@@ -270,8 +282,9 @@ class MessageService(MessageContentProjectionMixin):
                 raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent State")
             return []
 
-        config = build_checkpoint_config(session_id)
-        tup = await self._checkpointer.aget_tuple(config)
+        tup = await self._load_checkpoint_tuple(
+            session_id, self._resolve_main_thread_id(session_id)
+        )
         if tup is None:
             return []
 
@@ -288,9 +301,8 @@ class MessageService(MessageContentProjectionMixin):
     async def _load_messages(self, session_id: str) -> list[MessageDTO]:
         if self._checkpointer is None:
             return []
-        checkpoint_tuple = await self._checkpointer.aget_tuple(
-            build_checkpoint_config(session_id)
-        )
+        thread_id = self._resolve_main_thread_id(session_id)
+        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return []
         raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
@@ -300,7 +312,7 @@ class MessageService(MessageContentProjectionMixin):
             return []
         return self._visible_messages_from_checkpoint(
             session_id,
-            self._resolve_main_thread_id(session_id),
+            thread_id,
             checkpoint_tuple,
         )
 

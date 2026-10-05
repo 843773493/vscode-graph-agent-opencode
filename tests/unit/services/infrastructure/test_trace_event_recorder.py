@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.core.job_event_bus import EventType, JobEventBus
+from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import (
     AgentStartEvent,
     AgentStartPayload,
@@ -65,7 +66,7 @@ async def test_recorder_persists_job_events(tmp_path: Path, session_bundle_facto
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb"},
+            payload={"session_id": "ses_019ba1bfed0773fc80049132b9745deb", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019ba1bfed0773fc80049132b9745deb")},
             agent_id="job_service",
         )
         await bus.publish(
@@ -100,7 +101,7 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": "ses_019b9b92ef127e83870baac3f15d7bc4"},
+            payload={"session_id": "ses_019b9b92ef127e83870baac3f15d7bc4", "thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019b9b92ef127e83870baac3f15d7bc4")},
             agent_id="job_service",
         )
         await bus.publish(

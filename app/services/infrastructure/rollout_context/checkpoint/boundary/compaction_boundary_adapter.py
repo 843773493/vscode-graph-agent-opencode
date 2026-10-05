@@ -57,6 +57,7 @@ class CompactionPreflightPort(Protocol):
     def safe_compaction_prefix_cutoffs(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str,
         state_messages: Sequence[object],
@@ -100,6 +101,7 @@ class RolloutCompactionPreflightOwnerMixin:
     def safe_compaction_prefix_cutoffs(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str,
         state_messages: Sequence[object],
@@ -112,6 +114,8 @@ class RolloutCompactionPreflightOwnerMixin:
         """
         if not isinstance(session_id, str) or not session_id:
             raise TypeError("compaction preflight session_id 必须是非空字符串")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise TypeError("compaction preflight thread_id 必须是非空字符串")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("compaction preflight checkpoint_ns 必须是字符串")
         candidates = list(cutoff_indexes)
@@ -120,9 +124,11 @@ class RolloutCompactionPreflightOwnerMixin:
                 raise TypeError(
                     f"compaction preflight 切点必须是 int，实际值: {cutoff!r}"
                 )
-        with self._lock(session_id, checkpoint_ns):
-            self.initialize(session_id, checkpoint_ns)
-            with self._connect(session_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 head = self._checkpoint_row(connection, checkpoint_ns, None)
                 if head is None:

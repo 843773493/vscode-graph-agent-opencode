@@ -48,7 +48,8 @@ function panelProps(overrides: {
     error: null as string | null,
     loadedAt: "2026-09-15T12:30:00Z",
     sessionId: "ses_parent",
-    activeThreadId: "main",
+    mainThreadId: "thr_main_canonical",
+    activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
     onSelectThread: overrides.onSelectThread ?? (() => {}),
   };
@@ -87,7 +88,7 @@ describe("子会话线程面板", () => {
     expect(html).toContain('data-start-status="failed"');
     expect(html).toContain("child-thread-status-failed");
     expect(html).toContain("child-thread-status-pending");
-    expect(html).toContain('data-thread-id="main"');
+    expect(html).toContain('data-thread-id="thr_main_canonical"');
     expect(html).toContain("主线程");
   });
 
@@ -144,6 +145,29 @@ describe("子会话线程面板", () => {
     disabledRenderer!.unmount();
   });
 
+  test("main thread ID 尚未解析时不允许选择主线程", () => {
+    const selected: string[] = [];
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ChildThreadPanel
+          {...panelProps({
+            onSelectThread: (threadId) => { selected.push(threadId); },
+          })}
+          mainThreadId={null}
+        />,
+      );
+    });
+
+    const mainRow = renderer!.root.findByProps({
+      "aria-label": "切换到主线程调试",
+    });
+    expect(mainRow.props.disabled).toBe(true);
+    act(() => mainRow.props.onClick());
+    expect(selected).toEqual([]);
+    renderer!.unmount();
+  });
+
   test("点击 child 项回传 thread_id，并支持切回主线程", () => {
     const selected: string[] = [];
     let renderer: ReactTestRenderer;
@@ -169,7 +193,7 @@ describe("子会话线程面板", () => {
       "aria-label": "切换到主线程调试",
     });
     act(() => mainRow.props.onClick());
-    expect(selected).toEqual(["thr_child_1", "main"]);
+    expect(selected).toEqual(["thr_child_1", "thr_main_canonical"]);
     // 当前调试 owner 对应行标记“当前调试”。
     const statuses = renderer!.root.findAll(
       (node) => typeof node.props.className === "string"

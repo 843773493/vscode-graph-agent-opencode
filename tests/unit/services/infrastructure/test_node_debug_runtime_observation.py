@@ -21,6 +21,7 @@ from app.services.infrastructure.node_debug.process.observation import (
     NodeDebugRuntimeObserver,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from tests.support.node_debug_dependencies import TEST_THREAD_ID
 
 
 class _FakeStream:
@@ -83,7 +84,7 @@ def _observer(
 def _runtime(process: _FakeProcess | None = None) -> NodeDebugRuntime:
     return NodeDebugRuntime(
         session_id="ses_019bf141964978208ce9100774167f90",
-        thread_id="main",
+        thread_id=TEST_THREAD_ID,
         configuration_id="dbgcfg_" + "1" * 32,
         workspace_root=Path("/tmp"),
         script_path=Path("/tmp/entry.mjs"),

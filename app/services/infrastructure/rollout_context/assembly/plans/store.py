@@ -18,6 +18,7 @@ class ContextPlanRegistryStorageMixin:
     def record_context_plan_seal_failure(
         self,
         session_id: str,
+        thread_id: str,
         *,
         plan_id: str,
         seal_idempotency_key: str,
@@ -25,13 +26,15 @@ class ContextPlanRegistryStorageMixin:
         checkpoint_ns: str = "",
     ) -> str:
         """封存事务回滚后独立记录失败，不创建 assembly 或 storage commit。"""
-        with self._lock(session_id, checkpoint_ns):
-            self.initialize(session_id, checkpoint_ns)
-            with self._connect(session_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 failure_id = record_seal_failure(
-                    connection, session_id, plan_id,
+                    connection, session_id, thread_id, plan_id,
                     seal_idempotency_key=seal_idempotency_key,
                     error_code=error_code,
                 )
@@ -44,9 +47,15 @@ class ContextPlanRegistryStorageMixin:
         *,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
-        with self._lock(plan.session_id, checkpoint_ns):
-            self.initialize(plan.session_id, checkpoint_ns)
-            with self._connect(plan.session_id, checkpoint_ns) as connection:
+        with self._lock(
+            plan.thread_id, checkpoint_ns, session_id=plan.session_id
+        ):
+            self.initialize(
+                plan.session_id, checkpoint_ns, thread_id=plan.thread_id
+            )
+            with self._connect(
+                plan.thread_id, checkpoint_ns, session_id=plan.session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 registered = create_registration(connection, plan)
@@ -60,9 +69,15 @@ class ContextPlanRegistryStorageMixin:
         expected_revision: int,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
-        with self._lock(plan.session_id, checkpoint_ns):
-            self.initialize(plan.session_id, checkpoint_ns)
-            with self._connect(plan.session_id, checkpoint_ns) as connection:
+        with self._lock(
+            plan.thread_id, checkpoint_ns, session_id=plan.session_id
+        ):
+            self.initialize(
+                plan.session_id, checkpoint_ns, thread_id=plan.thread_id
+            )
+            with self._connect(
+                plan.thread_id, checkpoint_ns, session_id=plan.session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 registered = revise_registration(
@@ -77,9 +92,12 @@ class ContextPlanRegistryStorageMixin:
         *,
         plan_id: str,
         checkpoint_ns: str = "",
+        thread_id: str,
     ) -> ContextPlanRegistration:
-        self.initialize(session_id, checkpoint_ns)
-        with self._connect(session_id, checkpoint_ns, read_only=True) as connection:
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        ) as connection:
             self._require_v2_runtime(connection)
             connection.execute("BEGIN")
-            return read_registration(connection, session_id, plan_id)
+            return read_registration(connection, session_id, thread_id, plan_id)

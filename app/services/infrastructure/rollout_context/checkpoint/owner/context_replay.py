@@ -10,6 +10,7 @@ class ContextReplayMixin:
         self,
         session_id: str,
         *,
+        thread_id: str,
         source_turn_id: str,
         checkpoint_ns: str = "",
         branch_id: str | None = None,
@@ -18,6 +19,7 @@ class ContextReplayMixin:
         """显式创建新 Turn 的 replay；不复用 source Turn/root。"""
         return self._storage.replay_as_new_turn(
             session_id,
+            thread_id,
             source_turn_id=source_turn_id,
             checkpoint_ns=checkpoint_ns,
             branch_id=branch_id,

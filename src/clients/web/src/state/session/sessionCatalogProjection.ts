@@ -29,6 +29,8 @@ export interface CatalogProjectedNode {
   session_id: string | null;
   folder_id: string | null;
   has_children: boolean;
+  node_revision: number | null;
+  state: "active" | "deleting" | null;
   storage_relative_path: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -43,6 +45,7 @@ export interface CatalogProjectedNode {
 /** 投影后的分支视图：分页字段逐字来自后端 confirmed 页，绝不被 pending 改动。 */
 export interface CatalogBranchProjection {
   revision: string;
+  catalog_revision: number;
   parent_node_id: string | null;
   items: CatalogProjectedNode[];
   cursor: string | null;
@@ -82,6 +85,8 @@ function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNod
     session_id: node.session_id ?? null,
     folder_id: node.folder_id ?? null,
     has_children: node.has_children,
+    node_revision: node.node_revision,
+    state: node.state,
     storage_relative_path: node.storage_relative_path ?? null,
     created_at: node.created_at ?? null,
     updated_at: node.updated_at ?? null,
@@ -100,6 +105,7 @@ function confirmedNodeToProjected(node: SessionCatalogNode): CatalogProjectedNod
  */
 function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, EffectiveNode> {
   const table = new Map<string, EffectiveNode>();
+  const deletingRoots = new Set<string>();
   for (const node of input.confirmedNodes) {
     if (table.has(node.node_id)) {
       throw new Error(`confirmed 镜像出现重复 node_id: ${node.node_id}`);
@@ -156,6 +162,8 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
           session_id: null,
           folder_id: null,
           has_children: false,
+          node_revision: null,
+          state: null,
           storage_relative_path: null,
           created_at: null,
           updated_at: null,
@@ -184,8 +192,11 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
         : resolveReference(operation);
     } else {
       target.deleted = true;
+      target.node.state = "deleting";
+      deletingRoots.add(operation.target_node_id);
     }
-    if (!catalogOutboxOperationIsTerminal(operation)
+    if (deletingRoots.has(operation.target_node_id ?? "")
+      || !catalogOutboxOperationIsTerminal(operation)
       || operation.state === "dependency_failed"
       || operation.state === "rejected") {
       target.node.pending_state = operation.state;
@@ -195,7 +206,7 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
 
   const live = new Map<string, EffectiveNode>();
   for (const [nodeId, entry] of table) {
-    if (!entry.deleted) live.set(nodeId, entry);
+    if (!entry.deleted || deletingRoots.has(nodeId)) live.set(nodeId, entry);
   }
   // 删除 Folder 必须连同逻辑后代一起消失，否则被删子树会在投影里继续可交互。
   let changed = true;
@@ -204,7 +215,7 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     for (const [nodeId, entry] of [...live]) {
       const parentId = entry.node.parent_node_id;
       if (parentId === null) continue;
-      if (table.get(parentId)?.deleted === true && !live.has(parentId)) {
+      if (table.get(parentId)?.deleted === true) {
         live.delete(nodeId);
         changed = true;
       }
@@ -221,8 +232,12 @@ function buildEffectiveNodes(input: CatalogProjectionInput): Map<string, Effecti
     childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
   }
   for (const [nodeId, entry] of live) {
-    if (entry.confirmed) continue;
-    entry.node.has_children = (childCounts.get(nodeId) ?? 0) > 0;
+    const hasProjectedChildren = (childCounts.get(nodeId) ?? 0) > 0;
+    if (hasProjectedChildren) {
+      entry.node.has_children = true;
+    } else if (!entry.confirmed) {
+      entry.node.has_children = false;
+    }
   }
   return live;
 }
@@ -281,6 +296,7 @@ export function projectCatalogBranch(
     .map((node) => node.node_id);
   return {
     revision: page.revision,
+    catalog_revision: page.catalog_revision,
     parent_node_id: parentNodeId,
     items: [...items, ...pendingExtras],
     cursor: page.cursor ?? null,
@@ -293,6 +309,7 @@ export function projectCatalogBranch(
 
 export interface CatalogBreadcrumbProjection {
   revision: string;
+  catalog_revision: number;
   items: CatalogProjectedNode[];
   pending_node_ids: string[];
 }
@@ -303,7 +320,11 @@ export interface CatalogBreadcrumbProjection {
  * 缺失 node 时定位最近的有效祖先（截断到该祖先为止），绝不返回悬空父链。
  */
 export function projectCatalogBreadcrumb(
-  confirmed: { revision: string; items: readonly SessionCatalogNode[] },
+  confirmed: {
+    revision: string;
+    catalog_revision: number;
+    items: readonly SessionCatalogNode[];
+  },
   input: CatalogProjectionInput,
   nodeId: string,
 ): CatalogBreadcrumbProjection {
@@ -317,10 +338,16 @@ export function projectCatalogBreadcrumb(
     cursor = entry.node.parent_node_id;
   }
   if (chain.length === 0) {
-    return { revision: confirmed.revision, items: [...confirmed.items].map(confirmedNodeToProjected), pending_node_ids: [] };
+    return {
+      revision: confirmed.revision,
+      catalog_revision: confirmed.catalog_revision,
+      items: [...confirmed.items].map(confirmedNodeToProjected),
+      pending_node_ids: [],
+    };
   }
   return {
     revision: confirmed.revision,
+    catalog_revision: confirmed.catalog_revision,
     items: chain,
     pending_node_ids: chain
       .filter((node) => node.pending_state !== null)
@@ -330,6 +357,7 @@ export function projectCatalogBreadcrumb(
 
 export interface CatalogSearchProjection {
   revision: string;
+  catalog_revision: number;
   items: CatalogProjectedNode[];
   cursor: string | null;
   total: number;
@@ -342,7 +370,12 @@ export interface CatalogSearchProjection {
  * pending 项绝不写入后端分页语义，因此不改变 `total` 也不产生新 cursor。
  */
 export function projectCatalogSearch(
-  confirmed: { revision: string; cursor: string | null; total: number },
+  confirmed: {
+    revision: string;
+    catalog_revision: number;
+    cursor: string | null;
+    total: number;
+  },
   input: CatalogProjectionInput,
   query: string,
 ): CatalogSearchProjection {
@@ -357,6 +390,7 @@ export function projectCatalogSearch(
     .map((entry) => entry.node);
   return {
     revision: confirmed.revision,
+    catalog_revision: confirmed.catalog_revision,
     items: pendingMatches,
     cursor: confirmed.cursor,
     total: confirmed.total,

@@ -77,6 +77,7 @@ export function useNodeDebugController({
   });
 
   const beginMutation = (mode: NodeDebugMutation["mode"]): NodeDebugMutation | null => {
+    if (!enabledRef.current || !sessionId || !threadId) return null;
     const mutation = mutationGate.beginMutation(ownerKey, mode);
     if (mutation) syncMutationFlags();
     return mutation;

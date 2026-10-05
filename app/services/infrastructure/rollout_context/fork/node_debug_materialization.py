@@ -21,8 +21,7 @@ from app.services.infrastructure.node_debug.session.fork import (
     validate_target_prepublication,
 )
 from app.services.infrastructure.node_debug.session.thread_owner import (
-    MAIN_THREAD_ID,
-    resolve_node_debug_owner,
+    NodeDebugThreadOwner,
 )
 
 if TYPE_CHECKING:
@@ -35,6 +34,7 @@ if TYPE_CHECKING:
 class PreparedNodeDebugFork:
     staging_root: Path
     target_node: Path
+    target_thread_id: str
     target_manifest_sha256: str
 
 
@@ -176,14 +176,20 @@ def prepare_node_debug_fork(
             fork_id, source_id
         ),
     )
-    target_owner = resolve_node_debug_owner(
-        storage._path_resolver,
+    target_thread_id = storage.main_thread_id(target_session_id)
+    target_owner = NodeDebugThreadOwner(
         session_id=target_session_id,
-        thread_id=MAIN_THREAD_ID,
+        thread_id=target_thread_id,
+        thread_node=storage._resolve_thread_node(target_session_id, target_thread_id),
     )
     publish_target_node = target_owner.thread_node
     staging_root = target_staging_root(
-        storage.root(target_session_id, checkpoint_ns), materialization_id
+        storage.root(
+            target_owner.session_id,
+            checkpoint_ns,
+            thread_id=target_owner.thread_id,
+        ),
+        materialization_id,
     )
     configuration_map = prepublication.configuration_id_map
     manifest_sha256 = _target_manifest_sha256(
@@ -198,6 +204,7 @@ def prepare_node_debug_fork(
         snapshot,
         prepublication,
         target_session_id=target_session_id,
+        target_thread_id=target_owner.thread_id,
         staging_relative_path=(
             Path("rollout") / ".fork-debug-staging" / materialization_id / "node"
         ),
@@ -217,6 +224,7 @@ def prepare_node_debug_fork(
     return PreparedNodeDebugFork(
         staging_root=staging_root,
         target_node=publish_target_node,
+        target_thread_id=target_owner.thread_id,
         target_manifest_sha256=manifest_sha256,
     )
 
@@ -274,6 +282,7 @@ def ready_node_debug_fork(
     storage.mark_fork_debug_snapshot_ready(
         materialization_id,
         target_session_id=target_session_id,
+        target_thread_id=prepared.target_thread_id,
         checkpoint_ns=checkpoint_ns,
         target_manifest_sha256=prepared.target_manifest_sha256,
     )
@@ -292,6 +301,7 @@ def publish_ready_node_debug_fork(
     storage.mark_fork_debug_snapshot_published(
         materialization_id,
         target_session_id=target_session_id,
+        target_thread_id=prepared.target_thread_id,
         checkpoint_ns=checkpoint_ns,
         target_manifest_sha256=prepared.target_manifest_sha256,
     )

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
+from types import TracebackType
+from typing import Self
 
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -15,20 +18,26 @@ from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
-from app.agents.graph_binding import JsonFileGraphBindingStore
+from app.agents.graph_binding import SessionControlGraphBindingStore
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
+from app.core.mounted_workspaces import MountedWorkspaceRegistry
 from app.core.path_utils import (
-    get_session_creation_service,
-    get_session_path_resolver,
+    SessionCatalogComponents,
+    build_session_catalog_components,
+    catalog_provider_scope,
+    get_session_catalog_components,
     get_user_config_root,
-    get_workspace_root,
+    workspace_context,
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
@@ -73,6 +82,7 @@ from app.services.business.session_turn_history import (
 )
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -98,9 +108,6 @@ from app.services.infrastructure.gateway_session_context_client import (
 )
 from app.services.infrastructure.gateway_session_message_client import (
     GatewaySessionMessageClient,
-)
-from app.services.infrastructure.historical_terminal_record_reader import (
-    HistoricalTerminalRecordReader,
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
 from app.services.infrastructure.log_service import LogService
@@ -171,7 +178,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         message_service: MessageService,
         session_service: SessionService,
         checkpointer: BaseCheckpointSaver,
-        terminal_manager_client: TerminalManagerClient,
+        terminal_resource_owner: TerminalResourceOwner,
         browser_manager_client: BrowserManagerClient,
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
@@ -181,7 +188,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._message_service = message_service
         self._session_service = session_service
         self._checkpointer = checkpointer
-        self._terminal_manager_client = terminal_manager_client
+        self._terminal_resource_owner = terminal_resource_owner
         self._browser_manager_client = browser_manager_client.for_actor("agent")
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
@@ -212,8 +219,8 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     def get_checkpointer(self) -> BaseCheckpointSaver:
         return self._checkpointer
 
-    def get_terminal_manager_client(self) -> TerminalManagerClient:
-        return self._terminal_manager_client
+    def get_terminal_resource_owner(self) -> TerminalResourceOwner:
+        return self._terminal_resource_owner
 
     def get_browser_manager_client(self) -> BrowserManagerClient:
         return self._browser_manager_client
@@ -290,8 +297,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 TeamCoordinationService")
         return self._team_service
 
+
 @dataclass(slots=True)
 class AppContainer:
+    workspace_id: str
+    workspace_root: Path
+    session_catalog: SessionCatalogComponents
     config_service: ConfigService
     workspace_source_owner: WorkspaceSourceOwner
     agent_service: AgentService
@@ -312,6 +323,7 @@ class AppContainer:
     session_information_service: SessionInformationService
     session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
+    terminal_resource_owner: TerminalResourceOwner
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
@@ -345,15 +357,140 @@ class AppContainer:
     message_stream_store: MessageStreamStore
 
 
-def build_app_container(
+class WorkspaceContainerRegistry:
+    """缓存按 workspace_id 装配的完整后端服务图。"""
+
+    def __init__(
+        self,
+        *,
+        mounted_workspaces: MountedWorkspaceRegistry,
+        project_root: str | Path | None = None,
+    ) -> None:
+        self._mounted_workspaces = mounted_workspaces
+        self._project_root = project_root
+        self._containers: dict[str, AppContainer] = {}
+        self._catalog_components: dict[str, SessionCatalogComponents] = {}
+        self._closed = False
+        self._lock = RLock()
+
+    @property
+    def mounted_workspaces(self) -> MountedWorkspaceRegistry:
+        return self._mounted_workspaces
+
+    @property
+    def workspace_ids(self) -> tuple[str, ...]:
+        return self._mounted_workspaces.workspace_ids
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("WorkspaceContainerRegistry 已关闭，禁止重新装配")
+
+    def get_catalog_components(
+        self, sessions_root: Path, workspace_id: str
+    ) -> SessionCatalogComponents:
+        with self._lock:
+            self._require_open()
+            mount = self._mounted_workspaces.resolve(workspace_id)
+            expected_root = mount.workspace_root / ".boxteam" / "sessions"
+            if sessions_root != expected_root:
+                raise RuntimeError(
+                    "Session catalog 根目录与已挂载工作区不一致: "
+                    f"workspace_id={workspace_id}, requested={sessions_root}, "
+                    f"mounted={expected_root}"
+                )
+            components = self._catalog_components.get(workspace_id)
+            if components is None:
+                components = build_session_catalog_components(sessions_root, workspace_id)
+                self._catalog_components[workspace_id] = components
+            return components.get_catalog_components(sessions_root, workspace_id)
+
+    def get(self, workspace_id: str) -> AppContainer:
+        with self._lock:
+            self._require_open()
+            mount = self._mounted_workspaces.resolve(workspace_id)
+            container = self._containers.get(mount.workspace_id)
+            if container is None:
+                try:
+                    with catalog_provider_scope(self):
+                        container = build_app_container(
+                            project_root=self._project_root,
+                            workspace_root=mount.workspace_root,
+                        )
+                    components = self.get_catalog_components(
+                        mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
+                    )
+                    if (
+                        container.workspace_id != mount.workspace_id
+                        or container.session_catalog is not components
+                    ):
+                        raise RuntimeError(
+                            "服务图未使用已挂载工作区唯一 catalog owner: "
+                            f"mounted={mount.workspace_id}, container={container.workspace_id}"
+                        )
+                    self._containers[mount.workspace_id] = container
+                except BaseException as error:
+                    components = self._catalog_components.pop(mount.workspace_id, None)
+                    if components is not None:
+                        try:
+                            components.close()
+                        except Exception as close_error:  # noqa: BLE001 - 关闭失败须与原始失败一起暴露。
+                            raise BaseExceptionGroup(
+                                "工作区服务图装配失败且 catalog 关闭失败",
+                                [error, close_error],
+                            ) from None
+                    raise
+            return container
+
+    def values(self) -> tuple[AppContainer, ...]:
+        return tuple(self.get(workspace_id) for workspace_id in self.workspace_ids)
+
+    def close(self) -> None:
+        """所有业务 writer 排空后统一关闭 catalog，迟到访问不可复活。"""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            errors: list[Exception] = []
+            for components in self._catalog_components.values():
+                try:
+                    components.close()
+                except Exception as error:  # noqa: BLE001 - 排空全部 catalog 后聚合错误。
+                    errors.append(error)
+            self._catalog_components.clear()
+            self._containers.clear()
+            if errors:
+                raise ExceptionGroup("工作区 catalog owner 关闭失败", errors)
+
+    def __enter__(self) -> Self:
+        with self._lock:
+            self._require_open()
+        return self
+
+    def __exit__(
+        self,
+        _type: type[BaseException] | None,
+        error: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        try:
+            self.close()
+        except Exception as close_error:
+            if error is not None:
+                raise BaseExceptionGroup(
+                    "工作区生命周期失败且 catalog 关闭失败", [error, close_error]
+                ) from None
+            raise
+
+
+def _build_app_container(
     *,
     project_root: str | Path | None = None,
     workspace_root: str | Path | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
-    resolved_workspace_root = (
-        Path(workspace_root).resolve() if workspace_root is not None else get_workspace_root()
-    )
+    if workspace_root is None:
+        raise ValueError("build_app_container 必须接收显式 workspace_root")
+    resolved_workspace_root = Path(workspace_root).expanduser().resolve(strict=True)
     resolved_boxteam_root = resolved_workspace_root / ".boxteam"
     resolved_sessions_root = resolved_boxteam_root / "sessions"
     workspace_source_owner = WorkspaceSourceOwner(
@@ -363,8 +500,11 @@ def build_app_container(
     workspace_activity_service = WorkspaceActivityService(
         workspace_root=resolved_workspace_root,
     )
-    session_path_resolver = get_session_path_resolver(resolved_sessions_root)
-    session_creation_service = get_session_creation_service(resolved_sessions_root)
+    session_catalog = get_session_catalog_components(
+        resolved_sessions_root, workspace_id=workspace_id
+    )
+    session_path_resolver = session_catalog.resolver
+    session_creation_service = session_catalog.creation_service
     session_path_resolver.initialize()
     job_event_bus = JobEventBus()
     background_task_registry = BackgroundTaskRegistry(
@@ -401,10 +541,14 @@ def build_app_container(
         config_service=config_service,
         workspace_root=resolved_workspace_root,
     )
-    terminal_manager_client = TerminalManagerClient(config_service=config_service)
+    terminal_manager_client = TerminalManagerClient(
+        config_service=config_service,
+        workspace_id=workspace_id,
+    )
     browser_manager_client = BrowserManagerClient(config_service=config_service)
     workspace_session_context_transport = GatewaySessionContextClient(
         config_service=config_service,
+        local_token_supplier=get_gateway_local_token,
     )
     workspace_session_context_client = GatewayContextQueryService(
         transport=workspace_session_context_transport
@@ -458,6 +602,7 @@ def build_app_container(
         message_source=message_service,
         session_lookup=session_service,
         assembly_source=checkpointer,
+        workspace_id=workspace_id,
     )
     session_target_resolver = SessionTargetResolver(
         session_service=session_service,
@@ -480,11 +625,18 @@ def build_app_container(
     )
     workspace_file_watch_service = resource_platform.file_watch_service
     workspace_file_resource_registry = resource_platform.file_registry
+    thread_residency_tracker = ThreadResidencyTracker()
+    terminal_resource_owner = TerminalResourceOwner(
+        workspace_root=resolved_workspace_root, workspace_id=workspace_id,
+        sessions=session_service, threads=session_path_resolver,
+        transport=terminal_manager_client, leases=external_resource_leases,
+        thread_release_fence=thread_residency_tracker.is_unloading_generation,
+    )
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
         checkpointer=checkpointer,
-        terminal_manager_client=terminal_manager_client,
+        terminal_resource_owner=terminal_resource_owner,
         browser_manager_client=browser_manager_client,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
@@ -495,8 +647,8 @@ def build_app_container(
     # ThreadResidency：30 分钟 idle 卸载判定器（OpenSpec 2.8/8.8-A）。debug 服务把
     # 已核实的 claim 相位单向推送为 thread 的 idle blocker；tracker 评估时再通过
     # ResidencyBlockerSource 拉取磁盘 durable claim 兜底（重启恢复），不建第二套
-    # dispose/LifetimeScope 抽象，卸载回调由真实 ThreadRuntime owner（8.4/8.5）注册。
-    thread_residency_tracker = ThreadResidencyTracker()
+    # dispose/LifetimeScope 抽象；tracker 直接持有真实 thread generation scope。
+    thread_residency_tracker.add_unload_listener(terminal_resource_owner.release_thread)
     node_debug_service = NodeDebugService(
         workspace_root=resolved_workspace_root,
         config_service=config_service,
@@ -518,6 +670,8 @@ def build_app_container(
     thread_residency_tracker.add_blocker_source(node_debug_service)
     dependency_provider.set_node_debug_service(node_debug_service)
     agent_execution_service = AgentExecutionService(
+        workspace_id=workspace_id,
+        session_catalog=session_catalog,
         config_service=config_service,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
@@ -529,22 +683,22 @@ def build_app_container(
         workspace_root=resolved_workspace_root,
         external_resource_leases=external_resource_leases,
         workspace_file_resource_registry=workspace_file_resource_registry,
-        # OpenSpec 8.4：GraphBinding 持久化装配。store 是 workspace 级唯一实例
-        # （多会话单文档，按 (session_id, thread_id) 键控），目录使用 .boxteam/
-        # 下的专用附属目录，不与会话/导航数据混放。
-        graph_binding_store=JsonFileGraphBindingStore(
-            directory=resolved_boxteam_root / "graph-bindings",
+        graph_binding_store=SessionControlGraphBindingStore(
+            session_control_store_factory=lambda session_id: SessionControlStore(
+                session_path_resolver.resolve_session_node(session_id)
+                / CONTROL_DATABASE_NAME
+            ),
         ),
-        # OpenSpec 2.8：runtime owner 的 residency 记账与 idle unload 回调。
+        # 精确 thread 的真实 generation scope、lease 与 idle unload 共用同一 owner。
         residency_tracker=thread_residency_tracker,
     )
-    # unload 回调装配：idle 卸载只释放该 thread 可重建 runtime 资源（agent 缓存
-    # 条目与 context source 订阅），经 generation fence 拒绝迟到 callback。
-    thread_residency_tracker.set_unload_callback(
-        agent_execution_service.unload_thread_runtime
+    session_catalog_service = SessionCatalogService(
+        session_service=session_service,
+        background_task_registry=background_task_registry,
     )
     session_title_service = SessionTitleService(
         session_service=session_service,
+        session_catalog_service=session_catalog_service,
         job_event_bus=job_event_bus,
     )
     job_executor = JobExecutionService(
@@ -564,6 +718,7 @@ def build_app_container(
         terminal_status_writer=checkpointer,
     )
     session_service.bind_job_service(job_service)
+    session_catalog_service.bind_job_service(job_service)
     session_turn_history_service = SessionTurnHistoryService(
         checkpointer=checkpointer,
         session_service=session_service,
@@ -590,13 +745,8 @@ def build_app_container(
         )
     )
     terminal_steering_service = TerminalSteeringService(
-        terminal_client=terminal_manager_client,
+        terminal_client=terminal_resource_owner,
         session_orchestrator=session_orchestrator,
-    )
-    session_catalog_service = SessionCatalogService(
-        session_service=session_service,
-        job_service=job_service,
-        background_task_registry=background_task_registry,
     )
     session_generation_service = SessionGenerationService(
         workspace_root=resolved_workspace_root,
@@ -670,9 +820,6 @@ def build_app_container(
         checkpointer=checkpointer,
         session_service=session_service,
     )
-    historical_terminal_reader = HistoricalTerminalRecordReader(
-        sessions_dir=resolved_sessions_root,
-    )
     session_resource_mapper = SessionResourceMapper()
     session_resource_provider_registry = SessionResourceProviderRegistry(
         [
@@ -681,9 +828,7 @@ def build_app_container(
                 resource_mapper=session_resource_mapper,
             ),
             TerminalResourceProvider(
-                terminal_manager=terminal_manager_client,
-                historical_reader=historical_terminal_reader,
-                message_service=message_service,
+                terminal_owner=terminal_resource_owner,
                 resource_mapper=session_resource_mapper,
             ),
             BrowserResourceProvider(
@@ -763,6 +908,9 @@ def build_app_container(
         test_supported_tools=tool_test_service.supported_tools,
     )
     return AppContainer(
+        workspace_id=workspace_id,
+        session_catalog=session_catalog,
+        workspace_root=resolved_workspace_root,
         config_service=config_service,
         workspace_source_owner=workspace_source_owner,
         agent_service=agent_service,
@@ -784,6 +932,7 @@ def build_app_container(
         session_context_query_service=session_context_query_service,
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
+        terminal_resource_owner=terminal_resource_owner,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         terminal_steering_service=terminal_steering_service,
@@ -815,3 +964,19 @@ def build_app_container(
         workspace_activity_service=workspace_activity_service,
         message_stream_store=message_stream_store,
     )
+
+
+def build_app_container(
+    *,
+    project_root: str | Path | None = None,
+    workspace_root: str | Path,
+) -> AppContainer:
+    """在显式工作区上下文中装配唯一完整服务图。"""
+
+    resolved_root = Path(workspace_root).expanduser().resolve(strict=True)
+    workspace_id = load_or_create_workspace_id(resolved_root)
+    with workspace_context(workspace_id, resolved_root):
+        return _build_app_container(
+            project_root=project_root,
+            workspace_root=resolved_root,
+        )

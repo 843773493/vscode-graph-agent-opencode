@@ -23,6 +23,9 @@ from fastapi import HTTPException
 
 from app.api import workspace as workspace_api
 from app.api.errors import client_error_message, forbidden_http_error
+
+_THREAD_ID = "thr_00000000700070008000000000000001"
+
 from app.api.node_debug import (
     apply_node_debug_action,
     create_node_debug_configuration,
@@ -109,7 +112,7 @@ async def test_node_debug_create_configuration_traversal_is_403() -> None:
     with pytest.raises(HTTPException) as raised:
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(
-                session_id="ses_x", thread_id="main", name="t",
+                session_id="ses_x", thread_id=_THREAD_ID, name="t",
                 script_path=_TRAVERSAL,
             ),
             _="local", request_id="req", node_debug_service=service,
@@ -125,7 +128,7 @@ async def test_node_debug_get_configuration_traversal_is_403() -> None:
 
     with pytest.raises(HTTPException) as raised:
         await get_node_debug_configuration(
-            session_id="ses_x", configuration_id="dbgcfg_x", thread_id="main",
+            session_id="ses_x", configuration_id="dbgcfg_x", thread_id=_THREAD_ID,
             _="local", request_id="req", node_debug_service=service,
         )
 
@@ -140,7 +143,7 @@ async def test_node_debug_start_traversal_is_403() -> None:
     with pytest.raises(HTTPException) as raised:
         await start_node_debug(
             payload=NodeDebugStartRequest(
-                session_id="ses_x", thread_id="main", path=_TRAVERSAL,
+                session_id="ses_x", thread_id=_THREAD_ID, path=_TRAVERSAL,
             ),
             _="local", request_id="req", node_debug_service=service,
         )
@@ -156,7 +159,7 @@ async def test_node_debug_action_traversal_is_403() -> None:
     with pytest.raises(HTTPException) as raised:
         await apply_node_debug_action(
             payload=NodeDebugSetBreakpointActionRequest(
-                session_id="ses_x", thread_id="main", action="set_breakpoint",
+                session_id="ses_x", thread_id=_THREAD_ID, action="set_breakpoint",
                 params=NodeDebugSetBreakpointParams(path=_TRAVERSAL, line=1),
             ),
             _="local", request_id="req", node_debug_service=service,

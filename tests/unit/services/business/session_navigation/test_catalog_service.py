@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import pytest
 
@@ -15,8 +15,19 @@ from app.schemas.internal_v2.session_navigation import (
     SessionFolderCreateRequest,
     SessionFolderUpdateRequest,
 )
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.business.session_navigation import SessionCatalogService
+from app.services.business.session_navigation.service import (
+    SessionCatalogRevisionChangedError,
+)
 from tests.support.canonical_id_at import uuid7_hex_from_name
+from tests.support.session_navigation_queue import (
+    create_catalog_intent,
+    submit_catalog_intent,
+)
 
 T = TypeVar("T")
 
@@ -71,6 +82,14 @@ class _SessionService:
         payload["title"] = node.name
         payload.setdefault("workspace_id", "ws-test")
         payload.setdefault("current_agent_id", "test-agent")
+        payload.update(
+            resource_identity=session_resource_identity(
+                payload["workspace_id"],
+                session_id,
+            ),
+            vrn=session_resource_vrn(payload["workspace_id"], session_id),
+            scope="workspace",
+        )
         return SessionDTO.model_validate(payload)
 
 
@@ -99,6 +118,49 @@ class _DeleteJobService(_JobService):
     ) -> T:
         self.deleted_session_ids = list(session_ids)
         return await operation()
+
+
+async def _submit_catalog_mutation(
+    catalog: SessionCatalogService,
+    kind: Literal[
+        "create_folder",
+        "rename_node",
+        "move_node",
+        "delete_folder",
+        "delete_session",
+    ],
+    *,
+    target_node_id: str | None = None,
+    name: str | None = None,
+    parent_node_id: str | None = None,
+    recursive: bool = False,
+):
+    intent = create_catalog_intent(
+        catalog,
+        kind,
+        target_node_id=target_node_id,
+        name=name,
+        parent_node_id=parent_node_id,
+        recursive=recursive,
+    )
+    receipt = await submit_catalog_intent(catalog, intent)
+    assert receipt.state == "committed", receipt.error_detail
+    return receipt
+
+def _count_catalog_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+    resolver: SessionCatalogPathResolver,
+) -> list[int]:
+    """统计 resolver 原子 catalog snapshot 读取次数。"""
+    count = [0]
+    original = resolver.catalog_snapshot
+
+    def counted():
+        count[0] += 1
+        return original()
+
+    monkeypatch.setattr(resolver, "catalog_snapshot", counted)
+    return count
 
 
 @pytest.mark.asyncio
@@ -566,3 +628,169 @@ async def test_search_cursor_is_scoped_to_query(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="cursor 与当前列表不匹配"):
         await catalog.search(query="beta", limit=1, cursor=first.cursor)
+
+async def test_revision_tracks_node_changes_without_full_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """读取 resolver navigation revision 不触发全量 snapshot。"""
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+
+    count = _count_catalog_snapshots(monkeypatch, resolver)
+
+    folder = resolver.create_folder(name="目录", parent_node_id=None)
+    before = resolver.revision
+    assert count[0] == 0
+    resolver.update_node_name(folder.node_id, "新名")
+    assert resolver.revision == before + 1
+    assert count[0] == 0
+
+async def test_children_cursor_rejects_boolean_and_out_of_range_offsets(
+    tmp_path: Path,
+) -> None:
+    session_service = _SessionService(tmp_path / "sessions")
+    resolver = session_service.path_resolver
+    for index in range(3):
+        resolver.create_folder(name=f"目录{index}", parent_node_id=None)
+    catalog = SessionCatalogService(session_service=session_service)
+    first = await catalog.list_children(parent_node_id=None, limit=1, cursor=None)
+
+    boolean_cursor = catalog._encode_cursor(
+        True, first.revision, first.catalog_revision, None
+    )
+    with pytest.raises(ValueError, match="cursor offset 无效"):
+        await catalog.list_children(
+            parent_node_id=None, limit=1, cursor=boolean_cursor
+        )
+
+    out_of_range_cursor = catalog._encode_cursor(
+        first.total, first.revision, first.catalog_revision, None
+    )
+    with pytest.raises(ValueError, match="offset 超出当前列表范围"):
+        await catalog.list_children(
+            parent_node_id=None, limit=1, cursor=out_of_range_cursor
+        )
+
+async def test_search_cursor_offset_uses_filtered_match_count(tmp_path: Path) -> None:
+    session_service = _SessionService(tmp_path / "sessions")
+    resolver = session_service.path_resolver
+    for index in range(3):
+        resolver.create_folder(name=f"alpha-{index}", parent_node_id=None)
+        resolver.create_folder(name=f"beta-{index}", parent_node_id=None)
+    catalog = SessionCatalogService(session_service=session_service)
+    first = await catalog.search(query="alpha", limit=1, cursor=None)
+
+    out_of_range_cursor = catalog._encode_cursor(
+        first.total,
+        first.revision,
+        first.catalog_revision,
+        "search\nalpha",
+    )
+    with pytest.raises(ValueError, match="offset 超出当前列表范围"):
+        await catalog.search(query="alpha", limit=1, cursor=out_of_range_cursor)
+
+async def test_catalog_read_dtos_expose_snapshot_and_node_revisions(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="版本目录", parent_node_id=None)
+    session_id = canonical("版本会话")
+    session_bundle_factory(sessions_root, session_id)
+    _relocate(resolver, session_id, folder.node_id)
+    catalog = SessionCatalogService(session_service=session_service)
+    expected_catalog_revision = resolver.revision
+
+    page = await catalog.list_children(
+        parent_node_id=folder.node_id,
+        limit=100,
+        cursor=None,
+    )
+    breadcrumb = await catalog.breadcrumb(session_id)
+    search = await catalog.search(query="版本", limit=100, cursor=None)
+    exported = await catalog.export_index()
+
+    assert page.catalog_revision == expected_catalog_revision
+    assert breadcrumb.catalog_revision == expected_catalog_revision
+    assert search.catalog_revision == expected_catalog_revision
+    assert exported.catalog_revision == expected_catalog_revision
+    assert page.items[0].node_revision == resolver.catalog_store.get_node(
+        session_id
+    ).revision
+    assert search.items
+    for node in [
+        *breadcrumb.items,
+        *exported.items,
+        *search.items[0].breadcrumb,
+    ]:
+        assert node.node_revision == resolver.catalog_store.get_node(node.node_id).revision
+
+async def test_deleting_breadcrumb_keeps_catalog_and_node_revisions(
+    tmp_path: Path,
+) -> None:
+    session_service = _SessionService(tmp_path / "sessions")
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="删除中", parent_node_id=None)
+    deleting_node = resolver.catalog_store.set_node_state(folder.node_id, "deleting")
+    catalog = SessionCatalogService(session_service=session_service)
+
+    breadcrumb = await catalog.breadcrumb(folder.node_id)
+
+    assert breadcrumb.catalog_revision == resolver.revision
+    assert breadcrumb.items[-1].state == "deleting"
+    assert breadcrumb.items[-1].node_revision == deleting_node.revision
+
+async def test_catalog_snapshot_rejects_navigation_revision_drift_after_metadata_await(
+    tmp_path: Path,
+    session_bundle_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    session_service = _SessionService(sessions_root)
+    resolver = session_service.path_resolver
+    folder = resolver.create_folder(name="元数据目录", parent_node_id=None)
+    session_id = canonical("metadata_drift")
+    session_bundle_factory(sessions_root, session_id)
+    _relocate(resolver, session_id, folder.node_id)
+    catalog = SessionCatalogService(session_service=session_service)
+    original_get = session_service.get
+
+    async def write_after_metadata(session_id: str) -> SessionDTO:
+        metadata = await original_get(session_id)
+        resolver.create_folder(name="并发新增", parent_node_id=None)
+        return metadata
+
+    monkeypatch.setattr(session_service, "get", write_after_metadata)
+
+    with pytest.raises(SessionCatalogRevisionChangedError, match="revision_changed"):
+        await catalog.export_index()
+
+    assert catalog._cached_snapshot is None
+
+async def test_cursor_survives_catalog_writes_without_node_changes(
+    tmp_path: Path,
+) -> None:
+    session_service = _SessionService(tmp_path / "sessions")
+    resolver = session_service.path_resolver
+    for index in range(3):
+        resolver.create_folder(name=f"节点{index}", parent_node_id=None)
+    catalog = SessionCatalogService(session_service=session_service)
+
+    first = await catalog.list_children(parent_node_id=None, limit=1, cursor=None)
+    assert first.cursor is not None
+    generation_before = resolver.catalog_store.current_generation()
+    with resolver.catalog_store.write_transaction():
+        pass
+    assert resolver.catalog_store.current_generation() == generation_before + 1
+    assert resolver.revision == first.catalog_revision
+
+    second = await catalog.list_children(
+        parent_node_id=None,
+        limit=1,
+        cursor=first.cursor,
+    )
+    assert [node.name for node in second.items] == ["节点1"]

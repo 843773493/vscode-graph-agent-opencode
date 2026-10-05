@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import re
 from uuid import uuid4
+
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
@@ -22,6 +25,20 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
 )
+from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+
+
+def _optional_identity(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return required_text(value, field=field)
+
+
+def _required_sha256(value: object, *, field: str) -> str:
+    digest = required_text(value, field=field)
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(f"{field} 必须是小写 SHA-256 hex digest")
+    return digest
 
 
 class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
@@ -36,7 +53,12 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         source_view_id: str | None,
         fork_mode: str,
         relationship: str,
-        checkpoint_ns: str = "",
+        checkpoint_ns: str,
+        source_thread_id: str,
+        target_thread_id: str,
+        source_snapshot_sha256: str,
+        fork_id: str | None = None,
+        materialization_id: str | None = None,
     ) -> tuple[str, str]:
         """为目标 rollout 建立一次可恢复的 fork 物化 journal。"""
         target_session_id = required_text(target_session_id, field="target_session_id")
@@ -57,12 +79,31 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork checkpoint_ns 必须是字符串")
-        self.initialize(target_session_id, checkpoint_ns)
-        materialization_id = uuid4().hex
-        fork_id = uuid4().hex
+        source_thread_id = required_text(source_thread_id, field="source_thread_id")
+        target_thread_id = required_text(target_thread_id, field="target_thread_id")
+        source_snapshot_sha256 = _required_sha256(
+            source_snapshot_sha256, field="source_snapshot_sha256"
+        )
+        if self._resolve_thread_identity(source_session_id, None) != source_thread_id:
+            raise RuntimeError("fork journal source thread 与 source main owner 不匹配")
+        if self.main_thread_id(target_session_id) != target_thread_id:
+            raise RuntimeError("fork journal target thread 与 target main owner 不匹配")
+        self.initialize(
+            target_session_id,
+            checkpoint_ns,
+            thread_id=target_thread_id,
+        )
+        materialization_id = _optional_identity(
+            materialization_id, field="materialization_id"
+        ) or uuid4().hex
+        fork_id = _optional_identity(fork_id, field="fork_id") or uuid4().hex
         with (
-            self._lock(target_session_id, checkpoint_ns),
-            self._connect(target_session_id, checkpoint_ns) as connection,
+            self._lock(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ),
+            self._connect(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ) as connection,
         ):
             self._require_v2_runtime(connection)
             active = connection.execute(
@@ -86,7 +127,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 meta[0], field="database_meta.committed_jsonl_offset"
             )
             result = connection.execute(
-                "INSERT INTO fork_materializations(materialization_id, fork_id, target_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, status, rollback_jsonl_offset, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)",
+                "INSERT INTO fork_materializations(materialization_id, fork_id, target_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, status, rollback_jsonl_offset, created_at, source_thread_id, target_thread_id, checkpoint_ns, source_snapshot_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?)",
                 (
                     materialization_id,
                     fork_id,
@@ -98,12 +139,48 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                     relationship,
                     rollback_offset,
                     _now(),
+                    source_thread_id,
+                    target_thread_id,
+                    checkpoint_ns,
+                    source_snapshot_sha256,
                 ),
             )
             if result.rowcount != 1:
                 raise RuntimeError("fork materialization journal 未写入")
-            self._active_fork_materializations.add((target_session_id, checkpoint_ns))
+            self._active_fork_materializations.add(
+                (target_session_id, target_thread_id, checkpoint_ns)
+            )
         return materialization_id, fork_id
+
+    def materialize_fork_checkpoint(
+        self, *, materialization_id: str, target_session_id: str,
+        target_thread_id: str, checkpoint_ns: str, checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        current_messages: list[object],
+    ) -> None:
+        """prepared journal 的 checkpoint capability；仅引用已有 target item。"""
+        with (self._lock(target_thread_id, checkpoint_ns, session_id=target_session_id),
+              self._connect(target_thread_id, checkpoint_ns, session_id=target_session_id,
+                            read_only=True) as connection):
+            row = connection.execute(
+                "SELECT target_session_id, target_thread_id, checkpoint_ns, status "
+                "FROM fork_materializations WHERE materialization_id = ?",
+                (materialization_id,),
+            ).fetchone()
+            if row != (target_session_id, target_thread_id, checkpoint_ns, "prepared"):
+                raise RuntimeError("fork checkpoint capability 与 prepared journal scope 不一致")
+            for index, message in enumerate(current_messages):
+                message_id = self._codec().message_id(message, index)
+                item = connection.execute(
+                    "SELECT execution_id FROM item_catalog WHERE item_id = ?",
+                    (f"item-{message_id}",),
+                ).fetchone()
+                if item is None or not isinstance(item[0], str) or not item[0]:
+                    raise RuntimeError("fork checkpoint 只能引用已映射 execution 的 target canonical item")
+        self.append_checkpoint(
+            thread_id=target_thread_id, checkpoint_ns=checkpoint_ns, checkpoint=checkpoint,
+            metadata=metadata, parent_checkpoint_id=None, current_messages=current_messages,
+        )
 
     def abort_fork_materialization(
         self,
@@ -119,9 +196,14 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         target_session_id = required_text(target_session_id, field="target_session_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork checkpoint_ns 必须是字符串")
+        target_thread_id = self.main_thread_id(target_session_id)
         with (
-            self._lock(target_session_id, checkpoint_ns),
-            self._connect(target_session_id, checkpoint_ns) as connection,
+            self._lock(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ),
+            self._connect(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ) as connection,
         ):
             self._require_v2_runtime(connection)
             row = connection.execute(
@@ -139,11 +221,18 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 return
             self._recover_fork_materialization(
                 target_session_id,
+                target_thread_id,
                 checkpoint_ns,
                 connection,
-                self.jsonl_path(target_session_id, checkpoint_ns),
+                self.jsonl_path(
+                    target_session_id,
+                    checkpoint_ns,
+                    thread_id=target_thread_id,
+                ),
             )
-        self._active_fork_materializations.discard((target_session_id, checkpoint_ns))
+        self._active_fork_materializations.discard(
+            (target_session_id, target_thread_id, checkpoint_ns)
+        )
 
     def commit_fork_materialization(
         self,
@@ -155,13 +244,16 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         source_view_id: str | None,
         fork_mode: str,
         relationship: str,
-        checkpoint_ns: str = "",
+        checkpoint_ns: str,
+        source_thread_id: str,
+        target_thread_id: str,
+        source_snapshot_sha256: str,
         defer_completion: bool = False,
     ) -> str:
         """在目标库收敛 fork，并幂等完成父库 retention。
 
-        消息/Checkpoint 的物化可以包含多个普通 append commit，但这些 commit
-        都被 journal 保护。真正对外可见的边界在本方法的目标事务中：Turn
+        canonical 与 Checkpoint 通过 prepared journal 的专用物化写入。
+        对外可见的边界在本方法的目标事务中：Turn
         finalization、运行态终止、唯一 provenance 和 ``target_committed`` 一起
         提交；父库 retention 完成后才进入 ``committed``。
         """
@@ -187,19 +279,16 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork checkpoint_ns 必须是字符串")
         requested_source_view_id = source_view_id
-        migrated_v1 = False
-        if fork_mode == "full_rollout_copy":
-            with self._connect(
-                target_session_id, checkpoint_ns, read_only=True
-            ) as target_connection:
-                migrated_v1 = (
-                    target_connection.execute(
-                        "SELECT 1 FROM legacy_migration_reports WHERE source_session_id = ? AND target_session_id = ? AND source_format_version = 1 AND status IN ('completed', 'completed_with_rejections') LIMIT 1",
-                        (source_session_id, target_session_id),
-                    ).fetchone()
-                    is not None
-                )
-        if source_view_id is None and not migrated_v1:
+        source_thread_id = required_text(source_thread_id, field="source_thread_id")
+        target_thread_id = required_text(target_thread_id, field="target_thread_id")
+        source_snapshot_sha256 = _required_sha256(
+            source_snapshot_sha256, field="source_snapshot_sha256"
+        )
+        if self._resolve_thread_identity(source_session_id, None) != source_thread_id:
+            raise RuntimeError("fork commit source thread 与 source main owner 不匹配")
+        if self.main_thread_id(target_session_id) != target_thread_id:
+            raise RuntimeError("fork commit target thread 与 target main owner 不匹配")
+        if source_view_id is None:
             source_view_id = self._fork_source_view_id(
                 source_session_id,
                 source_checkpoint_id,
@@ -214,18 +303,17 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 checkpoint_ns,
             )
         )
-        source_v2_turn_rows = (
-            self._fork_v2_turn_records(source_session_id, checkpoint_ns)
-            if fork_mode != "full_rollout_copy"
-            else ()
-        )
         with (
-            self._lock(target_session_id, checkpoint_ns),
-            self._connect(target_session_id, checkpoint_ns) as connection,
+            self._lock(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ),
+            self._connect(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ) as connection,
         ):
             self._require_v2_runtime(connection)
             journal = connection.execute(
-                "SELECT fork_id, target_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, status FROM fork_materializations WHERE materialization_id = ? AND target_session_id = ?",
+                "SELECT fork_id, target_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, status, source_thread_id, target_thread_id, checkpoint_ns, source_snapshot_sha256 FROM fork_materializations WHERE materialization_id = ? AND target_session_id = ?",
                 (materialization_id, target_session_id),
             ).fetchone()
             if journal is None:
@@ -258,6 +346,20 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 {"prepared", "target_committed", "committed", "aborted"},
                 field="fork_materializations.status",
             )
+            journal_source_thread_id = required_text(
+                journal[8], field="fork_materializations.source_thread_id"
+            )
+            journal_target_thread_id = required_text(
+                journal[9], field="fork_materializations.target_thread_id"
+            )
+            journal_checkpoint_ns = strict_text(
+                journal[10],
+                field="fork_materializations.checkpoint_ns",
+                allow_empty=True,
+            )
+            journal_snapshot_sha256 = _required_sha256(
+                journal[11], field="fork_materializations.source_snapshot_sha256"
+            )
             if journal_target_session_id != target_session_id:
                 raise RuntimeError("fork journal target session identity 不一致")
             if journal_source_session_id != source_session_id:
@@ -270,9 +372,17 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 raise RuntimeError("fork journal mode 与提交请求不一致")
             if journal_relationship != relationship:
                 raise RuntimeError("fork journal relationship 与提交请求不一致")
+            if journal_source_thread_id != source_thread_id:
+                raise RuntimeError("fork journal source thread identity 不一致")
+            if journal_target_thread_id != target_thread_id:
+                raise RuntimeError("fork journal target thread identity 不一致")
+            if journal_checkpoint_ns != checkpoint_ns:
+                raise RuntimeError("fork journal checkpoint namespace 不一致")
+            if journal_snapshot_sha256 != source_snapshot_sha256:
+                raise RuntimeError("fork journal source snapshot hash 不一致")
             if status == "committed":
                 self._active_fork_materializations.discard(
-                    (target_session_id, checkpoint_ns)
+                    (target_session_id, target_thread_id, checkpoint_ns)
                 )
                 return fork_id
             if status == "target_committed":
@@ -309,53 +419,50 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                         source_session_id=source_session_id,
                         target_session_id=target_session_id,
                         fork_id=fork_id,
+                        checkpoint_ns=checkpoint_ns,
                         timestamp=timestamp,
                     )
-                    # v1 full copy 已在 clone_rollout 中先迁移到新的 v2
-                    # namespace；再次重写会破坏 migration report 中的
-                    # target identity。因此仅对真正从 v2 SQLite 克隆的
-                    # 数据执行全量 target-local remap。
-                    migrated_v1_row = connection.execute(
-                        "SELECT 1 FROM legacy_migration_reports WHERE source_session_id = ? AND target_session_id = ? AND source_format_version = 1 AND status IN ('completed', 'completed_with_rejections') LIMIT 1",
-                        (source_session_id, target_session_id),
-                    ).fetchone()
-                    if migrated_v1_row is None:
-                        self._remap_full_copy_v2_entities(
-                            connection,
-                            source_session_id=source_session_id,
-                            target_session_id=target_session_id,
-                            fork_id=fork_id,
-                            checkpoint_ns=checkpoint_ns,
-                            timestamp=timestamp,
-                        )
-                    else:
-                        self._record_copied_v2_identity_mappings(
-                            connection,
-                            source_session_id=source_session_id,
-                            target_session_id=target_session_id,
-                            fork_id=fork_id,
-                            timestamp=timestamp,
-                        )
+                    self._remap_full_copy_v2_entities(
+                        connection,
+                        source_session_id=source_session_id,
+                        target_session_id=target_session_id,
+                        fork_id=fork_id,
+                        checkpoint_ns=checkpoint_ns,
+                        timestamp=timestamp,
+                    )
                 else:
+                    source_thread_id = self._resolve_thread_identity(
+                        source_session_id,
+                        None,
+                    )
+                    target_thread_id = self._resolve_thread_identity(
+                        target_session_id,
+                        None,
+                    )
                     self._copy_source_overlays_for_fork(
                         connection,
                         source_session_id=source_session_id,
+                        source_thread_id=source_thread_id,
                         target_session_id=target_session_id,
+                        target_thread_id=target_thread_id,
                         fork_id=fork_id,
                         checkpoint_ns=checkpoint_ns,
-                        timestamp=timestamp,
-                    )
-                    self._ensure_fork_v2_turn_records(
-                        connection,
-                        source_session_id=source_session_id,
-                        target_session_id=target_session_id,
-                        fork_id=fork_id,
-                        checkpoint_ns=checkpoint_ns,
-                        source_turn_rows=source_v2_turn_rows,
                         timestamp=timestamp,
                     )
                 if fork_mode != "full_rollout_copy":
-                    for turn_id, final_message_id in source_finalizations:
+                    for source_turn_id, source_final_message_id in source_finalizations:
+                        identities = dict(connection.execute(
+                            "SELECT entity_type, target_local_id FROM fork_identity_mappings "
+                            "WHERE fork_id = ? AND ((entity_type = 'turn' AND source_local_id = ?) "
+                            "OR (entity_type = 'message' AND source_local_id = ?))",
+                            (fork_id, source_turn_id, source_final_message_id),
+                        ).fetchall())
+                        if not identities:
+                            continue
+                        if set(identities) != {"turn", "message"}:
+                            raise RuntimeError("fork completed Turn 的 target identity mapping 不完整")
+                        turn_id = identities["turn"]
+                        final_message_id = identities["message"]
                         target_message = connection.execute(
                             "SELECT message_sequence, turn_id FROM messages WHERE message_id = ?",
                             (final_message_id,),
@@ -506,9 +613,10 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                     turn_id = required_text(raw_turn_id, field="turn_records.turn_id")
                     self._append_v2_records_transaction(
                         connection,
-                        target_session_id,
+                        target_thread_id,
                         checkpoint_ns,
                         (),
+                        session_id=target_session_id,
                         commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
                         commit_mode=CommitMode.METADATA_ONLY.value,
                         outcome=ControlOutcome.CANCELLED.value,
@@ -534,8 +642,8 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                         field="fork.turn.execution_count",
                     )
                     result = connection.execute(
-                        "UPDATE executions SET outcome = 'cancelled' WHERE turn_id = ?",
-                        (turn_id,),
+                        "UPDATE executions SET outcome = 'cancelled', updated_at = ? WHERE turn_id = ?",
+                        (timestamp, turn_id),
                     )
                     if result.rowcount != execution_count:
                         raise RuntimeError(
@@ -622,6 +730,42 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         # 由正式 owner 补写 source retention 与 committed，不发布半成品。
         if defer_completion:
             return fork_id
+        return self.complete_fork_materialization(
+            materialization_id=materialization_id,
+            target_session_id=target_session_id,
+            target_thread_id=target_thread_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+
+    def complete_fork_materialization(
+        self, *, materialization_id: str, target_session_id: str,
+        target_thread_id: str, checkpoint_ns: str,
+    ) -> str:
+        """退出 source snapshot scope 后，仅由目标 journal 完成 retention。"""
+        if self._fork_source_snapshot_for_session(target_session_id) is not None:
+            raise RuntimeError("fork completion target 不能是 source snapshot")
+        with self._connect(target_thread_id, checkpoint_ns,
+                           session_id=target_session_id, read_only=True) as connection:
+            row = connection.execute(
+                "SELECT fork_id, source_session_id, source_checkpoint_id, source_view_id, "
+                "relationship, status, target_session_id, target_thread_id, checkpoint_ns, "
+                "source_snapshot_sha256 FROM fork_materializations WHERE materialization_id = ?",
+                (materialization_id,),
+            ).fetchone()
+        if row is None or row[6:9] != (target_session_id, target_thread_id, checkpoint_ns):
+            raise RuntimeError("fork completion journal target scope 不一致")
+        fork_id = required_text(row[0], field="fork_materializations.fork_id")
+        source_session_id = required_text(row[1], field="fork_materializations.source_session_id")
+        if self._fork_source_snapshot_for_session(source_session_id) is not None:
+            raise RuntimeError("fork retention 必须在 source snapshot scope 释放后完成")
+        source_checkpoint_id = optional_text(row[2], field="fork_materializations.source_checkpoint_id")
+        source_view_id = optional_text(row[3], field="fork_materializations.source_view_id")
+        relationship = one_of_text(row[4], {"pinned", "detached"}, field="fork_materializations.relationship")
+        status = one_of_text(row[5], {"target_committed", "committed"}, field="fork_materializations.status")
+        _required_sha256(row[9], field="fork_materializations.source_snapshot_sha256")
+        if status == "committed":
+            self._active_fork_materializations.discard((target_session_id, target_thread_id, checkpoint_ns))
+            return fork_id
         if relationship == "pinned":
             self._retain_fork_source(
                 source_session_id=source_session_id,
@@ -632,8 +776,12 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 checkpoint_ns=checkpoint_ns,
             )
         with (
-            self._lock(target_session_id, checkpoint_ns),
-            self._connect(target_session_id, checkpoint_ns) as connection,
+            self._lock(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ),
+            self._connect(
+                target_thread_id, checkpoint_ns, session_id=target_session_id
+            ) as connection,
         ):
             result = connection.execute(
                 "UPDATE fork_materializations SET status = 'committed', committed_at = ?, error_message = NULL WHERE materialization_id = ? AND status = 'target_committed'",
@@ -643,5 +791,129 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 raise RuntimeError(
                     f"fork materialization 未进入 committed: {materialization_id}"
                 )
-        self._active_fork_materializations.discard((target_session_id, checkpoint_ns))
+        self._active_fork_materializations.discard(
+            (target_session_id, target_thread_id, checkpoint_ns)
+        )
         return fork_id
+
+    def read_committed_fork_materialization(
+        self,
+        *,
+        target_session_id: str,
+        source_session_id: str,
+        source_thread_id: str,
+        target_thread_id: str,
+        source_checkpoint_id: str | None,
+        source_view_id: str | None,
+        fork_mode: str,
+        relationship: str,
+        checkpoint_ns: str,
+        fork_id: str,
+        materialization_id: str,
+        source_snapshot_sha256: str,
+    ) -> tuple[str, str]:
+        """从唯一 committed journal 复核完整 source/target capture 合同。"""
+        target_session_id = required_text(target_session_id, field="target_session_id")
+        source_session_id = required_text(source_session_id, field="source_session_id")
+        source_thread_id = required_text(source_thread_id, field="source_thread_id")
+        target_thread_id = required_text(target_thread_id, field="target_thread_id")
+        source_checkpoint_id = optional_text(
+            source_checkpoint_id, field="source_checkpoint_id"
+        )
+        source_view_id = optional_text(source_view_id, field="source_view_id")
+        fork_id = required_text(fork_id, field="fork_id")
+        materialization_id = required_text(
+            materialization_id, field="materialization_id"
+        )
+        source_snapshot_sha256 = _required_sha256(
+            source_snapshot_sha256, field="source_snapshot_sha256"
+        )
+        if not isinstance(checkpoint_ns, str):
+            raise TypeError("checkpoint_ns 必须是字符串")
+        if self.main_thread_id(target_session_id) != target_thread_id:
+            raise RuntimeError("fork proof target thread 与 target owner 不一致")
+        self.initialize(
+            target_session_id,
+            checkpoint_ns,
+            thread_id=target_thread_id,
+        )
+        with (
+            self._lock(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+            ),
+            self._connect(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+                read_only=True,
+            ) as connection,
+        ):
+            rows = connection.execute(
+                "SELECT materialization_id, fork_id, source_session_id, "
+                "target_session_id, source_checkpoint_id, source_view_id, fork_mode, "
+                "relationship, status, source_thread_id, target_thread_id, "
+                "checkpoint_ns, source_snapshot_sha256 "
+                "FROM fork_materializations WHERE target_session_id = ? "
+                "AND status = 'committed' ORDER BY created_at, materialization_id",
+                (target_session_id,),
+            ).fetchall()
+            if len(rows) != 1:
+                raise RuntimeError(
+                    "fork proof 要求 target 只有一条 committed materialization journal: "
+                    f"target_session_id={target_session_id}, count={len(rows)}"
+                )
+            row = rows[0]
+            actual = (
+                required_text(row[0], field="fork_materializations.materialization_id"),
+                required_text(row[1], field="fork_materializations.fork_id"),
+                required_text(row[2], field="fork_materializations.source_session_id"),
+                required_text(row[3], field="fork_materializations.target_session_id"),
+                optional_text(row[4], field="fork_materializations.source_checkpoint_id"),
+                optional_text(row[5], field="fork_materializations.source_view_id"),
+                one_of_text(
+                    row[6],
+                    {"context_fork", "history_prefix_fork", "full_rollout_copy"},
+                    field="fork_materializations.fork_mode",
+                ),
+                one_of_text(
+                    row[7],
+                    {"detached", "pinned"},
+                    field="fork_materializations.relationship",
+                ),
+                one_of_text(
+                    row[8], {"committed"}, field="fork_materializations.status"
+                ),
+                required_text(row[9], field="fork_materializations.source_thread_id"),
+                required_text(row[10], field="fork_materializations.target_thread_id"),
+                strict_text(
+                    row[11],
+                    field="fork_materializations.checkpoint_ns",
+                    allow_empty=True,
+                ),
+                _required_sha256(
+                    row[12], field="fork_materializations.source_snapshot_sha256"
+                ),
+            )
+        expected = (
+            materialization_id,
+            fork_id,
+            source_session_id,
+            target_session_id,
+            source_checkpoint_id,
+            source_view_id,
+            fork_mode,
+            relationship,
+            "committed",
+            source_thread_id,
+            target_thread_id,
+            checkpoint_ns,
+            source_snapshot_sha256,
+        )
+        if actual != expected:
+            raise RuntimeError(
+                "committed fork journal 与 source/target snapshot 合同不一致: "
+                f"expected={expected!r}, actual={actual!r}"
+            )
+        return actual[0], actual[1]

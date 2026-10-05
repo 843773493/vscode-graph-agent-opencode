@@ -82,7 +82,8 @@ export function preserveTimelineAfterTransientNetworkFailure(
   timeline: SessionTurnTimeline,
   targetGeneration: number,
 ): SessionTurnTimeline {
-  const hasVisibleContent = timeline.orderedTurnIds.length > 0;
+  const hasVisibleContent = timeline.orderedTurnIds.length > 0
+    || timeline.internalExecutions.length > 0;
   return {
     ...timeline,
     phase: hasVisibleContent ? timeline.phase : "error",

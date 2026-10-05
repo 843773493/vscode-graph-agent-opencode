@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import UUID
 
 from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore
@@ -15,6 +16,7 @@ class RegistryRoutesMixin:
         return (
             target.connection_kind,
             target.backend_url.rstrip("/"),
+            target.backend_workspace_id,
             target.remote_gateway_connection_id,
             target.remote_workspace_id,
         )
@@ -157,7 +159,30 @@ class RegistryRoutesMixin:
     @staticmethod
     def _target_headers(target: WorkspaceTarget) -> dict[str, str]:
         if target.connection_kind != "remote_gateway":
-            return {"X-Local-Token": "local-dev-token"}
+            backend_workspace_id = target.backend_workspace_id
+            if backend_workspace_id is None:
+                raise RuntimeError(
+                    "本地 Gateway target 缺少 backend UUID: "
+                    f"workspace_id={target.workspace_id}"
+                )
+            try:
+                parsed_workspace_id = UUID(backend_workspace_id)
+            except ValueError as error:
+                raise RuntimeError(
+                    "本地 Gateway target backend UUID 非法: "
+                    f"workspace_id={target.workspace_id}, "
+                    f"backend_workspace_id={backend_workspace_id!r}"
+                ) from error
+            if str(parsed_workspace_id) != backend_workspace_id:
+                raise RuntimeError(
+                    "本地 Gateway target backend UUID 必须是标准文本: "
+                    f"workspace_id={target.workspace_id}, "
+                    f"backend_workspace_id={backend_workspace_id!r}"
+                )
+            return {
+                "X-Local-Token": "local-dev-token",
+                "X-BoxTeam-Workspace-Id": backend_workspace_id,
+            }
         connection_id = target.remote_gateway_connection_id
         remote_workspace_id = target.remote_workspace_id
         if connection_id is None or remote_workspace_id is None:

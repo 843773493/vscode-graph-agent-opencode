@@ -9,7 +9,7 @@ from app.services.infrastructure.rollout_context.storage.schema_plans import (
     TOOL_SET_SNAPSHOT_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 4
+ROLLOUT_SCHEMA_VERSION = 9
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -57,7 +57,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS database_meta (
             singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1), rollout_id TEXT NOT NULL UNIQUE,
-            session_id TEXT NOT NULL UNIQUE, schema_version INTEGER NOT NULL,
+            session_id TEXT NOT NULL, thread_id TEXT NOT NULL, schema_version INTEGER NOT NULL,
             message_format_version INTEGER NOT NULL, database_state TEXT NOT NULL,
             last_commit_id INTEGER, last_message_sequence INTEGER NOT NULL,
             last_control_sequence INTEGER NOT NULL, committed_jsonl_offset INTEGER NOT NULL,
@@ -129,7 +129,8 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS messages (
             message_sequence INTEGER PRIMARY KEY, message_id TEXT NOT NULL UNIQUE,
-            turn_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),
+            turn_id TEXT, execution_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),
             jsonl_offset INTEGER NOT NULL, jsonl_length INTEGER NOT NULL,
             content_length INTEGER NOT NULL, content_hash TEXT NOT NULL,
             visibility TEXT NOT NULL, commit_id INTEGER NOT NULL, created_at TEXT NOT NULL
@@ -223,7 +224,9 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             rollback_jsonl_offset INTEGER NOT NULL,
             copied_message_count INTEGER NOT NULL DEFAULT 0,
             error_message TEXT, created_at TEXT NOT NULL,
-            target_committed_at TEXT, committed_at TEXT
+            target_committed_at TEXT, committed_at TEXT,
+            source_thread_id TEXT NOT NULL, target_thread_id TEXT NOT NULL,
+            checkpoint_ns TEXT NOT NULL, source_snapshot_sha256 TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS item_catalog (
             item_sequence INTEGER PRIMARY KEY,
@@ -232,6 +235,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             payload_kind TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('completed','partial','incomplete','cancelled','failed','unknown')),
             turn_id TEXT,
+            execution_id TEXT,
             turn_scope TEXT,
             message_group_id TEXT,
             wire_role TEXT,
@@ -313,13 +317,17 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             accepted_ingress_id TEXT PRIMARY KEY,
             acceptance_idempotency_key TEXT NOT NULL UNIQUE,
             session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             turn_id TEXT NOT NULL UNIQUE,
             payload_hash TEXT NOT NULL,
             source_session_id TEXT,
             source_accepted_ingress_id TEXT,
             source_acceptance_idempotency_key TEXT,
             identity_origin TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            UNIQUE(session_id, thread_id, accepted_ingress_id),
+            UNIQUE(session_id, thread_id, acceptance_idempotency_key),
+            UNIQUE(session_id, thread_id, turn_id)
         );
         CREATE TABLE IF NOT EXISTS fork_identity_mappings (
             mapping_id TEXT PRIMARY KEY,
@@ -338,6 +346,8 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         );
         CREATE TABLE IF NOT EXISTS turn_records (
             turn_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             turn_ordinal INTEGER NOT NULL UNIQUE,
             source_branch_id TEXT NOT NULL,
             root_input_item_id TEXT NOT NULL UNIQUE,
@@ -350,11 +360,21 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             final_item_id TEXT,
             replay_of_turn_id TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            UNIQUE(session_id, thread_id, turn_id)
         );
         CREATE TABLE IF NOT EXISTS executions (
             execution_id TEXT PRIMARY KEY,
-            turn_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            turn_id TEXT,
+            execution_origin TEXT NOT NULL CHECK(execution_origin IN ('user_turn','internal')),
+            job_id TEXT NOT NULL CHECK(length(job_id) > 0),
+            admission_idempotency_key TEXT NOT NULL CHECK(length(admission_idempotency_key) > 0),
+            admission_payload_hash TEXT NOT NULL CHECK(
+                length(admission_payload_hash) = 78
+                AND substr(admission_payload_hash, 1, 14) = 'sha256:jcs:v1:'
+            ),
             attempt INTEGER NOT NULL,
             execution_ordinal INTEGER NOT NULL DEFAULT 1,
             accepted_ingress_id TEXT,
@@ -364,10 +384,20 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             first_model_call_id TEXT,
             last_model_call_id TEXT,
             created_at TEXT NOT NULL,
-            UNIQUE(turn_id, attempt)
+            updated_at TEXT NOT NULL,
+            CHECK (
+                (execution_origin = 'user_turn' AND turn_id IS NOT NULL AND accepted_ingress_id IS NOT NULL)
+                OR
+                (execution_origin = 'internal' AND turn_id IS NULL AND accepted_ingress_id IS NULL)
+            ),
+            UNIQUE(session_id, thread_id, turn_id, attempt),
+            UNIQUE(session_id, thread_id, execution_id),
+            UNIQUE(session_id, thread_id, admission_idempotency_key)
         );
         CREATE TABLE IF NOT EXISTS model_calls (
             model_call_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             execution_id TEXT NOT NULL,
             attempt INTEGER NOT NULL,
             attempt_ordinal INTEGER NOT NULL DEFAULT 1,
@@ -378,22 +408,26 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             dispatch_state TEXT NOT NULL DEFAULT 'ready',
             outcome TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            UNIQUE(execution_id, attempt)
+            UNIQUE(session_id, thread_id, execution_id, attempt),
+            UNIQUE(session_id, thread_id, model_call_id)
         );
         CREATE TABLE IF NOT EXISTS turn_execution_links (
+            session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             turn_id TEXT NOT NULL,
             execution_id TEXT NOT NULL,
             execution_role TEXT NOT NULL,
             execution_ordinal INTEGER NOT NULL DEFAULT 1,
             link_idempotency_key TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
-            PRIMARY KEY(turn_id, execution_id),
-            UNIQUE(turn_id, link_idempotency_key)
+            PRIMARY KEY(session_id, thread_id, turn_id, execution_id),
+            UNIQUE(session_id, thread_id, turn_id, link_idempotency_key)
         );
         CREATE TABLE IF NOT EXISTS context_assemblies (
             assembly_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            turn_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            turn_id TEXT,
             execution_id TEXT NOT NULL,
             plan_id TEXT NOT NULL,
             plan_hash TEXT NOT NULL,
@@ -407,7 +441,8 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             detail_ref TEXT,
             created_at TEXT NOT NULL,
             sealed_at TEXT,
-            terminal_at TEXT
+            terminal_at TEXT,
+            UNIQUE(session_id, thread_id, assembly_id)
         );
         CREATE TABLE IF NOT EXISTS assembly_item_refs (
             assembly_id TEXT NOT NULL,
@@ -506,6 +541,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS source_overlays (
             overlay_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             checkpoint_ns TEXT NOT NULL DEFAULT '',
             source_kind TEXT NOT NULL,
             source_revision TEXT NOT NULL,
@@ -532,6 +568,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS context_plan_details (
             detail_ref TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
             checkpoint_ns TEXT NOT NULL DEFAULT '',
             assembly_id TEXT NOT NULL,
             detail_id TEXT NOT NULL,
@@ -550,12 +587,14 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             expires_at TEXT,
-            UNIQUE(session_id, assembly_id, detail_id),
+            UNIQUE(session_id, thread_id, assembly_id, detail_id),
             CHECK(json_valid(detail_ref)
                 AND json_type(detail_ref, '$.session_id') IS 'text'
+                AND json_type(detail_ref, '$.thread_id') IS 'text'
                 AND json_type(detail_ref, '$.assembly_id') IS 'text'
                 AND json_type(detail_ref, '$.detail_id') IS 'text'
                 AND json_extract(detail_ref, '$.session_id') = session_id
+                AND json_extract(detail_ref, '$.thread_id') = thread_id
                 AND json_extract(detail_ref, '$.assembly_id') = assembly_id
                 AND json_extract(detail_ref, '$.detail_id') = detail_id)
         );
@@ -596,11 +635,22 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS item_parts_hash_index ON item_parts(content_hash);
         CREATE INDEX IF NOT EXISTS executions_turn_index ON executions(turn_id, attempt);
         CREATE INDEX IF NOT EXISTS model_calls_execution_index ON model_calls(execution_id, attempt);
+        CREATE INDEX IF NOT EXISTS executions_owner_index ON executions(session_id, thread_id, turn_id, attempt);
+        CREATE INDEX IF NOT EXISTS executions_internal_history_index
+            ON executions(session_id, thread_id, execution_origin, created_at);
+        CREATE INDEX IF NOT EXISTS messages_execution_index ON messages(execution_id, message_sequence);
+        CREATE INDEX IF NOT EXISTS item_catalog_execution_index ON item_catalog(execution_id, item_sequence);
+        CREATE INDEX IF NOT EXISTS model_calls_owner_index ON model_calls(session_id, thread_id, execution_id, attempt);
+        CREATE INDEX IF NOT EXISTS turn_execution_links_owner_index ON turn_execution_links(session_id, thread_id, turn_id, execution_id);
+        CREATE INDEX IF NOT EXISTS turn_records_owner_index ON turn_records(session_id, thread_id, turn_ordinal);
+        CREATE INDEX IF NOT EXISTS turn_acceptances_owner_index ON turn_acceptances(session_id, thread_id, accepted_ingress_id);
         CREATE INDEX IF NOT EXISTS turn_records_ordinal_index ON turn_records(turn_ordinal);
         CREATE INDEX IF NOT EXISTS turn_records_ingress_index ON turn_records(accepted_ingress_id);
         CREATE INDEX IF NOT EXISTS fork_identity_source_index ON fork_identity_mappings(source_session_id, entity_type, source_local_id);
         CREATE INDEX IF NOT EXISTS fork_identity_target_index ON fork_identity_mappings(target_session_id, entity_type, target_local_id);
         CREATE INDEX IF NOT EXISTS context_assemblies_turn_index ON context_assemblies(turn_id, created_at);
+        CREATE INDEX IF NOT EXISTS context_assemblies_owner_index ON context_assemblies(session_id, thread_id, turn_id, execution_id);
+        CREATE INDEX IF NOT EXISTS context_plan_details_owner_index ON context_plan_details(session_id, thread_id, assembly_id);
         CREATE INDEX IF NOT EXISTS assembly_item_refs_item_index ON assembly_item_refs(ref_type, ref_id);
         CREATE INDEX IF NOT EXISTS context_assembly_contributions_source_index ON context_assembly_contributions(source_kind, source_revision);
         CREATE INDEX IF NOT EXISTS assembly_item_refs_ordinal_index ON assembly_item_refs(assembly_id, ref_ordinal);
@@ -612,7 +662,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS context_assembly_selections_contribution_index ON context_assembly_selections(assembly_id, contribution_id);
         CREATE UNIQUE INDEX IF NOT EXISTS context_assembly_selections_contribution_unique ON context_assembly_selections(assembly_id, contribution_id) WHERE contribution_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS context_view_items_ordinal_index ON context_view_items(view_id, logical_item_ordinal);
-        CREATE INDEX IF NOT EXISTS source_overlays_epoch_index ON source_overlays(session_id, source_overlay_epoch);
+        CREATE INDEX IF NOT EXISTS source_overlays_epoch_index ON source_overlays(session_id, thread_id, source_overlay_epoch);
         CREATE UNIQUE INDEX IF NOT EXISTS context_contributions_source_ordinal_unique
             ON context_contributions(source_ordinal)
             WHERE source_ordinal IS NOT NULL;

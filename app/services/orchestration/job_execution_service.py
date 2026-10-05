@@ -59,35 +59,37 @@ class JobExecutionService:
         request_id_token = set_current_request_id(getattr(job, "request_id", None))
 
         try:
-            title_message = session_title_message(job.message, job.message_metadata)
-            if title_message is not None:
-                await self._session_title_service.maybe_auto_title_before_first_message(
-                    session_id=job.session_id,
+            try:
+                title_message = session_title_message(job.message, job.message_metadata)
+                if title_message is not None:
+                    await self._session_title_service.maybe_auto_title_before_first_message(
+                        session_id=job.session_id,
+                        job_id=job.job_id,
+                        user_message=title_message,
+                    )
+            except Exception as error:  # noqa: BLE001
+                await self._bus.publish(
                     job_id=job.job_id,
-                    user_message=title_message,
+                    event_type=EventType.ERROR,
+                    payload={
+                        "error": f"会话自动命名失败: {error}",
+                        "phase": "session_auto_title",
+                    },
+                    agent_id="session_title_service",
                 )
-        except Exception as error:  # noqa: BLE001
-            await self._bus.publish(
-                job_id=job.job_id,
-                event_type=EventType.ERROR,
-                payload={
-                    "error": f"会话自动命名失败: {error}",
-                    "phase": "session_auto_title",
-                },
-                agent_id="session_title_service",
-            )
-
-        try:
             result = await self._agent_execution_service.run_step(
                 job.session_id,
                 job.message,
+                thread_id=job.thread_id,
                 agent_id=job.agent_id,
                 job_id=job.job_id,
                 message_id=job.message_id,
+                execution_binding=job.execution_binding,
                 attachments=job.attachments,
                 message_created_at=job.message_created_at,
                 message_metadata=job.message_metadata,
                 progress_reporter=getattr(job, "progress_reporter", None),
+                protected_operations_settled=job.protected_operations_settled,
             )
         finally:
             reset_current_gateway_id(gateway_token)

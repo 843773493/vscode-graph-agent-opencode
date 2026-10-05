@@ -90,6 +90,9 @@ function session() {
   return {
     session_id: SESSION_ID,
     workspace_id: WORKSPACE_ID,
+    resource_identity: `fixture-${SESSION_ID}`,
+    vrn: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
+    scope: "workspace",
     title: "错误通道",
     current_agent_id: "default",
     created_at: "2026-01-01T00:00:00Z",

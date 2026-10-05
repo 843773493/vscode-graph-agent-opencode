@@ -16,8 +16,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
-from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -29,7 +30,11 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.integration.stubs.http_stubs import openai_chat_stub
+from tests.support.custom_tool_test_workspace import (
+    prepare_custom_tool_test_workspace,
+)
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -39,10 +44,10 @@ from tests.support.gateway_processes import (
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.web_boundary_seeding import (
     boundary_item,
 )
-from tests.support.workspaces import prepare_default_test_workspace
 
 STATIC_LONG_SESSION_ID = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
 LONG_SESSION_TOOL_CALL_ID = "call_chat_reasoning_tool"
@@ -55,7 +60,7 @@ LARGE_ARGUMENT_TURNS = frozenset({121, 128})
 def _call_arguments(turn_number: int) -> dict[str, object]:
     """invoke_extension_tool 调用参数；被断言的轮次序列化后恰好 65536 字符。"""
     marker = f"turn-{turn_number:04d}"
-    line = f"LARGE_CALL {marker}|record=000000|status=ok|source=handwritten_sse"
+    line = f"LARGE_CALL {marker}|record=000000|status=ok|source=canonical_fixture"
 
     def arguments_for(query_context: str) -> dict[str, object]:
         return {
@@ -101,7 +106,7 @@ def _tool_result_content(turn_number: int) -> str:
     marker = f"turn-{turn_number:04d}"
     if turn_number not in LARGE_ARGUMENT_TURNS:
         return f"LARGE_RESULT {marker}_BEGIN\nLARGE_RESULT {marker}_END\n"
-    line = f"LARGE_RESULT {marker}|record=000000|status=ok|source=handwritten_sse"
+    line = f"LARGE_RESULT {marker}|record=000000|status=ok|source=canonical_fixture"
     begin = f"LARGE_RESULT {marker}_BEGIN"
     end = f"LARGE_RESULT {marker}_END"
     # 总长 = 首尾行 + 尾部换行 + 每条中间行自身长度与分隔换行。
@@ -173,38 +178,28 @@ def _reasoning_items(turn_id: str, *, has_result: bool) -> tuple[object, ...]:
 
 
 def seed_long_rollout_history(workspace_root: Path) -> None:
-    """以模板 v1 文案为基线，用当前 Saver 重写 128 轮长会话数据。
-
-    模板 rollout 是 v1 dispatch 旧格式，runtime 与 legacy 导入器都无法读取；
-    复制出的工作区副本先读取 v1 的轮次结构与用户文案，再按真实运行时的
-    提交顺序（accept_turn → converge/put → put）重写为 schema-4 数据：
-    结果轮的 canonical item 由 LangChainMessageCodec 从消息生成，保证与
-    checkpoint message projection 的内容哈希一致；无结果轮由 checkpoint
-    直接派生 tool_call item，并以 completed_empty 收敛。
-    """
+    """把 canonical 基线长历史整理成逐轮工具调用的浏览器场景。"""
     sessions_dir = workspace_root / ".boxteam" / "sessions"
-    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
-        STATIC_LONG_SESSION_ID
+    resolver = get_session_path_resolver(sessions_dir)
+    session_dir = resolver.resolve_thread_node(
+        STATIC_LONG_SESSION_ID,
+        resolver.main_thread_id(STATIC_LONG_SESSION_ID),
     )
-    rollout_path = session_dir / "rollout" / "rollout.jsonl"
-    if not rollout_path.is_file():
-        raise FileNotFoundError(f"模板长会话 rollout 缺失: {rollout_path}")
-    records = [
-        json.loads(line)
-        for line in rollout_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
     turn_order: list[str] = []
     user_texts: dict[str, str] = {}
     result_turns: set[str] = set()
-    for record in records:
-        turn_id = record["turn_id"]
-        if turn_id not in user_texts and turn_id not in result_turns:
-            turn_order.append(turn_id)
-        if record.get("role") == "user":
-            user_texts[turn_id] = record["message"]["data"]["content"]
-        elif record.get("role") == "tool":
-            result_turns.add(turn_id)
+    for item in RolloutStorage(sessions_dir).read_items(STATIC_LONG_SESSION_ID):
+        if item.turn_id is None:
+            continue
+        if item.semantic_kind == "user_input":
+            content = item.payload
+            if not isinstance(content, str):
+                raise TypeError(f"canonical rollout user_input 缺少正文: {item.item_id}")
+            if item.turn_id not in user_texts:
+                turn_order.append(item.turn_id)
+                user_texts[item.turn_id] = content
+        elif item.semantic_kind == "tool_result":
+            result_turns.add(item.turn_id)
     if len(turn_order) != 128 or len(user_texts) != 128 or len(result_turns) != 16:
         raise RuntimeError(
             "模板长会话结构与基线不符: "
@@ -212,6 +207,7 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
         )
     shutil.rmtree(session_dir / "rollout")
     saver = RolloutCheckpointSaver(sessions_dir)
+    owner = saver.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
     codec = LangChainMessageCodec()
     timestamp = datetime.now(UTC).isoformat()
     for index, turn_id in enumerate(turn_order, start=1):
@@ -263,8 +259,11 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
             )
         accepted = saver.accept_turn(
             STATIC_LONG_SESSION_ID,
+            thread_id=owner.thread_id,
             accepted_ingress_id=f"ingress-rollout-{turn_id}",
             acceptance_idempotency_key=f"acceptance-rollout-{turn_id}",
+            job_id=f"job-rollout-{turn_id}",
+            admission_idempotency_key=f"execution-rollout-{turn_id}",
             payload=user_texts[turn_id],
             payload_kind=PayloadKind.TEXT,
             turn_id=turn_id,
@@ -272,18 +271,30 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
             initial_execution_id=f"execution-rollout-{turn_id}",
         )
 
-        def put_checkpoint(turn_messages: list[object], checkpoint_turn_id: str) -> None:
+        admission = saver.execution_admission(
+            STATIC_LONG_SESSION_ID, thread_id=owner.thread_id,
+            execution_id=str(accepted["initial_execution_id"]),
+        )
+
+        def put_checkpoint(
+            turn_messages: list[object], checkpoint_turn_id: str,
+            *, checkpoint_admission=admission,
+        ) -> None:
             checkpoint = empty_checkpoint()
             checkpoint["id"] = f"checkpoint-rollout-{checkpoint_turn_id}"
             checkpoint["channel_values"] = {"messages": turn_messages}
             checkpoint["channel_versions"] = {"messages": "1"}
             checkpoint["updated_channels"] = ["messages"]
-            saver.put(
-                build_checkpoint_config(STATIC_LONG_SESSION_ID),
-                checkpoint,
-                {"source": f"rollout-history-fixture-{checkpoint_turn_id}", "step": 1},
-                {"messages": "1"},
-            )
+            with (
+                session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+                execution_admission_scope(checkpoint_admission, langgraph_thread_id=owner.thread_id),
+            ):
+                saver.put(
+                    build_checkpoint_config(owner.thread_id),
+                    checkpoint,
+                    {"source": f"rollout-history-fixture-{checkpoint_turn_id}", "step": 1},
+                    {"messages": "1"},
+                )
 
         if has_result:
             converge_items: list[object] = []
@@ -294,12 +305,14 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
                         item_sequence=1,
                         message_id=message.id,
                         turn_id=turn_id,
+                        execution_id=admission.execution_id,
                         timestamp=timestamp,
                         model_call_id=model_call_id,
                     )
                 )
             saver.converge_execution(
                 STATIC_LONG_SESSION_ID,
+                thread_id=owner.thread_id,
                 turn_id=turn_id,
                 execution_id=str(accepted["initial_execution_id"]),
                 outcome="completed",
@@ -312,12 +325,21 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
             put_checkpoint(messages, turn_id)
             saver.converge_execution(
                 STATIC_LONG_SESSION_ID,
+                thread_id=owner.thread_id,
                 turn_id=turn_id,
                 execution_id=str(accepted["initial_execution_id"]),
                 outcome="completed_empty",
                 turn_status="completed_empty",
             )
-        saver.append_items(STATIC_LONG_SESSION_ID, list(_reasoning_items(turn_id, has_result=has_result)))
+        with (
+            session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
+        ):
+            saver.append_items(
+                STATIC_LONG_SESSION_ID,
+                list(_reasoning_items(turn_id, has_result=has_result)),
+                thread_id=owner.thread_id,
+            )
 
 
 @pytest.fixture(scope="module")
@@ -329,15 +351,14 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_default_test_workspace(
+    workspace_root = prepare_custom_tool_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板 rollout 是 v1 dispatch 旧格式；先完成一次性 catalog 迁移，
-    # 然后统一在副本上以当前 Saver 重写 schema-4 数据。
-    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
-    seed_long_rollout_history(workspace_root)
+    # 为长历史浏览器场景在副本上生成逐轮工具调用数据。
+    with fixture_catalog_scope():
+        seed_long_rollout_history(workspace_root)
     return str(workspace_root)
 
 
@@ -366,22 +387,22 @@ def browser_backend(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    # 该历史 fixture 原本由 handwritten provider 生成，但本测试的 replay
-    # 需要真正启动一轮新 Job；复制后的工作区统一切到测试 stub provider，
-    # 不修改只读 fixture 源目录。
+    # 本测试的 replay 需要真正启动一轮新 Job；复制后的工作区统一切到测试
+    # stub provider，不修改只读 fixture 源目录。
     sessions_dir = workspace_root / ".boxteam" / "sessions"
-    session_path = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(
-            STATIC_LONG_SESSION_ID
+    with fixture_catalog_scope():
+        session_path = (
+            get_session_path_resolver(sessions_dir).resolve_session_node(
+                STATIC_LONG_SESSION_ID
+            )
+            / "session.json"
         )
-        / "session.json"
-    )
-    session = json.loads(session_path.read_text(encoding="utf-8"))
-    session["current_provider_id"] = "primary"
-    session_path.write_text(
-        json.dumps(session, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+        session = json.loads(session_path.read_text(encoding="utf-8"))
+        session["current_provider_id"] = "primary"
+        session_path.write_text(
+            json.dumps(session, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     with openai_chat_stub(port_block.port(10)):
         backend = start_backend_process(
             workspace_root=str(workspace_root),
@@ -435,8 +456,9 @@ async def test_rollout_history_around_loading_real_web_chain(
 
     session_id = STATIC_LONG_SESSION_ID
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_dir)
     static_rollout_root = (
-        get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
+        resolver.resolve_thread_node(session_id, resolver.main_thread_id(session_id))
         / "rollout"
     )
     rollout_path = static_rollout_root / "rollout.jsonl"

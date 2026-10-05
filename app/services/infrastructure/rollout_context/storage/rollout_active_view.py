@@ -30,6 +30,8 @@ class RolloutActiveViewMixin:
         self,
         thread_id: str,
         checkpoint_ns: str = "",
+        *,
+        session_id: str,
     ) -> bool:
         """修复 active view 的 Turn 索引，不重写 canonical 消息文件。
 
@@ -38,9 +40,13 @@ class RolloutActiveViewMixin:
         错误删空。这里依据每个 Turn 自身的消息集合重新计算索引；只有索引
         与规范结果不一致时才写 SQLite，避免普通只读请求产生文件监听噪声。
         """
-        with self._host._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._host._connect(thread_id, checkpoint_ns) as connection:
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._host._require_v2_runtime(connection)
                 namespace = self._namespace_state(connection, checkpoint_ns)
                 branch_row = connection.execute(
@@ -200,6 +206,7 @@ class RolloutActiveViewMixin:
 
     def ensure_active_view_contains_turn_root(
         self,
+        session_id: str,
         thread_id: str,
         *,
         turn_id: str,
@@ -212,16 +219,21 @@ class RolloutActiveViewMixin:
         同步，避免首个 assembly 在 active view 已建立后仍看不到 root。只更新
         SQLite view membership，不改变 canonical JSONL 或 view head。
         """
+        session_id = strict_text(session_id, field="session_id")
         thread_id = strict_text(thread_id, field="thread_id")
         turn_id = strict_text(turn_id, field="turn_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        if not thread_id or not turn_id:
-            raise ValueError("ensure active view root 缺少 thread_id/turn_id")
-        with self._host._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._host._connect(thread_id, checkpoint_ns) as connection:
+        if not session_id or not thread_id or not turn_id:
+            raise ValueError("ensure active view root 缺少 session_id/thread_id/turn_id")
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._host._require_v2_runtime(connection)
                 branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",

@@ -6,12 +6,12 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -35,6 +35,7 @@ def owned_omitted_snapshot(
     if kind == "tool_set":
         ref = ToolSetRef.from_tool_snapshot(
             session_id=session_id,
+            thread_id=omitted_snapshot.thread_id,
             plan_id=plan_id,
             snapshot_id="owner-tools",
             source_revision="tools-r1",
@@ -67,6 +68,7 @@ def owned_omitted_snapshot(
     tools = (ref,) if isinstance(ref, ToolSetRef) else ()
     plan = ContextRequestPlan(
         session_id=session_id,
+        thread_id="thread-1",
         plan_id=plan_id,
         refs=refs,
         tool_set_refs=tools,
@@ -92,7 +94,7 @@ def test_canonical_fact_can_be_selected_by_two_plans_in_its_session(
     fingerprints = []
     for plan_id in ("plan-owner-a", "plan-owner-b"):
         plan = ContextRequestPlan(
-            session_id="session-owner", plan_id=plan_id, refs=(ref,)
+            session_id="session-owner", thread_id="thread-1", plan_id=plan_id, refs=(ref,)
         )
         assert plan.refs[0].session_id == "session-owner"
         assert plan.to_dict()["session_id"] == "session-owner"
@@ -118,11 +120,11 @@ def test_request_owner_is_plan_local_even_when_ref_ids_match() -> None:
     assert first != second
     for ref in (first, second):
         assert ContextRequestPlan(
-            session_id=ref.session_id, plan_id=ref.plan_id, refs=(ref,)
+            session_id=ref.session_id, thread_id="thread-1", plan_id=ref.plan_id, refs=(ref,)
         ).refs == (ref,)
     with pytest.raises(ItemSchemaError, match="plan"):
         ContextRequestPlan(
-            session_id="session-owner", plan_id="plan-owner-b", refs=(first,)
+            session_id="session-owner", thread_id="thread-1", plan_id="plan-owner-b", refs=(first,)
         )
 
 
@@ -160,15 +162,75 @@ def test_request_factory_requires_plan_argument() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "api", ["ref", "canonical", "request", "tools", "plan"]
+)
+def test_thread_owner_is_a_required_argument_not_a_default(
+    user_item: CanonicalItemRecord,
+    api: str,
+) -> None:
+    with pytest.raises(TypeError, match="thread_id"):
+        if api == "ref":
+            ContextRef(
+                ref_type="canonical_item",
+                ref_id="ref",
+                session_id="session-owner",
+                availability="unavailable",
+            )
+        elif api == "canonical":
+            ContextRef.canonical_item(user_item, session_id="session-owner")
+        elif api == "request":
+            ContextRef.request_only_ref(
+                "ref",
+                session_id="session-owner",
+                plan_id="plan-owner",
+                source_revision="r1",
+                content="body",
+            )
+        elif api == "tools":
+            ToolSetRef.from_tool_snapshot(
+                snapshot_id="tools",
+                session_id="session-owner",
+                plan_id="plan-owner",
+                source_revision="r1",
+                tools=[],
+            )
+        else:
+            ContextRequestPlan(
+                session_id="session-owner",
+                plan_id="plan-owner",
+                refs=(),
+            )
+
+
+def test_request_only_ref_must_match_plan_thread() -> None:
+    ref = ContextRef.request_only_ref(
+        "thread-owned-ref",
+        session_id="session-owner",
+        thread_id="thread-child",
+        plan_id="plan-owner",
+        source_revision="r1",
+        content="body",
+    )
+    with pytest.raises(ItemSchemaError, match="当前 thread"):
+        ContextRequestPlan(
+            session_id="session-owner",
+            thread_id="thread-main",
+            plan_id="plan-owner",
+            refs=(ref,),
+        )
+
+
 @pytest.mark.parametrize("value", [None, "", 7, True])
 @pytest.mark.parametrize("kind", ["canonical_item", "request_only", "tool_set", "plan"])
 def test_invalid_session_owner_is_rejected(value: object, kind: str) -> None:
     with pytest.raises(ItemSchemaError, match="session_id"):
         if kind == "plan":
-            ContextRequestPlan(session_id=value, plan_id="plan-owner", refs=())
+            ContextRequestPlan(session_id=value, thread_id="thread-1", plan_id="plan-owner", refs=())
         elif kind == "tool_set":
             ToolSetRef.from_tool_snapshot(
                 session_id=value,
+                thread_id="thread-1",
                 snapshot_id="tools",
                 plan_id="plan-owner",
                 source_revision="r1",
@@ -204,7 +266,7 @@ def test_canonical_ref_cannot_gain_plan_ownership(
         replace(ref, plan_id="not-canonical-owner")
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
     owned_omitted_snapshot: ContextAssemblySnapshot,
     field: str,
@@ -219,15 +281,34 @@ def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
     wrong_entry = replace(entry, ref=wrong)
     refs = (wrong,) if isinstance(wrong, ContextRef) else ()
     tools = (wrong,) if isinstance(wrong, ToolSetRef) else ()
+    if (
+        field == "thread_id"
+        and isinstance(wrong, ContextRef)
+        and wrong.ref_type == "canonical_item"
+    ):
+        # canonical fact 可以作为 sibling thread 的 context；thread owner 不等于 parent scope。
+        assert ContextRequestPlan(
+            session_id=snapshot.session_id,
+            thread_id=snapshot.thread_id,
+            plan_id=snapshot.plan_id,
+            refs=refs,
+        ).refs == refs
+        assert replace(snapshot, refs=refs, selection=(wrong_entry,)).refs == refs
+        return
     # registry 与 entry 一同替换，不能靠 manifest 不一致偶然拒绝，而必须检查 parent owner。
     expected_plan_error = (
-        "ToolSetRef 必须属于当前 ContextRequestPlan"
-        if isinstance(wrong, ToolSetRef) and field == "plan_id"
-        else f"source-mismatch: {type(wrong).__name__} 不属于当前 {field.removesuffix('_id')}"
+        "source-mismatch: ToolSetRef 不属于当前 session/thread/plan"
+        if isinstance(wrong, ToolSetRef)
+        else (
+            "source-mismatch: request-only ContextRef 不属于当前 thread"
+            if field == "thread_id" and wrong.ref_type == "request_only"
+            else f"source-mismatch: ContextRef 不属于当前 {field.removesuffix('_id')}"
+        )
     )
     with pytest.raises(ItemSchemaError, match=f"^{expected_plan_error}$"):
         ContextRequestPlan(
             session_id=snapshot.session_id,
+            thread_id="thread-1",
             plan_id=snapshot.plan_id,
             refs=refs,
             tool_set_refs=tools,
@@ -238,7 +319,11 @@ def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
     expected_snapshot_error = (
         "ToolSetRef 与 assembly/plan 不一致"
         if isinstance(wrong, ToolSetRef)
-        else "source-mismatch: ContextRef 与 assembly owner 不一致"
+        else (
+            "source-mismatch: request-only ContextRef 与 assembly thread 不一致"
+            if field == "thread_id" and wrong.ref_type == "request_only"
+            else "source-mismatch: ContextRef 与 assembly owner 不一致"
+        )
     )
     with pytest.raises(ItemSchemaError, match=f"^{expected_snapshot_error}$"):
         replace(snapshot, refs=refs, tool_set_refs=tools, selection=(wrong_entry,))
@@ -262,7 +347,17 @@ def test_owner_roundtrip_keeps_omitted_identity_without_allocating_body(
     assert restored.selection[0].contribution_ordinal is None
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+@pytest.mark.parametrize(
+    "owned_omitted_snapshot", ["request_only"], indirect=True
+)
+def test_request_only_ref_must_match_snapshot_thread(
+    owned_omitted_snapshot: ContextAssemblySnapshot,
+) -> None:
+    with pytest.raises(ItemSchemaError, match="assembly thread"):
+        replace(owned_omitted_snapshot, thread_id="thread-child")
+
+
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_restore_never_infers_missing_ref_owner_from_enclosing_snapshot(
     owned_omitted_snapshot: ContextAssemblySnapshot,
     field: str,
@@ -273,7 +368,7 @@ def test_restore_never_infers_missing_ref_owner_from_enclosing_snapshot(
         ContextAssemblySnapshot.from_dict(raw)
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_restore_rejects_consistently_forged_omitted_owner(
     owned_omitted_snapshot: ContextAssemblySnapshot,
     field: str,
@@ -283,10 +378,16 @@ def test_restore_rejects_consistently_forged_omitted_owner(
     for ref in raw["refs"]:
         ref[field] = "forged-owner"
     kind = raw["selection"][0]["ref"]["ref_type"]
+    if kind == "canonical_item" and field == "thread_id":
+        restored = ContextAssemblySnapshot.from_dict(raw)
+        assert restored.refs[0].thread_id == "forged-owner"
+        return
     if kind == "canonical_item" and field == "plan_id":
         expected_error = "canonical ContextRef 不得携带 plan_id"
     elif kind == "tool_set":
         expected_error = "selection ToolSetRef scope 不一致"
+    elif kind == "request_only" and field == "thread_id":
+        expected_error = "source-mismatch: request-only ContextRef 与 assembly thread 不一致"
     else:
         expected_error = "source-mismatch: ContextRef 与 assembly owner 不一致"
     with pytest.raises(ItemSchemaError, match=f"^{expected_error}$"):
@@ -311,6 +412,7 @@ def test_unselected_registry_cannot_hide_a_foreign_session(
     else:
         ref = ToolSetRef.from_tool_snapshot(
             session_id="foreign-session",
+            thread_id="thread-1",
             plan_id="plan-owner",
             snapshot_id="foreign-tools",
             source_revision="r1",
@@ -319,6 +421,7 @@ def test_unselected_registry_cannot_hide_a_foreign_session(
     with pytest.raises(ItemSchemaError, match="session"):
         ContextRequestPlan(
             session_id="session-owner",
+            thread_id="thread-1",
             plan_id="plan-owner",
             refs=(ref,) if isinstance(ref, ContextRef) else (),
             tool_set_refs=(ref,) if isinstance(ref, ToolSetRef) else (),
@@ -346,6 +449,7 @@ def owned_included_snapshot(
     else:
         ref = ToolSetRef.from_tool_snapshot(
             session_id=snapshot.session_id,
+            thread_id=snapshot.thread_id,
             plan_id=snapshot.plan_id,
             snapshot_id="included-owner-tools",
             tools=[{"name": "owner_tool"}],
@@ -360,12 +464,18 @@ def owned_included_snapshot(
         source_revision=ref.source_revision,
         content_length=ref.content_length,
         content_hash=ref.content_hash,
-        detail_ref=DetailRef(snapshot.session_id, snapshot.assembly_id, "detail-owner")
+        detail_ref=DetailRef(
+            snapshot.session_id,
+            snapshot.thread_id,
+            snapshot.assembly_id,
+            "detail-owner",
+        )
         if isinstance(ref, ContextRef) and ref.ref_type == "request_only"
         else None,
     )
     plan = ContextRequestPlan(
         session_id=snapshot.session_id,
+        thread_id="thread-1",
         plan_id=snapshot.plan_id,
         refs=(ref,) if isinstance(ref, ContextRef) else (),
         tool_set_refs=(ref,) if isinstance(ref, ToolSetRef) else (),
@@ -399,13 +509,17 @@ def test_included_owner_roundtrip_is_exact(
     )
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_included_snapshot_rejects_foreign_parent_owner(
     owned_included_snapshot: ContextAssemblySnapshot,
     field: str,
 ) -> None:
     snapshot = owned_included_snapshot
     ref = snapshot.selection[0].ref
+    if field == "thread_id" and ref.ref_type == "canonical_item":
+        # canonical item 可由 sibling thread 作为独立 context 引用。
+        assert replace(snapshot, thread_id="foreign-owner").refs == snapshot.refs
+        return
     if field == "plan_id" and ref.ref_type == "canonical_item":
         # canonical fact 不归某个 plan 所有，同 session 内重选无需重建 ref。
         assert replace(snapshot, plan_id="another-plan").refs == snapshot.refs
@@ -413,13 +527,17 @@ def test_included_snapshot_rejects_foreign_parent_owner(
     expected = (
         "ToolSetRef 与 assembly/plan 不一致"
         if isinstance(ref, ToolSetRef)
-        else "source-mismatch: ContextRef 与 assembly owner 不一致"
+        else (
+            "source-mismatch: request-only ContextRef 与 assembly thread 不一致"
+            if field == "thread_id" and ref.ref_type == "request_only"
+            else "source-mismatch: ContextRef 与 assembly owner 不一致"
+        )
     )
     with pytest.raises(ItemSchemaError, match=f"^{expected}$"):
         replace(snapshot, **{field: "foreign-owner"})
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_included_registry_restore_requires_owner_fields(
     owned_included_snapshot: ContextAssemblySnapshot,
     field: str,
@@ -446,7 +564,14 @@ def test_tool_ref_constructor_also_requires_session(
         ToolSetRef(**raw)
 
 
-@pytest.mark.parametrize("field", ["session_id", "plan_id"])
+def test_tool_ref_constructor_also_requires_thread(golden_plan: ContextRequestPlan) -> None:
+    raw = golden_plan.tool_set_refs[0].to_dict()
+    raw.pop("thread_id")
+    with pytest.raises(TypeError, match="thread_id"):
+        ToolSetRef(**raw)
+
+
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
 def test_selected_owner_identity_is_bound_in_plan_and_request_hash(
     golden_plan: ContextRequestPlan,
     field: str,
@@ -455,10 +580,21 @@ def test_selected_owner_identity_is_bound_in_plan_and_request_hash(
     target_session = (
         "session-target" if field == "session_id" else golden_plan.session_id
     )
+    target_thread = (
+        "thread-target" if field == "thread_id" else golden_plan.thread_id
+    )
     target_plan = "plan-target" if field == "plan_id" else golden_plan.plan_id
-    refs = tuple(replace(ref, session_id=target_session) for ref in golden_plan.refs)
+    refs = tuple(
+        replace(ref, session_id=target_session, thread_id=target_thread)
+        for ref in golden_plan.refs
+    )
     tools = tuple(
-        replace(ref, session_id=target_session, plan_id=target_plan)
+        replace(
+            ref,
+            session_id=target_session,
+            thread_id=target_thread,
+            plan_id=target_plan,
+        )
         for ref in golden_plan.tool_set_refs
     )
     by_identity = {(ref.ref_type, ref.ref_id): ref for ref in (*refs, *tools)}
@@ -469,6 +605,7 @@ def test_selected_owner_identity_is_bound_in_plan_and_request_hash(
     target = replace(
         golden_plan,
         session_id=target_session,
+        thread_id=target_thread,
         plan_id=target_plan,
         refs=refs,
         tool_set_refs=tools,

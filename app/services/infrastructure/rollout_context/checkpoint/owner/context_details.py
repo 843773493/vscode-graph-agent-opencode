@@ -28,9 +28,10 @@ class ContextDetailOwnerMixin:
     def seal_context_plan(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
-        turn_id: str,
+        turn_id: str | None,
         execution_id: str,
         provider_version: str,
         seal_idempotency_key: str,
@@ -49,10 +50,11 @@ class ContextDetailOwnerMixin:
         它必须与 assembly 在同一次 ``assembly_sealed`` 提交原子绑定。为 None 时
         不写 activation 行（尚未接入 activation 的调用方）。
         """
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         return seal_registered_plan(
             self,
             session_id,
+            thread_id,
             plan,
             seal_idempotency_key=seal_idempotency_key,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
@@ -72,6 +74,8 @@ class ContextDetailOwnerMixin:
 
     def seal_context_assembly(
         self,
+        session_id: str,
+        thread_id: str,
         snapshot: ContextAssemblySnapshot,
         *,
         seal_idempotency_key: str,
@@ -83,8 +87,12 @@ class ContextDetailOwnerMixin:
         activation_binding=None,
     ) -> int:
         """在 provider dispatch 前完成 snapshot 与可选详情的 sealed 提交。"""
+        if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
+            raise ValueError("source-mismatch: assembly seal owner 不一致")
         return seal_snapshot(
             self,
+            session_id,
+            thread_id,
             snapshot,
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=seal_input_hash,
@@ -98,6 +106,7 @@ class ContextDetailOwnerMixin:
     def read_context_plan_detail(
         self,
         session_id: str,
+        thread_id: str,
         *,
         detail_ref: DetailRef,
         include_sensitive: bool = False,
@@ -106,15 +115,17 @@ class ContextDetailOwnerMixin:
         """通过 Saver 读取 assembly detail，执行 session/敏感权限边界。"""
         if not isinstance(detail_ref, DetailRef):
             raise TypeError("source-mismatch: detail_ref 必须是 typed DetailRef")
-        detail_ref.require_owner(session_id)
+        detail_ref.require_owner(session_id, thread_id)
         raw = self._storage.get_context_plan_detail(
             session_id,
+            thread_id,
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
         )
         record = detail_record_from_mapping(raw)
         return self._detail_store.read(
             session_id=session_id,
+            thread_id=thread_id,
             record=record,
             include_sensitive=include_sensitive,
         )
@@ -122,6 +133,7 @@ class ContextDetailOwnerMixin:
     def gc_context_plan_details(
         self,
         session_id: str,
+        thread_id: str,
         *,
         expired_before: datetime,
         checkpoint_ns: str = "",
@@ -129,6 +141,7 @@ class ContextDetailOwnerMixin:
         """只清理未被 sealed assembly 引用的过期 detail。"""
         candidates = self._storage.list_expired_context_plan_details(
             session_id,
+            thread_id,
             expired_before=expired_before,
             checkpoint_ns=checkpoint_ns,
         )
@@ -137,6 +150,7 @@ class ContextDetailOwnerMixin:
             for detail_ref, assembly_id in candidates
             if not self._storage.context_assembly_references_detail(
                 session_id,
+                thread_id,
                 assembly_id=assembly_id,
                 detail_ref=detail_ref,
                 checkpoint_ns=checkpoint_ns,
@@ -146,11 +160,13 @@ class ContextDetailOwnerMixin:
         # 标记后崩溃，registry 的 GC candidates 必须允许重试物理清理。
         self._storage.mark_context_plan_details_unavailable(
             session_id,
+            thread_id,
             detail_refs=removable,
             checkpoint_ns=checkpoint_ns,
         )
         return self._detail_store.gc(
             session_id=session_id,
+            thread_id=thread_id,
             expired_before=expired_before,
             allowed_refs=removable,
         )

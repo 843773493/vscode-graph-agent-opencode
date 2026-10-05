@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import time
 from datetime import UTC, datetime
@@ -23,16 +22,10 @@ from app.services.business.job.service import JobService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
-logger = logging.getLogger(__name__)
-
 
 def is_job_timeout_event(event: Event) -> bool:
-    """兼容带 code 与旧版仅保存超时错误文本的 JOB_FAILED 事件。"""
-    payload = event.payload
-    if getattr(payload, "code", None) == "job_timeout":
-        return True
-    error = getattr(payload, "error", None)
-    return isinstance(error, str) and "超过总超时上限" in error
+    """Job 的两类超时由唯一结构化 code 判定。"""
+    return getattr(event.payload, "code", None) in {"job_timeout", "job_startup_timeout"}
 
 
 class RuntimeService:
@@ -131,61 +124,57 @@ class RuntimeService:
             "job_failed",
             "session_interrupted",
         }
+        started_owners: dict[str, tuple[str, str]] = {}
         for session_id in self._trace_event_store.list_session_ids():
-            try:
-                events = self._trace_event_store.read_events(session_id)
-            except (RuntimeError, TypeError) as error:
-                error_detail = str(error)
-                self._startup_reconciliation_errors.append(
-                    {"session_id": session_id, "error": error_detail}
-                )
-                logger.exception(
-                    "历史 Trace 无法参与启动恢复，已保留该会话并继续启动: "
-                    "session_id=%s error=%s",
-                    session_id,
-                    error_detail,
-                )
-                continue
+            events = self._trace_event_store.read_events(session_id)
             lifecycle_by_job: dict[str, Event] = {}
             for event in events:
+                if event.type == "job_started":
+                    owner = (event.payload.session_id, event.payload.thread_id)
+                    if owner[0] != session_id:
+                        raise RuntimeError(
+                            f"Job started owner 与 Trace 会话冲突: job_id={event.job_id!r}, "
+                            f"trace_session={session_id!r}, owner={owner!r}"
+                        )
+                    previous = started_owners.setdefault(event.job_id, owner)
+                    if previous != owner:
+                        raise RuntimeError(
+                            f"同一 Job 的 started owner 漂移: job_id={event.job_id!r}, "
+                            f"previous={previous!r}, current={owner!r}"
+                        )
                 if event.type == "job_started" or event.type in terminal_types:
                     lifecycle_by_job[event.job_id] = event
             for job_id, event in lifecycle_by_job.items():
+                owner = started_owners.get(job_id)
+                # 排队取消或准入前失败可以没有 started，不产生 execution/Turn。
+                if owner is None:
+                    continue
+                if owner[0] != session_id:
+                    raise RuntimeError(
+                        f"Job 终态 Trace 与 started owner 冲突: job_id={job_id!r}, "
+                        f"trace_session={session_id!r}, owner={owner!r}"
+                    )
                 event_type = event.type
                 if event_type == "job_failed":
-                    if self._terminal_status_writer is not None:
-                        status = (
-                            "timed_out"
-                            if is_job_timeout_event(event)
-                            else "failed"
-                        )
-                        self._terminal_status_writer.mark_turn_terminal_status(
-                            session_id=session_id,
-                            turn_id=job_id,
-                            status=status,
-                        )
-                    continue
-                if event_type == "session_interrupted":
+                    status = "timed_out" if is_job_timeout_event(event) else "failed"
+                elif event_type == "job_cancelled":
+                    status = "cancelled"
+                elif event_type == "session_interrupted":
                     payload = event.payload
-                    is_process_exit = (
-                        payload.code == "execution_lost"
-                        or payload.phase == "process_exit"
-                    )
-                    if is_process_exit and self._terminal_status_writer is not None:
-                        self._terminal_status_writer.mark_turn_terminal_status(
-                            session_id=session_id,
-                            turn_id=job_id,
-                            status="failed",
-                        )
-                    continue
-                if event_type != "job_started":
+                    if payload.code != "execution_lost" and payload.phase != "process_exit":
+                        continue
+                    status = "execution_lost"
+                elif event_type == "job_started":
+                    status = "execution_lost"
+                else:
                     continue
                 if self._terminal_status_writer is not None:
-                    self._terminal_status_writer.mark_turn_terminal_status(
-                        session_id=session_id,
-                        turn_id=job_id,
-                        status="failed",
+                    self._terminal_status_writer.mark_job_terminal_status(
+                        session_id=owner[0], thread_id=owner[1],
+                        job_id=job_id, status=status,
                     )
+                if event_type != "job_started":
+                    continue
                 now = datetime.now(UTC)
                 await self._trace_event_store.append(
                     session_id,

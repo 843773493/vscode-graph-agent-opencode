@@ -47,6 +47,8 @@ def committed_rollout(
         session_id,
         accepted_ingress_id="ingress-1",
         acceptance_idempotency_key="acceptance-1",
+        job_id="job-1",
+        admission_idempotency_key="admission-1",
         payload="已提交的用户输入不能在损坏恢复时丢失",
         payload_kind=PayloadKind.TEXT,
     )
@@ -222,6 +224,8 @@ def test_bounded_projection_preserves_original_text_length(
         rollout.session_id,
         accepted_ingress_id="long-text",
         acceptance_idempotency_key="long-text",
+        job_id="long-text-job",
+        admission_idempotency_key="long-text-admission",
         payload="界" * text_length,
         payload_kind=PayloadKind.TEXT,
     )
@@ -264,6 +268,8 @@ def test_nullable_source_revision_uses_stable_canonical_revision(
         rollout.session_id,
         accepted_ingress_id="nullable-source",
         acceptance_idempotency_key="nullable-source",
+        job_id="nullable-source-job",
+        admission_idempotency_key="nullable-source-admission",
         payload="没有外部 revision 的 canonical input",
         acceptance_metadata={"source_revision": None},
     )

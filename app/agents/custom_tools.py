@@ -22,7 +22,6 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
     BrowserManagerClientProtocol,
-    TerminalManagerClientProtocol,
 )
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
@@ -30,6 +29,7 @@ from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 if TYPE_CHECKING:
+    from app.services.business.terminal_resources.owner import TerminalResourceOwner
     from app.services.infrastructure.node_debug.service import NodeDebugService
 
 
@@ -47,7 +47,7 @@ class CustomToolFactoryContext:
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
     session_orchestrator: SessionOrchestratorProtocol
     config_service: CustomToolConfigProtocol
-    terminal_manager_client: TerminalManagerClientProtocol
+    terminal_resource_owner: TerminalResourceOwner
     browser_manager_client: BrowserManagerClientProtocol
     invocation_context: ToolInvocationContext
     session_target_resolver: SessionTargetResolverProtocol | None = None
@@ -145,7 +145,7 @@ def build_custom_tool_bundle(
     workspace_session_context_client: WorkspaceSessionContextClientProtocol,
     session_orchestrator: SessionOrchestratorProtocol,
     config_service: CustomToolConfigProtocol,
-    terminal_manager_client: TerminalManagerClientProtocol,
+    terminal_resource_owner: TerminalResourceOwner,
     browser_manager_client: BrowserManagerClientProtocol,
     invocation_context: ToolInvocationContext,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
@@ -164,7 +164,7 @@ def build_custom_tool_bundle(
         workspace_session_context_client=workspace_session_context_client,
         session_orchestrator=session_orchestrator,
         config_service=config_service,
-        terminal_manager_client=terminal_manager_client,
+        terminal_resource_owner=terminal_resource_owner,
         browser_manager_client=browser_manager_client,
         invocation_context=invocation_context,
         session_target_resolver=session_target_resolver,

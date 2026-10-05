@@ -9,6 +9,7 @@ import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
 import type {
   GatewayUserViewState,
   LLMRequestLogRecord,
+  Session,
   SessionChangeset,
   SessionChangesSummary,
 } from "../../types/backend";
@@ -52,6 +53,7 @@ interface ContentViewSlotsProps extends Pick<
   contentView: ConversationContentView;
   apiPort: number;
   workspaceId: string | null;
+  session: Session | null;
   sessionId: string | null;
   hasActiveSession: boolean;
   activeSessionCacheKey: string | null;
@@ -102,6 +104,7 @@ export default function ContentViewSlots({
   contentView,
   apiPort,
   workspaceId,
+  session,
   sessionId,
   hasActiveSession,
   activeSessionCacheKey,
@@ -180,7 +183,7 @@ export default function ContentViewSlots({
         <AgentStatePanel
           port={apiPort}
           workspaceId={workspaceId ?? ""}
-          sessionId={sessionId ?? ""}
+          session={session}
           active={contentView === "agent"}
           jsonl={agentStateJsonl}
           messageCount={agentStateMessageCount}
@@ -219,6 +222,7 @@ export default function ContentViewSlots({
           apiPort={apiPort}
           workspaceId={workspaceId}
           conversations={conversations}
+          internalExecutions={activeTurnTimeline?.internalExecutions ?? []}
           expandDetails={expandedDetails}
           hasActiveSession={hasActiveSession}
           hasOlderMessages={activeTurnTimeline?.hasBefore ?? false}

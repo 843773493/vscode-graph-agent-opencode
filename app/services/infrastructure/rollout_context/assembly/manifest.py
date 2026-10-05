@@ -58,7 +58,10 @@ class ContextAssemblyManifestMixin:
         # plan registry 是来源的唯一 owner，同时核验 refs/contributions/tools
         # 和已封存 snapshot 的 hash；本层不读取 draft 或重新解释 omitted 正文。
         registration = read_registration(
-            connection, snapshot.session_id, snapshot.plan_id
+            connection,
+            snapshot.session_id,
+            snapshot.thread_id,
+            snapshot.plan_id,
         )
         if registration.plan_state != "sealed":
             raise RuntimeError(

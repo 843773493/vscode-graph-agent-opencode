@@ -605,12 +605,19 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
         .splitlines()
     ]
     assert [line["semantic_kind"] for line in lines] == [
-        "user_input", "assistant_output", "tool_call", "tool_result", "assistant_output"
+        "user_input",
+        "assistant_output",
+        "tool_call",
+        "tool_result",
+        "assistant_output",
     ]
     assert [line["item_sequence"] for line in lines] == [1, 2, 3, 4, 5]
     assert lines[1]["payload"] == "检查 001"
     assert lines[1]["message_group_id"] == lines[2]["message_group_id"]
-    assert restored.checkpoint["channel_values"]["messages"][1].content == messages[1].content
+    assert (
+        restored.checkpoint["channel_values"]["messages"][1].content
+        == messages[1].content
+    )
     assert {line["wire_role"] for line in lines} == {"user", "assistant", "tool"}
     assert all(line["record_type"] == "item" for line in lines)
     assert all("message" not in line and "role" not in line for line in lines)
@@ -623,11 +630,18 @@ def test_checkpoint_envelope_and_channels_are_authoritative_sqlite(
             == 3
         )
         assert connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 4
-        assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone()[0] == 5
-        assert len(connection.execute(
-            "SELECT DISTINCT commit_id FROM item_catalog WHERE item_id IN (?, ?)",
-            (lines[1]["item_id"], lines[2]["item_id"]),
-        ).fetchall()) == 1
+        assert (
+            connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone()[0] == 5
+        )
+        assert (
+            len(
+                connection.execute(
+                    "SELECT DISTINCT commit_id FROM item_catalog WHERE item_id IN (?, ?)",
+                    (lines[1]["item_id"], lines[2]["item_id"]),
+                ).fetchall()
+            )
+            == 1
+        )
 
 
 def test_failed_turn_status_survives_history_reload(
@@ -659,6 +673,7 @@ def test_failed_turn_status_survives_history_reload(
             session_id=SESSION_ID,
             turn_id="failed-turn",
             status="failed",
+            thread_id=get_session_path_resolver(sessions_dir).main_thread_id(SESSION_ID),
         )
         is True
     )
@@ -718,6 +733,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
             session_id=SESSION_ID,
             turn_id="cancelled-turn",
             status="cancelled",
+            thread_id=get_session_path_resolver(sessions_dir).main_thread_id(SESSION_ID),
         )
         is True
     )
@@ -728,6 +744,7 @@ def test_terminal_turn_status_convergence_is_idempotent_after_termination(
             session_id=SESSION_ID,
             turn_id="cancelled-turn",
             status="failed",
+            thread_id=get_session_path_resolver(sessions_dir).main_thread_id(SESSION_ID),
         )
         is True
     )
@@ -741,6 +758,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.main_thread_id(SESSION_ID)
     user = HumanMessage(
         content="带工具的任务",
         id="user-job-1",
@@ -757,6 +775,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
         submit_checkpoint_reminder(
             checkpointer=saver,
             session_id=SESSION_ID,
+            thread_id=thread_id,
             reminder="任务已超时，请根据已完成结果明确报告失败。",
             response_metadata={"source": "job_timeout"},
             checkpoint_source="job_timeout",
@@ -765,7 +784,9 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
     )
 
     with sqlite3.connect(
-        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        get_session_path_resolver(sessions_dir).resolve_thread_node(
+            SESSION_ID, thread_id
+        )
         / "rollout"
         / "index.sqlite"
     ) as connection:
@@ -796,6 +817,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
             session_id=SESSION_ID,
             turn_id="job-1",
             status="failed",
+            thread_id=get_session_path_resolver(sessions_dir).main_thread_id(SESSION_ID),
         )
         is True
     )
@@ -814,10 +836,12 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.main_thread_id(SESSION_ID)
 
     assert submit_checkpoint_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
+        thread_id=thread_id,
         reminder="请继续处理超时任务。",
         response_metadata={"source": "job_timeout", "attempt": "first"},
         checkpoint_source="job_timeout",
@@ -827,6 +851,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
     assert submit_checkpoint_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
+        thread_id=thread_id,
         reminder="请继续处理超时任务。",
         response_metadata={"attempt": "first", "source": "job_timeout"},
         checkpoint_source="job_timeout",
@@ -835,6 +860,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
     assert submit_checkpoint_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
+        thread_id=thread_id,
         reminder="请继续处理超时任务。",
         response_metadata={"source": "job_timeout", "attempt": "other"},
         checkpoint_source="job_timeout",
@@ -842,7 +868,9 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
     )
 
     with sqlite3.connect(
-        get_session_path_resolver(sessions_dir).resolve_session_node(SESSION_ID)
+        get_session_path_resolver(sessions_dir).resolve_thread_node(
+            SESSION_ID, thread_id
+        )
         / "rollout"
         / "index.sqlite"
     ) as connection:
@@ -864,16 +892,22 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver.main_thread_id(SESSION_ID)
     saver.put(
         build_checkpoint_config(SESSION_ID),
         _checkpoint("cp-before-reminder-failure", [HumanMessage(content="用户输入")]),
         {"source": "test"},
         {"messages": "1"},
     )
-    rollout_root = saver._storage.root(SESSION_ID, "")
-    jsonl_path = saver._storage.jsonl_path(SESSION_ID, "")
+    rollout_root = saver._storage.root(SESSION_ID, "", thread_id=thread_id)
+    jsonl_path = saver._storage.jsonl_path(SESSION_ID, "", thread_id=thread_id)
     before_jsonl_size = jsonl_path.stat().st_size
-    with saver._storage._connect(SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(
+        saver._storage.main_thread_id(SESSION_ID),
+        "",
+        read_only=True,
+        session_id=SESSION_ID,
+    ) as connection:
         before_meta = connection.execute(
             "SELECT last_item_sequence, committed_jsonl_offset "
             "FROM database_meta WHERE singleton_id = 1"
@@ -891,6 +925,7 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
         submit_checkpoint_reminder(
             checkpointer=saver,
             session_id=SESSION_ID,
+            thread_id=thread_id,
             reminder="故障注入提醒",
             response_metadata={"source": "injected"},
             checkpoint_source="injected",
@@ -900,16 +935,25 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
     assert rollout_root.is_dir()
     assert jsonl_path.stat().st_size == before_jsonl_size
     with sqlite3.connect(rollout_root / "index.sqlite") as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'runtime_notice'"
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT COUNT(*) FROM item_projections WHERE semantic_kind = 'runtime_notice'"
-        ).fetchone()[0] == 0
-        assert connection.execute(
-            "SELECT last_item_sequence, committed_jsonl_offset "
-            "FROM database_meta WHERE singleton_id = 1"
-        ).fetchone() == before_meta
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM item_catalog WHERE semantic_kind = 'runtime_notice'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM item_projections WHERE semantic_kind = 'runtime_notice'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT last_item_sequence, committed_jsonl_offset "
+                "FROM database_meta WHERE singleton_id = 1"
+            ).fetchone()
+            == before_meta
+        )
 
 
 def test_legacy_hidden_reminder_turn_is_excluded_from_history(
@@ -994,9 +1038,15 @@ def test_rewind_replay_uses_new_canonical_suffix_without_replacement_event(
     assert replay_bytes.startswith(immutable_prefix)
     before_items = [json.loads(line) for line in immutable_prefix.splitlines()]
     assert [item["semantic_kind"] for item in before_items] == [
-        "user_input", "assistant_output", "tool_call", "tool_result", "assistant_output"
+        "user_input",
+        "assistant_output",
+        "tool_call",
+        "tool_result",
+        "assistant_output",
     ] * 2
-    appended = [json.loads(line) for line in replay_bytes[len(immutable_prefix):].splitlines()]
+    appended = [
+        json.loads(line) for line in replay_bytes[len(immutable_prefix) :].splitlines()
+    ]
     assert len(appended) == 1
     assert appended[0]["item_sequence"] == 11
     assert appended[0]["semantic_kind"] == "assistant_output"
@@ -1620,9 +1670,7 @@ def test_sqlite_backup_restores_authoritative_checkpoint_state(
         assert restored_snapshot.manifest.latest_checkpoint_id == "cp-1"
     finally:
         restored_snapshot.close()
-    quarantine_entries = tuple(
-        (index_path.parent / "recovery-quarantine").iterdir()
-    )
+    quarantine_entries = tuple((index_path.parent / "recovery-quarantine").iterdir())
     assert len(quarantine_entries) == 1
     quarantine = quarantine_entries[0]
     assert (quarantine / "index.sqlite").read_bytes() == b"corrupted"

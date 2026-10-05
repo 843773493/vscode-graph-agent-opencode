@@ -8,7 +8,6 @@ from app.domain.itemized.assembly_snapshot import (
     ContextAssemblySnapshot,
     context_request_hash,
 )
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     PayloadKind,
     SelectionKind,
@@ -18,8 +17,9 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
 )
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -63,6 +63,7 @@ def test_plan_and_selection_version_are_exact_integers(
     with pytest.raises(ItemSchemaError):
         ContextRequestPlan(
             session_id=omitted_snapshot.session_id,
+            thread_id="thread-1",
             plan_id="plan",
             refs=(),
             format_version=version,
@@ -124,22 +125,25 @@ def test_plan_hash_uses_canonical_contribution_order_key(
     )
     canonical = ContextRequestPlan(
         session_id="session-order",
+        thread_id="thread-1",
         plan_id="plan-order",
         refs=(),
         contributions=(later, earlier),
     )
     reversed_input = ContextRequestPlan(
         session_id="session-order",
+        thread_id="thread-1",
         plan_id="plan-order",
         refs=(),
         contributions=(earlier, later),
     )
     assert canonical.plan_hash() == reversed_input.plan_hash()
     assert canonical.plan_hash() == (
-        "sha256:jcs:v1:b82dda14458bf0f317efe50bb478c568d90c422f377391c4fac192713d76ece9"
+        "sha256:jcs:v1:93f6e6d3b44a2ce95ba68d24c76958436ae8b26cc00ec62f67fc35d45e34e8e7"
     )
     swapped_ordinals = ContextRequestPlan(
         session_id="session-order",
+        thread_id="thread-1",
         plan_id="plan-order",
         refs=(),
         contributions=(
@@ -245,6 +249,7 @@ def test_restore_preserves_an_unavailable_ref_without_inventing_source_identity(
     )
     plan = ContextRequestPlan(
         session_id=omitted_snapshot.session_id,
+        thread_id="thread-1",
         plan_id=omitted_snapshot.plan_id,
         refs=(ref,),
     ).seal_for_assembly(
@@ -285,7 +290,7 @@ def test_unsealed_plan_has_no_selection_or_assembly(
     user_item: CanonicalItemRecord,
 ) -> None:
     ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
-    plan = ContextRequestPlan(session_id="session-1", plan_id="plan-draft", refs=(ref,))
+    plan = ContextRequestPlan(session_id="session-1", thread_id="thread-1", plan_id="plan-draft", refs=(ref,))
     assert plan.assembly_id is None and plan.selection == ()
     with pytest.raises(ItemSchemaError, match="unsealed"):
         replace(plan, assembly_id="premature-assembly")
@@ -350,12 +355,13 @@ def test_sealed_plan_freezes_selection_and_contribution_ordinals(
         visibility=request_ref.visibility,
         protection=request_ref.protection,
         availability=request_ref.availability,
-        detail_ref=DetailRef("session-1", "assembly-1", "detail-1"),
+        detail_ref=DetailRef("session-1", "thread-1", "assembly-1", "detail-1"),
         contribution_id=contribution.contribution_id,
         contribution_ordinal=0,
     )
     plan = ContextRequestPlan(
         session_id="session-1",
+        thread_id="thread-1",
         plan_id="plan-1",
         refs=(item_ref, request_ref),
         contributions=(contribution,),
@@ -394,6 +400,7 @@ def test_contribution_security_manifest_survives_plan_serialization_and_hash_sco
     )
     plan = ContextRequestPlan(
         session_id="session-protected-contribution",
+        thread_id="thread-1",
         plan_id="plan-protected-contribution",
         refs=(),
         contributions=(contribution,),
@@ -415,6 +422,7 @@ def test_plan_rejects_boolean_revision_coordinates(field_name: str) -> None:
     with pytest.raises(ItemSchemaError, match="非负整数"):
         ContextRequestPlan(
             session_id="session-invalid-revision",
+            thread_id="thread-1",
             plan_id="plan-invalid-revision",
             refs=(),
             **{field_name: True},
@@ -456,12 +464,15 @@ def test_seal_rejects_included_contribution_binding_drift(
         visibility=request_ref.visibility,
         protection=request_ref.protection,
         availability=request_ref.availability,
-        detail_ref=DetailRef("session-bound", "assembly-bound", "detail-bound"),
+        detail_ref=DetailRef(
+            "session-bound", "thread-1", "assembly-bound", "detail-bound"
+        ),
         contribution_id=contribution_id,
         contribution_ordinal=0 if contribution_id is not None else None,
     )
     plan = ContextRequestPlan(
         session_id="session-bound",
+        thread_id="thread-1",
         plan_id="plan-bound",
         refs=(request_ref,),
         contributions=(contribution,),
@@ -534,6 +545,7 @@ def test_assembly_snapshot_does_not_persist_unselected_tool_definitions(
     snapshot = omitted_snapshot
     tool_ref = ToolSetRef.from_tool_snapshot(
         session_id=snapshot.session_id,
+        thread_id="thread-1",
         snapshot_id="tool-set-unselected",
         plan_id=snapshot.plan_id,
         assembly_id=snapshot.assembly_id,
@@ -614,6 +626,7 @@ def test_assembly_restore_rejects_malformed_tool_set_manifest(
     snapshot = omitted_snapshot
     tool_ref = ToolSetRef.from_tool_snapshot(
         session_id=snapshot.session_id,
+        thread_id="thread-1",
         snapshot_id="tool-set-restore",
         plan_id=snapshot.plan_id,
         assembly_id=snapshot.assembly_id,

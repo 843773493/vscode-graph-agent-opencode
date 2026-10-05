@@ -16,8 +16,8 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_keys import (
     ContextDetailKeyStore,
 )
@@ -146,9 +146,11 @@ def prepare_protected_detail_upgrade(
         stage = "source-owner"
         if not isinstance(target_ref, DetailRef):
             raise TypeError("target_ref 必须是 typed DetailRef")
-        target_ref.require_owner(aad["session_id"])
+        target_ref.require_owner(aad["session_id"], target_ref.thread_id)
         stage = "session-key-required"
-        session_key = key_store.get(target_ref.session_id, create=False)
+        session_key = key_store.get(
+            target_ref.session_id, target_ref.thread_id, create=False
+        )
         stage = "authentication"
         old = backend.authenticate_schema2_blob(legacy_blob, aad=legacy_aad)
         stage = "source-manifest"

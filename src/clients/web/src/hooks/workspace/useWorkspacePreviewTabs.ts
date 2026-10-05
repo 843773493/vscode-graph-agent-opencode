@@ -13,6 +13,7 @@ import type {
 } from "../../types/backend";
 import type { WorkspacePreviewTab } from "../../components/workspace/WorkspaceFilePreviewArea";
 import { buildGatewayAttachUrl } from "../../utils/attachUrls";
+import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type {
   WorkspaceFileReference,
   WorkspaceFileSelection,
@@ -399,7 +400,7 @@ export function useWorkspacePreviewTabs({
     openWorkspaceFileContent(content, reference.selection);
   }, [beginFileOpenIntent, openWorkspaceFileContent]);
 
-  const openTerminalPreview = (terminalId: string) => {
+  const openTerminalPreview = (terminalId: string, thread?: ResourceThreadRef) => {
     if (!workspaceId) {
       throw new Error("打开终端需要当前会话的 Gateway workspace_id");
     }
@@ -416,7 +417,7 @@ export function useWorkspacePreviewTabs({
         path: tabPath,
         name: `终端 ${terminalId.slice(0, 8)}`,
         terminalId,
-        attachUrl: buildGatewayAttachUrl("terminal", workspaceId, terminalId, true),
+        attachUrl: buildGatewayAttachUrl("terminal", workspaceId, terminalId, true, thread),
       },
     ]);
     onStatusChange(`已选择终端: ${terminalId}`);

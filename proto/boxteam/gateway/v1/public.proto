@@ -209,6 +209,7 @@ message GatewayHealthDTO {
   optional string active_workspace_id = 2;
   int64 process_id = 3;
   optional bool development_restart_available = 4;
+  string gateway_id = 5;
 }
 
 message GatewayInboundAccessListDTO {
@@ -447,6 +448,7 @@ message GatewayWorkspaceDTO {
   optional google.protobuf.Struct services = 15;
   optional string connection_error = 16;
   string checked_at = 17;
+  optional string backend_workspace_id = 18;
 }
 
 message GatewayWorkspaceListDTO {

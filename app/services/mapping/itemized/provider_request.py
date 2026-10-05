@@ -6,6 +6,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
+from app.domain.itemized.records import RuntimeNoticePayload
 from app.services.mapping.itemized.content_blocks import (
     direct_content_blocks,
     reasoning_content_text,
@@ -27,6 +28,8 @@ _TOOL_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
 
 def project_runtime_notice_content(content: Any) -> str | list[dict[str, str]]:
     """把 runtime source 正文规范化为两种 Provider 共用的 user 文本。"""
+    if isinstance(content, Mapping) and set(content) & {"prompt", "display_part"}:
+        content = RuntimeNoticePayload.from_dict(content).prompt
     if isinstance(content, str):
         return content
     values = content if isinstance(content, (list, tuple)) else [content]

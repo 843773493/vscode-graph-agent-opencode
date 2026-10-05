@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 
 from .attachment import AttachmentRef
 
@@ -21,8 +27,12 @@ class PendingRequestDTO(BaseModel):
     """会话 FIFO 队列中的单条用户消息。"""
 
     job_id: str
+    execution_binding: ExecutionBinding
     message_id: str
     session_id: str
+    thread_id: str
+    # 用户执行关联真实 turn_id；内部执行显式为 None。必填以区分缺失和空值。
+    turn_id: str | None
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
     delivery_policy: DeliveryPolicy
@@ -45,6 +55,19 @@ class PendingRequestDTO(BaseModel):
     # 重启恢复必须逐字沿用同一值，MUST NOT 在 job 内部补造第二个请求 ID。
     # 同样无默认值即必填：老数据缺该键即 ValidationError（诚实失败）。
     request_id: str | None
+
+    @model_validator(mode="after")
+    def validate_execution_binding(self) -> PendingRequestDTO:
+        binding = self.execution_binding
+        if isinstance(binding, InternalExecutionIntent):
+            if binding.message_id != self.message_id:
+                raise ValueError("internal Job execution intent 与消息 identity 不一致")
+        else:
+            if not isinstance(binding, UserExecutionIdentity):
+                raise TypeError("pending execution_binding 必须是已知的 typed binding")
+            if binding.job_id != self.job_id:
+                raise ValueError("pending Job ID 与 user execution binding 不一致")
+        return self
 
 
 class PendingRequestUpdateRequest(BaseModel):
@@ -69,6 +92,7 @@ class PendingRequestListDTO(BaseModel):
 class PendingRequestSummaryDTO(BaseModel):
     job_id: str
     message_id: str
+    thread_id: str
     enqueue_sequence: int = Field(ge=1)
     delivery_policy: DeliveryPolicy
     status: PendingRequestStatus

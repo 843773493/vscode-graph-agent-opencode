@@ -217,6 +217,7 @@ class GatewayRemoteConnectionSummaryDTO(BaseModel):
 
 class GatewayWorkspaceDTO(BaseModel):
     workspace_id: str
+    backend_workspace_id: str | None = None
     parent_workspace_id: str | None = None
     name: str
     root_path: str
@@ -445,6 +446,7 @@ class ActivateGatewayWorkspaceResultDTO(BaseModel):
 
 
 class GatewayHealthDTO(BaseModel):
+    gateway_id: str
     status: Literal["ok"] = "ok"
     active_workspace_id: str | None = None
     process_id: int = Field(gt=0)

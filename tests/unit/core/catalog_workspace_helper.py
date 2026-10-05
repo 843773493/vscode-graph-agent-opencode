@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
 
-from app.core.session_catalog_legacy_layout import SESSION_MANIFEST_NAME
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
@@ -31,9 +30,11 @@ from app.core.session_catalog_store import (
 )
 from app.core.session_creation import SessionCreationService
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 # 与 R15 resolver 测试同款默认 workspace_id（标准 UUID 文本）。
 DEFAULT_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
+SESSION_MANIFEST_NAME = "session.json"
 
 # 调用方六字段闭集的默认值（与 R15 make_metadata 同构；真实调用方值由
 # create_session 的 metadata 覆盖）。
@@ -126,12 +127,16 @@ class CatalogWorkspaceContext:
         ``metadata`` 覆盖六字段闭集（kind/delegation/...）。
         所有会话创建统一走原子 ``SessionCreationService`` 流。
         """
-        result = await self.creation_service.create(
+        record = await self.creation_service.prepare(
             idempotency_key=f"test-session-{uuid4().hex}",
             title=title,
+            title_source="user",
+            purpose="normal",
             parent_node_id=parent,
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
             session_metadata=make_session_metadata(**metadata),
         )
+        result = await self.creation_service.publish_prepared(record)
         return result.session_id
 
     def create_folder(self, name: str, parent: str | None = None) -> str:

@@ -12,11 +12,11 @@ CSM。释放失败经 scope 原样返回给持有它的 owner。
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.core.lifecycle import LifetimeHandle, LifetimeScope
+from app.core.lifecycle import LifetimeScope
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationSubscription,
@@ -93,14 +93,16 @@ class ContextSourceReactor:
         # OpenSpec 3.3:消费方可经 reactor 向 Reconciler 回执 committed
         # revision,registry 侧据此区分 observed/pending/committed。
         self._reconciler = reconciler
-        self._lifetime_scope = lifetime_scope
         self._reactor_id = reactor_id
         self._subscription: ResourceObservationSubscription | None = None
-        self._release_handle: LifetimeHandle | None = None
         self._source_ids_by_uri: dict[str, str] = {}
         self._observed_tokens: dict[str, tuple[str, str | None]] = {}
         self._released = False
-        self._release_registered = False
+        # 构建失败或尚未订阅也必须由同一 scope fence 掉整个 reactor。
+        lifetime_scope.register(
+            self._release_resources,
+            label=f"context-source-reactor:{self._reactor_id}",
+        )
 
     @property
     def reactor_id(self) -> str:
@@ -248,7 +250,6 @@ class ContextSourceReactor:
             self._subscription = self._sources.subscribe_observation(
                 label=f"context-source-reactor:{self._reactor_id}"
             )
-            self._register_release()
         self._source_ids_by_uri[resource_uri] = descriptor.source_id
         logger.debug(
             "ContextSourceReactor 绑定来源: reactor=%s source_id=%s uri=%s",
@@ -339,27 +340,15 @@ class ContextSourceReactor:
             f"source_id={source_id}"
         )
 
-    def _register_release(self) -> None:
-        if self._release_registered:
-            return
-        # OpenSpec 3.9：登记返回可撤销句柄。reactor 的 close() 与 scope 关闭
-        # 都会驱动 _release_resources（幂等），句柄保留给 owner 需要提前撤销时
-        # 显式调用 handle.revoke() 使用。
-        self._release_handle = self._lifetime_scope.register(
-            self._release_resources,
-            label=f"context-source-reactor:{self._reactor_id}",
-        )
-        self._release_registered = True
-
     async def _release_resources(self) -> None:
         """幂等释放：清空绑定并解除订阅；释放后事件不再到达 CSM。"""
         self._released = True
         subscription = self._subscription
-        self._subscription = None
         self._source_ids_by_uri.clear()
         self._observed_tokens.clear()
         if subscription is not None:
             self._sources.unsubscribe_observation(subscription)
+            self._subscription = None
 
     def _require_active(self) -> None:
         if self._released:
@@ -369,63 +358,8 @@ class ContextSourceReactor:
             )
 
 
-ReactorCreatedCallback = Callable[[tuple[object, ...], "ContextSourceReactor"], None]
-
-
-class ContextSourceReactionRegistry:
-    """按 agent 缓存身份持有 reactor，并在淘汰或关闭时释放订阅。"""
-
-    def __init__(self, *, lifetime_scope: LifetimeScope) -> None:
-        self._lifetime_scope = lifetime_scope
-        self._reactors: dict[tuple[object, ...], ContextSourceReactor] = {}
-
-    @property
-    def active_keys(self) -> tuple[tuple[object, ...], ...]:
-        return tuple(self._reactors)
-
-    def record(
-        self,
-        owner_key: tuple[object, ...],
-        reactor: ContextSourceReactor,
-    ) -> None:
-        if owner_key in self._reactors:
-            raise RuntimeError(
-                "ContextSourceReactionRegistry owner key 重复: "
-                f"owner_key={owner_key!r}"
-            )
-        self._reactors[owner_key] = reactor
-
-    async def release(self, owner_key: tuple[object, ...]) -> None:
-        """释放指定 owner 的 reactor；未登记时是无操作。"""
-        reactor = self._reactors.pop(owner_key, None)
-        if reactor is None:
-            return
-        await reactor.close()
-
-    async def close(self) -> None:
-        """释放全部 reactor，并关闭持有它们的 scope。
-
-        逐个释放，最后统一汇总错误：单个 reactor 失败不得阻止其它订阅释放，
-        也不得把失败转换成成功。
-        """
-        errors: list[Exception] = []
-        for owner_key in tuple(self._reactors):
-            try:
-                await self.release(owner_key)
-            except Exception as error:  # noqa: BLE001 - 释放错误必须汇总上报
-                errors.append(error)
-        try:
-            await self._lifetime_scope.close()
-        except Exception as error:  # noqa: BLE001 - scope 释放错误必须汇总上报
-            errors.append(error)
-        if errors:
-            raise ExceptionGroup("ContextSourceReactionRegistry close 失败", errors)
-
-
 __all__ = [
-    "ContextSourceReactionRegistry",
     "ContextSourceReactor",
-    "ReactorCreatedCallback",
     "ResourceObservationSourcePort",
     "ResourceSnapshotLike",
     "SourceObservation",

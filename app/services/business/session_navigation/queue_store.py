@@ -16,9 +16,9 @@
 ``queue_dependencies.py``；本模块保留队列语义方法并原路径重导出全部对外符号，
 外部调用方的导入路径不随拆分改变。
 
-catalog revision 直接采用 ``SessionCatalogStore.current_generation()``：它由
-catalog 的每个已提交写事务推进一次，天然覆盖创建/删除/子树等所有目录变更，
-因此客户端 pin 的 revision 不会漏掉本模块之外提交的目录变化。
+catalog revision 直接读取 ``catalog_metadata.navigation_revision``。SQLite
+trigger 仅在 ``nodes`` 行实际变化时、同一事务内推进它；队列、owner 与拒绝记录
+只推进备份 generation，不会使无关的目录 cursor 失效。
 
 错误分类约定（沿用 ``session_catalog_store.py``）：``TypeError`` 类型错、
 ``ValueError`` 形态非法、``KeyError`` 目标不存在、``RuntimeError`` 语义
@@ -31,10 +31,13 @@ import json
 import sqlite3
 
 from app.core.identifier import create_prefixed_id
-from app.core.session_catalog_store import SessionCatalogStore
+from app.core.session_catalog_store import (
+    CatalogMaintenanceRequiredError,
+    SessionCatalogStore,
+)
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
-    NavigationMutationIntentDTO,
+    NavigationQueueCommand,
     validate_operation_id,
 )
 from app.services.business.session_navigation.queue_dependencies import (
@@ -76,24 +79,17 @@ __all__ = [
 
 def read_catalog_revision(
     connection: sqlite3.Connection,
-    *,
-    committed: bool,
 ) -> int:
-    """读取 catalog revision（= ``catalog_metadata`` 的单调 generation）。
-
-    ``committed=False`` 用于只读快照口径（已提交事务的当前值）；``committed=True``
-    用于写事务内的「本次提交后」口径（``write_transaction`` 在提交前自增一次
-    generation，因此提交后值等于事务内读到的值 + 1）。两条口径共用本实现，避免
-    客户端 pin 的 revision 与本模块上报的 revision 出现两套算法。
-    """
+    """读取同一SQLite快照或写事务中的实际 navigation revision。"""
     row = connection.execute(
-        "SELECT generation FROM catalog_metadata WHERE singleton_id = 1"
+        "SELECT navigation_revision FROM catalog_metadata "
+        "WHERE singleton_id = 1"
     ).fetchone()
     if row is None:
-        raise RuntimeError(
-            "session catalog 缺少 catalog_metadata 单例行，无法确定 revision"
+        raise CatalogMaintenanceRequiredError(
+            "session catalog 缺少 navigation revision 单例行，无法确定目录 revision"
         )
-    return int(row[0]) + 1 if committed else int(row[0])
+    return int(row[0])
 
 
 class NavigationMutationQueueStore(
@@ -128,7 +124,7 @@ class NavigationMutationQueueStore(
         gateway_id: str,
         workspace_id: str,
         actor: str,
-        intents: list[NavigationMutationIntentDTO],
+        intents: list[NavigationQueueCommand],
         now: str,
     ) -> list[NavigationMutationRecord]:
         """在调用方写事务内原子接受一批 intent，返回按 ``client_sequence`` 的 receipt。
@@ -250,7 +246,7 @@ class NavigationMutationQueueStore(
         connection: sqlite3.Connection,
         *,
         workspace_id: str,
-        intent: NavigationMutationIntentDTO,
+        intent: NavigationQueueCommand,
         batch_positions: dict[str, int],
         position: int,
     ) -> None:

@@ -39,9 +39,14 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
+    monkeypatch.setattr(
+        "app.gateway.managed_workspaces.resolve_backend_workspace_id",
+        lambda *_: "00000000-0000-4000-8000-000000000001",
+    )
 
     target = await create_direct_managed_workspace(
         registry=registry,
@@ -67,6 +72,7 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
             root_path=str(tmp_path / "kept"),
             backend_url="http://127.0.0.1:41235",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         activate=False,
@@ -117,6 +123,7 @@ def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
             root_path=str(tmp_path / "default"),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             removable=False,
             system_default=True,
@@ -129,6 +136,7 @@ def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
             root_path=str(tmp_path / "external"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=False,
         ),
         activate=False,
@@ -149,6 +157,7 @@ def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path) -> No
             root_path=str(tmp_path / "only"),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         )
     )

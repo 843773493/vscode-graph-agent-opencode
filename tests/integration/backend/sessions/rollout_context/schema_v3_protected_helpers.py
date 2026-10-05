@@ -28,7 +28,8 @@ SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 def create_protected_schema2_artifact(saver: RolloutCheckpointSaver) -> Schema2Artifact:
     session_id = SESSION_ID
     saver.accept_turn(session_id, accepted_ingress_id="protected-ingress",
-        acceptance_idempotency_key="protected-acceptance", payload="确定性 schema2 protected fixture")
+        acceptance_idempotency_key="protected-acceptance", job_id="protected-job",
+        admission_idempotency_key="protected-admission", payload="确定性 schema2 protected fixture")
     root = saver._storage.root(session_id)
     freeze_empty_legacy_database(root / "index.sqlite", version=2)
     key = root / ".context-redaction-key"

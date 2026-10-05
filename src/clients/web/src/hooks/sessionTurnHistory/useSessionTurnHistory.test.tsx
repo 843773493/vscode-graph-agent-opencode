@@ -12,6 +12,7 @@ import {
   WORKSPACE_ID,
   appState,
   bootstrap,
+  emptyHistoryPageResponse,
   installWindow,
   originalFetch,
   restoreTurnHistoryTestGlobals,
@@ -56,6 +57,36 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { ...bootstrap("ready", 1), latest_turn: null },
           });
         }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_internal_only_history",
+            data: {
+              items: [],
+              internal_executions: [{
+                execution_id: "execution-internal-only",
+                job_id: "job-internal-only",
+                session_id: SESSION_ID,
+                thread_id: "thr_main",
+                status: "completed",
+                created_at: "2026-07-28T00:00:00Z",
+                updated_at: "2026-07-28T00:00:00Z",
+                display_parts: [{
+                  kind: "generated_session_result",
+                  text: "子会话结果",
+                  item_id: "item-internal-only",
+                  item_sequence: 1,
+                  logical_item_ordinal: 0,
+                  created_at: "2026-07-28T00:00:00Z",
+                  provenance: {},
+                }],
+                response_parts: [],
+              }],
+              projection_epoch: 1,
+            },
+          });
+        }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
       { preconnect: originalFetch.preconnect },
@@ -85,6 +116,9 @@ describe("useSessionTurnHistory partial bootstrap", () => {
     const timeline = currentState.turnTimelinesBySession.get(SCOPE_KEY);
     expect(timeline?.orderedTurnIds).toEqual([]);
     expect(timeline?.turnsById.job_latest).toBeUndefined();
+    expect(timeline?.internalExecutions.map(({ execution_id }) => execution_id)).toEqual([
+      "execution-internal-only",
+    ]);
 
     // 显式刷新也必须从空 context window 开始，不能把已经失效的旧 Turn
     // 带回下一次详情水合。
@@ -150,6 +184,9 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             request_id: "req_bootstrap_cached_history",
             data: { ...bootstrap("ready", 1), latest_turn: null },
           });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return emptyHistoryPageResponse("req_history_cached_history");
         }
         throw new Error(`缓存命中测试收到未预期请求: ${path}`);
       },
@@ -335,6 +372,9 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { ...bootstrap("partial", 1), latest_turn: null },
           });
         }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return emptyHistoryPageResponse("req_history_partial_cleanup");
+        }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
       { preconnect: originalFetch.preconnect },
@@ -416,6 +456,23 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             message: "ok",
             request_id: `req_bootstrap_abort_${bootstrapCalls}`,
             data: { ...bootstrap("ready", 1), latest_turn: null },
+          });
+        }
+        if (
+          path === `/api/v1/sessions/${SESSION_ID}/history`
+          && JSON.parse(String(init?.body ?? "{}")).direction === "tail"
+        ) {
+          return Response.json({
+            code: 0,
+            message: "ok",
+            request_id: "req_abort_initial_history",
+            data: {
+              items: [],
+              internal_executions: [],
+              before_cursor: "cursor_abort_before",
+              has_before: true,
+              projection_epoch: 1,
+            },
           });
         }
         if (

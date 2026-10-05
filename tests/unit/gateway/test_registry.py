@@ -24,6 +24,10 @@ from app.gateway.workspace_ids import (
 class _HealthResponse:
     status_code = 200
 
+    @staticmethod
+    def json() -> dict[str, str]:
+        return {"workspace_id": "00000000-0000-4000-8000-000000000001"}
+
 
 class _ConfigStatusResponse:
     status_code = 200
@@ -53,7 +57,10 @@ class _ConfigAwareHealthClient:
         return None
 
     async def get(self, url: str, *, headers: dict[str, str]):
-        assert headers == {"X-Local-Token": "local-dev-token"}
+        assert headers == {
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001",
+        }
         if url.endswith("/api/v1/config/reload-status"):
             return _ConfigStatusResponse()
         return _HealthResponse()
@@ -94,7 +101,10 @@ class _ConcurrentHealthClient:
 
     async def get(self, url: str, *, headers: dict[str, str]):
         assert url.endswith("/api/v1/health")
-        assert headers == {"X-Local-Token": "local-dev-token"}
+        assert headers == {
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001",
+        }
         type(self).active_requests += 1
         type(self).peak_requests = max(
             type(self).peak_requests,
@@ -129,6 +139,7 @@ def test_external_local_workspace_resolves_backend_without_gateway_runtime(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:30100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=False,
         )
     )
@@ -152,6 +163,7 @@ def test_route_references_track_requests_and_streams_without_persisting_runtime_
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:30100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
     )
 
@@ -193,6 +205,7 @@ def test_registry_rejects_local_runtime_replacement_before_route_drain(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=old_runtime,
@@ -211,6 +224,7 @@ def test_registry_rejects_local_runtime_replacement_before_route_drain(
                 root_path=str(tmp_path),
                 backend_url="http://127.0.0.1:42000",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
                 managed=True,
             ),
             runtime=candidate_runtime,
@@ -524,6 +538,7 @@ def test_registry_runtime_generation_protocol_is_persistent_and_reversible(
             root_path="/local-runtime",
             backend_url="http://local",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=runtime,
@@ -567,6 +582,7 @@ def test_registry_persists_owner_namespace_and_generation(tmp_path: Path) -> Non
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:30100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             owner="config",
             target_namespace="gateway-config",
             connection_id="connection-1",
@@ -595,6 +611,7 @@ def test_registry_cas_failure_restores_uncommitted_memory(tmp_path: Path) -> Non
                 root_path=str(tmp_path),
                 backend_url="http://127.0.0.1:30100",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
             )
         )
         second = GatewayWorkspaceRegistry(
@@ -623,6 +640,7 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
                 root_path=f"/tmp/workspace-{index}",
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
             ),
             runtime=WorkspaceRuntime(
                 service_urls={
@@ -657,6 +675,7 @@ def test_registry_can_detach_terminal_and_browser_for_gateway_restart(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:8100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=WorkspaceRuntime(
@@ -695,6 +714,7 @@ def test_registry_can_detach_managed_workspace_backend_for_gateway_restart(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:8100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=WorkspaceRuntime(
@@ -800,7 +820,7 @@ def test_registry_v5_migrates_managed_local_id_to_stable_root_id(
     assert registry.active_workspace_id == expected_id
     assert registry.resolve(expected_id).name == "Managed"
     persisted = json.loads(storage_path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 10
+    assert persisted["schema_version"] == 11
     assert persisted["active_workspace_id"] == expected_id
     assert registry.resolve(expected_id).desired_running is True
 
@@ -851,6 +871,7 @@ def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
             root_path="/workspace/browser-survival",
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             local_service_urls={
                 "terminal_manager": "http://127.0.0.1:41001",
@@ -879,6 +900,7 @@ def test_registry_persists_managed_runtime_intent_until_explicit_stop(
         root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     registry.upsert(
@@ -912,6 +934,7 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
                 root_path=f"/tmp/workspace-{index}",
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
             ),
             runtime=WorkspaceRuntime(
                 service_urls={
@@ -941,6 +964,11 @@ async def test_list_dtos_checks_workspace_health_concurrently(
         "workspace-0",
         "workspace-1",
         "workspace-2",
+    ]
+    assert [item.backend_workspace_id for item in result] == [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001",
     ]
     assert all(item.status == "ready" for item in result)
     assert result[0].services["workspace_api"].local_port == 8100

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_prefixed_id, create_uuid_hex
 from app.core.session_catalog_store import (
@@ -201,7 +202,9 @@ def test_invalid_thread_id_rejected_before_persistence(tmp_path: Path) -> None:
     try:
         bad_thread_id = "thr_" + create_uuid_hex().upper()
         with pytest.raises(ValueError):
-            store.initialize_main_thread(bad_thread_id, datetime.now(UTC))
+            store.initialize_main_thread(
+                bad_thread_id, datetime.now(UTC), TEST_THREAD_GRAPH_BINDING
+            )
         count = store.connection.execute(
             "SELECT COUNT(*) FROM thread_catalog"
         ).fetchone()[0]
@@ -275,9 +278,7 @@ def test_storage_locator_leap_day_accepted() -> None:
 def test_thread_relative_locator_matrix() -> None:
     validate_thread_relative_locator("threads/2026/06/01/" + thread_id_at(JUNE_1))
     with pytest.raises(ValueError):
-        validate_thread_relative_locator(
-            "sessions/2026/06/01/" + thread_id_at(JUNE_1)
-        )
+        validate_thread_relative_locator("sessions/2026/06/01/" + thread_id_at(JUNE_1))
     with pytest.raises(ValueError):
         validate_thread_relative_locator("threads/2026/13/01/" + thread_id_at(JUNE_1))
 

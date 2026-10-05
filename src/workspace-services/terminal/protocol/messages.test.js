@@ -7,17 +7,19 @@ import {
 } from "./messages.js";
 
 describe("Terminal Protobuf JSON adapter", () => {
-  test("保留 attach oneof 的旧 JSON 外形", () => {
+  test("attach oneof 传递本次一次性 grant", () => {
     const message = parseTerminalClientMessage(JSON.stringify({
       type: "attach",
       terminalId: "terminal_123",
       afterSequence: 4,
+      grantToken: "current-one-use-grant",
     }));
 
     expect(message).toEqual({
       type: "attach",
       terminalId: "terminal_123",
       afterSequence: 4,
+      grantToken: "current-one-use-grant",
     });
   });
 

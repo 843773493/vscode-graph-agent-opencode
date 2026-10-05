@@ -20,14 +20,16 @@ class ContextPlanRegistryOwnerMixin:
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
         """提交无正文草稿；重复 creation key 返回同一份实际持久 identity。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, plan.thread_id, plan)
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        self._find_runtime_context_plan(session_id, plan.plan_id, checkpoint_ns)
+        self._find_runtime_context_plan(
+            session_id, plan.thread_id, plan.plan_id, checkpoint_ns
+        )
         registered = self._storage.create_context_plan(
             plan, checkpoint_ns=checkpoint_ns
         )
         runtime_draft(registered)
-        self._cache_draft_bodies(session_id, checkpoint_ns, plan, registered)
+        self._cache_draft_bodies(session_id, plan.thread_id, checkpoint_ns, plan, registered)
         return registered
 
     def revise_context_plan(
@@ -39,11 +41,14 @@ class ContextPlanRegistryOwnerMixin:
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
         """仅以显式 revision 修订尚未 sealed 的 registry，不覆盖创建幂等 preimage。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, plan.thread_id, plan)
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         runtime_draft(
             self.get_context_plan_registration(
-                session_id, plan_id=plan.plan_id, checkpoint_ns=checkpoint_ns
+                session_id,
+                thread_id=plan.thread_id,
+                plan_id=plan.plan_id,
+                checkpoint_ns=checkpoint_ns,
             )
         )
         registered = self._storage.revise_context_plan(
@@ -52,18 +57,20 @@ class ContextPlanRegistryOwnerMixin:
             checkpoint_ns=checkpoint_ns,
         )
         runtime_draft(registered)
-        self._cache_draft_bodies(session_id, checkpoint_ns, plan, registered)
+        self._cache_draft_bodies(session_id, plan.thread_id, checkpoint_ns, plan, registered)
         return registered
 
     def get_context_plan_registration(
         self,
         session_id: str,
         *,
+        thread_id: str,
         plan_id: str,
         checkpoint_ns: str = "",
     ) -> ContextPlanRegistration:
         return self._storage.get_context_plan_registration(
             session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
@@ -71,6 +78,7 @@ class ContextPlanRegistryOwnerMixin:
     def _cache_draft_bodies(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
         supplied: ContextRequestPlan,
         registered: ContextPlanRegistration,
@@ -98,6 +106,7 @@ class ContextPlanRegistryOwnerMixin:
                 self._plan_request_content[
                     (
                         session_id,
+                        thread_id,
                         checkpoint_ns,
                         draft.plan_id,
                         item.contribution_id,
@@ -105,12 +114,15 @@ class ContextPlanRegistryOwnerMixin:
                 ] = candidate.body
 
     def _find_runtime_context_plan(
-        self, session_id: str, plan_id: str, checkpoint_ns: str
+        self, session_id: str, thread_id: str, plan_id: str, checkpoint_ns: str
     ) -> ContextPlanRegistration | None:
         """只把不存在视为可显式创建；import/corruption 必须保留原错误。"""
         try:
             registered = self.get_context_plan_registration(
-                session_id, plan_id=plan_id, checkpoint_ns=checkpoint_ns
+                session_id,
+                thread_id=thread_id,
+                plan_id=plan_id,
+                checkpoint_ns=checkpoint_ns,
             )
         except KeyError:
             return None

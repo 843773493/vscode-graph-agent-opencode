@@ -38,7 +38,7 @@ export const WORKSPACE_SECTION_RECENT_LIMIT = 10;
 const RECENT_SECTION_DAYS = 7;
 
 export function sessionCatalogTimePresentation(
-  node: SessionCatalogNode,
+  node: Pick<SessionCatalogNode, "created_at" | "updated_at">,
 ): SessionCatalogTimePresentation | null {
   const timestamp = node.updated_at ?? node.created_at;
   if (!timestamp) {

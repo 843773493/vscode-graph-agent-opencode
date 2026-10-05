@@ -56,7 +56,10 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.catalog_session_bundle import (
+    fixture_main_thread_id,
+    seed_catalog_session_bundle,
+)
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
@@ -64,6 +67,8 @@ from tests.support.node_debug_dependencies import (
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
 _CHILD_SESSION_ID = "ses_00000000400070008000000000000002"
 _CONFIGURATION_ID = "dbgcfg_11111111111111111111111111111111"
+_PARENT_MAIN_THREAD_ID = fixture_main_thread_id(_PARENT_SESSION_ID)
+_CHILD_MAIN_THREAD_ID = fixture_main_thread_id(_CHILD_SESSION_ID)
 
 
 def _create_session(
@@ -78,6 +83,7 @@ def _create_session(
         session_id,
         title=title,
         parent_node_id=parent_session_id,
+        main_thread_id=fixture_main_thread_id(session_id),
     ).directory
 
 
@@ -98,7 +104,7 @@ def session_tree(tmp_path: Path) -> tuple[object, Path, Path]:
 def _claim(
     *,
     session_id: str = _PARENT_SESSION_ID,
-    thread_id: str = "main",
+    thread_id: str = _PARENT_MAIN_THREAD_ID,
     phase: str = "launch_pending",
     pid: int | None = None,
     source: str | None = None,
@@ -125,22 +131,25 @@ def _claim(
 def test_launch_claim_round_trip_and_owner_validation(
     session_tree: tuple[object, Path, Path],
 ) -> None:
-    resolver, parent_dir, _child_dir = session_tree
+    resolver, _parent_dir, _child_dir = session_tree
     store = NodeDebugSessionStore(resolver)
 
-    assert store.read_launch_claim(_PARENT_SESSION_ID, "main") is None
+    assert store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID) is None
     claim = new_launch_claim(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         configuration_id=_CONFIGURATION_ID,
         inspector_host="127.0.0.1",
         inspector_port=9229,
     )
     store.write_launch_claim(claim)
 
-    claim_path = parent_dir / "debug" / "node" / "launch-claim.json"
+    main_thread_node = resolver.resolve_thread_node(
+        _PARENT_SESSION_ID, resolver.main_thread_id(_PARENT_SESSION_ID)
+    )
+    claim_path = main_thread_node / "debug" / "node" / "launch-claim.json"
     assert claim_path.is_file()
-    loaded = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    loaded = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert loaded is not None
     assert loaded.phase == "launch_pending"
     assert loaded.pid is None
@@ -149,7 +158,7 @@ def test_launch_claim_round_trip_and_owner_validation(
     # 每次启动必须是唯一的 process instance + 一次性 nonce，否则崩溃后无法区分代际。
     another = new_launch_claim(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         configuration_id=_CONFIGURATION_ID,
         inspector_host="127.0.0.1",
         inspector_port=9229,
@@ -159,20 +168,20 @@ def test_launch_claim_round_trip_and_owner_validation(
 
     # 篡改 owner 的 claim 读回必须 fail-loud，不得静默返回别的 thread 数据。
     tampered = json.loads(claim_path.read_text(encoding="utf-8"))
-    tampered["thread_id"] = _CHILD_SESSION_ID
+    tampered["thread_id"] = _CHILD_MAIN_THREAD_ID
     claim_path.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(RuntimeError, match="SessionThread 不匹配"):
-        store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
 
 
 def test_store_write_paths_reject_alias_owner(
     session_tree: tuple[object, Path, Path],
 ) -> None:
-    resolver, parent_dir, child_dir = session_tree
+    resolver, _parent_dir, _child_dir = session_tree
     store = NodeDebugSessionStore(resolver)
     now = datetime.now(UTC)
 
-    with pytest.raises(ValueError, match="拒绝别名写入"):
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
         store.write_manifest(
             NodeDebugSessionManifestDTO(
                 session_id=_PARENT_SESSION_ID,
@@ -180,7 +189,7 @@ def test_store_write_paths_reject_alias_owner(
                 updated_at=now,
             )
         )
-    with pytest.raises(ValueError, match="拒绝别名写入"):
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
         store.write_launch_claim(
             _claim(
                 session_id=_PARENT_SESSION_ID,
@@ -188,7 +197,7 @@ def test_store_write_paths_reject_alias_owner(
                 phase="launch_pending",
             )
         )
-    with pytest.raises(ValueError, match="拒绝别名写入"):
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
         store.write_configuration(
             _PARENT_SESSION_ID,
             NodeDebugConfigurationDTO(
@@ -199,23 +208,29 @@ def test_store_write_paths_reject_alias_owner(
             ),
             _CHILD_SESSION_ID,
         )
-    with pytest.raises(ValueError, match="拒绝别名写入"):
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
         store.delete_configuration(
             _PARENT_SESSION_ID, _CONFIGURATION_ID, _CHILD_SESSION_ID
         )
 
-    assert not (child_dir / "debug" / "node" / "manifest.json").exists()
-    assert not (parent_dir / "debug" / "node" / "manifest.json").exists()
+    child_main_node = resolver.resolve_thread_node(
+        _CHILD_SESSION_ID, resolver.main_thread_id(_CHILD_SESSION_ID)
+    )
+    parent_main_node = resolver.resolve_thread_node(
+        _PARENT_SESSION_ID, resolver.main_thread_id(_PARENT_SESSION_ID)
+    )
+    assert not (child_main_node / "debug" / "node" / "manifest.json").exists()
+    assert not (parent_main_node / "debug" / "node" / "manifest.json").exists()
 
-    # 折叠后的权威形态可以正常写入子会话节点。
+    # 子会话的 catalog main thread 使用自己的 canonical owner。
     store.write_manifest(
         NodeDebugSessionManifestDTO(
             session_id=_CHILD_SESSION_ID,
-            thread_id="main",
+            thread_id=_CHILD_MAIN_THREAD_ID,
             updated_at=now,
         )
     )
-    assert (child_dir / "debug" / "node" / "manifest.json").is_file()
+    assert (child_main_node / "debug" / "node" / "manifest.json").is_file()
 
 
 def test_process_identity_reports_real_start_marker_and_detects_pid_reuse() -> None:
@@ -597,7 +612,7 @@ def _runtime_for(
 ) -> NodeDebugRuntime:
     runtime = NodeDebugRuntime(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         configuration_id=configuration_id,
         workspace_root=workspace_root,
         script_path=workspace_root / "entry.mjs",
@@ -632,7 +647,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -644,7 +659,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
         claim_with_spawn_identity(
             new_launch_claim(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 configuration_id=configuration_id,
                 inspector_host="127.0.0.1",
                 inspector_port=9229,
@@ -666,24 +681,24 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
         process=process,
     )
     store.write_launch_claim(claim)
-    service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
+    service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime
 
     stop_task = asyncio.create_task(
         service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
     )
     await process.terminate_called.wait()
 
-    stopping = await service.get_state(_PARENT_SESSION_ID, "main")
+    stopping = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert stopping.status == "stopping"
     assert stopping.pid == 4242
     assert stopping.error_message is None
-    persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None
     assert persisted.phase == "stopping"
     # 进程尚未核实终结：owner 级运行阻断不得解除。
@@ -692,7 +707,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
             configuration_id,
             NodeDebugConfigurationUpdateRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 name="停止中改名",
                 script_path="entry.mjs",
             ),
@@ -701,7 +716,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
     process.release_wait.set()
     stopped = await stop_task
     assert stopped.status == "exited"
-    persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted_after is not None
     assert persisted_after.phase == "settled"
     # 结清后阻断解除：同一个方案可以再次改名。
@@ -709,7 +724,7 @@ async def test_stopping_state_is_queryable_and_owner_stays_blocked_until_termina
         configuration_id,
         NodeDebugConfigurationUpdateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="结清后改名",
             script_path="entry.mjs",
         ),
@@ -727,18 +742,18 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
     store.write_launch_claim(
         new_launch_claim(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             configuration_id=_CONFIGURATION_ID,
             inspector_host="127.0.0.1",
             inspector_port=9229,
         )
     )
 
-    state = await service.get_state(_PARENT_SESSION_ID, "main")
+    state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert state.status == "reconcile_required"
     assert state.error_message is not None
     assert "launch_pending" in state.error_message
-    persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None
     assert persisted.phase == "reconcile_required"
     assert persisted.pid is None
@@ -746,7 +761,7 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
     # 轮询读接口不得每次追加动作或反复重写登记。
     reconcile_actions = [
         action
-        for action in (await service.get_state(_PARENT_SESSION_ID, "main")).actions
+        for action in (await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)).actions
         if action.action == "reconcile_required"
     ]
     assert len(reconcile_actions) == 1
@@ -754,18 +769,18 @@ async def test_cold_launch_pending_claim_surfaces_reconcile_required_and_blocks_
     with pytest.raises(RuntimeError, match="拒绝启动新实例"):
         await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             path="entry.mjs",
             args=[],
             breakpoints=[],
         )
     with pytest.raises(RuntimeError, match="未结清"):
-        await service.restart(_PARENT_SESSION_ID, thread_id="main")
+        await service.restart(_PARENT_SESSION_ID, thread_id=_PARENT_MAIN_THREAD_ID)
     with pytest.raises(RuntimeError, match="未结清"):
         await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="continue",
             ),
         )
@@ -786,7 +801,7 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
         store.write_launch_claim(
             _claim(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 phase="running",
                 pid=orphan.pid,
                 source=identity.source,
@@ -794,7 +809,7 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
             )
         )
 
-        state = await service.get_state(_PARENT_SESSION_ID, "main")
+        state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert state.status == "idle"
         # SIGTERM 后子进程需要一点时间被回收，断言给有界等待而不是瞬时假设。
         for _ in range(200):
@@ -802,14 +817,14 @@ async def test_cold_recovery_terminates_only_the_verified_orphan(
                 break
             await asyncio.sleep(0.05)
         assert orphan.poll() is not None
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "settled"
         assert state.actions[-1].action == "reconcile_settled"
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 name="恢复后新建方案",
                 script_path="entry.mjs",
             )
@@ -833,7 +848,7 @@ async def test_cold_recovery_never_kills_a_process_on_a_reused_pid(
         store.write_launch_claim(
             _claim(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 phase="running",
                 pid=squatter.pid,
                 source=IDENTITY_SOURCE_LINUX_PROC,
@@ -841,10 +856,10 @@ async def test_cold_recovery_never_kills_a_process_on_a_reused_pid(
             )
         )
 
-        state = await service.get_state(_PARENT_SESSION_ID, "main")
+        state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert state.status == "idle"
         assert squatter.poll() is None
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "settled"
         assert "复用" in state.actions[-1].message
@@ -869,7 +884,7 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
             claim_marked(
                 _claim(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     phase="running",
                     pid=live.pid,
                     source=identity.source,
@@ -880,13 +895,13 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
             )
         )
 
-        blocked = await service.get_state(_PARENT_SESSION_ID, "main")
+        blocked = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert blocked.status == "reconcile_required"
         assert live.poll() is None
         with pytest.raises(RuntimeError, match="拒绝启动新实例"):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
@@ -895,9 +910,9 @@ async def test_reconcile_required_releases_only_after_termination_is_verified(
         # 人工核实并让旧实例真正终结后，下一次读取核实到进程不存在即结清。
         live.terminate()
         live.wait(timeout=10)
-        released = await service.get_state(_PARENT_SESSION_ID, "main")
+        released = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert released.status == "idle"
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "settled"
         assert "不再存在" in released.actions[-1].message
@@ -927,12 +942,12 @@ async def test_start_registers_claim_before_spawn_and_running_only_after_handsha
 
     async def fake_exec(*args: object, **kwargs: object) -> _FakeNodeProcess:
         # 交接给 OS 之前的瞬间：登记必须已经落盘，且尚无 PID/运行属性。
-        observed["at_spawn"] = original_read(_PARENT_SESSION_ID, "main")
+        observed["at_spawn"] = original_read(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         return _FakeNodeProcess(child, "ws://127.0.0.1:45678/fake-target")
 
     async def fake_connect(url: object, **kwargs: object) -> _FakeInspectorSocket:
         # 握手发生的瞬间：仍是 spawned，PID/端口还没成为权威运行属性。
-        observed["at_handshake"] = original_read(_PARENT_SESSION_ID, "main")
+        observed["at_handshake"] = original_read(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         return _FakeInspectorSocket()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
@@ -940,7 +955,7 @@ async def test_start_registers_claim_before_spawn_and_running_only_after_handsha
     try:
         state = await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -965,7 +980,7 @@ async def test_start_registers_claim_before_spawn_and_running_only_after_handsha
 
         assert state.status == "running"
         assert state.pid == child.pid
-        persisted = original_read(_PARENT_SESSION_ID, "main")
+        persisted = original_read(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "running"
         assert persisted.pid == child.pid
@@ -989,7 +1004,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
     service, store, workspace_root = _make_service(tmp_path, resolver)
     current = new_launch_claim(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         configuration_id=_CONFIGURATION_ID,
         inspector_host="127.0.0.1",
         inspector_port=9229,
@@ -1004,7 +1019,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
     service._claim_runtime.mark_claim_phase(stale, "settled", "旧代际回调")
     service._claim_runtime.mark_claim_running(stale)
 
-    persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None
     assert persisted.phase == "launch_pending"
     assert persisted.process_instance_id == current.process_instance_id
@@ -1015,7 +1030,7 @@ async def test_stale_generation_callback_cannot_write_new_instance_claim(
         process_instance_id=current.process_instance_id,
     )
     service._claim_runtime.mark_claim_phase(current_runtime, "settled", "本代际结清")
-    persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted_after is not None
     assert persisted_after.phase == "settled"
 
@@ -1033,7 +1048,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     observed: list[NodeDebugLaunchClaimDTO | None] = []
 
     async def failing_exec(*args: object, **kwargs: object) -> _FakeNodeProcess:
-        observed.append(store.read_launch_claim(_PARENT_SESSION_ID, "main"))
+        observed.append(store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID))
         raise FileNotFoundError(2, "No such file or directory", "/nonexistent/node")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_exec)
@@ -1041,7 +1056,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1052,7 +1067,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     with pytest.raises(RuntimeError, match="启动 Node Inspector 失败"):
         await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             path="entry.mjs",
             args=[],
             breakpoints=[],
@@ -1066,12 +1081,12 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     assert observed[0].process_start_marker is None
     assert observed[0].nonce
 
-    persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None
     assert persisted.phase == "settled"
     assert persisted.process_instance_id == observed[0].process_instance_id
 
-    failed = await service.get_state(_PARENT_SESSION_ID, "main")
+    failed = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert failed.status == "failed"
     assert failed.actions[-1].action == "start_failed"
 
@@ -1079,7 +1094,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     second = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="第二个方案",
             script_path="entry.mjs",
             activate=True,
@@ -1087,7 +1102,7 @@ async def test_spawn_failure_settles_prewrite_and_leaves_no_blocker(
     )
     assert second.active_configuration_name == "第二个方案"
     assert (
-        store.read_launch_claim(_PARENT_SESSION_ID, "main") is not None
+        store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID) is not None
     )  # 未被新启动覆写时仍保留上一次的结清登记
 
 
@@ -1133,7 +1148,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1149,7 +1164,7 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
             claim_with_spawn_identity(
                 new_launch_claim(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     configuration_id=configuration_id,
                     inspector_host="127.0.0.1",
                     inspector_port=9229,
@@ -1168,12 +1183,12 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         )
         runtime.process_identity_source = identity.source
         runtime.process_start_marker = identity.start_marker
-        service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
+        service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime
 
         blocked = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
@@ -1181,19 +1196,19 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         assert blocked.error_message is not None
         assert "无法核实终态" in blocked.error_message
         assert blocked.actions[-1].action == "stop_reconcile_required"
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "reconcile_required"
         # 未被核实终结前，owner 级操作仍被阻断，且绝不自动去动这个进程。
         assert child.poll() is None
         with pytest.raises(RuntimeError, match="拒绝重启"):
-            await service.restart(_PARENT_SESSION_ID, thread_id="main")
+            await service.restart(_PARENT_SESSION_ID, thread_id=_PARENT_MAIN_THREAD_ID)
         with pytest.raises(RuntimeError, match="运行中"):
             await service.update_configuration(
                 configuration_id,
                 NodeDebugConfigurationUpdateRequest(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     name="阻断期间改名",
                     script_path="entry.mjs",
                 ),
@@ -1205,12 +1220,12 @@ async def test_stop_failure_enters_reconcile_required_and_releases_after_verific
         released = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
         assert released.status == "exited"
-        persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted_after is not None
         assert persisted_after.phase == "settled"
     finally:
@@ -1239,7 +1254,7 @@ async def test_cross_source_identity_cannot_report_termination(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -1254,7 +1269,7 @@ async def test_cross_source_identity_cannot_report_termination(
             claim_with_spawn_identity(
                 new_launch_claim(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     configuration_id=configuration_id,
                     inspector_host="127.0.0.1",
                     inspector_port=9229,
@@ -1274,12 +1289,12 @@ async def test_cross_source_identity_cannot_report_termination(
         # 登记时宿主用的是另一套来源（例如当时 psutil 可用，现在只剩 /proc）。
         runtime.process_identity_source = IDENTITY_SOURCE_PSUTIL
         runtime.process_start_marker = real_identity.start_marker
-        service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
+        service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime
 
         stopped = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
@@ -1288,7 +1303,7 @@ async def test_cross_source_identity_cannot_report_termination(
         assert stopped.error_message is not None
         assert "不可比对" in stopped.error_message
         assert child.poll() is None
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "reconcile_required"
     finally:
@@ -1446,14 +1461,14 @@ async def test_concurrent_starts_are_serialized_per_owner(
         await asyncio.gather(
             service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             ),
             service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
@@ -1473,7 +1488,7 @@ async def test_concurrent_starts_are_serialized_per_owner(
         # 没有代际错配：先启动的实例被后一次启动核实并停止。
         assert probe_process_identity(children[0].pid) is None
         assert probe_process_identity(children[1].pid) is not None
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.process_instance_id == instances[1]
         assert persisted.pid == children[1].pid
@@ -1516,14 +1531,16 @@ async def test_handshake_fails_fast_with_inspector_diagnostics_on_port_conflict(
         with pytest.raises(RuntimeError, match='address already in use'):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             )
         # 诊断行一到就必须失败，绝不空等 30 秒超时。
         assert time.monotonic() - started < 10.0
-        failed = await service.get_state(_PARENT_SESSION_ID, 'main')
+        failed = await service.get_state(
+            _PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID
+        )
         assert failed.status == "failed"
         assert failed.actions[-1].action == "start_failed"
         assert "address already in use" in (failed.error_message or "")
@@ -1557,19 +1574,23 @@ async def test_handshake_reports_exit_code_and_stderr_when_process_dies(
         with pytest.raises(RuntimeError, match='退出码: 7'):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
             )
-        failed = await service.get_state(_PARENT_SESSION_ID, 'main')
+        failed = await service.get_state(
+            _PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID
+        )
         assert failed.status == "failed"
         assert failed.actions[-1].action == "start_failed"
         assert failed.error_message is not None
         assert "退出码: 7" in failed.error_message
         assert "Error: boom" in failed.error_message
         # 失败终态的登记必须当场结清，不得为下次启动留下永久阻断。
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, 'main')
+        persisted = store.read_launch_claim(
+            _PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID
+        )
         assert persisted is not None
         assert persisted.phase == "settled"
     finally:
@@ -1600,7 +1621,7 @@ async def test_handshake_timeout_message_is_never_empty(
         with pytest.raises(RuntimeError, match='等待 Node Inspector 就绪超时'):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],

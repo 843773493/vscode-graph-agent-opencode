@@ -53,11 +53,13 @@ def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str
 
 
 def seed_dispatch_overlay(saver: RolloutCheckpointSaver, session_id: str) -> None:
+    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
     base = [{"type": "text", "text": "HTTP overlay base"}]
     delta = [{"type": "text", "text": "HTTP overlay delta"}]
     saver.register_source_overlay(
         SimpleNamespace(
             session_id=session_id,
+            thread_id=thread_id,
             checkpoint_ns="",
             overlay_id="http-overlay",
             source_kind="workspace_policy",
@@ -73,6 +75,8 @@ def seed_dispatch_overlay(saver: RolloutCheckpointSaver, session_id: str) -> Non
             status="active",
             idempotency_key="http-overlay-A-B",
         ),
+        session_id=session_id,
+        thread_id=thread_id,
         base_content=base,
         delta_content=delta,
     )

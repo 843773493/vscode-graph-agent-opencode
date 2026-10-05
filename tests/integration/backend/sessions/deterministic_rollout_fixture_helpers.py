@@ -78,6 +78,9 @@ def seed_deterministic_v2_rollout(
                 checkpoint["channel_versions"],
             )
             saver.finalize_turn(
-                session_id=session_id, turn_id=turn_id, final_message_id=final_id
+                session_id=session_id,
+                thread_id=saver._storage.main_thread_id(session_id),
+                turn_id=turn_id,
+                final_message_id=final_id,
             )
     return session_id, tool_bodies

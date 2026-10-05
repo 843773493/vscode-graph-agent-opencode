@@ -667,10 +667,15 @@ class SessionGeneratorCoordinator:
                     "X-Request-ID": request_id,
                 },
             )
+        if target.backend_workspace_id is None:
+            raise RuntimeError(
+                f"工作区后端缺少 backend UUID: {target.workspace_id}"
+            )
         return (
             f"{target.backend_url.rstrip('/')}{path}",
             {
                 "X-Local-Token": LOCAL_TOKEN,
+                "X-BoxTeam-Workspace-Id": target.backend_workspace_id,
                 "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
                 "X-Request-ID": request_id,
             },

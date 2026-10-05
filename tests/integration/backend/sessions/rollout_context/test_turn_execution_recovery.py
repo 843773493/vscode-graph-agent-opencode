@@ -41,8 +41,11 @@ SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:
     return saver.accept_turn(
         session_id,
+        thread_id=saver._storage.main_thread_id(session_id),
         accepted_ingress_id="ingress-user-1",
         acceptance_idempotency_key="acceptance-user-1",
+        job_id="job-user-1",
+        admission_idempotency_key="admission-user-1",
         payload="请检查当前状态",
         payload_kind=PayloadKind.TEXT,
         turn_id="turn-user-1",
@@ -52,8 +55,10 @@ def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]
 
 
 def _rollout_db(sessions_dir: Path, session_id: str) -> Path:
+    resolver = get_session_path_resolver(sessions_dir)
+    thread_id = resolver.main_thread_id(session_id)
     return (
-        get_session_path_resolver(sessions_dir).resolve_session_node(session_id)
+        resolver.resolve_thread_node(session_id, thread_id)
         / "rollout"
         / "index.sqlite"
     )
@@ -193,10 +198,11 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     )
 
 
-def _source_overlay_for_test(**overrides: object) -> SimpleNamespace:
+def _source_overlay_for_test(*, thread_id: str, **overrides: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "overlay_id": "overlay-contract",
         "session_id": SESSION_ID,
+        "thread_id": thread_id,
         "checkpoint_ns": "",
         "source_kind": "workspace_policy",
         "source_revision": "policy-1",
@@ -631,6 +637,7 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver._storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         accepted_offset = connection.execute(
@@ -639,13 +646,21 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
 
     lost = saver.mark_execution_lost(
         SESSION_ID,
+        thread_id=thread_id,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         reason="provider response lost before durable result commit",
     )
-    resumed = saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
+    resumed = saver.resume_turn(
+        SESSION_ID,
+        thread_id=thread_id,
+        job_id="job-user-resume-1",
+        turn_id="turn-user-1",
+    )
     assert lost["status"] == "unknown"
     assert lost["outcome"] == "execution_lost"
+    assert resumed["job_id"] == "job-user-resume-1"
+    assert resumed["job_id"] != resumed["turn_id"]
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         metadata_only = connection.execute(
             "SELECT commit_mode, jsonl_offset_before, jsonl_offset_after, "
@@ -668,6 +683,7 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
     assert resumed["attempt"] == 2
     saver.converge_execution(
         SESSION_ID,
+        thread_id=thread_id,
         turn_id="turn-user-1",
         execution_id=str(resumed["execution_id"]),
         outcome="completed_empty",
@@ -683,15 +699,20 @@ def test_execution_lost_resume_creates_execution_without_a_new_user_root(
             "FROM turn_records"
         ).fetchall()
         executions = connection.execute(
-            "SELECT execution_id, attempt, outcome FROM executions ORDER BY attempt"
+            "SELECT execution_id, attempt, outcome, job_id FROM executions ORDER BY attempt"
         ).fetchall()
     assert root_count == 1
     assert turns == [
         ("turn-user-1", "completed_empty", "execution-user-1", resumed["execution_id"])
     ]
     assert executions == [
-        ("execution-user-1", 1, "execution_lost"),
-        (resumed["execution_id"], 2, "completed_empty"),
+        ("execution-user-1", 1, "execution_lost", "job-user-1"),
+        (
+            resumed["execution_id"],
+            2,
+            "completed_empty",
+            "job-user-resume-1",
+        ),
     ]
 
 
@@ -702,9 +723,11 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver._storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
         SESSION_ID,
+        thread_id=thread_id,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         outcome="interrupted",
@@ -712,9 +735,16 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    resumed = restarted.resume_turn(SESSION_ID, turn_id="turn-user-1")
+    resumed = restarted.resume_turn(
+        SESSION_ID,
+        thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        job_id="job-user-resume-2",
+        turn_id="turn-user-1",
+    )
 
     assert resumed["execution_id"] != accepted["initial_execution_id"]
+    assert resumed["job_id"] == "job-user-resume-2"
+    assert resumed["job_id"] != resumed["turn_id"]
     assert resumed["attempt"] == 2
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         root_count = connection.execute(
@@ -725,7 +755,7 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
             "FROM turn_records"
         ).fetchone()
         executions = connection.execute(
-            "SELECT execution_id, attempt, outcome FROM executions ORDER BY attempt"
+            "SELECT execution_id, attempt, outcome, job_id FROM executions ORDER BY attempt"
         ).fetchall()
     assert root_count == 1
     assert turn_row == (
@@ -735,12 +765,13 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
         resumed["execution_id"],
     )
     assert executions == [
-        ("execution-user-1", 1, "interrupted"),
-        (resumed["execution_id"], 2, "unknown"),
+        ("execution-user-1", 1, "interrupted", "job-user-1"),
+        (resumed["execution_id"], 2, "unknown", "job-user-resume-2"),
     ]
 
     restarted.converge_execution(
         SESSION_ID,
+        thread_id=restarted._storage.main_thread_id(SESSION_ID),
         turn_id="turn-user-1",
         execution_id=str(resumed["execution_id"]),
         outcome="completed_empty",
@@ -931,14 +962,26 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     }
 
 
-def test_checkpoint_first_root_creates_one_based_turn_ordinal(
+def test_checkpoint_root_projection_preserves_acceptance_turn_ordinal(
     tmp_path: Path,
     session_bundle_factory,
 ) -> None:
-    """checkpoint 先到时也必须建立合法的 v2 Turn root/ordinal。"""
+    """LangGraph root projection 复用 acceptance-time 的真实 Turn lineage。"""
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = saver.accept_turn(
+        SESSION_ID,
+        accepted_ingress_id="ingress-checkpoint-root",
+        acceptance_idempotency_key="acceptance-checkpoint-root",
+        job_id="job-checkpoint-root",
+        admission_idempotency_key="admission-checkpoint-root",
+        payload="checkpoint 先到的用户输入",
+        payload_kind=PayloadKind.TEXT,
+        turn_id="turn-checkpoint-first",
+        root_item_id="item-checkpoint-first-user",
+        initial_execution_id="execution-checkpoint-root",
+    )
     checkpoint = empty_checkpoint()
     checkpoint["id"] = "checkpoint-first-root"
     checkpoint["channel_values"] = {
@@ -981,6 +1024,7 @@ def test_checkpoint_first_root_creates_one_based_turn_ordinal(
         "turn_root",
         "turn-checkpoint-first",
     )
+    assert accepted["initial_execution_id"] == "execution-checkpoint-root"
 
 
 def test_committed_overlay_selection_is_epoch_stable_after_restart(
@@ -992,11 +1036,13 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
+    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
 
     def overlay(epoch: int) -> SimpleNamespace:
         return SimpleNamespace(
             overlay_id=f"overlay-{epoch}",
             session_id=SESSION_ID,
+            thread_id=thread_id,
             checkpoint_ns="",
             source_kind="workspace_policy",
             source_revision=f"policy-{epoch}",
@@ -1026,6 +1072,8 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
         current = overlay(epoch)
         saver.register_source_overlay(
             current,
+            session_id=SESSION_ID,
+            thread_id=thread_id,
             base_content={"policy": f"base-{epoch}"},
             delta_content={"policy": f"delta-{epoch}"},
         )
@@ -1040,6 +1088,7 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
     def ref_ids(checkpoint_saver: RolloutCheckpointSaver) -> list[str]:
         plan = checkpoint_saver.compose_committed_context_plan(
             SESSION_ID,
+            thread_id=thread_id,
             plan_id="plan-overlay-order",
         )
         return [ref.ref_id for ref in plan.refs]
@@ -1078,11 +1127,14 @@ def test_source_overlay_registration_rejects_coerced_manifest_values(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
-    overlay = _source_overlay_for_test(**{field_name: value})
+    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    overlay = _source_overlay_for_test(thread_id=thread_id, **{field_name: value})
 
     with pytest.raises((TypeError, ValueError)):
         saver.register_source_overlay(
             overlay,
+            session_id=SESSION_ID,
+            thread_id=thread_id,
             base_content={"policy": "must not be accepted"},
         )
 
@@ -1095,7 +1147,9 @@ def test_source_overlay_registration_rejects_ref_identity_collision(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
+    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
     overlay = _source_overlay_for_test(
+        thread_id=thread_id,
         delta_ref="policy-base",
         delta_source_revision="policy-delta-rev-1",
         delta_from_revision="policy-base-rev-1",
@@ -1106,9 +1160,57 @@ def test_source_overlay_registration_rejects_ref_identity_collision(
     with pytest.raises(ValueError, match="不能复用同一 ref"):
         saver.register_source_overlay(
             overlay,
+            session_id=SESSION_ID,
+            thread_id=thread_id,
             base_content={"policy": "base"},
             delta_content={"policy": "delta"},
         )
+
+
+def test_source_overlay_writer_persists_the_complete_session_thread_owner(
+    tmp_path: Path,
+    session_bundle_factory,
+) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    _accept(saver, SESSION_ID)
+    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
+    overlay = _source_overlay_for_test(thread_id=thread_id, idempotency_key=None)
+
+    saver.register_source_overlay(
+        overlay,
+        session_id=SESSION_ID,
+        thread_id=thread_id,
+        base_content={"policy": "persisted"},
+    )
+
+    index_path = saver._storage.index_path(SESSION_ID, thread_id=thread_id)
+    with sqlite3.connect(index_path) as connection:
+        owner = connection.execute(
+            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+        ).fetchone()
+        registered = connection.execute(
+            "SELECT session_id, thread_id, source_overlay_epoch, idempotency_key "
+            "FROM source_overlays WHERE session_id = ? AND thread_id = ? "
+            "AND checkpoint_ns = ?",
+            (SESSION_ID, thread_id, ""),
+        ).fetchone()
+        epoch_index = tuple(
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info(source_overlays_epoch_index)"
+            ).fetchall()
+        )
+
+    assert owner == (SESSION_ID, thread_id)
+    assert registered is not None
+    assert registered[:3] == (SESSION_ID, thread_id, 0)
+    assert isinstance(registered[3], str) and registered[3].startswith("overlay:")
+    assert epoch_index == ("session_id", "thread_id", "source_overlay_epoch")
+    assert saver._request_only_content[(SESSION_ID, thread_id, "", "policy-base")] == {
+        "policy": "persisted"
+    }
 
 
 @pytest.mark.parametrize(
@@ -1125,8 +1227,11 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     _accept(saver, SESSION_ID)
+    thread_id = saver._storage._path_resolver.main_thread_id(SESSION_ID)
     saver.register_source_overlay(
-        _source_overlay_for_test(),
+        _source_overlay_for_test(thread_id=thread_id),
+        session_id=SESSION_ID,
+        thread_id=thread_id,
         base_content={"policy": "persisted"},
     )
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
@@ -1137,7 +1242,9 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="source overlay"):
-        RolloutCheckpointSaver(sessions_dir).list_source_overlays(SESSION_ID)
+        RolloutCheckpointSaver(sessions_dir).list_source_overlays(
+            SESSION_ID, thread_id
+        )
 
 
 def test_item_bearing_terminal_convergence_materializes_output_and_restart(
@@ -1334,11 +1441,13 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver._storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     execution_id = str(accepted["initial_execution_id"])
 
     saver.converge_execution(
         SESSION_ID,
+        thread_id=thread_id,
         turn_id="turn-user-1",
         execution_id=execution_id,
         outcome="cancelled",
@@ -1346,12 +1455,20 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
     )
 
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
+        saver.resume_turn(
+            SESSION_ID,
+            thread_id=thread_id,
+            job_id="job-user-resume-rejected-1",
+            turn_id="turn-user-1",
+        )
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay(SESSION_ID, turn_id="turn-user-1")
+        saver.dispatch_replay(
+            SESSION_ID, thread_id=thread_id, turn_id="turn-user-1"
+        )
 
     replayed = saver.replay_as_new_turn(
         SESSION_ID,
+        thread_id=thread_id,
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-1",
     )
@@ -1410,9 +1527,11 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver._storage.main_thread_id(SESSION_ID)
     accepted = _accept(saver, SESSION_ID)
     saver.converge_execution(
         SESSION_ID,
+        thread_id=thread_id,
         turn_id="turn-user-1",
         execution_id=str(accepted["initial_execution_id"]),
         outcome=outcome,
@@ -1430,9 +1549,16 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
         ).fetchone()[0]
 
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.resume_turn(SESSION_ID, turn_id="turn-user-1")
+        saver.resume_turn(
+            SESSION_ID,
+            thread_id=thread_id,
+            job_id="job-user-resume-rejected-2",
+            turn_id="turn-user-1",
+        )
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay(SESSION_ID, turn_id="turn-user-1")
+        saver.dispatch_replay(
+            SESSION_ID, thread_id=thread_id, turn_id="turn-user-1"
+        )
 
     with sqlite3.connect(db_path) as connection:
         after_turn = connection.execute(
@@ -1454,16 +1580,19 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    thread_id = saver._storage.main_thread_id(SESSION_ID)
     _accept(saver, SESSION_ID)
 
     first = saver.replay_as_new_turn(
         SESSION_ID,
+        thread_id=thread_id,
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-restart-1",
     )
     restarted = RolloutCheckpointSaver(sessions_dir)
     second = restarted.replay_as_new_turn(
         SESSION_ID,
+        thread_id=restarted._storage.main_thread_id(SESSION_ID),
         source_turn_id="turn-user-1",
         acceptance_idempotency_key="replay-acceptance-restart-1",
     )

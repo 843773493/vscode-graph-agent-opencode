@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from app.services.orchestration.event_stream.contracts import AgentEventSource
+from app.services.orchestration.thread_residency import ThreadRuntimeLease
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
     from app.abstractions.session_context import SessionLookupProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
+    from app.domain.itemized.execution_admission import ExecutionAdmission
     from app.services.infrastructure.config_service import ConfigService
     from app.services.infrastructure.external_resource_leases import (
         ExternalResourceLeaseLedger,
@@ -24,18 +26,18 @@ if TYPE_CHECKING:
 
 
 class StepAgentFactory(Protocol):
-    """按已冻结的本次请求选项构建 Agent，不让 retry 接触构建依赖。"""
+    """用真实准入取得 thread generation 的使用权。"""
 
-    def __call__(
+    async def __call__(
         self,
         *,
-        session_id: str,
+        admission: ExecutionAdmission,
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
         preferred_provider_id: str | None,
         include_team_tools: bool,
-    ) -> AgentEventSource: ...
+    ) -> ThreadRuntimeLease[AgentEventSource]: ...
 
 
 @dataclass(frozen=True, slots=True)

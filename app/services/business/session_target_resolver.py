@@ -9,15 +9,20 @@ from app.abstractions.session_target import (
     SessionTargetResolverProtocol,
 )
 from app.core.exceptions import NotFoundError
+from app.core.trace_middleware import require_current_gateway_id
+from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import SessionContextSearchRequest
 from app.services.business.session_context_resource import (
-    parse_session_context_resource,
+    gateway_session_inventory_identity,
+    gateway_session_inventory_vrn,
+    parse_session_context_ref,
+    session_resource_identity,
 )
 from app.services.business.session_service import SessionService
 
 
 class SessionTargetResolver(SessionTargetResolverProtocol):
-    """解析模型给出的短会话 ID，并在本地不存在时查询 Gateway。"""
+    """解析短 session ID，并把 backend workspace identity 映射为 Gateway 路由 ID。"""
 
     def __init__(
         self,
@@ -32,78 +37,197 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
         self,
         session_id: str,
         *,
-        workspace_id: str | None = None,
+        gateway_workspace_id: str | None = None,
+        backend_workspace_id: str | None = None,
     ) -> SessionTarget:
         normalized_session_id = session_id.strip()
         if not normalized_session_id:
             raise SessionTargetResolutionError("session_id 不能为空")
-        normalized_workspace_id = (
-            workspace_id.strip() if workspace_id is not None else None
+        normalized_gateway_workspace_id = (
+            gateway_workspace_id.strip()
+            if gateway_workspace_id is not None
+            else None
         )
-        if normalized_workspace_id == "":
-            raise SessionTargetResolutionError("workspace_id 不能为空")
-        if normalized_workspace_id is not None:
+        if normalized_gateway_workspace_id == "":
+            raise SessionTargetResolutionError("gateway_workspace_id 不能为空")
+        if normalized_gateway_workspace_id is not None:
             return SessionTarget(
                 session_id=normalized_session_id,
-                workspace_id=normalized_workspace_id,
+                workspace_id=normalized_gateway_workspace_id,
             )
+
+        normalized_backend_workspace_id = (
+            backend_workspace_id.strip()
+            if backend_workspace_id is not None
+            else None
+        )
+        if normalized_backend_workspace_id == "":
+            raise SessionTargetResolutionError("backend_workspace_id 不能为空")
+
+        if normalized_backend_workspace_id is None:
+            try:
+                await self._session_service.get(normalized_session_id)
+            except NotFoundError:
+                return await self._resolve_from_gateway(normalized_session_id)
+            return SessionTarget(session_id=normalized_session_id)
 
         try:
-            await self._session_service.get(normalized_session_id)
+            local_session = await self._session_service.get(normalized_session_id)
         except NotFoundError:
-            return await self._resolve_from_gateway(normalized_session_id)
-        return SessionTarget(session_id=normalized_session_id)
+            local_session = None
+        if (
+            local_session is not None
+            and local_session.workspace_id == normalized_backend_workspace_id
+        ):
+            return SessionTarget(session_id=normalized_session_id)
+
+        gateway_workspace_id = await self.resolve_backend_workspace(
+            normalized_backend_workspace_id
+        )
+        return SessionTarget(
+            session_id=normalized_session_id,
+            workspace_id=gateway_workspace_id,
+        )
+
+    async def resolve_backend_workspace(
+        self,
+        backend_workspace_id: str,
+    ) -> str:
+        normalized_backend_workspace_id = backend_workspace_id.strip()
+        if not normalized_backend_workspace_id:
+            raise SessionTargetResolutionError("backend_workspace_id 不能为空")
+        inventory = await self._workspace_session_context_client.list_gateway_workspaces()
+        return _gateway_workspace_id_for_backend(
+            inventory,
+            normalized_backend_workspace_id,
+        )
 
     async def _resolve_from_gateway(self, session_id: str) -> SessionTarget:
-        result = await self._workspace_session_context_client.search_gateway_context(
-            SessionContextSearchRequest(
-                resource="boxteam://gateway",
-                query=session_id,
-                sources=["session_catalog"],
-                max_results=200,
-                max_chars=65_536,
-            )
+        gateway_id = require_current_gateway_id("SessionTargetResolver")
+        request = SessionContextSearchRequest(
+            resource_identity=gateway_session_inventory_identity(gateway_id),
+            vrn=gateway_session_inventory_vrn(gateway_id),
+            scope="gateway",
+            query=session_id,
+            sources=["session_catalog"],
+            max_results=200,
+            max_chars=65_536,
         )
+        result = await self._workspace_session_context_client.search_gateway_context(
+            request
+        )
+        if (
+            result.resource_identity != request.resource_identity
+            or result.vrn != request.vrn
+            or result.scope != request.scope
+        ):
+            raise RuntimeError(
+                "Gateway session search 返回的查询身份与请求不一致: "
+                f"resource_identity={result.resource_identity!r}, vrn={result.vrn!r}, "
+                f"scope={result.scope!r}"
+            )
+
         candidates: set[tuple[str, str]] = set()
         for match in result.matches:
             try:
-                resource = parse_session_context_resource(match.locator)
+                resource = parse_session_context_ref(
+                    resource_identity=match.resource_identity,
+                    vrn=match.vrn,
+                    scope=match.scope,
+                )
             except ValueError as error:
                 raise RuntimeError(
-                    "Gateway 返回了无法解析的 session locator: "
-                    f"locator={match.locator!r}"
+                    "Gateway 返回了无法解析的结构化 session match: "
+                    f"resource_identity={match.resource_identity!r}, "
+                    f"vrn={match.vrn!r}, scope={match.scope!r}"
                 ) from error
             if (
-                resource.kind == "session"
-                and resource.workspace_id is not None
-                and resource.session_id == session_id
+                resource.scope != "workspace"
+                or resource.kind != "session"
+                or resource.session_id != session_id
             ):
-                candidates.add((resource.workspace_id, resource.session_id))
+                continue
+            expected_identity = session_resource_identity(
+                resource.scope_id,
+                resource.session_id,
+            )
+            if resource.resource_identity != expected_identity:
+                raise RuntimeError(
+                    "Gateway session match identity 与 backend workspace 和 session ID 不一致: "
+                    f"resource_identity={resource.resource_identity!r}, "
+                    f"backend_workspace_id={resource.scope_id!r}, "
+                    f"session_id={resource.session_id!r}"
+                )
+            candidates.add((resource.scope_id, resource.session_id))
+
+        if (
+            result.truncated
+            or result.partial_errors
+            or result.omitted_partial_error_count
+        ):
+            partial_error_text = "; ".join(
+                f"{item.resource_identity}: {item.error}"
+                for item in result.partial_errors
+            )
+            raise SessionTargetResolutionError(
+            f"Gateway session 搜索不完整，不能自动选择可见候选: "
+                f"session_id={session_id}, truncated={result.truncated}, "
+                "omitted_partial_error_count="
+                f"{result.omitted_partial_error_count}"
+                + (f"；部分错误：{partial_error_text}" if partial_error_text else "")
+            )
 
         if len(candidates) == 1:
-            resolved_workspace_id, resolved_session_id = candidates.pop()
+            backend_workspace_id, resolved_session_id = candidates.pop()
+            gateway_workspace_id = await self.resolve_backend_workspace(
+                backend_workspace_id
+            )
             return SessionTarget(
                 session_id=resolved_session_id,
-                workspace_id=resolved_workspace_id,
+                workspace_id=gateway_workspace_id,
             )
         if len(candidates) > 1:
             candidate_text = ", ".join(
-                f"workspace_id={workspace}, session_id={candidate_session}"
-                for workspace, candidate_session in sorted(candidates)
+                f"backend_workspace_id={backend_workspace}, session_id={candidate_session}"
+                for backend_workspace, candidate_session in sorted(candidates)
             )
             raise SessionTargetResolutionError(
-                f"session_id={session_id} 在多个工作区中冲突，请补传 workspace_id；"
+                f"session_id={session_id} 在多个工作区中冲突，请补传 gateway_workspace_id；"
                 f"候选：{candidate_text}"
             )
 
         error_text = "; ".join(
-            f"{item.resource}: {item.error}" for item in result.partial_errors
+            f"{item.resource_identity}: {item.error}" for item in result.partial_errors
         )
         detail = f"；Gateway 部分错误：{error_text}" if error_text else ""
         raise SessionTargetResolutionError(
-            f"未找到 session_id={session_id}；请检查 session_id 或补传 workspace_id"
+            f"未找到 session_id={session_id}；请检查 session_id 或补传 gateway_workspace_id"
             f"{detail}"
         )
+
+
+def _gateway_workspace_id_for_backend(
+    inventory: GatewayWorkspaceListDTO,
+    backend_workspace_id: str,
+) -> str:
+    matches = [
+        workspace
+        for workspace in inventory.items
+        if workspace.backend_workspace_id == backend_workspace_id
+    ]
+    gateway_workspace_ids = {workspace.workspace_id for workspace in matches}
+    if not gateway_workspace_ids:
+        raise SessionTargetResolutionError(
+            "Gateway inventory 中没有对应 backend_workspace_id: "
+            f"backend_workspace_id={backend_workspace_id}"
+        )
+    if len(gateway_workspace_ids) > 1:
+        raise SessionTargetResolutionError(
+            "多个 Gateway workspace 指向相同 backend_workspace_id: "
+            f"backend_workspace_id={backend_workspace_id}, "
+            f"workspace_ids={sorted(gateway_workspace_ids)}"
+        )
+    return next(iter(gateway_workspace_ids))
 
 
 __all__ = ["SessionTargetResolver"]

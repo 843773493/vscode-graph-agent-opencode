@@ -42,10 +42,12 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 @pytest.fixture
 def draft_factory(protected_source):
     saver = protected_source[0]
+    thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
 
     def create(plan_id, *, tool_name="read_file"):
         tool = ToolSetRef.from_tool_snapshot(
             session_id=SOURCE_SESSION_ID,
+            thread_id=thread_id,
             plan_id=plan_id,
             snapshot_id="same-local-tools",
             source_revision=f"{tool_name}-revision",
@@ -61,6 +63,7 @@ def draft_factory(protected_source):
         )
         plan = ContextRequestPlan(
             session_id=SOURCE_SESSION_ID,
+            thread_id=thread_id,
             plan_id=plan_id,
             refs=(),
             tool_set_refs=(tool,),
@@ -84,6 +87,7 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
     protected_source, draft_factory, protected_key
 ):
     saver, sealed, _record, _body = protected_source
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     initial = draft_factory("real-draft")
     current = replace(initial, tool_set_refs=(), history_view_revision=2)
     saver.revise_context_plan(SOURCE_SESSION_ID, current, expected_revision=0)
@@ -96,8 +100,12 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
     with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         target_draft_id = _target_plan_id(connection, "real-draft")
         target_sealed_id = _target_plan_id(connection, sealed.plan_id)
-        draft = read_registration(connection, TARGET_SESSION_ID, target_draft_id)
-        imported = read_registration(connection, TARGET_SESSION_ID, target_sealed_id)
+        draft = read_registration(
+            connection, TARGET_SESSION_ID, target_thread_id, target_draft_id
+        )
+        imported = read_registration(
+            connection, TARGET_SESSION_ID, target_thread_id, target_sealed_id
+        )
         assert draft.plan_state == "unsealed" and draft.registration_origin == "runtime"
         assert draft.revision == 1 and draft.assembly_id is None
         assert draft.seal_hash is None and draft.seal_input_hash is None
@@ -136,11 +144,17 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
         saver._storage.sessions_dir, protected_detail_key=protected_key
     ) as restarted:
         assert (
-            restarted.get_context_plan_registration(TARGET_SESSION_ID, plan_id=target_draft_id)
+            restarted.get_context_plan_registration(
+                TARGET_SESSION_ID,
+                thread_id=target_thread_id,
+                plan_id=target_draft_id,
+            )
             == draft
         )
         snapshot = restarted.get_context_assembly(
-            TARGET_SESSION_ID, assembly_id=imported.assembly_id
+            TARGET_SESSION_ID,
+            thread_id=target_thread_id,
+            assembly_id=imported.assembly_id,
         )
         assert snapshot.plan_id == target_sealed_id
 
@@ -150,6 +164,7 @@ async def test_full_copy_same_tool_local_id_stays_scoped_to_each_draft(
     protected_source, draft_factory
 ):
     saver = protected_source[0]
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     first = draft_factory("draft-a", tool_name="read_file")
     second = draft_factory("draft-b", tool_name="write_file")
     await saver.afork(
@@ -158,7 +173,10 @@ async def test_full_copy_same_tool_local_id_stays_scoped_to_each_draft(
     with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         targets = [
             read_registration(
-                connection, TARGET_SESSION_ID, _target_plan_id(connection, source.plan_id)
+                connection,
+                TARGET_SESSION_ID,
+                target_thread_id,
+                _target_plan_id(connection, source.plan_id),
             ).draft
             for source in (first, second)
         ]
@@ -228,6 +246,7 @@ async def test_fork_source_fingerprint_is_verified_on_restore(
     protected_source, mutation
 ):
     saver, sealed, _record, _body = protected_source
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
@@ -249,7 +268,9 @@ async def test_fork_source_fingerprint_is_verified_on_restore(
                 "UPDATE fork_identity_mappings SET lineage_json='{}' WHERE entity_type='assembly'"
             )
     with pytest.raises(ValueError, match="source-mismatch"):
-        saver.get_context_plan_registration(TARGET_SESSION_ID, plan_id=target_plan)
+        saver.get_context_plan_registration(
+            TARGET_SESSION_ID, thread_id=target_thread_id, plan_id=target_plan
+        )
 
 
 @pytest.mark.asyncio
@@ -257,13 +278,15 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
     protected_source,
 ):
     saver = protected_source[0]
+    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
     plan = ContextRequestPlan(
         session_id=SOURCE_SESSION_ID,
+        thread_id=source_thread_id,
         plan_id="omitted-draft",
         refs=(
             ContextRef.request_only_ref(
                 "unavailable-ref",
-                session_id=SOURCE_SESSION_ID, thread_id="thread-1",
+                session_id=SOURCE_SESSION_ID, thread_id=source_thread_id,
                 plan_id="omitted-draft",
                 source_revision="unavailable-revision",
                 availability="unavailable",
@@ -275,9 +298,12 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         target_id = _target_plan_id(connection, plan.plan_id)
-        copied = read_registration(connection, TARGET_SESSION_ID, target_id).draft
+        copied = read_registration(
+            connection, TARGET_SESSION_ID, target_thread_id, target_id
+        ).draft
         assert copied.contributions == () and copied.selection == ()
         ref = copied.refs[0]
         assert (ref.session_id, ref.plan_id) == (TARGET_SESSION_ID, target_id)
@@ -294,6 +320,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
     protected_source,
 ):
     saver = protected_source[0]
+    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
     for plan_id, text in (("source-draft-a", "a"), ("source-draft-b", "b")):
         contribution = ContextContribution(
             contribution_id="draft-contribution",
@@ -306,7 +333,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
         )
         ref = ContextRef.request_only_ref(
             "same-request-id",
-            session_id=SOURCE_SESSION_ID, thread_id="thread-1",
+            session_id=SOURCE_SESSION_ID, thread_id=source_thread_id,
             plan_id=plan_id,
             source_ref="draft-alias",
             source_revision=contribution.source_revision,
@@ -317,6 +344,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
             SOURCE_SESSION_ID,
             ContextRequestPlan(
                 session_id=SOURCE_SESSION_ID,
+                thread_id=source_thread_id,
                 plan_id=plan_id,
                 refs=(ref,),
                 contributions=(contribution,),
@@ -326,10 +354,13 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         for source_id, text in (("source-draft-a", "a"), ("source-draft-b", "b")):
             target_id = _target_plan_id(connection, source_id)
-            copied = read_registration(connection, TARGET_SESSION_ID, target_id).draft
+            copied = read_registration(
+                connection, TARGET_SESSION_ID, target_thread_id, target_id
+            ).draft
             ref, contribution = copied.refs[0], copied.contributions[0]
             assert ref.plan_id == target_id and ref.session_id == TARGET_SESSION_ID
             assert ref.ref_id != "same-request-id" and ref.source_ref != "draft-alias"
@@ -349,6 +380,7 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
     protected_source, property_name
 ):
     saver = protected_source[0]
+    source_thread_id = saver._storage.main_thread_id(SOURCE_SESSION_ID)
     tools = (
         {
             "name": "read_file",
@@ -360,6 +392,7 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
     )
     tool = ToolSetRef.from_tool_snapshot(
         session_id=SOURCE_SESSION_ID,
+        thread_id=source_thread_id,
         plan_id="schema-draft",
         snapshot_id="schema-tool",
         source_revision="schema-1",
@@ -369,6 +402,7 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
         SOURCE_SESSION_ID,
         ContextRequestPlan(
             session_id=SOURCE_SESSION_ID,
+            thread_id=source_thread_id,
             plan_id="schema-draft",
             refs=(),
             tool_set_refs=(tool,),
@@ -378,8 +412,11 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
     with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
         target_id = _target_plan_id(connection, "schema-draft")
-        copied = read_registration(connection, TARGET_SESSION_ID, target_id).draft
+        copied = read_registration(
+            connection, TARGET_SESSION_ID, target_thread_id, target_id
+        ).draft
         assert copied.tool_set_refs[0].tools == tools
         assert copied.tool_set_refs[0].content_hash == tool.content_hash

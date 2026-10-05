@@ -171,7 +171,7 @@ def _contribution_upgrade_sql(connection: sqlite3.Connection) -> str:
                     f"missing={sorted(missing)}"
                 )
             for name in added_columns:
-                column_type, notnull, default = target_columns[name]
+                _column_type, notnull, default = target_columns[name]
                 if not notnull or default is None:
                     raise RuntimeError(
                         f"schema-upgrade-source-mismatch: {table} 新增列 {name} "
@@ -217,21 +217,37 @@ class RolloutSchemaUpgradeMixin:
     """已注册版本路径的显式升级入口，不参与普通 runtime 初始化。"""
 
     def upgrade_v2_schema(
-        self, thread_id: str, *, checkpoint_ns: str = "",
+        self, thread_id: str, *, session_id: str, checkpoint_ns: str = "",
         prepare_artifact_upgrade: Callable[[sqlite3.Connection], SchemaUpgradeArtifacts] | None = None,
         resume_artifact_upgrade: Callable[[sqlite3.Connection], bool] | None = None,
         prepare_plan_upgrade: Callable[[sqlite3.Connection], SchemaUpgradePlan] | None = None,
     ) -> RolloutReadSnapshot:
         thread_id = strict_text(thread_id, field="schema_upgrade.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
-        with self._lock(thread_id, checkpoint_ns):
-            with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        with (
+            self._lock(thread_id, checkpoint_ns, session_id=session_id),
+            self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as connection,
+        ):
                 self._require_v2_runtime(connection)
                 current = strict_non_negative_int(connection.execute(
                     "SELECT schema_version FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()[0], field="schema_version")
-                if current not in {1, 2, 3, 4} or schema.ROLLOUT_SCHEMA_VERSION != 4:
-                    raise RuntimeError(f"schema-upgrade-path-unavailable: {current}")
+        if current == schema.ROLLOUT_SCHEMA_VERSION:
+            return self.validate_index(session_id, thread_id, checkpoint_ns)
+        if current not in {1, 2, 3, 4} or schema.ROLLOUT_SCHEMA_VERSION != 4:
+            raise RuntimeError(f"schema-upgrade-path-unavailable: {current}")
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as connection:
                 if current < 4 and prepare_plan_upgrade is None:
                     raise RuntimeError("schema-upgrade-plan-import-required: 显式升级必须注入 plan import owner")
                 script = _contribution_upgrade_sql(connection) if current == 1 else None
@@ -244,43 +260,56 @@ class RolloutSchemaUpgradeMixin:
                     raise RuntimeError("schema-upgrade-source-mismatch: 非空 schema1 artifact 尚无完整升级路径")
                 detail_script = _typed_details_upgrade_sql(connection) if current < 3 and not has_artifacts else None
             if current == 3 and resume_artifact_upgrade is not None:
-                with self._connect(thread_id, checkpoint_ns) as connection:
+                with self._connect(
+                    thread_id, checkpoint_ns, session_id=session_id
+                ) as connection:
                     if resume_artifact_upgrade(connection):
                         _activate_verified_artifact_upgrade(connection)
             if script is not None:
                 self._migrate_schema_locked(
-                    thread_id, checkpoint_ns=checkpoint_ns,
+                    thread_id, session_id=session_id,
+                    checkpoint_ns=checkpoint_ns,
                     to_version=2, migration_name="v2_contribution_hash_token",
                     migration_sql=script,
                 )
             if detail_script is not None:
                 self._migrate_schema_locked(
-                    thread_id, checkpoint_ns=checkpoint_ns, to_version=3,
+                    thread_id, session_id=session_id,
+                    checkpoint_ns=checkpoint_ns, to_version=3,
                     migration_name="v3_typed_detail_identity", migration_sql=detail_script,
                 )
             if has_artifacts:
                 self._upgrade_context_artifacts_locked(
-                    thread_id, checkpoint_ns=checkpoint_ns,
+                    thread_id, session_id=session_id,
+                    checkpoint_ns=checkpoint_ns,
                     prepare=prepare_artifact_upgrade,
                 )
             if current < 4:
-                with self._connect(thread_id, checkpoint_ns, read_only=True) as source:
+                with self._connect(
+                    thread_id,
+                    checkpoint_ns,
+                    session_id=session_id,
+                    read_only=True,
+                ) as source:
                     prepared_plan = prepare_plan_upgrade(source)
                 self._migrate_schema_locked(
-                    thread_id, checkpoint_ns=checkpoint_ns, to_version=4,
+                    thread_id, session_id=session_id,
+                    checkpoint_ns=checkpoint_ns, to_version=4,
                     migration_name="v4_context_plan_registry",
                     migration_sql=prepared_plan.migration_sql,
                     validate_migrated=prepared_plan.verify_migrated,
                     allow_failed_retry=True,
                 )
-        return self.validate_index(thread_id, checkpoint_ns)
+        return self.validate_index(session_id, thread_id, checkpoint_ns)
 
     def _upgrade_context_artifacts_locked(
-        self, thread_id: str, *, checkpoint_ns: str,
+        self, thread_id: str, *, session_id: str, checkpoint_ns: str,
         prepare: Callable[[sqlite3.Connection], SchemaUpgradeArtifacts],
     ) -> None:
         """持有 owner 锁时发布新文件、验证并提交 SQL；原件始终保留。"""
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as source:
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        ) as source:
             prepared = prepare(source)
             state = source.execute("SELECT database_state FROM database_meta WHERE singleton_id=1").fetchone()
             if state == ("recovery_required",):
@@ -297,18 +326,23 @@ class RolloutSchemaUpgradeMixin:
                 raise
         try:
             self._migrate_schema_locked(
-                thread_id, checkpoint_ns=checkpoint_ns, to_version=3,
+                thread_id, session_id=session_id, checkpoint_ns=checkpoint_ns,
+                to_version=3,
                 migration_name="v3_typed_detail_identity",
                 migration_sql=prepared.migration_sql,
                 validate_migrated=prepared.verify_migrated,
                 pending_artifact_audit=True,
             )
         except BaseException:
-            with self._connect(thread_id, checkpoint_ns, read_only=True) as failed:
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id, read_only=True
+            ) as failed:
                 prepared.discard_uncommitted(failed)
             raise
         # SQL 已提交后，只能验证并完成审计。此处失败不得清理已被引用的新文件。
-        with self._connect(thread_id, checkpoint_ns) as committed:
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as committed:
             prepared.verify_committed(committed)
             _activate_verified_artifact_upgrade(committed)
 

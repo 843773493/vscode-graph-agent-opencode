@@ -42,6 +42,7 @@ message Job {
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
   optional google.protobuf.Timestamp ended_at = 13;
+  string thread_id = 14;
 }
 
 message JobProgress {

@@ -17,7 +17,6 @@ import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
@@ -25,6 +24,7 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
     unique_ref_identities,
 )
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
@@ -86,15 +86,16 @@ def test_selection_ref_identity_fails_closed_without_thread_id() -> None:
 def test_selection_ref_identity_keys_tool_set_by_ref_id(
     user_item: CanonicalItemRecord,
 ) -> None:
-    # ToolSetRef 尚无 thread_id，其 plan/assembly 内唯一性由 ref_id 表达；
-    # 不得用 session_id 冒充 thread，也不得据此声称已 thread 化。
+    # ToolSetRef 显式绑定 owner，但计划内 registry identity 仍由 ref_id 表达。
     tool_ref = ToolSetRef.from_tool_snapshot(
         snapshot_id="tool-set-sibling",
         session_id="session-1",
+        thread_id="thread-1",
         plan_id="plan-sibling",
         tools=[],
         source_revision="tools-rev",
     )
+    assert tool_ref.thread_id == "thread-1"
     assert selection_ref_identity(tool_ref) == ("tool_set", "tool-set-sibling")
     with pytest.raises(ItemSchemaError, match="ToolSetRef.ref_id"):
         selection_ref_identity(replace(tool_ref, ref_id=""))
@@ -107,6 +108,7 @@ def test_ordered_selection_accepts_sibling_thread_refs_once(
     main_ref, child_ref = sibling_refs
     plan = ContextRequestPlan(
         session_id="session-1",
+        thread_id="thread-main",
         plan_id="plan-sibling",
         refs=(main_ref, child_ref),
     ).seal_for_assembly(
@@ -138,6 +140,7 @@ def test_sealed_plan_hash_is_stable_across_sibling_registry_order(
     registry_order = (main_ref, child_ref)
     base = ContextRequestPlan(
         session_id="session-1",
+        thread_id="thread-main",
         plan_id="plan-sibling",
         refs=registry_order,
     )
@@ -164,6 +167,7 @@ def test_snapshot_accepts_sibling_thread_refs_and_rejects_true_duplicate(
     base_kwargs: dict[str, object] = {
         "assembly_id": "assembly-sibling",
         "session_id": "session-1",
+        "thread_id": "thread-main",
         "turn_id": "turn-1",
         "execution_id": "execution-1",
         "plan_id": "plan-sibling",

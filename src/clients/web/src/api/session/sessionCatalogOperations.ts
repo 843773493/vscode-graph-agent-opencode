@@ -1,5 +1,10 @@
 import type { APIResponse } from "../../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "../http";
+import {
+  gatewayWorkspaceRequestHeaders,
+  requestJson,
+  unwrapApiData,
+} from "../http";
+import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
 /**
  * 会话目录异步 mutation 协议客户端（OpenSpec 8.1-H）。
@@ -149,8 +154,9 @@ const NAVIGATION_EVENTS_PATH = "/api/v1/session-catalog/navigation-events";
  */
 export async function enqueueSessionCatalogOperations(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   intents: readonly SessionCatalogOperationIntent[],
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogEnqueueResult> {
   if (intents.length === 0) {
     throw new Error("会话目录批量入队至少需要一个 intent");
@@ -160,8 +166,9 @@ export async function enqueueSessionCatalogOperations(
     ENQUEUE_PATH,
     {
       method: "POST",
-      headers: workspaceHeader(workspaceId),
+      headers: gatewayWorkspaceRequestHeaders(workspaceTarget),
       body: JSON.stringify({ intents }),
+      signal: options.signal,
     },
   ));
 }
@@ -169,8 +176,9 @@ export async function enqueueSessionCatalogOperations(
 /** 按精确 operation ID 查询 durable 状态；未知 ID 由调用方显式保留为 unknown。 */
 export async function querySessionCatalogOperationStatus(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   operationIds: readonly string[],
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogOperationStatusPage> {
   if (operationIds.length === 0) {
     throw new Error("会话目录状态查询至少需要一个 operation_id");
@@ -182,26 +190,27 @@ export async function querySessionCatalogOperationStatus(
   return unwrapApiData(await requestJson<APIResponse<SessionCatalogOperationStatusPage>>(
     port,
     `${OPERATION_STATUS_PATH}?${query.toString()}`,
-    { headers: workspaceHeader(workspaceId) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
 }
 
 /** revision-pinned catalog snapshot：取同一已提交 revision 与事件水位。 */
 export async function fetchSessionCatalogSnapshot(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogSnapshot> {
   return unwrapApiData(await requestJson<APIResponse<SessionCatalogSnapshot>>(
     port,
     SNAPSHOT_PATH,
-    { headers: workspaceHeader(workspaceId) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
 }
 
 /** 拉取 `event_seq > after` 的 navigation 终态事件页。 */
 export async function listSessionCatalogNavigationEvents(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { after: number; cursor?: string | null },
 ): Promise<SessionCatalogNavigationEventsPage> {
   if (!Number.isInteger(options.after) || options.after < 0) {
@@ -212,6 +221,6 @@ export async function listSessionCatalogNavigationEvents(
   return unwrapApiData(await requestJson<APIResponse<SessionCatalogNavigationEventsPage>>(
     port,
     `${NAVIGATION_EVENTS_PATH}?${query.toString()}`,
-    { headers: workspaceHeader(workspaceId) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
   ));
 }

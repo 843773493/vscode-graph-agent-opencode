@@ -24,9 +24,15 @@ import type {
 } from "../../types/frontend";
 import type { SessionViewStatePayload } from "../session/useSessionViewState";
 import type { ComposerStateSnapshot } from "../../state/composerState";
+import type {
+  SessionCatalogOutboxRuntime,
+  SessionCatalogOutboxSnapshot,
+} from "../session/sessionCatalogOutboxRuntime";
 
 export interface AppContextType {
   state: AppState;
+  sessionCatalogOutboxRuntime: SessionCatalogOutboxRuntime;
+  sessionCatalogOutboxSnapshot: SessionCatalogOutboxSnapshot;
   setStatus: (text: string) => void;
   sendMessage: (
     content: string,

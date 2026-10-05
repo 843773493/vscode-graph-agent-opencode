@@ -5,6 +5,7 @@ import type {
   GatewayWorkspace,
   GeneratorSessionStrategyMode,
 } from "../../types/backend";
+import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 import WarmActionDialog from "../overlays/WarmActionDialog";
 import {
@@ -126,7 +127,11 @@ export default function SessionGeneratorManager({
     }
     let cancelled = false;
     setSessionFolderChoicesError(null);
-    void listSessionCatalogChildren(apiPort, targetWorkspaceId)
+    void Promise.resolve()
+      .then(() => listSessionCatalogChildren(
+        apiPort,
+        requireGatewayWorkspaceRequestTarget(workspaces, targetWorkspaceId),
+      ))
       .then((page) => {
         if (cancelled) return;
         setSessionFolderChoices(page.items.flatMap((node) => (
@@ -145,7 +150,7 @@ export default function SessionGeneratorManager({
     return () => {
       cancelled = true;
     };
-  }, [apiPort, creating, targetWorkspaceId]);
+  }, [apiPort, creating, targetWorkspaceId, workspaces]);
 
   const submit = async () => {
     const workspaceId = targetWorkspaceId || activeWorkspaceId;

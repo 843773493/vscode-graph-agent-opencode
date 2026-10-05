@@ -57,6 +57,7 @@ async def test_cancel_before_task_body_runs_converges_to_cancelled(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     job = service._jobs[dispatch.job_id]
 
@@ -82,6 +83,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     await service.control(
         first.job_id,
@@ -93,6 +95,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
         "第二条",
         message_id="msg_second",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     for _ in range(200):
         if service._jobs[second.job_id].status == JobStatus.completed:
@@ -135,6 +138,7 @@ async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard) -> No
         "消息",
         message_id=f"msg_{index}",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     holder.append(dispatch.job_id)
     started.set()
@@ -161,6 +165,7 @@ async def test_pause_before_task_body_runs_resumes_cleanly(
         "第一条",
         message_id="msg_pause",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     job = service._jobs[dispatch.job_id]
 
@@ -212,6 +217,7 @@ async def test_cancel_after_task_body_started_keeps_task_path_terminal(
         "消息",
         message_id="msg_running",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     job = service._jobs[dispatch.job_id]
     await entered.wait()
@@ -274,6 +280,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     await executor.started.wait()
     second = await service.start_job(
@@ -281,6 +288,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         "第二条",
         message_id="msg_second",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     assert service._jobs[second.job_id].status == JobStatus.queued
 
@@ -313,6 +321,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("workspace_scope")
 async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> None:
     """P2 变体：运行期排空作用于 paused Job 时也必须释放活动槽。"""
 
@@ -328,6 +337,7 @@ async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> 
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
+        thread_id="thr_cancel_test",
     )
     await executor.started.wait()
 

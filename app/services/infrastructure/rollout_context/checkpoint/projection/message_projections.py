@@ -38,6 +38,7 @@ class RolloutMessageProjectionMixin:
         item: CanonicalItemRecord,
         *,
         thread_id: str,
+        session_id: str,
         checkpoint_ns: str,
         commit_id: int,
         message_sequence: int,
@@ -64,7 +65,7 @@ class RolloutMessageProjectionMixin:
         }:
             return None
         catalog = connection.execute(
-            "SELECT content_hash, jsonl_offset, jsonl_length, turn_id "
+            "SELECT content_hash, jsonl_offset, jsonl_length, turn_id, execution_id "
             "FROM item_catalog WHERE item_id = ?",
             (item.item_id,),
         ).fetchone()
@@ -89,12 +90,22 @@ class RolloutMessageProjectionMixin:
         catalog_turn_id = strict_optional_text(
             catalog[3], field=f"item_catalog.turn_id: {item.item_id}"
         )
-        if catalog_hash != item.content_hash or catalog_turn_id != item.turn_id:
+        catalog_execution_id = strict_text(
+            catalog[4], field=f"item_catalog.execution_id: {item.item_id}"
+        )
+        if (
+            catalog_hash != item.content_hash
+            or catalog_turn_id != item.turn_id
+        ):
             raise RuntimeError(
                 "canonical item 与 item_catalog identity 不一致，拒绝建立 message projection: "
                 f"{item.item_id}"
             )
-        with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+        with self.jsonl_path(
+            session_id,
+            checkpoint_ns,
+            thread_id=thread_id,
+        ).open("rb") as stream:
             items = read_message_group(
                 connection, stream, offset=catalog_offset, length=catalog_length,
                 read_item=self._read_v2_item_at,
@@ -134,33 +145,36 @@ class RolloutMessageProjectionMixin:
                 f"actual={message.get('type')}"
             )
         existing = connection.execute(
-            "SELECT message_sequence, turn_id, role, jsonl_offset, jsonl_length, "
-            "content_hash FROM messages WHERE message_id = ?",
+            "SELECT message_sequence, turn_id, execution_id, role, jsonl_offset, "
+            "jsonl_length, content_hash FROM messages WHERE message_id = ?",
             (message_id,),
         ).fetchone()
         if existing is not None:
             existing_sequence = strict_non_negative_int(
                 existing[0], field=f"messages.message_sequence: {message_id}"
             )
-            existing_turn_id = strict_text(
+            existing_turn_id = strict_optional_text(
                 existing[1],
                 field=f"messages.turn_id: {message_id}",
-                allow_empty=True,
+            )
+            existing_execution_id = strict_text(
+                existing[2], field=f"messages.execution_id: {message_id}"
             )
             existing_role = strict_text(
-                existing[2], field=f"messages.role: {message_id}"
+                existing[3], field=f"messages.role: {message_id}"
             )
             existing_offset = strict_non_negative_int(
-                existing[3], field=f"messages.jsonl_offset: {message_id}"
+                existing[4], field=f"messages.jsonl_offset: {message_id}"
             )
             existing_length = strict_non_negative_int(
-                existing[4], field=f"messages.jsonl_length: {message_id}"
+                existing[5], field=f"messages.jsonl_length: {message_id}"
             )
             existing_hash = strict_text(
-                existing[5], field=f"messages.content_hash: {message_id}"
+                existing[6], field=f"messages.content_hash: {message_id}"
             )
             if (
-                existing_turn_id != (item.turn_id or "")
+                existing_turn_id != item.turn_id
+                or existing_execution_id != catalog_execution_id
                 or existing_role != expected_role
                 or existing_offset != catalog_offset
                 or existing_length != catalog_length
@@ -173,13 +187,15 @@ class RolloutMessageProjectionMixin:
             return existing_sequence, message_id, expected_role
 
         connection.execute(
-            "INSERT INTO messages(message_sequence, message_id, turn_id, role, "
-            "jsonl_offset, jsonl_length, content_length, content_hash, visibility, "
-            "commit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)",
+            "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, "
+            "role, jsonl_offset, jsonl_length, content_length, content_hash, "
+            "visibility, commit_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'visible', ?, ?)",
             (
                 message_sequence,
                 message_id,
-                item.turn_id or "",
+                item.turn_id,
+                catalog_execution_id,
                 expected_role,
                 catalog_offset,
                 catalog_length,

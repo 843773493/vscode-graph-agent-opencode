@@ -13,6 +13,10 @@ import pytest
 from app.core import identifier
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 FIXED_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 FIXED_EPOCH_MS = identifier.to_epoch_ms(FIXED_CREATED_AT)
@@ -63,11 +67,16 @@ def test_session_creation_journal_uses_default_monotonic_uuid7(
                 "workspace_id": "ws",
                 "parent_node_id": None,
                 "display_name": f"Session {index}",
+                "purpose": "normal",
+                "session_metadata_json": "{}",
+                "graph_binding": TEST_THREAD_GRAPH_BINDING,
                 "preimage_hash": f"preimage-{index}",
             }
             for index in range(128)
         ]
-        records = [store.create_or_get_creation_record(**request) for request in requests]
+        records = [
+            store.create_or_get_creation_record(**request) for request in requests
+        ]
 
         allocated_ids = [
             identity
@@ -99,7 +108,9 @@ def test_child_thread_creation_journal_uses_default_monotonic_uuid7(
     monkeypatch.setattr(identifier, "_resolve_uuid7", lambda: uuid7)
     store = SessionControlStore(tmp_path / "session-control.sqlite")
     fixed_main_thread_id = f"thr_{uuid7_payload(FIXED_EPOCH_MS, 100_000)}"
-    store.initialize_main_thread(fixed_main_thread_id, FIXED_CREATED_AT)
+    store.initialize_main_thread(
+        fixed_main_thread_id, FIXED_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     try:
         requests = [
@@ -107,7 +118,7 @@ def test_child_thread_creation_journal_uses_default_monotonic_uuid7(
                 "idempotency_key": f"thread-{index}",
                 "initial_state": "idle",
                 "preimage_hash": f"preimage-{index}",
-                "graph_binding": "{}",
+                "graph_binding": TEST_THREAD_GRAPH_BINDING_JSON,
                 "capability_profile": "{}",
             }
             for index in range(128)
@@ -165,6 +176,9 @@ def test_session_journal_bucket_uses_session_id_across_midnight(
             workspace_id="ws",
             parent_node_id=None,
             display_name="午夜会话",
+            purpose="normal",
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
+            session_metadata_json="{}",
             preimage_hash="midnight-preimage",
         )
 
@@ -173,9 +187,12 @@ def test_session_journal_bucket_uses_session_id_across_midnight(
             f"sessions/2026/06/01/{record.session_id}"
         )
         assert record.main_thread_id[4:16] == f"{main_thread_ms:012x}"
-        assert identifier.uuid7_datetime_from_hex(
-            record.main_thread_id[4:]
-        ).date().isoformat() == "2026-06-02"
+        assert (
+            identifier.uuid7_datetime_from_hex(record.main_thread_id[4:])
+            .date()
+            .isoformat()
+            == "2026-06-02"
+        )
 
         # Main row 是 Session 创建事实，沿用 ses ID 冻结的时刻；main thr
         # 可在午夜后自然分配，因为它没有独立物理日期桶。
@@ -194,21 +211,21 @@ def test_session_journal_bucket_uses_session_id_across_midnight(
         )
         session_created_at = datetime.fromisoformat(record.created_at)
         control_store.initialize_main_thread(
-            record.main_thread_id, session_created_at
+            record.main_thread_id, session_created_at, TEST_THREAD_GRAPH_BINDING
         )
         control_store.initialize_fence("active", 1)
         main_row = control_store.get_main_thread()
         assert str(main_row["thread_id"]) == record.main_thread_id
         assert str(main_row["created_at"]) == record.created_at
-        assert datetime.fromisoformat(str(main_row["created_at"])).date().isoformat() == (
-            "2026-06-01"
-        )
+        assert datetime.fromisoformat(
+            str(main_row["created_at"])
+        ).date().isoformat() == ("2026-06-01")
 
         child_record = control_store.create_or_get_thread_creation_record(
             idempotency_key="midnight-child",
             initial_state="idle",
             preimage_hash="a" * 64,
-            graph_binding="{}",
+            graph_binding=TEST_THREAD_GRAPH_BINDING_JSON,
             capability_profile="{}",
         )
         assert child_record.child_thread_id[4:16] == f"{child_thread_ms:012x}"

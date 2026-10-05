@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from app.services.infrastructure.node_debug.session.thread_owner import (
     NodeDebugThreadOwner,
     normalize_node_debug_owner,
 )
+
+TEST_THREAD_ID = "thr_00000000000070008000000000000000"
 
 
 class PermissiveNodeDebugSessionAdmission:
@@ -17,16 +21,19 @@ class PermissiveNodeDebugSessionAdmission:
     注册流程；验证生命周期的测试应直接注入 ``NodeDebugSessionAdmission``。
     """
 
+    @asynccontextmanager
     async def admit(
         self,
         session_id: str,
         thread_id: str,
-    ) -> NodeDebugThreadOwner:
+    ) -> AsyncIterator[NodeDebugThreadOwner]:
+        if thread_id is None:
+            raise ValueError("测试调试 owner 必须显式提供 thread_id")
         owner_session_id, owner_thread_id = normalize_node_debug_owner(
             session_id,
             thread_id,
         )
-        return NodeDebugThreadOwner(
+        yield NodeDebugThreadOwner(
             session_id=owner_session_id,
             thread_id=owner_thread_id,
             thread_node=Path.cwd(),

@@ -25,12 +25,15 @@ class NodeDebugForkJournalMixin:
         prepublication: NodeDebugTargetPrepublication,
         *,
         target_session_id: str,
+        target_thread_id: str,
         staging_relative_path: Path,
         target_manifest_sha256: str,
         checkpoint_ns: str = "",
     ) -> None:
         """把冻结 debug proof 写进与 fork materialization 同一 SQLite journal。"""
-        materialization_id = required_text(materialization_id, field="materialization_id")
+        materialization_id = required_text(
+            materialization_id, field="materialization_id"
+        )
         fork_id = required_text(fork_id, field="fork_id")
         if snapshot.source_snapshot_id != prepublication.source_snapshot_id:
             raise RuntimeError("fork debug snapshot 与 target prepublication 不匹配")
@@ -48,8 +51,10 @@ class NodeDebugForkJournalMixin:
             }
             for artifact in snapshot.configuration_artifacts
         ]
-        with self._lock(target_session_id, checkpoint_ns), self._connect(
-            target_session_id, checkpoint_ns
+        with self._lock(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
+        ), self._connect(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -68,13 +73,12 @@ class NodeDebugForkJournalMixin:
             if row[2] != "prepared":
                 raise RuntimeError("fork debug snapshot 只能写入 prepared journal")
             expected_relative = (
-                Path("rollout")
-                / ".fork-debug-staging"
-                / materialization_id
-                / "node"
+                Path("rollout") / ".fork-debug-staging" / materialization_id / "node"
             )
             if staging_relative_path != expected_relative:
-                raise RuntimeError("fork debug staging journal 路径与 materialization 不一致")
+                raise RuntimeError(
+                    "fork debug staging journal 路径与 materialization 不一致"
+                )
             staging_relative = staging_relative_path.as_posix()
             timestamp = _now()
             lineage = {
@@ -139,9 +143,7 @@ class NodeDebugForkJournalMixin:
                         target_session_id,
                         artifact.configuration_id,
                         target_id,
-                        json.dumps(
-                            mapping_lineage, ensure_ascii=False, sort_keys=True
-                        ),
+                        json.dumps(mapping_lineage, ensure_ascii=False, sort_keys=True),
                         timestamp,
                     ),
                 )
@@ -154,11 +156,14 @@ class NodeDebugForkJournalMixin:
         materialization_id: str,
         *,
         target_session_id: str,
+        target_thread_id: str,
         checkpoint_ns: str = "",
         target_manifest_sha256: str | None,
     ) -> None:
-        with self._lock(target_session_id, checkpoint_ns), self._connect(
-            target_session_id, checkpoint_ns
+        with self._lock(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
+        ), self._connect(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             row = connection.execute(
                 "SELECT mapping_id, lineage_json FROM fork_identity_mappings "
@@ -195,12 +200,15 @@ class NodeDebugForkJournalMixin:
         materialization_id: str,
         *,
         target_session_id: str,
+        target_thread_id: str,
         checkpoint_ns: str = "",
         target_manifest_sha256: str,
     ) -> None:
         """在最终配置复核后冻结可恢复发布所需的 target manifest hash。"""
-        with self._lock(target_session_id, checkpoint_ns), self._connect(
-            target_session_id, checkpoint_ns
+        with self._lock(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
+        ), self._connect(
+            target_thread_id, checkpoint_ns, session_id=target_session_id
         ) as connection:
             row = connection.execute(
                 "SELECT mapping_id, lineage_json FROM fork_identity_mappings "
@@ -221,7 +229,9 @@ class NodeDebugForkJournalMixin:
                 required_text(target_manifest_sha256, field="target_manifest_sha256")
                 != expected_manifest_sha256
             ):
-                raise RuntimeError("fork debug manifest hash 与 prepared journal 不一致")
+                raise RuntimeError(
+                    "fork debug manifest hash 与 prepared journal 不一致"
+                )
             lineage["state"] = "ready"
             lineage["ready_at"] = _now()
             result = connection.execute(
@@ -254,8 +264,6 @@ class NodeDebugForkJournalMixin:
             raise RuntimeError(
                 f"fork debug snapshot 尚未发布，禁止提交 materialization: {materialization_id}"
             )
-
-
 
 
 __all__ = ["NodeDebugForkJournalMixin"]

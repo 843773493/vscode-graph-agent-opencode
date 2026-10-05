@@ -41,15 +41,19 @@ def record_source_fingerprints(state: FullCopyRemapState) -> None:
 
 def refresh_detail_manifests(state: FullCopyRemapState) -> None:
     connection = state.connection
+    overlay_owner = (state.target_session_id, state.target_thread_id)
     for key, record in state.detail_records.items():
         connection.execute(
-            "UPDATE context_plan_details SET content_hash=?, redacted_stable_digest=?, status=?, availability=? WHERE detail_ref=?",
+            "UPDATE context_plan_details SET content_hash=?, redacted_stable_digest=?, status=?, availability=? "
+            "WHERE detail_ref=? AND session_id=? AND thread_id=?",
             (
                 record.content_hash,
                 record.redacted_stable_digest,
                 record.status,
                 record.availability,
                 key,
+                state.target_session_id,
+                state.target_thread_id,
             ),
         )
     digest_columns = (
@@ -62,9 +66,16 @@ def refresh_detail_manifests(state: FullCopyRemapState) -> None:
     )
     for source, target in state.detail_digests.items():
         for table, column in digest_columns:
-            connection.execute(
-                f"UPDATE {table} SET {column}=? WHERE {column}=?", (target, source)
-            )
+            if table == "source_overlays":
+                connection.execute(
+                    f"UPDATE {table} SET {column}=? WHERE {column}=? "
+                    "AND session_id = ? AND thread_id = ?",
+                    (target, source, *overlay_owner),
+                )
+            else:
+                connection.execute(
+                    f"UPDATE {table} SET {column}=? WHERE {column}=?", (target, source)
+                )
 
     def refresh(value):
         if isinstance(value, list):

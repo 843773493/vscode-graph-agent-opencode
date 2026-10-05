@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type {
   SessionTurnBootstrap,
+  InternalExecutionHistory,
   TurnDetail,
   TurnPage,
   TurnSummary,
@@ -29,6 +30,7 @@ function summary(turnId: string, ordinal: number, revision = 1): TurnSummary {
     job_id: turnId,
     session_id: SESSION_ID,
     ordinal,
+    root_logical_item_ordinal: ordinal * 10,
     revision,
     status: "completed",
     created_at: `2026-07-28T00:00:0${ordinal}Z`,
@@ -55,6 +57,7 @@ function detail(turnId: string, ordinal: number, revision = 1): TurnDetail {
     job_id: turnId,
     session_id: SESSION_ID,
     ordinal,
+    root_logical_item_ordinal: ordinal * 10,
     revision,
     status: "completed",
     created_at: `2026-07-28T00:00:0${ordinal}Z`,
@@ -102,6 +105,9 @@ function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
     session: {
       session_id: SESSION_ID,
       workspace_id: "workspace",
+      resource_identity: `fixture-${SESSION_ID}`,
+      vrn: `boxteam://workspace/workspace/resources/session/${SESSION_ID}`,
+      scope: "workspace",
       title: "Turn 测试",
       current_agent_id: "default",
       created_at: "2026-07-28T00:00:00Z",
@@ -354,6 +360,42 @@ describe("Turn timeline revision 合并", () => {
 
     expect(partial.beforeCursor).toBe("older-around");
     expect(partial.hasBefore).toBe(true);
+  });
+
+  test("只有 internal history 的时间线会保留 around 窗口游标", () => {
+    const initial = createSessionTurnTimeline(SCOPE_KEY);
+    const populated = applyTurnHistoryPage(initial, {
+      items: [],
+      internal_executions: [{
+        execution_id: "execution-1",
+        job_id: "job-1",
+        session_id: SESSION_ID,
+        thread_id: "thr_main",
+        status: "completed",
+        created_at: "2026-07-28T00:00:01Z",
+        updated_at: "2026-07-28T00:00:01Z",
+        display_parts: [],
+        response_parts: [],
+      }],
+      before_cursor: "older-internal",
+      after_cursor: "newer-internal",
+      has_before: true,
+      has_after: true,
+      projection_epoch: 1,
+    }, "around");
+
+    const resumed = applyTurnBootstrap(populated, 0, {
+      ...bootstrap(summary("latest", 1)),
+      latest_turn: null,
+      older_cursor: null,
+    });
+
+    expect(resumed.orderedTurnIds).toEqual([]);
+    expect(resumed.internalExecutions).toHaveLength(1);
+    expect(resumed.beforeCursor).toBe("older-internal");
+    expect(resumed.afterCursor).toBe("newer-internal");
+    expect(resumed.hasBefore).toBe(true);
+    expect(resumed.hasAfter).toBe(true);
   });
 
   test("历史分页和详情水合保留已加载 Turn", () => {
@@ -671,6 +713,198 @@ describe("Turn timeline revision 合并", () => {
     expect(timeline.orderedTurnIds).toHaveLength(10);
     expect(timeline.turnsById.job_page_0).toBe(summaries[0]);
     expect(timeline.turnsById.job_page_9.items_view).toBe("full");
+  });
+
+  test("分页合并独立 internal execution 时按 membership ordinal 排序", () => {
+    const responsePart = (
+      itemId: string,
+      itemSequence: number,
+      logicalItemOrdinal: number,
+      text: string,
+      projection: "summary" | "detail",
+    ): InternalExecutionHistory["response_parts"][number] => ({
+      part_id: `${itemId}:part:0`,
+      kind: "text",
+      projection,
+      status: "completed",
+      source: {
+        message_sequence: 1,
+        item_id: itemId,
+        item_sequence: itemSequence,
+        logical_item_ordinal: logicalItemOrdinal,
+        part_ordinal: 0,
+        created_at: "2026-07-28T00:00:01Z",
+      },
+      text,
+    });
+    const execution = (
+      executionId: string,
+      createdAt: string,
+      status: InternalExecutionHistory["status"],
+      itemSequence: number,
+      logicalItemOrdinal: number,
+      responseParts: InternalExecutionHistory["response_parts"] = [],
+    ): InternalExecutionHistory => ({
+      execution_id: executionId,
+      job_id: `job-${executionId}`,
+      session_id: SESSION_ID,
+      thread_id: "thr_main",
+      status,
+      created_at: createdAt,
+      updated_at: createdAt,
+      response_parts: responseParts,
+      display_parts: [
+        {
+          kind: "generated_session_result",
+          text: "子任务已完成。",
+          item_id: `item-${executionId}-${itemSequence}`,
+          item_sequence: itemSequence,
+          logical_item_ordinal: logicalItemOrdinal,
+          created_at: createdAt,
+          provenance: {},
+        },
+      ],
+    });
+    const timeline = applyTurnHistoryPage(
+      applyTurnHistoryPage(
+        createSessionTurnTimeline(SCOPE_KEY),
+        {
+          items: [],
+          internal_executions: [
+            execution(
+              "execution-2",
+              "2026-07-28T00:00:02Z",
+              "unknown",
+              2,
+              80,
+              [responsePart("output-2", 20, 90, "摘要文本", "summary")],
+            ),
+            execution("execution-3", "2026-07-28T00:00:03Z", "completed", 3, 100),
+          ],
+          projection_epoch: 1,
+        },
+        "before",
+      ),
+      {
+          items: [],
+          internal_executions: [
+            execution("execution-1", "2026-07-28T00:00:01Z", "completed", 1, 60),
+            execution(
+              "execution-2",
+              "2026-07-28T00:00:02Z",
+              "completed",
+              4,
+              40,
+              [
+                responsePart("output-2", 20, 90, "补全后的文本", "detail"),
+                responsePart("tool-2", 21, 70, "工具结果", "detail"),
+              ],
+            ),
+        ],
+        projection_epoch: 1,
+      },
+      "before",
+    );
+
+    const execution2 = timeline.internalExecutions.find(
+      ({ execution_id }) => execution_id === "execution-2",
+    );
+    expect(execution2?.status).toBe("completed");
+    expect(execution2?.display_parts.map(({ logical_item_ordinal }) => logical_item_ordinal))
+      .toEqual([40, 80]);
+    expect(execution2?.response_parts.map(({ part_id }) => part_id))
+      .toEqual(["tool-2:part:0", "output-2:part:0"]);
+    expect(execution2?.response_parts[1]?.text).toBe("补全后的文本");
+  });
+
+  test("重页 display identity 的物理坐标变化明确报 projection integrity", () => {
+    const execution: InternalExecutionHistory = {
+      execution_id: "execution-1",
+      job_id: "job-1",
+      session_id: SESSION_ID,
+      thread_id: "thr_main",
+      status: "completed",
+      created_at: "2026-07-28T00:00:01Z",
+      updated_at: "2026-07-28T00:00:01Z",
+      display_parts: [{
+        kind: "generated_session_result",
+        text: "子任务已完成。",
+        item_id: "item-display-1",
+        item_sequence: 10,
+        logical_item_ordinal: 20,
+        created_at: "2026-07-28T00:00:01Z",
+        provenance: {},
+      }],
+      response_parts: [],
+    };
+    const timeline = applyTurnHistoryPage(
+      createSessionTurnTimeline(SCOPE_KEY),
+      { items: [], internal_executions: [execution], projection_epoch: 1 },
+      "before",
+    );
+
+    expect(() => applyTurnHistoryPage(
+      timeline,
+      {
+        items: [],
+        internal_executions: [{
+          ...execution,
+          display_parts: [{ ...execution.display_parts[0], item_sequence: 11 }],
+        }],
+        projection_epoch: 1,
+      },
+      "before",
+    )).toThrow("history projection integrity");
+  });
+
+  test("重页 response part 的 membership 坐标变化明确报 projection integrity", () => {
+    const responsePart: InternalExecutionHistory["response_parts"][number] = {
+      part_id: "part-1",
+      kind: "text",
+      projection: "summary",
+      status: "completed",
+      source: {
+        message_sequence: 1,
+        item_id: "item-response-1",
+        item_sequence: 10,
+        logical_item_ordinal: 20,
+        part_ordinal: 0,
+        created_at: "2026-07-28T00:00:01Z",
+      },
+      text: "输出",
+    };
+    const execution: InternalExecutionHistory = {
+      execution_id: "execution-1",
+      job_id: "job-1",
+      session_id: SESSION_ID,
+      thread_id: "thr_main",
+      status: "completed",
+      created_at: "2026-07-28T00:00:01Z",
+      updated_at: "2026-07-28T00:00:01Z",
+      display_parts: [],
+      response_parts: [responsePart],
+    };
+    const timeline = applyTurnHistoryPage(
+      createSessionTurnTimeline(SCOPE_KEY),
+      { items: [], internal_executions: [execution], projection_epoch: 1 },
+      "before",
+    );
+
+    expect(() => applyTurnHistoryPage(
+      timeline,
+      {
+        items: [],
+        internal_executions: [{
+          ...execution,
+          response_parts: [{
+            ...responsePart,
+            source: { ...responsePart.source, item_sequence: 11 },
+          }],
+        }],
+        projection_epoch: 1,
+      },
+      "before",
+    )).toThrow("history projection integrity");
   });
 
   test("切换 session scope 时卸载旧会话详情正文但保留摘要窗口", () => {

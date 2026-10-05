@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
+    "AutoSessionTitleCommand",
     "NavigationEventDTO",
     "NavigationEventsPageDTO",
     "NavigationMutationEnqueueRequest",
@@ -70,6 +71,14 @@ NavigationMutationKind = Literal[
     "move_node",
     "delete_folder",
     "delete_session",
+    "auto_title_session",
+]
+NavigationPublicMutationKind = Literal[
+    "create_folder",
+    "rename_node",
+    "move_node",
+    "delete_folder",
+    "delete_session",
 ]
 
 
@@ -86,7 +95,7 @@ class NavigationMutationIntentDTO(BaseModel):
 
     client_operation_id: str
     client_sequence: int = Field(ge=1)
-    kind: NavigationMutationKind
+    kind: NavigationPublicMutationKind
     base_catalog_revision: int = Field(ge=0)
     expected_revision: int | None = Field(default=None, ge=1)
     target_node_id: str | None = None
@@ -131,6 +140,36 @@ class NavigationMutationIntentDTO(BaseModel):
         """改名/移动必须携带目标 node 的 expected revision 作为执行期 CAS 前置。"""
         if self.expected_revision is None:
             raise ValueError(f"{self.kind} 必须给出 target node 的 expected_revision")
+
+
+class AutoSessionTitleCommand(BaseModel):
+    """仅供后端自动标题 producer 使用的 CAS 导航队列命令。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_operation_id: str
+    client_sequence: int = Field(default=1, ge=1)
+    kind: Literal["auto_title_session"] = "auto_title_session"
+    base_catalog_revision: int = Field(ge=0)
+    expected_revision: int = Field(ge=1)
+    target_node_id: str
+    expected_title_source: Literal["default"] = "default"
+    expected_title: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    parent_node_id: None = None
+    created_by_operation_id: None = None
+    recursive: Literal[False] = False
+    depends_on: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_command(self) -> AutoSessionTitleCommand:
+        validate_operation_id(self.client_operation_id)
+        if self.depends_on:
+            raise ValueError("auto_title_session 不接受依赖")
+        return self
+
+
+NavigationQueueCommand = NavigationMutationIntentDTO | AutoSessionTitleCommand
 
 
 class NavigationMutationEnqueueRequest(BaseModel):

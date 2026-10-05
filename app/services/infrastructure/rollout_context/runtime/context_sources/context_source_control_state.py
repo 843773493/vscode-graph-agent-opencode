@@ -4,8 +4,8 @@
 只通过该端口读写自己的控制状态；SQLite 表、owner 锁和事务边界由唯一的
 ``RolloutCheckpointSaver``/ContextStore owner 实现。
 
-控制状态按精确 ``(session_id, thread_id)`` 归属：main thread 使用
-``MAIN_THREAD_ID``，durable child thread 必须使用真实 thread ID。它只保存
+控制状态按精确 ``(session_id, thread_id)`` 归属：所有 Thread（包括 main）都
+必须使用 catalog 中的 canonical Thread ID。它只保存
 稳定 source identity、catalog/来源绑定 revision、observed/applied revision
 和 untrack（frozen）状态；locator、handle 和正文归 Registry/实际 source
 owner 所有，并在重启后由它们重建，不进入本状态。
@@ -15,13 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, Protocol
-
-MAIN_THREAD_ID = "main"
-"""Session 级产品入口的 main thread 身份。
-
-裸 ``session_id`` 等价于 main thread，但控制状态必须使用稳定的
-``MAIN_THREAD_ID`` 而不是 session_id，避免同一 thread 出现两个持久化 key。
-"""
 
 ContextSourceTrackingStatus = Literal["tracked", "untracked"]
 """``untracked`` 即 OpenSpec 的 frozen 状态：停止消费 revision 且不再恢复。"""
@@ -38,9 +31,7 @@ class ContextSourceOwnerKey:
         for field_name in ("session_id", "thread_id"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
-                raise ValueError(
-                    f"ContextSourceOwnerKey.{field_name} 必须是非空字符串"
-                )
+                raise ValueError(f"ContextSourceOwnerKey.{field_name} 必须是非空字符串")
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,29 +73,28 @@ class ContextSourceControlState:
             value = getattr(self, field_name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(
-                    "ContextSourceControlState."
-                    f"{field_name} 必须是非空字符串或 null"
+                    f"ContextSourceControlState.{field_name} 必须是非空字符串或 null"
                 )
         if self.tracking_status not in {"tracked", "untracked"}:
             raise ValueError(
-                "ContextSourceControlState.tracking_status 只能是 "
-                "tracked 或 untracked"
+                "ContextSourceControlState.tracking_status 只能是 tracked 或 untracked"
             )
         if (
             not isinstance(self.state_revision, int)
             or isinstance(self.state_revision, bool)
             or self.state_revision < 0
         ):
-            raise ValueError(
-                "ContextSourceControlState.state_revision 必须是非负整数"
-            )
+            raise ValueError("ContextSourceControlState.state_revision 必须是非负整数")
         if self.updated_at is not None and (
             not isinstance(self.updated_at, str) or not self.updated_at
         ):
             raise ValueError(
                 "ContextSourceControlState.updated_at 必须是非空字符串或 null"
             )
-        if self.latest_visible_committed_revision is not None and self.latest_revision is None:
+        if (
+            self.latest_visible_committed_revision is not None
+            and self.latest_revision is None
+        ):
             raise ValueError(
                 "ContextSourceControlState.latest_visible_committed_revision 不能脱离 "
                 "latest_revision 存在"
@@ -153,7 +143,6 @@ class ContextSourceControlStatePort(Protocol):
 
 
 __all__ = [
-    "MAIN_THREAD_ID",
     "ContextSourceControlState",
     "ContextSourceControlStatePort",
     "ContextSourceOwnerKey",

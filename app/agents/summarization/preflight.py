@@ -15,6 +15,7 @@ class NoDurableOwnerCompactionPreflight:
     def safe_compaction_prefix_cutoffs(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str,
         state_messages: Sequence[object],
@@ -22,5 +23,5 @@ class NoDurableOwnerCompactionPreflight:
     ) -> frozenset[int]:
         raise RuntimeError(
             "compaction preflight 需要 RolloutCheckpointSaver durable owner；"
-            f"当前装配 session={session_id} 没有 Saver 端口"
+            f"当前装配 SessionThread=({session_id},{thread_id}) 没有 Saver 端口"
         )

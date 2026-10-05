@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.core.execution_admission_context import require_current_execution_admission
+
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     SEMANTIC_FIELDS,
@@ -26,7 +28,7 @@ ItemLocation = tuple[CanonicalItemRecord, int, int]
 PreparedMessage = tuple[
     int,
     str,
-    str,
+    str | None,
     str,
     str,
     int,
@@ -35,6 +37,7 @@ PreparedMessage = tuple[
     str,
     str,
     tuple[ItemLocation, ...],
+    str,
 ]
 
 
@@ -91,6 +94,7 @@ def prepare_messages(
     jsonl: Path,
     codec: MessageCodec,
     read_item: Callable[..., CanonicalItemRecord],
+    thread_id: str,
     messages: Sequence[object],
     last_message_sequence: int,
     next_item_sequence: int,
@@ -102,17 +106,18 @@ def prepare_messages(
     ]
     if len(set(identities)) != len(identities):
         raise ValueError("一个 checkpoint 不能重复引用同一个 canonical message_id")
-    current_turn: str | None = None
     with jsonl.open("rb") as stream:
         for index, (message_id, message) in enumerate(
             zip(identities, messages, strict=True)
         ):
             indexed = connection.execute(
-                "SELECT message_sequence, turn_id FROM messages WHERE message_id = ?",
+                "SELECT message_sequence, turn_id, execution_id FROM messages "
+                "WHERE message_id = ?",
                 (message_id,),
             ).fetchone()
             catalog = connection.execute(
-                "SELECT jsonl_offset, jsonl_length, turn_id FROM item_catalog WHERE item_id = ?",
+                "SELECT jsonl_offset, jsonl_length, turn_id, execution_id "
+                "FROM item_catalog WHERE item_id = ?",
                 (f"item-{message_id}",),
             ).fetchone()
             if indexed is not None and catalog is None:
@@ -130,14 +135,80 @@ def prepare_messages(
                 if catalog is not None
                 else ()
             )
-            turn_id = (
-                indexed[1]
-                if indexed is not None
-                else stored[-1].turn_id
-                if stored and stored[-1].turn_id is not None
-                else codec.turn_id(message, current_turn, message_id)
-            )
             message_role = codec.message_role(message)
+            if indexed is not None or stored:
+                stored_turn_ids = {item.turn_id for item in stored}
+                if len(stored_turn_ids) != 1:
+                    raise RuntimeError(
+                        f"canonical message group Turn identity 不一致: {message_id}"
+                    )
+                stored_turn_id = next(iter(stored_turn_ids))
+                stored_execution_ids: set[str] = set()
+                for item in stored:
+                    execution_row = connection.execute(
+                        "SELECT execution_id FROM item_catalog WHERE item_id = ?",
+                        (item.item_id,),
+                    ).fetchone()
+                    if (
+                        execution_row is None
+                        or not isinstance(execution_row[0], str)
+                        or not execution_row[0]
+                    ):
+                        raise RuntimeError(
+                            "canonical item 缺少 execution attribution: "
+                            f"{item.item_id}"
+                        )
+                    stored_execution_ids.add(execution_row[0])
+                if len(stored_execution_ids) != 1:
+                    raise RuntimeError(
+                        f"canonical message group execution identity 不一致: {message_id}"
+                    )
+                stored_execution_id = next(iter(stored_execution_ids))
+                if catalog is None or (
+                    catalog[2] != stored_turn_id
+                    or catalog[3] != stored_execution_id
+                ):
+                    raise RuntimeError(
+                        "canonical item 与 message-root catalog attribution 不一致: "
+                        f"{message_id}"
+                    )
+                if indexed is not None and (
+                    indexed[1] != stored_turn_id
+                    or indexed[2] != stored_execution_id
+                ):
+                    raise RuntimeError(
+                        "message projection 与 canonical item attribution 不一致: "
+                        f"{message_id}"
+                    )
+                turn_id = stored_turn_id
+                execution_id = stored_execution_id
+            else:
+                admission = require_current_execution_admission(
+                    langgraph_thread_id=thread_id
+                )
+                execution_id = admission.execution_id
+                if admission.execution_origin == "user_turn":
+                    if admission.turn_id is None:
+                        raise RuntimeError(
+                            "user_turn execution admission 缺少 accepted turn_id"
+                        )
+                    if message_role == "user" and codec.is_internal(message):
+                        raise RuntimeError(
+                            "user_turn execution admission 不得写入 internal HumanMessage；"
+                            "内部通知必须使用 internal admission"
+                        )
+                    turn_id = admission.turn_id
+                elif admission.execution_origin == "internal":
+                    if admission.turn_id is not None:
+                        raise RuntimeError(
+                            "internal execution admission 不得绑定 turn_id"
+                        )
+                    turn_id = None
+                else:
+                    raise RuntimeError(
+                        "未知 execution admission origin: "
+                        f"{admission.execution_origin!r}"
+                    )
             model_call_id = (
                 codec.tool_message_model_call_id(message, messages[:index])
                 if message_role == "tool"
@@ -152,6 +223,7 @@ def prepare_messages(
                 else batch.next_item_sequence,
                 message_id=message_id,
                 turn_id=turn_id,
+                execution_id=execution_id,
                 timestamp=datetime.now(UTC).isoformat(),
                 model_call_id=model_call_id,
             )
@@ -159,10 +231,6 @@ def prepare_messages(
             codec.project_message(group)
             if stored:
                 _compare_group(group, stored)
-            if not codec.is_internal(message) or (
-                message_role == "user" and not turn_id.startswith("internal-")
-            ):
-                current_turn = turn_id
             batch.item_ids.extend(item.item_id for item in group)
             if indexed is not None:
                 batch.visible_sequences.append(indexed[0])
@@ -195,6 +263,7 @@ def prepare_messages(
                     "internal" if codec.is_internal(message) else "visible",
                     "{}",
                     tuple(locations),
+                    execution_id,
                 )
             )
             batch.last_message_sequence = sequence

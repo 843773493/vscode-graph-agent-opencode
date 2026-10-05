@@ -291,6 +291,7 @@ describe("Turn 历史分页 epoch 协调", () => {
       job_id: "job_latest",
       session_id: SESSION_ID,
       ordinal: 9,
+      root_logical_item_ordinal: 90,
       revision: 1,
       status: "running",
       created_at: "2026-08-30T18:00:00Z",

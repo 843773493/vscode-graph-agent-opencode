@@ -47,16 +47,20 @@ def registry_db(request, session_bundle_factory):
         session_id,
         accepted_ingress_id="registry-ingress",
         acceptance_idempotency_key="registry-root",
+        job_id="registry-job",
+        admission_idempotency_key="registry-admission",
         payload="独立草稿",
         payload_kind="text",
     )
-    with saver._storage._connect(session_id, "") as owner_connection:
+    with saver._storage._connect(
+        saver._storage.main_thread_id(session_id), "", session_id=session_id
+    ) as owner_connection:
         database_path = owner_connection.execute("PRAGMA database_list").fetchone()[2]
     connection = sqlite3.connect(database_path)
     connection.execute("PRAGMA foreign_keys = ON")
     assert connection.execute(
         "SELECT schema_version, database_state FROM database_meta"
-    ).fetchone() == (4, "active")
+    ).fetchone() == (8, "active")
     try:
         yield saver, session_id, connection, accepted
     finally:
@@ -65,7 +69,8 @@ def registry_db(request, session_bundle_factory):
 
 @pytest.fixture
 def draft(registry_db):
-    _saver, session, _connection, _accepted = registry_db
+    saver, session, _connection, _accepted = registry_db
+    thread_id = saver._storage.main_thread_id(session)
     body = {"instructions": "草稿正文不能复制进 SQLite", "value": 0.0000001}
     contribution = ContextContribution(
         contribution_id="source-contribution",
@@ -78,7 +83,7 @@ def draft(registry_db):
     )
     ref = ContextRef.request_only_ref(
         "request-ref",
-        session_id=session, thread_id="thread-1",
+        session_id=session, thread_id=thread_id,
         plan_id="plan",
         source_revision="revision-1",
         content_hash_value=contribution.content_hash,
@@ -87,6 +92,7 @@ def draft(registry_db):
     )
     tool = ToolSetRef.from_tool_snapshot(
         session_id=session,
+        thread_id=thread_id,
         plan_id="plan",
         snapshot_id="tools",
         source_revision="tools-1",
@@ -94,6 +100,7 @@ def draft(registry_db):
     )
     return ContextRequestPlan(
         session_id=session,
+        thread_id=thread_id,
         plan_id="plan",
         refs=(ref,),
         contributions=(contribution,),
@@ -121,7 +128,7 @@ def test_runtime_registration_rejects_import_evidence(registry_db, draft, field)
     with connection:
         connection.execute(f"UPDATE context_plans SET {field} = '{{}}'")
     with pytest.raises(ValueError, match="runtime draft 不得冒充导入记录"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
 def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
@@ -148,8 +155,13 @@ def test_registry_roundtrip_has_no_early_binding_or_body(registry_db, draft):
         "SELECT count(*) FROM context_assembly_selections"
     ).fetchone() == (0,)
     assert "草稿正文不能复制进 SQLite" not in "\n".join(connection.iterdump())
-    with saver._storage._connect(session, "", read_only=True) as restarted:
-        assert read_registration(restarted, session, draft.plan_id) == registered
+    with saver._storage._connect(
+        saver._storage.main_thread_id(session), "", read_only=True, session_id=session
+    ) as restarted:
+        assert (
+            read_registration(restarted, session, draft.thread_id, draft.plan_id)
+            == registered
+        )
     assert (saver._storage.root(session) / "rollout.jsonl").read_bytes() == before
     assert (
         connection.execute(
@@ -218,6 +230,7 @@ def test_registry_requires_owner_and_explicit_transaction(registry_db, draft):
             connection,
             ContextRequestPlan(
                 session_id="other",
+                thread_id=draft.thread_id,
                 plan_id="other-plan",
                 refs=(),
                 plan_creation_idempotency_key="other-key",
@@ -235,7 +248,7 @@ def test_recovery_rejects_missing_registry_without_repair(registry_db, draft, ta
     with connection:
         connection.execute(f"DELETE FROM {table}")
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
     assert connection.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
 
 
@@ -256,7 +269,7 @@ def test_draft_revision_is_cas_and_keeps_initial_creation_identity(registry_db, 
     with pytest.raises(ValueError, match="plan-revision-conflict"), connection:
         connection.execute("BEGIN IMMEDIATE")
         revise_registration(connection, draft, expected_revision=0)
-    assert read_registration(connection, session, draft.plan_id) == revised
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == revised
 
 
 @pytest.mark.parametrize("tamper", ["creation_hash", "creation_json"])
@@ -284,7 +297,9 @@ def test_revised_plan_still_authenticates_initial_creation_preimage(
         else:
             connection.execute("UPDATE context_plans SET creation_json=draft_json")
     with pytest.raises(ValueError, match="source-mismatch"):
-        saver.get_context_plan_registration(session, plan_id=draft.plan_id)
+        saver.get_context_plan_registration(
+            session, thread_id=draft.thread_id, plan_id=draft.plan_id
+        )
     with pytest.raises(ValueError, match="source-mismatch"):
         saver.create_context_plan(session, revised_input)
 
@@ -313,12 +328,13 @@ def test_failure_control_keeps_draft_correctable_without_selection(registry_db, 
         failure_id = record_seal_failure(
             connection,
             session,
+            draft.thread_id,
             draft.plan_id,
             seal_idempotency_key="seal-key",
             error_code="detail-unavailable",
         )
     assert failure_id.startswith("seal-failure:")
-    assert read_registration(connection, session, draft.plan_id) == first
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == first
     assert connection.execute(
         "SELECT error_code FROM context_plan_seal_failures"
     ).fetchall() == [("detail-unavailable",)]
@@ -327,6 +343,7 @@ def test_failure_control_keeps_draft_correctable_without_selection(registry_db, 
         record_seal_failure(
             connection,
             session,
+            draft.thread_id,
             draft.plan_id,
             seal_idempotency_key="seal-key",
             error_code="exception with sensitive data",
@@ -334,9 +351,10 @@ def test_failure_control_keeps_draft_correctable_without_selection(registry_db, 
 
 
 def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
-    _saver, session, connection, accepted = registry_db
+    saver, session, connection, accepted = registry_db
     draft = ContextRequestPlan(
         session_id=session,
+        thread_id=saver._storage.main_thread_id(session),
         plan_id="empty-plan",
         refs=(),
         plan_creation_idempotency_key="empty-key",
@@ -346,6 +364,7 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
         plan=draft,
         assembly_id="assembly",
         session_id=session,
+        thread_id=draft.thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="fixture",
@@ -367,7 +386,8 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
     assert (
-        read_registration(connection, session, draft.plan_id).plan_state == "unsealed"
+        read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
+        == "unsealed"
     )
     with pytest.raises(RuntimeError, match="injected crash"), connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -380,14 +400,16 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
         assert (
-            read_registration(connection, session, draft.plan_id).plan_state == "sealed"
+            read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
+            == "sealed"
         )
         raise RuntimeError("injected crash")
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (
         0,
     )
     assert (
-        read_registration(connection, session, draft.plan_id).plan_state == "unsealed"
+        read_registration(connection, session, draft.thread_id, draft.plan_id).plan_state
+        == "unsealed"
     )
     with connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -424,12 +446,13 @@ def test_seal_requires_current_draft_and_atomic_snapshot(registry_db):
 def _insert_snapshot(connection, snapshot):
     # 本用例验证 registry 的事务 port，不冒充完整 storage commit/selection 写入。
     connection.execute(
-        "INSERT INTO context_assemblies(assembly_id, session_id, turn_id, execution_id, plan_id, "
+        "INSERT INTO context_assemblies(assembly_id, session_id, thread_id, turn_id, execution_id, plan_id, "
         "plan_hash, request_hash, history_view_revision, source_overlay_epoch, snapshot_json, status, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', 'fixture')",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sealed', 'fixture')",
         (
             snapshot.assembly_id,
             snapshot.session_id,
+            snapshot.thread_id,
             snapshot.turn_id,
             snapshot.execution_id,
             snapshot.plan_id,
@@ -468,7 +491,7 @@ def test_recovery_rejects_tampered_manifest(registry_db, draft, mutation):
                 "UPDATE tool_set_snapshots SET assembly_id = 'premature'"
             )
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
 def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draft):
@@ -478,14 +501,19 @@ def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draf
     # 的权威值，不能用 rollout 路径反向推导。
     restarted = RolloutCheckpointSaver(saver._storage.sessions_dir)
     assert (
-        restarted.get_context_plan_registration(session, plan_id=draft.plan_id)
+        restarted.get_context_plan_registration(
+            session, thread_id=draft.thread_id, plan_id=draft.plan_id
+        )
         == original
     )
     changed = replace(draft, history_view_revision=1)
     current = restarted.revise_context_plan(session, changed, expected_revision=0)
     assert current.revision == 1
     assert (
-        saver.get_context_plan_registration(session, plan_id=draft.plan_id) == current
+        saver.get_context_plan_registration(
+            session, thread_id=draft.thread_id, plan_id=draft.plan_id
+        )
+        == current
     )
     assert saver.create_context_plan(session, draft) == current
 
@@ -527,13 +555,14 @@ def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft)
     ):
         _plan, _records, detail_refs = saver._bind_request_detail_refs(
             session,
+            draft.thread_id,
             "",
             registered.draft,
             assembly_id=f"assembly-{registered.draft.plan_id}",
         )
         assert (
             saver.read_context_plan_detail(
-                session, detail_ref=detail_refs["request-ref"]
+                session, draft.thread_id, detail_ref=detail_refs["request-ref"]
             )["detail"]
             == expected_body
         )
@@ -564,7 +593,7 @@ def test_registry_restore_rejects_inline_body_with_matching_hash(
                 "UPDATE context_plans SET draft_hash=?", (sha256_jcs(inline),)
             )
     with pytest.raises(ValueError, match="registry 不得包含 inline body"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
 def test_toolset_sql_owner_must_exist_even_outside_registry_api(registry_db, draft):
@@ -574,7 +603,7 @@ def test_toolset_sql_owner_must_exist_even_outside_registry_api(registry_db, dra
     with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"), connection:
         connection.execute("UPDATE tool_set_snapshots SET plan_id='missing-parent'")
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-    assert read_registration(connection, session, draft.plan_id) == original
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == original
 
 
 def test_registry_rejects_duplicate_json_key_even_when_effective_hash_matches(
@@ -588,7 +617,7 @@ def test_registry_rejects_duplicate_json_key_even_when_effective_hash_matches(
     with connection:
         connection.execute("UPDATE context_plans SET draft_json=?", (duplicate,))
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
 def test_sql_cannot_claim_sealed_with_null_binding(registry_db, draft):
@@ -596,7 +625,7 @@ def test_sql_cannot_claim_sealed_with_null_binding(registry_db, draft):
     original = _create(connection, draft)
     with pytest.raises(sqlite3.IntegrityError), connection:
         connection.execute("UPDATE context_plans SET plan_state = 'sealed'")
-    assert read_registration(connection, session, draft.plan_id) == original
+    assert read_registration(connection, session, draft.thread_id, draft.plan_id) == original
 
 
 def test_sealed_header_without_snapshot_is_not_a_dispatch_authority(registry_db, draft):
@@ -610,7 +639,7 @@ def test_sealed_header_without_snapshot_is_not_a_dispatch_authority(registry_db,
         )
         connection.execute("UPDATE tool_set_snapshots SET assembly_id = 'forged'")
     with pytest.raises(ValueError, match="缺少同一 assembly"):
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
 
 
 def test_tool_registry_binding_is_atomic_and_plan_cannot_get_second_assembly(
@@ -623,6 +652,7 @@ def test_tool_registry_binding_is_atomic_and_plan_cannot_get_second_assembly(
         plan=tools_only,
         assembly_id="tools-assembly",
         session_id=session,
+        thread_id=tools_only.thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="fixture",
@@ -644,6 +674,7 @@ def test_tool_registry_binding_is_atomic_and_plan_cannot_get_second_assembly(
         plan=tools_only,
         assembly_id="other-assembly",
         session_id=session,
+        thread_id=tools_only.thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="fixture",

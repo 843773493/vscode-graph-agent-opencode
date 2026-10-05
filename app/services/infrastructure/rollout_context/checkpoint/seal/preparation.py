@@ -7,6 +7,7 @@ from dataclasses import fields, replace
 
 from langchain_core.messages import BaseMessage
 
+from app.core.execution_admission_context import require_current_execution_admission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -21,8 +22,10 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
 def prepare_registered_context(
     owner,
     session_id: str,
+    thread_id: str,
     *,
-    turn_id: str,
+    turn_id: str | None,
+    execution_id: str,
     plan_creation_idempotency_key: str,
     seal_idempotency_key: str,
     request_messages: Sequence[BaseMessage],
@@ -34,11 +37,23 @@ def prepare_registered_context(
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
-    if not session_id or not turn_id or not provider_version:
-        raise ValueError("provider context 缺少 session_id/turn_id/provider_version")
+    if not session_id or not execution_id or not provider_version:
+        raise ValueError("provider context 缺少 session_id/execution_id/provider_version")
+    admission = require_current_execution_admission(
+        langgraph_thread_id=thread_id
+    )
+    if (
+        admission.session_id != session_id
+        or admission.thread_id != thread_id
+        or admission.execution_id != execution_id
+        or admission.turn_id != turn_id
+    ):
+        raise RuntimeError("provider context 与当前 execution admission 不一致")
     if target_format not in {"chat_completions", "responses"}:
         raise ValueError(f"不支持的 provider context target_format: {target_format}")
-    if not owner.supports_itemized_context(session_id, checkpoint_ns=checkpoint_ns):
+    if not owner.supports_itemized_context(
+        session_id, thread_id, checkpoint_ns=checkpoint_ns
+    ):
         raise RuntimeError("provider dispatch 必须使用可用的 v2 itemized context")
     contributions = tuple(prompt_contributions)
     contribution_ids = set()
@@ -70,29 +85,41 @@ def prepare_registered_context(
     plan_id = "plan-prepared:" + sha256_jcs(
         {"creation_key": plan_creation_idempotency_key}
     )
-    registered = owner._find_runtime_context_plan(session_id, plan_id, checkpoint_ns)
+    registered = owner._find_runtime_context_plan(
+        session_id, thread_id, plan_id, checkpoint_ns
+    )
     if registered is None or registered.plan_state == "unsealed":
         # 5.4：新 plan 组装前先在 model-call 安全边界收敛 desired/applied
         # ToolSet；已 sealed 的在飞请求不做二次比较。
-        owner._switch_tool_set_if_needed(session_id, tool_snapshot=tool_snapshot)
-        owner._storage.ensure_active_view_contains_turn_root(
-            session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
+        owner._switch_tool_set_if_needed(
+            session_id, thread_id, tool_snapshot=tool_snapshot
         )
+        if turn_id is not None:
+            owner._storage.ensure_active_view_contains_turn_root(
+                session_id,
+                thread_id,
+                turn_id=turn_id,
+                checkpoint_ns=checkpoint_ns,
+            )
         owner._storage.ensure_request_items(
             session_id,
+            thread_id,
             turn_id=turn_id,
+            execution_id=execution_id,
             messages=request_messages,
             checkpoint_ns=checkpoint_ns,
         )
         for contribution in contributions:
             owner.register_context_contribution(
                 session_id,
+                thread_id,
                 contribution,
                 checkpoint_ns=checkpoint_ns,
                 request_content=contribution.body,
             )
         full_plan = owner.compose_committed_context_plan(
             session_id,
+            thread_id,
             plan_id=plan_id,
             tool_snapshot=tool_snapshot,
             checkpoint_ns=checkpoint_ns,
@@ -125,11 +152,9 @@ def prepare_registered_context(
         registered = owner.create_context_plan(
             session_id, plan, checkpoint_ns=checkpoint_ns
         )
-    execution_id = owner._storage.execution_for_turn(
-        session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
-    )
     snapshot = owner.seal_context_plan(
         session_id,
+        thread_id,
         runtime_draft(registered),
         seal_idempotency_key=seal_idempotency_key,
         turn_id=turn_id,
@@ -142,6 +167,7 @@ def prepare_registered_context(
     plan = snapshot.as_sealed_plan()
     messages, tools, losses = owner.project_context_plan_to_provider(
         session_id,
+        thread_id,
         plan,
         target_format=target_format,
         checkpoint_ns=checkpoint_ns,
@@ -160,7 +186,7 @@ def prepare_registered_context(
     }
     with owner._lock:
         queue = owner._prepared_dispatches.setdefault(
-            (session_id, checkpoint_ns, turn_id), []
+            (session_id, thread_id, checkpoint_ns, execution_id), []
         )
         if not any(item["assembly_id"] == snapshot.assembly_id for item in queue):
             queue.append(pending)

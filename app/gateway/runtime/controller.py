@@ -21,8 +21,9 @@ from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
 from app.gateway.runtime.local_workspace import (
     restart_managed_workspace_backend,
     start_managed_local_workspace_runtime,
+    wait_for_workspace_health,
 )
-from app.gateway.runtime.process import wait_for_http_ok
+from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway import (
     GatewayRuntimeBlockerDTO,
@@ -90,6 +91,7 @@ class GatewayWorkspaceRuntimeController:
             runtime = await start_managed_local_workspace_runtime(
                 project_root=self._project_root,
                 workspace_root=workspace_root,
+                expected_backend_workspace_id=target.backend_workspace_id,
                 log_dir=self._log_dir,
                 reusable_backend_url=target.backend_url or None,
                 adopt_existing_backend=False,
@@ -102,6 +104,7 @@ class GatewayWorkspaceRuntimeController:
                 default_skill_groups=self._default_skill_groups,
             )
             target.backend_url = runtime.service_urls["workspace_api"]
+            target.backend_workspace_id = runtime.backend_workspace_id
             target.local_service_urls = {
                 "terminal_manager": runtime.service_urls["terminal_manager"],
                 "browser_manager": runtime.service_urls["browser_manager"]
@@ -182,7 +185,7 @@ class GatewayWorkspaceRuntimeController:
             if target.system_default or not target.removable:
                 raise PermissionError(f"默认工作区不能关闭: {target.name}")
             await self._runtime_action(
-                target.backend_url,
+                target,
                 "/api/v1/runtime/drain",
                 request_id=request_id,
             )
@@ -190,7 +193,7 @@ class GatewayWorkspaceRuntimeController:
             blockers: list[GatewayRuntimeBlockerDTO] = []
             while True:
                 runtime_status = await self._runtime_status(
-                    target.backend_url,
+                    target,
                     request_id=request_id,
                 )
                 blockers = self._parse_blockers(runtime_status.get("blockers"))
@@ -199,7 +202,7 @@ class GatewayWorkspaceRuntimeController:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
                     await self._runtime_action(
-                        target.backend_url,
+                        target,
                         "/api/v1/runtime/drain/cancel",
                         request_id=request_id,
                     )
@@ -228,11 +231,11 @@ class GatewayWorkspaceRuntimeController:
                 )
             target, runtime = self._managed_local_target(workspace_id)
             startup_contract = await self._pending_startup_contract(
-                target.backend_url,
+                target,
                 request_id=request_id,
             )
             await self._runtime_action(
-                target.backend_url,
+                target,
                 "/api/v1/runtime/drain",
                 request_id=request_id,
             )
@@ -242,7 +245,7 @@ class GatewayWorkspaceRuntimeController:
             blockers: list[GatewayRuntimeBlockerDTO] = []
             while True:
                 runtime_status = await self._runtime_status(
-                    target.backend_url,
+                    target,
                     request_id=request_id,
                 )
                 blockers = self._parse_blockers(runtime_status.get("blockers"))
@@ -251,7 +254,7 @@ class GatewayWorkspaceRuntimeController:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
                     await self._runtime_action(
-                        target.backend_url,
+                        target,
                         "/api/v1/runtime/drain/cancel",
                         request_id=request_id,
                     )
@@ -291,21 +294,21 @@ class GatewayWorkspaceRuntimeController:
                 )
             target, runtime = self._managed_local_target(workspace_id)
             startup_contract = await self._pending_startup_contract(
-                target.backend_url,
+                target,
                 request_id=request_id,
             )
             await self._runtime_action(
-                target.backend_url,
+                target,
                 "/api/v1/runtime/drain",
                 request_id=request_id,
             )
             runtime_status = await self._runtime_status(
-                target.backend_url,
+                target,
                 request_id=request_id,
             )
             blockers = self._parse_blockers(runtime_status.get("blockers"))
             await self._runtime_action(
-                target.backend_url,
+                target,
                 "/api/v1/runtime/drain/force",
                 request_id=request_id,
             )
@@ -339,12 +342,12 @@ class GatewayWorkspaceRuntimeController:
         startup_contract: dict[str, object] | None = None,
         request_id: str,
     ) -> None:
-        previous_backend_url = target.backend_url
         try:
             await restart_managed_workspace_backend(
                 runtime=runtime,
                 project_root=self._project_root,
                 workspace_root=Path(target.root_path),
+                expected_backend_workspace_id=target.backend_workspace_id,
                 log_dir=self._log_dir,
                 health_request_timeout_seconds=self._health_request_timeout_seconds,
                 health_poll_interval_seconds=self._health_poll_interval_seconds,
@@ -372,23 +375,23 @@ class GatewayWorkspaceRuntimeController:
             recovery_error: Exception | None = None
             try:
                 await self._runtime_action(
-                    previous_backend_url,
+                    target,
                     "/api/v1/runtime/drain/cancel",
                     request_id=request_id,
                 )
                 old_runtime_recovered = True
-            except Exception as cancel_error:
+            except Exception as cancel_error:  # noqa: BLE001 - 恢复失败需与启动错误一起暴露
                 recovery_error = cancel_error
             if startup_contract is not None:
                 try:
                     await self._record_pending_restart_failure(
-                        previous_backend_url,
+                        target,
                         candidate_ref=str(startup_contract["candidate_ref"]),
                         error=str(error),
                         old_runtime_recovered=old_runtime_recovered,
                         request_id=request_id,
                     )
-                except Exception as record_error:
+                except Exception as record_error:  # noqa: BLE001 - 记录失败不能中断恢复清理
                     recovery_error = recovery_error or record_error
             if recovery_error is not None:
                 raise RuntimeError(
@@ -398,18 +401,19 @@ class GatewayWorkspaceRuntimeController:
             raise
         self._registry.invalidate_route(target.workspace_id)
         target.backend_url = runtime.service_urls["workspace_api"]
+        target.backend_workspace_id = runtime.backend_workspace_id
         target.connection_error = None
         self._registry.upsert(target, activate=False)
         if startup_contract is not None:
             await self._resolve_pending_restart(
-                target.backend_url,
+                target,
                 candidate_ref=str(startup_contract["candidate_ref"]),
                 request_id=request_id,
             )
 
     async def _record_pending_restart_failure(
         self,
-        backend_url: str,
+        target: WorkspaceTarget,
         *,
         candidate_ref: str,
         error: str,
@@ -418,19 +422,22 @@ class GatewayWorkspaceRuntimeController:
     ) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
-                f"{backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",
+                f"{target.backend_url.rstrip('/')}/api/v1/config/pending/restart-failed",
                 params={"candidate_ref": candidate_ref},
                 json={
                     "error": error,
                     "old_runtime_recovered": old_runtime_recovered,
                 },
-                headers=self._backend_headers(request_id),
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             response.raise_for_status()
 
     async def _resolve_pending_restart(
         self,
-        backend_url: str,
+        target: WorkspaceTarget,
         *,
         candidate_ref: str,
         request_id: str,
@@ -439,48 +446,66 @@ class GatewayWorkspaceRuntimeController:
 
         async with httpx.AsyncClient(timeout=10) as client:
             health_response = await client.get(
-                f"{backend_url.rstrip('/')}/api/v1/health",
-                headers=self._backend_headers(request_id),
+                f"{target.backend_url.rstrip('/')}/api/v1/health",
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             health_response.raise_for_status()
             health_payload = health_response.json()
             if not isinstance(health_payload, dict):
                 raise TypeError("Workspace 健康响应必须是 JSON 对象")
+            if health_payload.get("workspace_id") != target.backend_workspace_id:
+                raise RuntimeError(
+                    "Workspace 健康响应 backend UUID 不匹配: "
+                    f"expected={target.backend_workspace_id}, "
+                    f"actual={health_payload.get('workspace_id')!r}"
+                )
             health_proof = health_payload.get("config_proof")
             if not isinstance(health_proof, dict):
                 raise TypeError("Workspace 健康响应缺少 config_proof")
             resolve_response = await client.post(
-                f"{backend_url.rstrip('/')}/api/v1/config/pending/resolve",
+                f"{target.backend_url.rstrip('/')}/api/v1/config/pending/resolve",
                 params={"candidate_ref": candidate_ref},
                 json=health_proof,
-                headers=self._backend_headers(request_id),
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             resolve_response.raise_for_status()
 
     async def _runtime_status(
         self,
-        backend_url: str,
+        target: WorkspaceTarget,
         *,
         request_id: str,
     ) -> dict[str, object]:
         async with httpx.AsyncClient(timeout=5) as client:
             response = await client.get(
-                f"{backend_url.rstrip('/')}/api/v1/runtime/status",
-                headers=self._backend_headers(request_id),
+                f"{target.backend_url.rstrip('/')}/api/v1/runtime/status",
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             response.raise_for_status()
         return self._response_data(response)
 
     async def _pending_startup_contract(
         self,
-        backend_url: str,
+        target: WorkspaceTarget,
         *,
         request_id: str,
     ) -> dict[str, object] | None:
         async with httpx.AsyncClient(timeout=10) as client:
             status_response = await client.get(
-                f"{backend_url.rstrip('/')}/api/v1/config/reload-status",
-                headers=self._backend_headers(request_id),
+                f"{target.backend_url.rstrip('/')}/api/v1/config/reload-status",
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
         status_response.raise_for_status()
         status = self._response_data(status_response)
@@ -492,9 +517,12 @@ class GatewayWorkspaceRuntimeController:
                 )
             async with httpx.AsyncClient(timeout=10) as client:
                 retry_response = await client.post(
-                    f"{backend_url.rstrip('/')}/api/v1/config/pending/retry",
+                    f"{target.backend_url.rstrip('/')}/api/v1/config/pending/retry",
                     params={"candidate_ref": candidate_ref},
-                    headers=self._backend_headers(request_id),
+                    headers=self._backend_headers(
+                        request_id,
+                        target.backend_workspace_id,
+                    ),
                 )
                 retry_response.raise_for_status()
             status = self._response_data(retry_response)
@@ -507,9 +535,12 @@ class GatewayWorkspaceRuntimeController:
             )
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(
-                f"{backend_url.rstrip('/')}/api/v1/config/pending/startup-contract",
+                f"{target.backend_url.rstrip('/')}/api/v1/config/pending/startup-contract",
                 params={"candidate_ref": candidate_ref},
-                headers=self._backend_headers(request_id),
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             response.raise_for_status()
         contract = self._response_data(response)
@@ -531,24 +562,33 @@ class GatewayWorkspaceRuntimeController:
 
     async def _runtime_action(
         self,
-        backend_url: str,
+        target: WorkspaceTarget,
         path: str,
         *,
         request_id: str,
     ) -> dict[str, object]:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
-                f"{backend_url.rstrip('/')}{path}",
-                headers=self._backend_headers(request_id),
+                f"{target.backend_url.rstrip('/')}{path}",
+                headers=self._backend_headers(
+                    request_id,
+                    target.backend_workspace_id,
+                ),
             )
             response.raise_for_status()
         return self._response_data(response)
 
     @staticmethod
-    def _backend_headers(request_id: str) -> dict[str, str]:
+    def _backend_headers(
+        request_id: str,
+        backend_workspace_id: str | None,
+    ) -> dict[str, str]:
+        if backend_workspace_id is None:
+            raise RuntimeError("Workspace API 调用缺少 backend UUID")
         return {
             "X-Local-Token": LOCAL_TOKEN,
             "X-Request-ID": request_id,
+            "X-BoxTeam-Workspace-Id": backend_workspace_id,
             # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
             "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
         }
@@ -662,8 +702,23 @@ class GatewayWorkspaceRuntimeController:
                 raise ValueError(
                     "只有外部本地后端可以执行重新探测"
                 )
-            await wait_for_http_ok(
+            backend_workspace_id = await asyncio.to_thread(
+                resolve_backend_workspace_id,
+                self._project_root,
+                Path(target.root_path),
+            )
+            if (
+                target.backend_workspace_id is not None
+                and target.backend_workspace_id != backend_workspace_id
+            ):
+                raise RuntimeError(
+                    "外部 Workspace backend UUID 与 Gateway registry 不一致: "
+                    f"expected={target.backend_workspace_id}, actual={backend_workspace_id}"
+                )
+            target.backend_workspace_id = backend_workspace_id
+            await wait_for_workspace_health(
                 f"{target.backend_url.rstrip('/')}/api/v1/health",
+                backend_workspace_id,
                 request_timeout_seconds=self._health_request_timeout_seconds,
                 poll_interval_seconds=self._health_poll_interval_seconds,
             )
@@ -820,6 +875,7 @@ async def reconnect_gateway_workspace(
         runtime = await start_managed_local_workspace_runtime(
             project_root=project_root,
             workspace_root=Path(target.root_path),
+            expected_backend_workspace_id=target.backend_workspace_id,
             log_dir=log_dir,
             reusable_backend_url=target.backend_url or None,
             adopt_existing_backend=False,
@@ -830,17 +886,36 @@ async def reconnect_gateway_workspace(
             default_skill_groups=default_skill_groups,
         )
         target.backend_url = runtime.service_urls["workspace_api"]
+        target.backend_workspace_id = runtime.backend_workspace_id
         target.local_service_urls = {
             "terminal_manager": runtime.service_urls["terminal_manager"],
             "browser_manager": runtime.service_urls["browser_manager"]
         }
     else:
-        await wait_for_http_ok(
+        backend_workspace_id = await asyncio.to_thread(
+            resolve_backend_workspace_id,
+            project_root,
+            Path(target.root_path),
+        )
+        if (
+            target.backend_workspace_id is not None
+            and target.backend_workspace_id != backend_workspace_id
+        ):
+            raise RuntimeError(
+                "外部 Workspace backend UUID 与 Gateway registry 不一致: "
+                f"expected={target.backend_workspace_id}, actual={backend_workspace_id}"
+            )
+        target.backend_workspace_id = backend_workspace_id
+        await wait_for_workspace_health(
             f"{target.backend_url.rstrip('/')}/api/v1/health",
+            backend_workspace_id,
             request_timeout_seconds=health_request_timeout_seconds,
             poll_interval_seconds=health_poll_interval_seconds,
         )
-        runtime = WorkspaceRuntime(service_urls={"workspace_api": target.backend_url})
+        runtime = WorkspaceRuntime(
+            service_urls={"workspace_api": target.backend_url},
+            backend_workspace_id=backend_workspace_id,
+        )
 
     target.connection_error = None
     registry.upsert(target, runtime=runtime, activate=False)

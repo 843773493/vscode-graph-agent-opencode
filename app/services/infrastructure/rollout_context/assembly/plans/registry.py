@@ -34,28 +34,31 @@ def require_transaction(connection: sqlite3.Connection) -> None:
         raise RuntimeError("context plan 写入必须属于 storage owner 的显式事务")
 
 
-def require_owner(connection: sqlite3.Connection, session_id: str) -> None:
+def require_owner(
+    connection: sqlite3.Connection, session_id: str, thread_id: str
+) -> None:
     row = connection.execute(
-        "SELECT session_id, database_state FROM database_meta WHERE singleton_id = 1",
+        "SELECT session_id, thread_id, database_state FROM database_meta WHERE singleton_id = 1",
     ).fetchone()
-    if row != (session_id, "active"):
+    if row != (session_id, thread_id, "active"):
         raise ValueError(
-            "source-mismatch: plan session owner 不一致或数据库不是 active"
+            "source-mismatch: plan session/thread owner 不一致或数据库不是 active"
         )
 
 
 def read_registration(
     connection: sqlite3.Connection,
     session_id: str,
+    thread_id: str,
     plan_id: str,
 ) -> ContextPlanRegistration:
-    require_owner(connection, session_id)
+    require_owner(connection, session_id, thread_id)
     row = connection.execute(
         "SELECT draft_json, draft_hash, creation_hash, revision, plan_state, assembly_id, "
         "seal_idempotency_key, seal_hash, plan_creation_idempotency_key, creation_json, "
         "registration_origin, source_provenance_json, seal_input_hash, source_manifest_json "
-        "FROM context_plans WHERE session_id = ? AND plan_id = ?",
-        (session_id, plan_id),
+        "FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        (session_id, thread_id, plan_id),
     ).fetchone()
     if row is None:
         raise KeyError(f"context plan 不存在: {plan_id}")
@@ -64,7 +67,7 @@ def read_registration(
             read_imported_registration,
         )
 
-        return read_imported_registration(connection, session_id, plan_id)
+        return read_imported_registration(connection, session_id, thread_id, plan_id)
     if row[11] is not None or row[13] is not None:
         raise ValueError("source-mismatch: runtime draft 不得冒充导入记录")
     if (row[4] == "unsealed" and row[12] is not None) or (
@@ -77,8 +80,9 @@ def read_registration(
     plan = unsealed_context_plan_from_dict(value)
     if any(item.body is not None for item in plan.contributions):
         raise ValueError("source-mismatch: plan registry 不得包含 inline body")
-    if (plan.session_id, plan.plan_id, plan.plan_creation_idempotency_key) != (
+    if (plan.session_id, plan.thread_id, plan.plan_id, plan.plan_creation_idempotency_key) != (
         session_id,
+        thread_id,
         plan_id,
         row[8],
     ):
@@ -99,8 +103,9 @@ def read_registration(
     initial = unsealed_context_plan_from_dict(initial_value)
     if any(item.body is not None for item in initial.contributions):
         raise ValueError("source-mismatch: creation registry 不得包含 inline body")
-    if (initial.session_id, initial.plan_id, initial.plan_creation_idempotency_key) != (
+    if (initial.session_id, initial.thread_id, initial.plan_id, initial.plan_creation_idempotency_key) != (
         session_id,
+        thread_id,
         plan_id,
         row[8],
     ) or row[2] != creation_hash(initial):
@@ -113,8 +118,8 @@ def read_registration(
     if row[4] == "sealed":
         assembly = connection.execute(
             "SELECT snapshot_json, detail_ref, status FROM context_assemblies "
-            "WHERE session_id = ? AND plan_id = ? AND assembly_id = ?",
-            (session_id, plan_id, row[5]),
+            "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND assembly_id = ?",
+            (session_id, thread_id, plan_id, row[5]),
         ).fetchone()
         if assembly is None or assembly[2] not in {"sealed", "terminal"}:
             raise ValueError("source-mismatch: sealed plan 缺少同一 assembly")
@@ -123,7 +128,16 @@ def read_registration(
         if row[7] != runtime_seal_hash(snapshot, assembly[1], row[12]):
             raise ValueError("source-mismatch: sealed plan preimage 与 assembly 不一致")
     return ContextPlanRegistration(
-        plan, row[2], row[3], row[4], row[5], row[6], row[7], seal_input_hash=row[12],
+        session_id=session_id,
+        thread_id=thread_id,
+        draft=plan,
+        creation_hash=row[2],
+        revision=row[3],
+        plan_state=row[4],
+        assembly_id=row[5],
+        seal_idempotency_key=row[6],
+        seal_hash=row[7],
+        seal_input_hash=row[12],
     )
 
 
@@ -131,30 +145,33 @@ def create_registration(
     connection: sqlite3.Connection, plan: ContextRequestPlan
 ) -> ContextPlanRegistration:
     require_transaction(connection)
-    require_owner(connection, plan.session_id)
+    require_owner(connection, plan.session_id, plan.thread_id)
     manifest = draft_manifest(plan)
     input_hash = creation_hash(plan)
     existing = connection.execute(
-        "SELECT plan_id FROM context_plans WHERE session_id = ? AND plan_creation_idempotency_key = ?",
-        (plan.session_id, plan.plan_creation_idempotency_key),
+        "SELECT plan_id FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_creation_idempotency_key = ?",
+        (plan.session_id, plan.thread_id, plan.plan_creation_idempotency_key),
     ).fetchone()
     if existing is not None:
-        registration = read_registration(connection, plan.session_id, existing[0])
+        registration = read_registration(
+            connection, plan.session_id, plan.thread_id, existing[0]
+        )
         if registration.creation_hash != input_hash:
             raise ValueError("plan-idempotency-conflict: 同一创建键的初始输入不一致")
         return registration
     if connection.execute(
-        "SELECT 1 FROM context_plans WHERE session_id = ? AND plan_id = ?",
-        (plan.session_id, plan.plan_id),
+        "SELECT 1 FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        (plan.session_id, plan.thread_id, plan.plan_id),
     ).fetchone():
         raise ValueError("plan-idempotency-conflict: plan_id 已被另一创建键占用")
     timestamp = datetime.now(UTC).isoformat()
     connection.execute(
-        "INSERT INTO context_plans(session_id, plan_id, plan_creation_idempotency_key, "
+        "INSERT INTO context_plans(session_id, thread_id, plan_id, plan_creation_idempotency_key, "
         "creation_hash, creation_json, draft_json, draft_hash, revision, plan_state, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'unsealed', ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'unsealed', ?, ?)",
         (
             plan.session_id,
+            plan.thread_id,
             plan.plan_id,
             plan.plan_creation_idempotency_key,
             input_hash,
@@ -166,7 +183,7 @@ def create_registration(
         ),
     )
     write_registry(connection, plan, timestamp)
-    return read_registration(connection, plan.session_id, plan.plan_id)
+    return read_registration(connection, plan.session_id, plan.thread_id, plan.plan_id)
 
 
 def revise_registration(
@@ -179,7 +196,9 @@ def revise_registration(
     if type(expected_revision) is not int or expected_revision < 0:
         raise ValueError("plan-revision-conflict: expected_revision 必须是非负整数")
     manifest = draft_manifest(plan)
-    existing = read_registration(connection, plan.session_id, plan.plan_id)
+    existing = read_registration(
+        connection, plan.session_id, plan.thread_id, plan.plan_id
+    )
     if existing.plan_state != "unsealed":
         raise ValueError("assembly-idempotency-conflict: sealed plan 不可修订")
     if existing.draft is None or existing.registration_origin != "runtime":
@@ -198,16 +217,17 @@ def revise_registration(
     write_registry(connection, plan, timestamp)
     cursor = connection.execute(
         "UPDATE context_plans SET draft_json = ?, draft_hash = ?, revision = revision + 1, updated_at = ? "
-        "WHERE session_id = ? AND plan_id = ? AND revision = ? AND plan_state = 'unsealed'",
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND revision = ? AND plan_state = 'unsealed'",
         (
             json_text(manifest),
             sha256_jcs(manifest),
             timestamp,
             plan.session_id,
+            plan.thread_id,
             plan.plan_id,
             expected_revision,
         ),
     )
     if cursor.rowcount != 1:
         raise RuntimeError("plan-revision-conflict: draft CAS 写入失败")
-    return read_registration(connection, plan.session_id, plan.plan_id)
+    return read_registration(connection, plan.session_id, plan.thread_id, plan.plan_id)

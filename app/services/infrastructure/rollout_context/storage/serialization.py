@@ -60,8 +60,15 @@ class RolloutSerializationMixin:
         self,
         thread_id: str,
         checkpoint_ns: str,
+        *,
+        session_id: str | None = None,
     ) -> None:
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._validate_reasoning_projection_connection(connection)
 
     @staticmethod
@@ -155,13 +162,19 @@ class RolloutSerializationMixin:
 
     def supports_itemized_context(
         self,
+        session_id: str,
         thread_id: str,
         *,
         checkpoint_ns: str = "",
     ) -> bool:
         """判断 rollout 是否允许 v2 item/context owner 参与 provider 请求。"""
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             return True
 

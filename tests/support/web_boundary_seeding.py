@@ -1,13 +1,7 @@
-"""clients/web 边界状态集成测试共享的 schema-4 会话再生成。
-
-模板 custom_tool_test_workspace 的 rollout 是 schema-4 之前的前 v1-dispatch
-旧格式，runtime 与 legacy 导入器都拒绝读取；各真实链路测试在复制出的工作区
-副本上用当前 Saver 按模板 v1 文案与终态重写等价数据。
-"""
+"""为 custom-tool 工作区中的 Web 边界会话生成 canonical rollout。"""
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -15,7 +9,8 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.path_utils import get_session_path_resolver
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -103,15 +98,15 @@ def seed_boundary_turn(
     turn_status: str,
     final_item_id: str | None = None,
 ) -> None:
-    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
-        session_id
-    )
-    shutil.rmtree(session_dir / "rollout")
     saver = RolloutCheckpointSaver(sessions_dir)
+    owner = saver.resolve_main_thread_owner(session_id)
     accepted = saver.accept_turn(
         session_id,
+        thread_id=owner.thread_id,
         accepted_ingress_id=f"ingress-{turn_id}",
         acceptance_idempotency_key=f"acceptance-{turn_id}",
+        job_id=f"job-{turn_id}",
+        admission_idempotency_key=f"execution-admission-{turn_id}",
         payload=user_content,
         payload_kind=PayloadKind.TEXT,
         turn_id=turn_id,
@@ -133,14 +128,23 @@ def seed_boundary_turn(
     }
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
-    saver.put(
-        build_checkpoint_config(session_id),
-        checkpoint,
-        {"source": f"boundary-cases-{turn_id}-fixture", "step": 1},
-        {"messages": "1"},
+    admission = saver.execution_admission(
+        session_id, thread_id=owner.thread_id,
+        execution_id=str(accepted["initial_execution_id"]),
     )
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
+    ):
+        saver.put(
+            build_checkpoint_config(owner.thread_id),
+            checkpoint,
+            {"source": f"boundary-cases-{turn_id}-fixture", "step": 1},
+            {"messages": "1"},
+        )
     saver.converge_execution(
         session_id,
+        thread_id=owner.thread_id,
         turn_id=turn_id,
         execution_id=str(accepted["initial_execution_id"]),
         outcome=outcome,

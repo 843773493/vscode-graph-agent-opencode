@@ -22,8 +22,21 @@ from app.core.path_utils import (
     get_user_workspace_schema_path,
     initialize_directories,
     safe_join,
+    validate_workspace_path,
+    workspace_context,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+
+
+@pytest.fixture
+def initialized_workspace(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    initialize_directories(workspace_id, workspace_root)
+    with workspace_context(workspace_id, workspace_root):
+        yield workspace_id, workspace_root
 
 
 class TestPathUtils:
@@ -94,41 +107,19 @@ class TestPathUtils:
 
     def test_validate_workspace_path(self):
         """测试工作区路径验证"""
-        # 先设置临时工作区环境变量
-        original_env = os.environ.get("WORKSPACE_ROOT")
-        os.environ["WORKSPACE_ROOT"] = str(self.base_path)
-
-        try:
-            # 重新导入以刷新环境变量
-            from importlib import reload
-
-            import app.core.path_utils
-
-            reload(app.core.path_utils)
-            from app.core.path_utils import validate_workspace_path
-
-            # 正常路径
+        workspace_id = "00000000-0000-4000-8000-000000000001"
+        with workspace_context(workspace_id, self.base_path):
             result = validate_workspace_path("test/file.txt")
             assert result == self.base_path / "test" / "file.txt"
 
-            # 遍历攻击
             with pytest.raises(ForbiddenError):
                 validate_workspace_path("../outside.txt")
 
-        finally:
-            if original_env:
-                os.environ["WORKSPACE_ROOT"] = original_env
-            else:
-                del os.environ["WORKSPACE_ROOT"]
-
-    def test_get_session_path_resolves_physical_tree(self, tmp_path, monkeypatch):
+    def test_get_session_path_resolves_physical_tree(self, initialized_workspace):
         """稳定 ID 应解析到真实层级目录，而不是拼接固定扁平路径。"""
-        workspace_root = tmp_path / "workspace"
-        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
+        _, workspace_root = initialized_workspace
 
         from app.core.path_utils import get_session_path_resolver
-
-        initialize_directories()
         resolver = get_session_path_resolver()
         folder_name = '项目/会话:*?"<>'
         session_title = '测试/会话:*?"<>'
@@ -156,22 +147,16 @@ class TestPathUtils:
         with pytest.raises(RuntimeError, match="folder 无物理目录"):
             resolver.resolve_folder_dir(folder.node_id)
 
-    def test_get_session_path_rejects_unknown_session(self, tmp_path, monkeypatch):
-        workspace_root = tmp_path / "workspace"
-        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-        initialize_directories()
-
+    def test_get_session_path_rejects_unknown_session(self, initialized_workspace):
         with pytest.raises(FileNotFoundError, match="会话物理目录不存在"):
             get_session_path("ses_missing")
 
     def test_get_session_path_detects_manual_directory_move(
         self,
         tmp_path,
-        monkeypatch,
+        initialized_workspace,
     ):
-        workspace_root = tmp_path / "workspace"
-        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-        initialize_directories()
+        _, workspace_root = initialized_workspace
         from app.core.path_utils import get_session_path_resolver
 
         resolver = get_session_path_resolver()

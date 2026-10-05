@@ -29,36 +29,40 @@ export function resolveTerminalCwd(workspaceRoot, cwdRelative) {
   return resolved;
 }
 
-// 一次性迁移旧持久记录：把绝对 `cwd` 还原为工作区内相对路径 `cwd_relative`。
-// 迁移必须能失败：非字符串/空串、非绝对路径、目录不存在、以及无法表达为工作区
-// 内相对路径（跨设备）都 MUST fail-closed 并给出可定位错误，绝不静默丢弃终端，
-// 也绝不回退进程 cwd。工作区外但仍可逐字节还原的现存目录（例如 `/etc`）按
-// `path.relative` 的 `..` 表达保留原语义，不在此处做边界收窄。
-export function deriveLegacyCwdRelative(workspaceRoot, cwd, terminalId) {
-  if (typeof cwd !== "string" || cwd.trim() === "") {
+const RECONCILIATION_STATUSES = new Set([
+  "verified",
+  "unknown",
+  "reconcile_required",
+]);
+
+export function validateTerminalRecord(record, workspaceId) {
+  if (record.workspace_id !== workspaceId) {
     throw new Error(
-      `终端记录 cwd 缺失或非字符串，无法迁移为相对路径: terminal_id=${terminalId}, cwd=${JSON.stringify(cwd)}`,
+      `终端记录工作区身份不匹配: terminal_id=${record.terminal_id}, expected=${workspaceId}, actual=${record.workspace_id}`,
     );
   }
-  const rawCwd = cwd.trim();
-  if (!path.isAbsolute(rawCwd)) {
-    throw new Error(
-      `终端记录 cwd 不是绝对路径，无法迁移为相对路径: terminal_id=${terminalId}, cwd=${rawCwd}`,
-    );
+  if (Object.hasOwn(record, "cwd")) {
+    throw new Error(`终端记录包含已废弃的真实工作目录 cwd: terminal_id=${record.terminal_id}`);
   }
-  const resolved = path.resolve(rawCwd);
-  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-    throw new Error(
-      `终端记录 cwd 不存在或不是目录，迁移拒绝静默丢弃: terminal_id=${terminalId}, cwd=${resolved}`,
-    );
+  if (
+    typeof record.cwd_relative !== "string"
+    || path.posix.isAbsolute(record.cwd_relative)
+    || path.win32.isAbsolute(record.cwd_relative)
+  ) {
+    throw new Error(`终端记录必须包含相对 cwd_relative: terminal_id=${record.terminal_id}`);
   }
-  const relative = path.relative(path.resolve(workspaceRoot), resolved);
-  if (path.isAbsolute(relative)) {
-    throw new Error(
-      `终端记录 cwd 无法表达为工作区内相对路径: terminal_id=${terminalId}, cwd=${resolved}, workspace_root=${workspaceRoot}`,
-    );
+  if (!Number.isSafeInteger(record.transport_owner_revision) || record.transport_owner_revision < 1) {
+    throw new Error(`终端传输版本无效: terminal_id=${record.terminal_id}`);
   }
-  return relative === "" ? "." : relative;
+  if (!RECONCILIATION_STATUSES.has(record.reconciliation_status)) {
+    throw new Error(`终端 PTY 核实状态无效: terminal_id=${record.terminal_id}`);
+  }
+  for (const field of ["session_id", "source_thread_id", "retention_scope", "thread_associations", "unattached_since", "owner_revision"]) {
+    if (Object.hasOwn(record, field)) {
+      throw new Error(`Node PTY 记录不得持有领域 owner 字段: ${field}, terminal_id=${record.terminal_id}`);
+    }
+  }
+  return record;
 }
 
 export function resolveShell() {
@@ -133,22 +137,6 @@ function stripAnsi(value) {
     .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
-function latestInteractiveInputFromBuffer(buffer) {
-  const lines = stripAnsi(displayBuffer(buffer)).split(/\r?\n/).reverse();
-  for (const line of lines) {
-    const match = line.match(/\$\s+(.+)$/);
-    if (!match) {
-      continue;
-    }
-    const command = match[1].trim();
-    if (!command || command.includes("__BOXTEAM_CMD_START_") || command.includes("__BOXTEAM_CMD_DONE_")) {
-      continue;
-    }
-    return command;
-  }
-  return null;
-}
-
 function latestCommandExitCode(buffer, doneMarker = null) {
   const markerPattern = doneMarker
     ? doneMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -184,19 +172,18 @@ function displayBuffer(buffer) {
 
 export class TerminalSession {
   constructor({ record, manager }) {
+    validateTerminalRecord(record, manager.workspaceId);
     this.manager = manager;
     this.id = record.terminal_id;
-    this.workspaceId = record.workspace_id || manager.workspaceId;
-    this.sessionId = record.session_id;
+    this.workspaceId = record.workspace_id;
+    // 唯一领域版本的传输影子，仅用于拒绝过期 grant；不决定保留、关联或回收。
+    this.transportOwnerRevision = record.transport_owner_revision;
+    this.transports = new Map();
+    this.reconciliationStatus = record.reconciliation_status;
     this.ownerAgentId = record.owner_agent_id || null;
     this.title = record.title || "Persistent Terminal";
     this.command = record.command || resolveShell();
     this.args = Array.isArray(record.args) ? record.args : shellArgs();
-    if (typeof record.cwd_relative !== "string") {
-      throw new Error(
-        `终端记录缺少工作目录相对路径: terminal_id=${record.terminal_id}`,
-      );
-    }
     this.cwdRelative = record.cwd_relative;
     this.cwd = path.resolve(manager.workspaceRoot, record.cwd_relative);
     this.cols = record.cols || 100;
@@ -230,8 +217,7 @@ export class TerminalSession {
     this.lastCommandCompletedAt = record.last_command_completed_at || null;
     this.lastCommandStartMarker = record.last_command_start_marker || null;
     this.lastCommandDoneMarker = record.last_command_done_marker || null;
-    // TODO: 旧终端记录没有 last_input 字段时，通过已持久化 buffer 推断最近交互输入。
-    const inferredLastInput = record.last_input || latestInteractiveInputFromBuffer(this.buffer);
+    const inferredLastInput = record.last_input;
     this.lastInput = inferredLastInput || null;
     this.lastInputSource = record.last_input_source || (inferredLastInput ? "interactive" : null);
     this.lastInputAt = record.last_input_at || (inferredLastInput ? this.updatedAt : null);
@@ -353,19 +339,16 @@ export class TerminalSession {
     this.status = "running";
     this.startedAt = this.startedAt || nowIso();
     this.osPid = ready.pid;
-    void readProcessStat(this.osPid).then((stat) => {
-      if (!stat) {
-        this.processGroupId = this.processGroupId || this.osPid;
-        this.processSessionId = this.processSessionId || null;
-        return;
-      }
+    const stat = await readProcessStat(this.osPid);
+    if (stat) {
       this.processGroupId = stat.processGroupId;
       this.processSessionId = stat.processSessionId;
       this.processStartTime = stat.processStartTime;
-      this.touch();
-      void this.manager.persist();
-    });
+    } else {
+      this.processGroupId = this.processGroupId || this.osPid;
+    }
     this.touch();
+    await this.manager.persist();
   }
 
   async handlePtyExit({
@@ -388,6 +371,7 @@ export class TerminalSession {
     this.signal = signal;
     this.endedAt = nowIso();
     if (workerExit || cleanupResult === "still_running" || cleanupResult === "cleanup_failed") {
+      this.markReconciliationStatus("unknown");
       this.releaseReason = error
         ? `pty_worker_error: ${error.message}`
         : workerExit
@@ -422,16 +406,23 @@ export class TerminalSession {
     await this.manager.persist();
   }
 
-  async attach(client, { afterSequence = null } = {}) {
+  async attach(client, { afterSequence = null, grant } = {}) {
+    this.assertPtyConnected("attach");
     this.touchUsage();
     try {
+      this.transports.set(client, grant);
+      this.assertTransport(client);
       await this.outputMultiplexer.attach(client, {
         afterSequence,
-        beforeNotify: () => this.manager.persist(),
+        beforeNotify: async () => {
+          await this.manager.persist();
+          this.assertTransport(client);
+        },
       });
+      this.assertTransport(client);
     } catch (error) {
-      this.touch();
-      await this.manager.persist();
+      this.transports.delete(client);
+      await this.detach(client);
       throw error;
     }
   }
@@ -466,6 +457,7 @@ export class TerminalSession {
   }
 
   write(data, { source = "user", command = null } = {}) {
+    this.assertPtyConnected("write");
     if (!this.ptyProcess || this.status !== "running" || this.releasePromise) {
       throw new Error(`终端未运行: terminal_id=${this.id}, status=${this.status}`);
     }
@@ -508,9 +500,15 @@ export class TerminalSession {
     if (this.cols === cols && this.rows === rows) {
       return false;
     }
+    const hasLivePty = this.ptyProcess && this.status === "running" && !this.releasePromise;
+    if (!hasLivePty && this.reconciliationStatus !== "verified") {
+      throw new Error(
+        `终端尚待 owner 核实，不能调整尺寸: terminal_id=${this.id}, reconciliation_status=${this.reconciliationStatus}`,
+      );
+    }
     this.cols = cols;
     this.rows = rows;
-    if (this.ptyProcess && this.status === "running" && !this.releasePromise) {
+    if (hasLivePty) {
       this.ptyProcess.resize(cols, rows);
     }
     this.touch();
@@ -542,18 +540,29 @@ export class TerminalSession {
   async _terminateForRelease({ status, commandStatus, reason }) {
     const pid = this.osPid || this.ptyProcess?.pid;
     const isolatedPty = this.ptyProcess;
+    if (!isolatedPty) {
+      await this.verifyPersistedProcessIdentity(pid);
+    }
     const result = await terminateTerminalProcessTree({
       pid,
       processSessionId: this.processSessionId,
       processStartTime: this.processStartTime,
     });
     if (result === "still_running") {
+      this.markReconciliationStatus("unknown");
       throw new Error(
         `终端进程树清理失败: terminal_id=${this.id}, pid=${pid}`,
       );
     }
+    if (!new Set(["terminated", "force_killed", "missing"]).has(result)) {
+      this.markReconciliationStatus("unknown");
+      throw new Error(
+        `终端进程停止结果无法核实: terminal_id=${this.id}, result=${result}`,
+      );
+    }
     this.ptyProcess = null;
     await isolatedPty?.shutdown({ terminatePty: false });
+    this.markReconciliationStatus("verified");
     this.status = status;
     this.endedAt = nowIso();
     this.signal = result === "force_killed" ? "SIGKILL" : "SIGTERM";
@@ -562,7 +571,7 @@ export class TerminalSession {
       this.lastCommandStatus = commandStatus;
       this.lastCommandCompletedAt = this.endedAt;
     }
-    this.touch();
+    this.closeTransports("terminal stopped");
     this.broadcast({
       type: status === "deleted" ? "deleted" : "exit",
       terminalId: this.id,
@@ -572,17 +581,86 @@ export class TerminalSession {
       snapshot: this.snapshot(),
     });
     void this.manager.persist();
-    return result !== "missing";
+    return true;
   }
 
-  async dispose() {
+  async verifyPersistedProcessIdentity(pid) {
+    if (
+      !Number.isInteger(pid)
+      || !this.processSessionId
+      || this.processStartTime === null
+    ) {
+      this.markReconciliationStatus("unknown");
+      throw new Error(
+        `终端持久进程身份不完整，拒绝停止或删除: terminal_id=${this.id}`,
+      );
+    }
+    const stat = await readProcessStat(pid);
+    if (
+      !stat
+      || stat.processSessionId !== this.processSessionId
+      || stat.processStartTime !== this.processStartTime
+      || stat.processGroupId !== this.processGroupId
+    ) {
+      this.markReconciliationStatus("unknown");
+      throw new Error(
+        `终端持久进程身份无法核实，拒绝停止或删除: terminal_id=${this.id}, pid=${pid}`,
+      );
+    }
+  }
+
+  assertPtyConnected(operation) {
+    if (this.reconciliationStatus !== "verified") {
+      throw new Error(
+        `终端 owner 状态尚待核实: operation=${operation}, terminal_id=${this.id}, reconciliation_status=${this.reconciliationStatus}`,
+      );
+    }
+  }
+
+  markReconciliationStatus(status) {
+    if (!RECONCILIATION_STATUSES.has(status)) {
+      throw new Error(`终端 reconciliation_status 无效: ${status}`);
+    }
+    if (this.reconciliationStatus === status) {
+      return false;
+    }
+    this.reconciliationStatus = status;
+    this.touch();
+    return true;
+  }
+
+  syncOwnerRevision(revision) {
+    if (!Number.isSafeInteger(revision) || revision < this.transportOwnerRevision) {
+      throw new Error(`终端传输 owner revision 过期或无效: terminal_id=${this.id}, revision=${revision}`);
+    }
+    if (revision !== this.transportOwnerRevision) {
+      this.transportOwnerRevision = revision;
+      this.closeTransports("terminal owner changed");
+      this.touch();
+    }
+  }
+
+  closeTransports(reason) {
+    for (const client of this.transports.keys()) {
+      client.close(4009, reason);
+    }
+    this.transports.clear();
+  }
+
+  assertTransport(client) {
+    if (this.transports.get(client)?.revision !== this.transportOwnerRevision) {
+      throw new Error(`终端连接授权已过期: terminal_id=${this.id}`);
+    }
+  }
+
+  async dispose({ terminatePty = true } = {}) {
     if (this.releasePromise) {
       await this.releasePromise;
     }
     const isolatedPty = this.ptyProcess;
     this.ptyProcess = null;
     this.outputMultiplexer.dispose();
-    await isolatedPty?.shutdown();
+    await isolatedPty?.shutdown({ terminatePty });
   }
 
   async kill({ reason = "terminal_cancel" } = {}) {
@@ -597,6 +675,7 @@ export class TerminalSession {
     if (this.status === "deleted") {
       return;
     }
+    this.assertPtyConnected("delete");
     if (this.releasePromise) {
       await this.releasePromise;
     }
@@ -611,6 +690,7 @@ export class TerminalSession {
       }
     }
     this.status = "deleted";
+    this.closeTransports("terminal deleted");
     this.endedAt = nowIso();
     this.releaseReason = "terminal_delete";
     if (this.lastCommandStatus === "running") {
@@ -672,7 +752,8 @@ export class TerminalSession {
     return {
       terminal_id: this.id,
       workspace_id: this.workspaceId,
-      session_id: this.sessionId,
+      transport_owner_revision: this.transportOwnerRevision,
+      reconciliation_status: this.reconciliationStatus,
       owner_agent_id: this.ownerAgentId,
       title: this.title,
       command: this.command,
@@ -717,7 +798,6 @@ export class TerminalSession {
       last_input_source: this.lastInputSource,
       last_input_at: this.lastInputAt,
       client_count: this.outputMultiplexer.clientCount,
-      attach_url: this.manager.attachUrl(this.id),
     };
   }
 

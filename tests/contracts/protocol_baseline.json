@@ -9,7 +9,13 @@
         "title": "shell",
         "cwd": "/workspace",
         "cols": 120,
-        "rows": 32
+        "rows": 32,
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+        "source_thread_id": "thr_018f0000000070008000000000000001",
+        "retention_scope": "thread"
+      },
+      "headers": {
+        "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001"
       }
     },
     "response": {
@@ -20,7 +26,8 @@
           "session_id": "session_123",
           "status": "running",
           "cols": 120,
-          "rows": 32
+          "rows": 32,
+          "workspace_id": "00000000-0000-4000-8000-000000000001"
         }
       }
     },

@@ -13,6 +13,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_non_negative_int,
+    strict_optional_text,
     strict_text,
 )
 
@@ -20,10 +21,43 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 class RolloutTerminalProjectionMixin:
     """只负责 terminal projection 所需的 durable item/view 辅助读取。"""
 
+    @staticmethod
+    def _bind_canonical_item_execution(
+        connection: sqlite3.Connection,
+        *,
+        item_id: str,
+        execution_id: str,
+    ) -> None:
+        """在同一 writer 事务内把 canonical item 绑定到确定的 execution。"""
+        row = connection.execute(
+            "SELECT execution_id FROM item_catalog WHERE item_id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"canonical item 缺少 item_catalog: {item_id}")
+        current_execution_id = strict_optional_text(
+            row[0], field=f"item_catalog.execution_id:{item_id}"
+        )
+        if current_execution_id is not None:
+            if current_execution_id != execution_id:
+                raise RuntimeError(
+                    "canonical item 已绑定不同 execution: "
+                    f"item={item_id}, execution={current_execution_id}"
+                )
+            return
+        cursor = connection.execute(
+            "UPDATE item_catalog SET execution_id = ? "
+            "WHERE item_id = ? AND execution_id IS NULL",
+            (execution_id, item_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"canonical item execution 绑定失败: {item_id}")
+
     def _read_canonical_item_from_catalog(
         self,
         connection: sqlite3.Connection,
         *,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         item_id: str,
@@ -46,7 +80,11 @@ class RolloutTerminalProjectionMixin:
         length = strict_non_negative_int(row[3], field="item_catalog.jsonl_length")
         if length == 0:
             raise RuntimeError(f"canonical item JSONL locator 长度非法: {item_id}")
-        jsonl_path = self.jsonl_path(thread_id, checkpoint_ns)
+        jsonl_path = self.jsonl_path(
+            session_id,
+            checkpoint_ns,
+            thread_id=thread_id,
+        )
         with jsonl_path.open("rb") as stream:
             stream.seek(offset)
             raw = stream.read(length)

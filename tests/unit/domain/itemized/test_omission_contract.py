@@ -5,10 +5,10 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.hashing import contribution_content_hash
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import contribution_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -19,6 +19,7 @@ def omitted_tool_snapshot(
 ) -> ContextAssemblySnapshot:
     tool = ToolSetRef.from_tool_snapshot(
         session_id=omitted_snapshot.session_id,
+        thread_id=omitted_snapshot.thread_id,
         snapshot_id="omitted-tools",
         plan_id=omitted_snapshot.plan_id,
         assembly_id=omitted_snapshot.assembly_id,
@@ -37,6 +38,7 @@ def omitted_tool_snapshot(
     )
     plan = ContextRequestPlan(
         session_id=omitted_snapshot.session_id,
+        thread_id=omitted_snapshot.thread_id,
         plan_id=omitted_snapshot.plan_id,
         refs=(),
         tool_set_refs=(tool,),
@@ -126,6 +128,7 @@ def test_available_omitted_overlay_seals_without_resolving_contribution(
         )
     plan = ContextRequestPlan(
         session_id=omitted_snapshot.session_id,
+        thread_id="thread-1",
         plan_id=omitted_snapshot.plan_id,
         refs=(ref,),
     ).seal_for_assembly(omitted_snapshot.assembly_id, selection=(entry,))
@@ -190,7 +193,9 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
                 source_revision=ref.source_revision,
                 content_length=ref.content_length,
                 content_hash=ref.content_hash,
-                detail_ref=DetailRef("session-chain", "assembly-chain", f"detail-{role}"),
+                detail_ref=DetailRef(
+                    "session-chain", "thread-1", "assembly-chain", f"detail-{role}"
+                ),
                 contribution_id=contribution.contribution_id,
                 contribution_ordinal=ordinal,
                 base_delta_role=role,
@@ -203,6 +208,7 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
         contributions.append(contribution)
     return ContextRequestPlan(
         session_id="session-chain",
+        thread_id="thread-1",
         plan_id="plan-chain",
         refs=tuple(entry.ref for entry in entries),
         contributions=tuple(contributions),

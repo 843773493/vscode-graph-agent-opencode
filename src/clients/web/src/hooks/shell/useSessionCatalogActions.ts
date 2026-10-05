@@ -1,11 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   DEFAULT_SESSION_TITLE,
-  createSessionCatalogFolder,
 } from "../../api";
+import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
 import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
-import type { GatewayWorkspace, Session } from "../../types/backend";
+import type { GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
+import type { SessionCatalogOutboxRuntime } from "../session/sessionCatalogOutboxRuntime";
+import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 export interface SessionNameDialogState {
   sessionId: string;
@@ -26,6 +28,8 @@ interface SessionCatalogActionsInput {
     danger: boolean;
   }) => Promise<boolean>;
   setStatus: (text: string) => void;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
+  gatewayUserAccess?: GatewayUserAccess | null;
   activateGatewayWorkspace: (
     workspaceId: string,
     preferredSessionId?: string | null,
@@ -66,6 +70,8 @@ export function useSessionCatalogActions({
   gatewayWorkspaces,
   confirm,
   setStatus,
+  sessionCatalogOutboxRuntime,
+  gatewayUserAccess,
   activateGatewayWorkspace,
   createSession,
   openWorkspaceSession,
@@ -133,8 +139,51 @@ export function useSessionCatalogActions({
     parentNodeId: string | null,
     name: string,
   ) => {
-    await createSessionCatalogFolder(apiPort, workspaceId, name, parentNodeId);
+    const runtime = sessionCatalogOutboxRuntime;
+    const access = gatewayUserAccess;
+    if (!runtime || !access) {
+      throw new Error("Gateway 认证状态尚未就绪，不能新建会话文件夹");
+    }
+    const workspaceTarget = requireGatewayWorkspaceRequestTarget(gatewayWorkspaces, workspaceId);
+    const handle = await runtime.openWorkspace(
+      workspaceTarget,
+      access,
+    );
+    let resolvedParentNodeId = parentNodeId;
+    if (parentNodeId) {
+      const parentCreation = handle.driver.current().operations.find(
+        (operation) => operation.kind === "create_folder"
+          && (operation.client_ref === parentNodeId
+            || operation.created_node_id === parentNodeId),
+      );
+      if (parentCreation && !parentCreation.created_node_id) {
+        throw new Error("父文件夹尚未提交，当前目录协议不能在待提交文件夹下新建子文件夹");
+      }
+      if (parentCreation?.created_node_id) {
+        resolvedParentNodeId = parentCreation.created_node_id;
+      }
+    }
+    const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget);
+    const submitted = await runtime.submit(
+      workspaceTarget,
+      access,
+      { kind: "create_folder", name, parentNodeId: resolvedParentNodeId },
+      { baseCatalogRevision: catalog.catalog_revision },
+    );
+    if (submitted.dispatchOutcome === "accepted") {
+      setStatus("会话文件夹已持久受理，等待提交");
+    } else if (submitted.dispatchOutcome === "unknown") {
+      setStatus("会话文件夹状态待确认，保留本地待同步变更");
+    }
     invalidateSessionCatalog(workspaceId);
+    void runtime.waitForTerminal(handle, submitted.operationId)
+      .then(() => invalidateSessionCatalog(workspaceId))
+      .catch((error: unknown) => {
+        invalidateSessionCatalog(workspaceId);
+        runtime.reportError(
+          `新建会话文件夹失败: ${errorMessage(error)}`,
+        );
+      });
   };
   const handleSessionFolderDeleted = async (
     workspaceId: string,
@@ -194,9 +243,8 @@ export function useSessionCatalogActions({
         return;
       }
       await deleteSession(sessionId, workspaceId);
-      // 删除成功路径不再额外强制刷新会话目录树（§10.3 前端半边）：会话列表已在
-      // deleteSession 内本地收敛，会话目录树的刷新由 `sessionCatalogSyncKeys`（按
-      // 会话集合变化派生）驱动，无需再叠加一次强制重拉。
+      // 生命周期动作已刷新并对账被删会话的真实父分支；会话集合变化再驱动
+      // sessionCatalogSyncKeys 刷新其余已展开分支。
     }).catch((error: unknown) => {
       setStatus(`删除会话失败: ${errorMessage(error)}`);
     });

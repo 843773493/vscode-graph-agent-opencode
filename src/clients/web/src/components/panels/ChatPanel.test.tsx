@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import ChatPanel, { transcriptConversationsForDisplay } from "./ChatPanel";
+import ChatPanel, {
+  chatPanelSessionScopeId,
+  transcriptConversationsForDisplay,
+} from "./ChatPanel";
 import type { ConversationView } from "../../types/frontend";
+import type { InternalExecutionHistory } from "../../types/backend";
 
 function emptyPanelProps(onRetryHistory: () => void) {
   return {
@@ -96,5 +100,22 @@ describe("ChatPanel transcript 投影", () => {
       active,
       history,
     ]);
+  });
+
+  test("仅有 internal history 时仍按所属 session 隔离 scroller scope", () => {
+    const execution: InternalExecutionHistory = {
+      execution_id: "execution-1",
+      job_id: "job-1",
+      session_id: "session-internal-only",
+      thread_id: "thread-main",
+      status: "completed",
+      created_at: "2026-10-03T00:00:00Z",
+      updated_at: "2026-10-03T00:00:01Z",
+      display_parts: [],
+      response_parts: [],
+    };
+
+    expect(chatPanelSessionScopeId([], [], [execution])).toBe("session-internal-only");
+    expect(chatPanelSessionScopeId([], [], [])).toBe("empty");
   });
 });

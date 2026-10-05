@@ -11,12 +11,18 @@ from app.schemas.internal_v2.session_changes import (
     SessionFileChangeKind,
 )
 
-
 TEXT_PREVIEW_LIMIT = 8000
 
 
-def build_edit_id(*, turn_id: str, tool_call_id: str, file_path: str) -> str:
-    value = f"{turn_id}\0{tool_call_id}\0{file_path}\0{time.time_ns()}"
+def build_edit_id(
+    *,
+    turn_id: str | None,
+    execution_id: str,
+    tool_call_id: str,
+    file_path: str,
+) -> str:
+    owner_id = turn_id if turn_id is not None else execution_id
+    value = f"{owner_id}\0{tool_call_id}\0{file_path}\0{time.time_ns()}"
     return f"edit_{hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]}"
 
 
@@ -96,7 +102,13 @@ def aggregate_records(
                 execution_ids=tuple(
                     dict.fromkeys(record.execution_id for record in ordered)
                 ),
-                turn_ids=tuple(dict.fromkeys(record.turn_id for record in ordered)),
+                turn_ids=tuple(
+                    dict.fromkeys(
+                        record.turn_id
+                        for record in ordered
+                        if record.turn_id is not None
+                    )
+                ),
                 before_content=before_content,
                 after_content=after_content,
             )
@@ -107,7 +119,8 @@ def aggregate_records(
 def sorted_turn_ids(records: list[StoredFileEdit]) -> list[str]:
     seen: dict[str, str] = {}
     for record in records:
-        seen.setdefault(record.turn_id, record.created_at)
+        if record.turn_id is not None:
+            seen.setdefault(record.turn_id, record.created_at)
     return [
         turn_id
         for turn_id, _ in sorted(seen.items(), key=lambda item: item[1], reverse=True)

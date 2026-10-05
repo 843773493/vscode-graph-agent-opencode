@@ -30,6 +30,8 @@ function node(overrides: Partial<SessionCatalogNode> & { node_id: string }): Ses
     session_id: null,
     folder_id: null,
     has_children: false,
+    node_revision: 1,
+    state: "active",
     storage_relative_path: null,
     created_at: null,
     updated_at: null,
@@ -41,6 +43,7 @@ function node(overrides: Partial<SessionCatalogNode> & { node_id: string }): Ses
 function page(items: SessionCatalogNode[], parentNodeId: string | null = null): SessionCatalogPage {
   return {
     revision: "rev-3",
+    catalog_revision: 3,
     parent_node_id: parentNodeId,
     // 后端分页里的子节点一定带本页父节点；测试数据必须同构，否则会把「父链不符」
     // 误当成 pending 移出分支。
@@ -93,6 +96,9 @@ describe("会话目录 pending 投影：改名", () => {
     });
     expect(projection.items.map((item) => item.name)).toEqual(["新名"]);
     expect(projection.revision).toBe("rev-3");
+    expect(projection.catalog_revision).toBe(confirmed.catalog_revision);
+    expect(projection.items[0].node_revision).toBe(confirmed.items[0].node_revision);
+    expect(projection.items[0].state).toBe("active");
     expect(projection.cursor).toBe("cursor-abc");
     expect(projection.total).toBe(42);
     expect(projection.consistency_warning).toBe("warning-text");
@@ -181,6 +187,8 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
       outbox,
     });
     expect(projection.items.map((item) => item.node_id)).toEqual([opId("f")]);
+    expect(projection.items[0].node_revision).toBeNull();
+    expect(projection.items[0].state).toBeNull();
     expect(projection.items[0].client_ref).toBe(opId("f"));
     // 未确认阶段 node_id 只能等于 client_ref：绝不允许出现伪造的 canonical node ID。
     expect(projection.items[0].node_id).toBe(opId("f"));
@@ -260,7 +268,7 @@ describe("会话目录 pending 投影：新建 Folder 的 client_ref", () => {
 });
 
 describe("会话目录 pending 投影：删除", () => {
-  test("pending 删除 Folder 时其逻辑后代一并从投影消失", () => {
+  test("pending 删除 Folder 时保留 deleting 根节点并隐藏其逻辑后代", () => {
     const rootPage = page([node({ node_id: "cnode_f" })], "cnode_root");
     const childPage = page([node({ node_id: "ses_child", kind: "session", session_id: "ses_child" })], "cnode_f");
     const confirmedNodes = [
@@ -276,12 +284,14 @@ describe("会话目录 pending 投影：删除", () => {
     ));
     const root = projectCatalogBranch(rootPage, { confirmedNodes, outbox });
     const child = projectCatalogBranch(childPage, { confirmedNodes, outbox });
-    expect(root.items.map((item) => item.node_id)).toEqual([]);
+    expect(root.items.map((item) => item.node_id)).toEqual(["cnode_f"]);
+    expect(root.items[0].state).toBe("deleting");
+    expect(root.items[0].pending_state).toBe("pending_local");
     expect(child.items.map((item) => item.node_id)).toEqual([]);
-    expect(catalogPendingNodeCount({ confirmedNodes, outbox })).toBe(0);
+    expect(catalogPendingNodeCount({ confirmedNodes, outbox })).toBe(1);
   });
 
-  test("pending 删除会话只隐藏该会话，不关闭同层其它节点", () => {
+  test("pending 删除会话显示 deleting 状态，不关闭同层其它节点", () => {
     const rootPage = page([
       node({ node_id: "ses_a", kind: "session", session_id: "ses_a" }),
       node({ node_id: "ses_b", kind: "session", session_id: "ses_b" }),
@@ -296,7 +306,9 @@ describe("会话目录 pending 投影：删除", () => {
       confirmedNodes: rootPage.items,
       outbox,
     });
-    expect(projection.items.map((item) => item.node_id)).toEqual(["ses_b"]);
+    expect(projection.items.map((item) => item.node_id)).toEqual(["ses_a", "ses_b"]);
+    expect(projection.items[0].state).toBe("deleting");
+    expect(projection.items[0].pending_state).toBe("pending_local");
   });
 });
 
@@ -319,7 +331,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
       node({ node_id: "ses_1", kind: "session", session_id: "ses_1", parent_node_id: "cnode_root" }),
     ];
     const breadcrumb = projectCatalogBreadcrumb(
-      { revision: "rev-3", items: confirmedNodes },
+      { revision: "rev-3", catalog_revision: 3, items: confirmedNodes },
       { confirmedNodes, outbox },
       "ses_1",
     );
@@ -330,13 +342,14 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
     ]);
     // ses_1 的父链来自本地 pending 移动，因此它同样是 pending 展示项。
     expect(breadcrumb.pending_node_ids).toEqual([opId("f"), "ses_1"]);
+    expect(breadcrumb.catalog_revision).toBe(3);
   });
 
   test("缺失 node 时面包屑回落到最近有效祖先而不是悬空父链", () => {
     const confirmedNodes = [node({ node_id: "cnode_root" })];
     const outbox = createCatalogOutbox(PARTITION);
     const breadcrumb = projectCatalogBreadcrumb(
-      { revision: "rev-3", items: confirmedNodes },
+      { revision: "rev-3", catalog_revision: 3, items: confirmedNodes },
       { confirmedNodes, outbox },
       "cnode_missing_child",
     );
@@ -357,7 +370,7 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
       { baseCatalogRevision: 0 },
     );
     const search = projectCatalogSearch(
-      { revision: "rev-3", cursor: "cursor-abc", total: 5 },
+      { revision: "rev-3", catalog_revision: 3, cursor: "cursor-abc", total: 5 },
       { confirmedNodes: [], outbox },
       "报告",
     );
@@ -365,12 +378,13 @@ describe("会话目录 pending 投影：面包屑与搜索", () => {
     expect(search.total).toBe(5);
     expect(search.cursor).toBe("cursor-abc");
     expect(search.revision).toBe("rev-3");
+    expect(search.catalog_revision).toBe(3);
     expect(search.pending_node_ids).toEqual([opId("f")]);
   });
 
   test("空搜索关键字必须响亮失败", () => {
     expect(() => projectCatalogSearch(
-      { revision: "rev-3", cursor: null, total: 0 },
+      { revision: "rev-3", catalog_revision: 3, cursor: null, total: 0 },
       { confirmedNodes: [], outbox: createCatalogOutbox(PARTITION) },
       "   ",
     )).toThrow("会话目录搜索关键字不能为空");

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 IdentifierPrefix = Literal[
+    "adm",
     "attempt",
     "bgm",
     "bgt",
@@ -36,6 +37,7 @@ IdentifierPrefix = Literal[
     "team",
     "tevt",
     "thr",
+    "turn",
     "tooltest",
     "ttask",
 ]

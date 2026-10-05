@@ -31,6 +31,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
     connection = state.connection
     target_session_id = state.target_session_id
+    target_thread_id = state.target_thread_id
     maps = state.maps
     item_rows = state.item_rows
     part_maps = state.part_maps
@@ -199,16 +200,19 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
         for table in ("assembly_item_refs", "context_assembly_selections"):
             rewrite_column(connection, table, "detail_ref", old_id, new_id)
         target_detail = detail_ref_from_key(new_id)
-        target_detail.require_owner(target_session_id)
+        target_detail.require_owner(target_session_id, target_thread_id)
         result = connection.execute(
-            "UPDATE context_plan_details SET detail_ref = ?, session_id = ?, assembly_id = ?, detail_id = ?, relative_path = ? WHERE detail_ref = ?",
+            "UPDATE context_plan_details SET detail_ref = ?, session_id = ?, thread_id = ?, assembly_id = ?, detail_id = ?, relative_path = ? WHERE detail_ref = ? AND session_id = ? AND thread_id = ?",
             (
                 new_id,
                 target_detail.session_id,
+                target_detail.thread_id,
                 target_detail.assembly_id,
                 target_detail.detail_id,
                 detail_relative_path(target_detail).as_posix(),
                 old_id,
+                state.source_session_id,
+                state.source_thread_id,
             ),
         )
         if result.rowcount != 1:
@@ -221,15 +225,18 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
 
     for old_id, new_id in maps.get("source_overlay", {}).items():
         old_overlay = connection.execute(
-            "SELECT supersedes_overlay_id, materializes_overlay_id, base_ref, delta_ref FROM source_overlays WHERE overlay_id = ?",
-            (old_id,),
+            "SELECT supersedes_overlay_id, materializes_overlay_id, base_ref, delta_ref "
+            "FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+            (old_id, target_session_id, target_thread_id),
         ).fetchone()
         if old_overlay is None:
             raise RuntimeError(
                 f"full_rollout_copy source overlay manifest 丢失: {old_id}"
             )
         result = connection.execute(
-            "UPDATE source_overlays SET overlay_id = ?, supersedes_overlay_id = ?, materializes_overlay_id = ?, base_ref = ?, delta_ref = ? WHERE overlay_id = ?",
+            "UPDATE source_overlays SET overlay_id = ?, supersedes_overlay_id = ?, "
+            "materializes_overlay_id = ?, base_ref = ?, delta_ref = ? "
+            "WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
             (
                 new_id,
                 mapped(
@@ -255,6 +262,8 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
                     optional_text(old_overlay[3], field="source_overlays.delta_ref"),
                 ),
                 old_id,
+                target_session_id,
+                target_thread_id,
             ),
         )
         if result.rowcount != 1:

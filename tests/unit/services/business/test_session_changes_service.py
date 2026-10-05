@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import (
-    get_session_creation_service,
     get_session_changes_dir,
-    get_sessions_dir,
+    get_session_creation_service,
     get_session_path_resolver,
+    get_sessions_dir,
     initialize_directories,
+    workspace_context,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_service import SessionService
@@ -21,20 +23,57 @@ from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
 @pytest.fixture
-def session_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionService:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    initialize_directories()
-    # R17：workspace_id 与 resolver 同源（identity API）；catalog 模式下
-    # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
-    from app.core.workspace_identity import load_or_create_workspace_id
-
-    return SessionService(
-        config_service=ConfigService(),
-        trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
-        workspace_id=load_or_create_workspace_id(tmp_path),
-        path_resolver=get_session_path_resolver(get_sessions_dir()),
-        creation_service=get_session_creation_service(get_sessions_dir()),
-    )
+def session_service(tmp_path: Path):
+    workspace_id = load_or_create_workspace_id(tmp_path)
+    initialize_directories(workspace_id, tmp_path)
+    with workspace_context(workspace_id, tmp_path):
+        local_config_path = tmp_path / ".boxteam" / "workspace.jsonc"
+        local_config_path.write_text(
+            json.dumps(
+                {
+                    "llm": {
+                        "providers": [
+                            {
+                                "id": "test-local",
+                                "endpoint": "http://127.0.0.1:9/v1",
+                                "model": "offline-test-model",
+                                "api_key": "offline-test-key",
+                                "custom_llm_provider": "openai",
+                                "api_mode": {
+                                    "protocol": "chat_completions",
+                                    "model_info": {
+                                        "supports_function_calling": True,
+                                        "supports_reasoning": True,
+                                    },
+                                    "supports_reasoning": {"reasoning_content": True},
+                                },
+                            }
+                        ]
+                    },
+                    "agents": {
+                        "default": {
+                            "model": {
+                                "primary_provider": "test-local",
+                                "fallback_providers": [],
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        # R17：workspace_id 与 resolver 同源（identity API）；catalog 模式下
+        # register 校验 manifest workspace_id 与分配一致，不再硬编码假 UUID。
+        yield SessionService(
+            config_service=ConfigService(workspace_root=tmp_path),
+            trace_event_store=TraceEventStore(sessions_dir=get_sessions_dir()),
+            workspace_id=load_or_create_workspace_id(tmp_path),
+            path_resolver=get_session_path_resolver(get_sessions_dir()),
+            creation_service=get_session_creation_service(get_sessions_dir()),
+        )
 
 
 @pytest.mark.asyncio
@@ -290,3 +329,43 @@ async def test_counts_changed_lines_that_start_with_diff_prefixes(
     assert detail.summary.files == 1
     assert detail.summary.additions == 2
     assert detail.summary.deletions == 0
+
+@pytest.mark.asyncio
+async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changeset(
+    tmp_path: Path,
+    session_service: SessionService,
+) -> None:
+    session = await session_service.create(SessionCreateRequest(title="internal edit"))
+    service = SessionChangesService(
+        session_service=session_service,
+        store=SessionChangesStore(workspace_root=tmp_path),
+    )
+    target = tmp_path / "internal.txt"
+    before = service.capture_before("/internal.txt")
+    target.write_text("internal output\n", encoding="utf-8")
+
+    record = await service.record_tool_file_edit(
+        session_id=session.session_id,
+        turn_id=None,
+        tool_call_id="call_internal",
+        execution_id="execution_internal",
+        tool_name="write_file",
+        before=before,
+    )
+
+    assert record is not None
+    assert record.turn_id is None
+    changesets = await service.list_changesets(session.session_id)
+    assert [item.changeset_id for item in changesets.items] == ["all"]
+    all_changes = await service.get_changeset(
+        session_id=session.session_id,
+        changeset_id="all",
+    )
+    assert all_changes.summary.files == 1
+    assert all_changes.files[0].turn_ids == []
+    assert all_changes.files[0].execution_ids == ["execution_internal"]
+    turn_changes = await service.get_changeset(
+        session_id=session.session_id,
+        changeset_id="turn:execution_internal",
+    )
+    assert turn_changes.summary.files == 0

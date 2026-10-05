@@ -1,4 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getSessionMainThread } from "../../api";
+import { errorMessage } from "../../utils/errorMessage";
 
 import type { NodeDebugBreakpointDefinition } from "../../components/nodeDebug/NodeDebugBreakpointGutter";
 import type { NodeDebugState, WebUiSettingsUpdate } from "../../types/backend";
@@ -21,7 +23,8 @@ interface UseNodeDebugWorkbenchOptions {
 }
 
 export interface NodeDebugWorkbenchBinding {
-  threadId: string;
+  threadId: string | null;
+  mainThreadId: string | null;
   controller: NodeDebugController;
   activeFrame: NonNullable<NodeDebugState["call_stack"]>[number] | null;
   selectThread: (threadId: string) => void;
@@ -44,16 +47,37 @@ export function useNodeDebugWorkbench({
   setAuxiliaryTab,
   persistLayoutSettings,
 }: UseNodeDebugWorkbenchOptions): NodeDebugWorkbenchBinding {
+  const [resolvedMainThreadId, setResolvedMainThreadId] = useState<string | null>(null);
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
+  useEffect(() => {
+    if (!sessionId) {
+      setResolvedMainThreadId(null);
+      return;
+    }
+    let current = true;
+    setResolvedMainThreadId(null);
+    void getSessionMainThread(apiPort, sessionId, workspaceId)
+      .then((owner) => {
+        if (current) setResolvedMainThreadId(owner.thread_id);
+      })
+      .catch((cause: unknown) => {
+        if (current) onStatusChangeRef.current(`解析调试主线程失败: ${errorMessage(cause)}`);
+      });
+    return () => { current = false; };
+  }, [apiPort, sessionId, workspaceId]);
+
   const {
     threadId,
+    mainThreadId,
     selectThread: selectOwnerThread,
-  } = useNodeDebugOwner({ workspaceId, sessionId });
+  } = useNodeDebugOwner({ workspaceId, sessionId }, resolvedMainThreadId);
   const controller = useNodeDebugController({
     apiPort,
     workspaceId,
     sessionId,
-    threadId,
-    enabled,
+    threadId: threadId ?? "",
+    enabled: enabled && threadId !== null,
     onStatusChange,
   });
 
@@ -64,8 +88,8 @@ export function useNodeDebugWorkbench({
     if (!extensionWindowRequested) {
       persistLayoutSettings({ auxiliary_visible: true, auxiliary_tab: "debug" });
     }
-    onStatusChange(nextThreadId === "main" ? "已切换到主线程调试" : `已切换调试 owner: ${nextThreadId}`);
-  }, [extensionWindowRequested, onStatusChange, persistLayoutSettings, selectOwnerThread, setAuxiliaryTab, setAuxiliaryVisible]);
+    onStatusChange(nextThreadId === mainThreadId ? "已切换到主线程调试" : `已切换调试 owner: ${nextThreadId}`);
+  }, [extensionWindowRequested, mainThreadId, onStatusChange, persistLayoutSettings, selectOwnerThread, setAuxiliaryTab, setAuxiliaryVisible]);
 
   const changeBreakpoint = useCallback((
     path: string,
@@ -110,6 +134,7 @@ export function useNodeDebugWorkbench({
 
   return {
     threadId,
+    mainThreadId,
     controller,
     activeFrame: controller.state?.call_stack?.[0] ?? null,
     selectThread,

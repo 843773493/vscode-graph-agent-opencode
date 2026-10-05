@@ -36,7 +36,6 @@ from app.schemas.internal_v2.node_debug import (
     NodeDebugStateDTO,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 
 DebugScope = Literal["local", "global", "all"]
 VariableName = Annotated[str, Field(min_length=1)]
@@ -390,21 +389,15 @@ class DebuggingToolFactory:
         self._path_resolver = WorkspaceToolPathResolver(workspace_root)
         self._node_debug_service = node_debug_service
         self._invocation_context = invocation_context
-        binding = thread_binding or invocation_context.thread_binding
-        if binding is None:
-            # 直接构造 factory 的后端测试没有 Agent runtime 绑定；这里显式退化为
-            # (session_id, main)，与服务层“裸 session 等价 main”的同一语义，
-            # 绝不再把裸 session_id 传给服务层。
-            # TODO: 待所有直接构造 factory 的调用方显式提供绑定后改为 fail-closed。
-            binding = ThreadRuntimeBinding(
-                session_id=session_id,
-                thread_id=MAIN_THREAD_ID,
-            )
-        self._thread_binding = binding
+        self._thread_binding = thread_binding or invocation_context.thread_binding
 
     @property
     def _owner(self) -> tuple[str, str]:
         """受信 (session_id, thread_id)；模型无法覆盖它。"""
+        if self._thread_binding is None:
+            raise RuntimeError(
+                "Node 调试工具调用缺少 canonical SessionThread 运行时绑定"
+            )
         return self._thread_binding.session_id, self._thread_binding.thread_id
 
     def build(self) -> list[BaseTool]:

@@ -44,13 +44,17 @@ def test_backend_headers_inject_authoritative_gateway_id(tmp_path: Path) -> None
         log_dir=tmp_path / "logs",
     )
 
-    headers = controller._backend_headers("req_control_plane")
+    headers = controller._backend_headers(
+        "req_control_plane",
+        "00000000-0000-4000-8000-000000000001",
+    )
 
     assert headers["X-BoxTeam-Gateway-Id"] == _gateway_id(tmp_path)
     assert headers["X-BoxTeam-Gateway-Id"].startswith("gateway_")
     # 既有头部语义不被改动：仍是同一 request_id，绝不补造第二个请求 ID。
     assert headers["X-Request-ID"] == "req_control_plane"
     assert headers["X-Local-Token"]
+    assert headers["X-BoxTeam-Workspace-Id"] == "00000000-0000-4000-8000-000000000001"
 
 
 @pytest.mark.asyncio
@@ -76,7 +80,9 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     monkeypatch.setattr(workspace_port_module.httpx, "AsyncClient", handler_client)
 
     port = WorkspaceCatalogPort()
-    port.project_workspaces((("gw_catalog", "http://127.0.0.1:41100"),))
+    port.project_workspaces(
+        (("gw_catalog", "http://127.0.0.1:41100", "00000000-0000-4000-8000-000000000001"),)
+    )
 
     data = await port._export(workspace_id="gw_catalog")
 
@@ -84,6 +90,7 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     assert len(captured) == 1
     # httpx 头部名统一小写；断言线上可见的真实权威值。
     assert captured[0]["x-boxteam-gateway-id"] == _gateway_id(tmp_path)
+    assert captured[0]["x-boxteam-workspace-id"] == "00000000-0000-4000-8000-000000000001"
 
 
 class _FakeWebSocket:
@@ -128,6 +135,7 @@ async def test_auxiliary_websocket_injects_authoritative_gateway_id(
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41100",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"terminal_manager": "http://127.0.0.1:41101/api"}

@@ -16,6 +16,11 @@ from langgraph.checkpoint.base import (
     get_checkpoint_metadata,
 )
 
+from app.core.session_thread_context import (
+    require_current_session_thread_owner,
+    session_thread_owner_scope,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutPruningPlan,
     RolloutTurnAnchor,
@@ -38,7 +43,23 @@ def _checkpoint_identity(config: RunnableConfig) -> tuple[str, str]:
 class RolloutLangGraphCheckpointMixin:
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         thread_id, checkpoint_ns = _checkpoint_identity(config)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        return self._get_tuple_for_owner(
+            owner.session_id,
+            thread_id,
+            checkpoint_ns,
+            config,
+        )
+
+    def _get_tuple_for_owner(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_ns: str,
+        config: RunnableConfig,
+    ) -> CheckpointTuple | None:
         with self._context_reader.open_snapshot(
+            session_id,
             thread_id,
             checkpoint_ns,
         ) as snapshot:
@@ -54,6 +75,7 @@ class RolloutLangGraphCheckpointMixin:
                 else None
             )
             checkpoint = self._storage.load_checkpoint(
+                session_id,
                 thread_id,
                 checkpoint_ns,
                 checkpoint_index,
@@ -71,6 +93,7 @@ class RolloutLangGraphCheckpointMixin:
                 checkpoint=checkpoint,
                 metadata=self._decode_metadata(checkpoint_index),
                 pending_writes=self._storage.pending_writes(
+                    session_id,
                     thread_id,
                     checkpoint_ns,
                     checkpoint_index.checkpoint_id,
@@ -97,19 +120,31 @@ class RolloutLangGraphCheckpointMixin:
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
-        thread_ids = (
-            (config["configurable"]["thread_id"],)
-            if config is not None
-            else tuple(self._storage.list_thread_ids())
-        )
-        checkpoint_ns = (
-            config["configurable"].get("checkpoint_ns") if config is not None else None
-        )
+        if config is not None:
+            thread_id, checkpoint_ns = _checkpoint_identity(config)
+            if before is not None and _checkpoint_identity(before) != (
+                thread_id,
+                checkpoint_ns,
+            ):
+                raise ValueError("checkpoint list before 必须属于相同 rollout owner")
+            owners = (
+                require_current_session_thread_owner(langgraph_thread_id=thread_id),
+            )
+        else:
+            checkpoint_ns = None
+            owners = tuple(
+                MutationIntentOwner(
+                    session_id=session_id,
+                    thread_id=self._storage.main_thread_id(session_id),
+                )
+                for session_id in self._storage.list_thread_ids()
+            )
         before_id = get_checkpoint_id(before) if before is not None else None
         yielded = 0
-        for thread_id in thread_ids:
+        for owner in owners:
             indexes = self._storage.list_checkpoints(
-                thread_id,
+                owner.session_id,
+                owner.thread_id,
                 checkpoint_ns,
                 before_checkpoint_id=before_id,
                 limit=limit,
@@ -120,7 +155,13 @@ class RolloutLangGraphCheckpointMixin:
                     metadata.get(key) == value for key, value in filter.items()
                 ):
                     continue
-                yield self._tuple_from_index(thread_id, index)
+                with session_thread_owner_scope(
+                    owner,
+                    langgraph_thread_id=owner.thread_id,
+                ):
+                    yield self._tuple_from_index(
+                        owner.session_id, owner.thread_id, index
+                    )
                 yielded += 1
                 if limit is not None and yielded >= limit:
                     return
@@ -224,12 +265,14 @@ class RolloutLangGraphCheckpointMixin:
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         final_message_id: str,
     ) -> None:
         """根据最终消息 ID 写入 Turn 完成指针，不复制消息正文。"""
         self._writer.finalize_turn(
             session_id=session_id,
+            thread_id=thread_id,
             turn_id=turn_id,
             final_message_id=final_message_id,
         )
@@ -246,6 +289,9 @@ class RolloutLangGraphCheckpointMixin:
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
             raise ValueError("put_writes 缺少 checkpoint_id")
         self._writer.append_writes(
+            session_id=require_current_session_thread_owner(
+                langgraph_thread_id=thread_id
+            ).session_id,
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             checkpoint_id=checkpoint_id,
@@ -255,18 +301,23 @@ class RolloutLangGraphCheckpointMixin:
         )
 
     def delete_thread(self, thread_id: str) -> None:
-        self._storage.delete_thread(thread_id)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
+        self._storage.delete_thread(owner.session_id, thread_id=owner.thread_id)
 
     def clone_rollout(
         self,
         *,
+        source_session_id: str,
         source_thread_id: str,
+        target_session_id: str,
         target_thread_id: str,
         checkpoint_ns: str = "",
         source_checkpoint_id: str | None,
     ) -> str | None:
         return self._storage.clone_rollout(
+            source_session_id=source_session_id,
             source_thread_id=source_thread_id,
+            target_session_id=target_session_id,
             target_thread_id=target_thread_id,
             checkpoint_ns=checkpoint_ns,
             source_checkpoint_id=source_checkpoint_id,
@@ -276,15 +327,19 @@ class RolloutLangGraphCheckpointMixin:
         self,
         *,
         source_session_id: str,
+        source_thread_id: str,
         source_checkpoint_id: str | None,
         target_session_id: str,
+        target_thread_id: str,
         checkpoint_ns: str = "",
     ) -> int:
         """复制 fork 源 checkpoint 中已完成 Turn 的最终消息指针。"""
         return self._writer.copy_turn_finalizations(
             source_session_id=source_session_id,
+            source_thread_id=source_thread_id,
             source_checkpoint_id=source_checkpoint_id,
             target_session_id=target_session_id,
+            target_thread_id=target_thread_id,
             checkpoint_ns=checkpoint_ns,
         )
 
@@ -303,7 +358,7 @@ class RolloutLangGraphCheckpointMixin:
     def record_fork_origin(
         self,
         *,
-        target_thread_id: str,
+        target_session_id: str,
         source_session_id: str,
         source_checkpoint_id: str | None,
         source_view_id: str | None,
@@ -312,7 +367,7 @@ class RolloutLangGraphCheckpointMixin:
         checkpoint_ns: str = "",
     ) -> str:
         return self._storage.record_fork_origin(
-            target_thread_id=target_thread_id,
+            target_session_id=target_session_id,
             source_session_id=source_session_id,
             source_checkpoint_id=source_checkpoint_id,
             source_view_id=source_view_id,
@@ -323,14 +378,14 @@ class RolloutLangGraphCheckpointMixin:
 
     def list_fork_identity_mappings(
         self,
-        target_thread_id: str,
+        target_session_id: str,
         *,
         fork_id: str | None = None,
         entity_type: str | None = None,
         checkpoint_ns: str = "",
     ) -> list[dict[str, object]]:
         return self._storage.list_fork_identity_mappings(
-            target_thread_id,
+            target_session_id,
             fork_id=fork_id,
             entity_type=entity_type,
             checkpoint_ns=checkpoint_ns,
@@ -339,15 +394,19 @@ class RolloutLangGraphCheckpointMixin:
     def copy_pending_writes(
         self,
         *,
+        source_session_id: str,
         source_thread_id: str,
         source_checkpoint_id: str,
+        target_session_id: str,
         target_thread_id: str,
         target_checkpoint_id: str,
         checkpoint_ns: str = "",
     ) -> None:
         self._storage.copy_pending_writes(
+            source_session_id=source_session_id,
             source_thread_id=source_thread_id,
             source_checkpoint_id=source_checkpoint_id,
+            target_session_id=target_session_id,
             target_thread_id=target_thread_id,
             target_checkpoint_id=target_checkpoint_id,
             checkpoint_ns=checkpoint_ns,
@@ -359,8 +418,8 @@ class RolloutLangGraphCheckpointMixin:
     def rollout_id(self, thread_id: str, checkpoint_ns: str = "") -> str:
         return self._storage.rollout_id(thread_id, checkpoint_ns)
 
-    def pinned_fork_children(self, source_thread_id: str) -> tuple[str, ...]:
-        return self._storage.pinned_fork_children(source_thread_id)
+    def pinned_fork_children(self, source_session_id: str) -> tuple[str, ...]:
+        return self._storage.pinned_fork_children(source_session_id)
 
     def plan_pruning(
         self,
@@ -386,7 +445,6 @@ class RolloutLangGraphCheckpointMixin:
     ) -> tuple[str, ...]:
         return self._storage.execute_pruning(thread_id, plan, checkpoint_ns)
 
-
     def rewind(
         self,
         config: RunnableConfig,
@@ -404,6 +462,9 @@ class RolloutLangGraphCheckpointMixin:
             anchor_mode=anchor_mode,
         )
         self.reconcile_context(
+            require_current_session_thread_owner(
+                langgraph_thread_id=thread_id
+            ).session_id,
             thread_id,
             operation="rewind",
             checkpoint_ns=checkpoint_ns,
@@ -425,7 +486,9 @@ class RolloutLangGraphCheckpointMixin:
         require_completed: bool = False,
     ) -> RolloutTurnAnchor:
         thread_id, checkpoint_ns = _checkpoint_identity(config)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
         with self._context_reader.open_snapshot(
+            owner.session_id,
             thread_id,
             checkpoint_ns,
         ) as snapshot:
@@ -443,7 +506,9 @@ class RolloutLangGraphCheckpointMixin:
         anchor_mode: str = "inclusive",
     ) -> RolloutTurnAnchor | None:
         thread_id, checkpoint_ns = _checkpoint_identity(config)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
         with self._context_reader.open_snapshot(
+            owner.session_id,
             thread_id,
             checkpoint_ns,
         ) as snapshot:
@@ -460,7 +525,9 @@ class RolloutLangGraphCheckpointMixin:
         anchor_mode: str = "inclusive",
     ) -> tuple[RolloutTurnAnchor, list[BaseMessage]]:
         thread_id, checkpoint_ns = _checkpoint_identity(config)
+        owner = require_current_session_thread_owner(langgraph_thread_id=thread_id)
         with self._context_reader.open_snapshot(
+            owner.session_id,
             thread_id,
             checkpoint_ns,
         ) as snapshot:
@@ -489,6 +556,9 @@ class RolloutLangGraphCheckpointMixin:
             anchor_mode=anchor_mode,
         )
         self.reconcile_context(
+            require_current_session_thread_owner(
+                langgraph_thread_id=thread_id
+            ).session_id,
             thread_id,
             operation="rewind",
             checkpoint_ns=checkpoint_ns,
@@ -518,6 +588,9 @@ class RolloutLangGraphCheckpointMixin:
             anchor_mode=anchor_mode,
         )
         self.reconcile_context(
+            require_current_session_thread_owner(
+                langgraph_thread_id=thread_id
+            ).session_id,
             thread_id,
             operation="history_replay",
             checkpoint_ns=checkpoint_ns,
@@ -531,7 +604,12 @@ class RolloutLangGraphCheckpointMixin:
             }
         }
 
-    def _tuple_from_index(self, thread_id: str, index: Any) -> CheckpointTuple:
+    def _tuple_from_index(
+        self,
+        session_id: str,
+        thread_id: str,
+        index: Any,
+    ) -> CheckpointTuple:
         config = {
             "configurable": {
                 "thread_id": thread_id,

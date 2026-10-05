@@ -792,6 +792,11 @@ export declare type JobDTO = Message<"boxteam.workspace.v2.JobDTO"> & {
    * @generated from field: optional google.protobuf.Timestamp ended_at = 13;
    */
   endedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 14;
+   */
+  threadId: string;
 };
 
 /**
@@ -858,6 +863,11 @@ export declare type JobDispatchSnapshotDTO = Message<"boxteam.workspace.v2.JobDi
    * @generated from field: optional int64 queue_snapshot_version = 11;
    */
   queueSnapshotVersion?: bigint | undefined;
+
+  /**
+   * @generated from field: string thread_id = 12;
+   */
+  threadId: string;
 };
 
 /**
@@ -2893,6 +2903,21 @@ export declare type PendingRequestDTO = Message<"boxteam.workspace.v2.PendingReq
    * @generated from field: optional string gateway_id = 18;
    */
   gatewayId?: string | undefined;
+
+  /**
+   * @generated from field: string thread_id = 19;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: optional string turn_id = 20;
+   */
+  turnId?: string | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct execution_binding = 21;
+   */
+  executionBinding?: JsonObject | undefined;
 };
 
 /**
@@ -3799,11 +3824,6 @@ export declare type SessionContextItemDTO = Message<"boxteam.workspace.v2.Sessio
   kind: string;
 
   /**
-   * @generated from field: string locator = 2;
-   */
-  locator: string;
-
-  /**
    * @generated from field: optional string role = 3;
    */
   role?: string | undefined;
@@ -3852,6 +3872,26 @@ export declare type SessionContextItemDTO = Message<"boxteam.workspace.v2.Sessio
    * @generated from field: optional bool truncated = 12;
    */
   truncated?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string resource_identity = 13;
+   */
+  resourceIdentity?: string | undefined;
+
+  /**
+   * @generated from field: optional string vrn = 14;
+   */
+  vrn?: string | undefined;
+
+  /**
+   * @generated from field: optional string scope = 15;
+   */
+  scope?: string | undefined;
+
+  /**
+   * @generated from field: optional string assembly_ref = 16;
+   */
+  assemblyRef?: string | undefined;
 };
 
 /**
@@ -3865,14 +3905,14 @@ export declare const SessionContextItemDTOSchema: GenMessage<SessionContextItemD
  */
 export declare type SessionContextPartialErrorDTO = Message<"boxteam.workspace.v2.SessionContextPartialErrorDTO"> & {
   /**
-   * @generated from field: string resource = 1;
-   */
-  resource: string;
-
-  /**
    * @generated from field: string error = 2;
    */
   error: string;
+
+  /**
+   * @generated from field: string resource_identity = 3;
+   */
+  resourceIdentity: string;
 };
 
 /**
@@ -3885,11 +3925,6 @@ export declare const SessionContextPartialErrorDTOSchema: GenMessage<SessionCont
  * @generated from message boxteam.workspace.v2.SessionContextReadRequest
  */
 export declare type SessionContextReadRequest = Message<"boxteam.workspace.v2.SessionContextReadRequest"> & {
-  /**
-   * @generated from field: string resource = 1;
-   */
-  resource: string;
-
   /**
    * @generated from field: optional string view = 2;
    */
@@ -3926,9 +3961,34 @@ export declare type SessionContextReadRequest = Message<"boxteam.workspace.v2.Se
   maxChars?: bigint | undefined;
 
   /**
-   * @generated from field: optional string expected_revision = 9;
+   * @generated from field: optional string revision = 9;
    */
-  expectedRevision?: string | undefined;
+  revision?: string | undefined;
+
+  /**
+   * @generated from field: string resource_identity = 10;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 11;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 12;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: optional int64 record_index = 13;
+   */
+  recordIndex?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string assembly_ref = 14;
+   */
+  assemblyRef?: string | undefined;
 };
 
 /**
@@ -3941,11 +4001,6 @@ export declare const SessionContextReadRequestSchema: GenMessage<SessionContextR
  * @generated from message boxteam.workspace.v2.SessionContextReadResultDTO
  */
 export declare type SessionContextReadResultDTO = Message<"boxteam.workspace.v2.SessionContextReadResultDTO"> & {
-  /**
-   * @generated from field: string resource = 1;
-   */
-  resource: string;
-
   /**
    * @generated from field: string view = 2;
    */
@@ -4010,6 +4065,31 @@ export declare type SessionContextReadResultDTO = Message<"boxteam.workspace.v2.
    * @generated from field: optional int64 omitted_partial_error_count = 14;
    */
   omittedPartialErrorCount?: bigint | undefined;
+
+  /**
+   * @generated from field: string resource_identity = 15;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 16;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 17;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: optional int64 record_index = 18;
+   */
+  recordIndex?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string assembly_ref = 19;
+   */
+  assemblyRef?: string | undefined;
 };
 
 /**
@@ -4022,11 +4102,6 @@ export declare const SessionContextReadResultDTOSchema: GenMessage<SessionContex
  * @generated from message boxteam.workspace.v2.SessionContextSearchMatchDTO
  */
 export declare type SessionContextSearchMatchDTO = Message<"boxteam.workspace.v2.SessionContextSearchMatchDTO"> & {
-  /**
-   * @generated from field: string locator = 1;
-   */
-  locator: string;
-
   /**
    * @generated from field: string preview = 2;
    */
@@ -4056,6 +4131,21 @@ export declare type SessionContextSearchMatchDTO = Message<"boxteam.workspace.v2
    * @generated from field: int64 match_end = 7;
    */
   matchEnd: bigint;
+
+  /**
+   * @generated from field: string resource_identity = 8;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 9;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 10;
+   */
+  scope: string;
 };
 
 /**
@@ -4068,11 +4158,6 @@ export declare const SessionContextSearchMatchDTOSchema: GenMessage<SessionConte
  * @generated from message boxteam.workspace.v2.SessionContextSearchRequest
  */
 export declare type SessionContextSearchRequest = Message<"boxteam.workspace.v2.SessionContextSearchRequest"> & {
-  /**
-   * @generated from field: string resource = 1;
-   */
-  resource: string;
-
   /**
    * @generated from field: string query = 2;
    */
@@ -4109,9 +4194,24 @@ export declare type SessionContextSearchRequest = Message<"boxteam.workspace.v2.
   cursor?: string | undefined;
 
   /**
-   * @generated from field: optional string expected_revision = 9;
+   * @generated from field: optional string revision = 9;
    */
-  expectedRevision?: string | undefined;
+  revision?: string | undefined;
+
+  /**
+   * @generated from field: string resource_identity = 10;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 11;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 12;
+   */
+  scope: string;
 };
 
 /**
@@ -4124,11 +4224,6 @@ export declare const SessionContextSearchRequestSchema: GenMessage<SessionContex
  * @generated from message boxteam.workspace.v2.SessionContextSearchResultDTO
  */
 export declare type SessionContextSearchResultDTO = Message<"boxteam.workspace.v2.SessionContextSearchResultDTO"> & {
-  /**
-   * @generated from field: string resource = 1;
-   */
-  resource: string;
-
   /**
    * @generated from field: string query = 2;
    */
@@ -4183,6 +4278,21 @@ export declare type SessionContextSearchResultDTO = Message<"boxteam.workspace.v
    * @generated from field: optional int64 omitted_partial_error_count = 12;
    */
   omittedPartialErrorCount?: bigint | undefined;
+
+  /**
+   * @generated from field: string resource_identity = 13;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 14;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 15;
+   */
+  scope: string;
 };
 
 /**
@@ -4230,11 +4340,6 @@ export declare type SessionCreateRequest = Message<"boxteam.workspace.v2.Session
    * @generated from field: optional string agent_id = 2;
    */
   agentId?: string | undefined;
-
-  /**
-   * @generated from field: optional string title_source = 3;
-   */
-  titleSource?: string | undefined;
 
   /**
    * @generated from field: optional string folder_id = 4;
@@ -4311,6 +4416,26 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
    * @generated from field: optional boxteam.workspace.v2.SessionGenerationOriginDTO generation_origin = 13;
    */
   generationOrigin?: SessionGenerationOriginDTO | undefined;
+
+  /**
+   * @generated from field: string resource_identity = 14;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string vrn = 15;
+   */
+  vrn: string;
+
+  /**
+   * @generated from field: string scope = 16;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: optional string thread_id = 17;
+   */
+  threadId?: string | undefined;
 };
 
 /**
@@ -4681,6 +4806,11 @@ export declare type SessionForkRequest = Message<"boxteam.workspace.v2.SessionFo
    * @generated from field: optional bool pinned = 4;
    */
   pinned?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool place_under_source = 5;
+   */
+  placeUnderSource?: boolean | undefined;
 };
 
 /**
@@ -5572,6 +5702,244 @@ export declare type SessionResourceListDTO = Message<"boxteam.workspace.v2.Sessi
 export declare const SessionResourceListDTOSchema: GenMessage<SessionResourceListDTO>;
 
 /**
+ * 工作区资源由对应领域 owner 保存；Thread 关联与客户端传输连接分别管理。
+ *
+ * @generated from message boxteam.workspace.v2.ResourceThreadRef
+ */
+export declare type ResourceThreadRef = Message<"boxteam.workspace.v2.ResourceThreadRef"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ResourceThreadRef.
+ * Use `create(ResourceThreadRefSchema)` to create a new message.
+ */
+export declare const ResourceThreadRefSchema: GenMessage<ResourceThreadRef>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceResourceDTO
+ */
+export declare type WorkspaceResourceDTO = Message<"boxteam.workspace.v2.WorkspaceResourceDTO"> & {
+  /**
+   * @generated from field: string resource_id = 1;
+   */
+  resourceId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string kind = 3;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string retention_scope = 4;
+   */
+  retentionScope: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ResourceThreadRef source_thread = 5;
+   */
+  sourceThread?: ResourceThreadRef | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ResourceThreadRef thread_associations = 6;
+   */
+  threadAssociations: ResourceThreadRef[];
+
+  /**
+   * @generated from field: uint64 owner_revision = 7;
+   */
+  ownerRevision: bigint;
+
+  /**
+   * @generated from field: string status = 8;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string reconciliation_status = 9;
+   */
+  reconciliationStatus: string;
+
+  /**
+   * @generated from field: optional string unattached_since = 10;
+   */
+  unattachedSince?: string | undefined;
+
+  /**
+   * @generated from field: optional string reclaim_at = 11;
+   */
+  reclaimAt?: string | undefined;
+
+  /**
+   * @generated from field: repeated string available_actions = 12;
+   */
+  availableActions: string[];
+
+  /**
+   * @generated from field: google.protobuf.Struct metadata = 13;
+   */
+  metadata?: JsonObject | undefined;
+
+  /**
+   * @generated from field: string created_at = 14;
+   */
+  createdAt: string;
+
+  /**
+   * @generated from field: string updated_at = 15;
+   */
+  updatedAt: string;
+
+  /**
+   * @generated from field: optional string error = 16;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceResourceDTO.
+ * Use `create(WorkspaceResourceDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceResourceDTOSchema: GenMessage<WorkspaceResourceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceResourceListDTO
+ */
+export declare type WorkspaceResourceListDTO = Message<"boxteam.workspace.v2.WorkspaceResourceListDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.WorkspaceResourceDTO items = 2;
+   */
+  items: WorkspaceResourceDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceResourceListDTO.
+ * Use `create(WorkspaceResourceListDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceResourceListDTOSchema: GenMessage<WorkspaceResourceListDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TerminalResourceCreateRequest
+ */
+export declare type TerminalResourceCreateRequest = Message<"boxteam.workspace.v2.TerminalResourceCreateRequest"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: optional string thread_id = 2;
+   */
+  threadId?: string | undefined;
+
+  /**
+   * @generated from field: string retention_scope = 3;
+   */
+  retentionScope: string;
+
+  /**
+   * @generated from field: string title = 4;
+   */
+  title: string;
+
+  /**
+   * @generated from field: optional string cwd_relative = 5;
+   */
+  cwdRelative?: string | undefined;
+
+  /**
+   * @generated from field: optional uint32 cols = 6;
+   */
+  cols?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 rows = 7;
+   */
+  rows?: number | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TerminalResourceCreateRequest.
+ * Use `create(TerminalResourceCreateRequestSchema)` to create a new message.
+ */
+export declare const TerminalResourceCreateRequestSchema: GenMessage<TerminalResourceCreateRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.WorkspaceResourceCommandRequest
+ */
+export declare type WorkspaceResourceCommandRequest = Message<"boxteam.workspace.v2.WorkspaceResourceCommandRequest"> & {
+  /**
+   * @generated from field: uint64 expected_revision = 1;
+   */
+  expectedRevision: bigint;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ResourceThreadRef thread = 2;
+   */
+  thread?: ResourceThreadRef | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceResourceCommandRequest.
+ * Use `create(WorkspaceResourceCommandRequestSchema)` to create a new message.
+ */
+export declare const WorkspaceResourceCommandRequestSchema: GenMessage<WorkspaceResourceCommandRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TerminalTransportGrantDTO
+ */
+export declare type TerminalTransportGrantDTO = Message<"boxteam.workspace.v2.TerminalTransportGrantDTO"> & {
+  /**
+   * @generated from field: string resource_id = 1;
+   */
+  resourceId: string;
+
+  /**
+   * @generated from field: uint64 owner_revision = 2;
+   */
+  ownerRevision: bigint;
+
+  /**
+   * @generated from field: string grant_token = 3;
+   */
+  grantToken: string;
+
+  /**
+   * @generated from field: string expires_at = 4;
+   */
+  expiresAt: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.WorkspaceResourceDTO resource = 5;
+   */
+  resource?: WorkspaceResourceDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TerminalTransportGrantDTO.
+ * Use `create(TerminalTransportGrantDTOSchema)` to create a new message.
+ */
+export declare const TerminalTransportGrantDTOSchema: GenMessage<TerminalTransportGrantDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO
  */
 export declare type SessionStatusChangedExecutionEventDTO = Message<"boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO"> & {
@@ -5714,11 +6082,6 @@ export declare const SessionTurnBootstrapDTOSchema: GenMessage<SessionTurnBootst
  */
 export declare type SessionUpdateRequest = Message<"boxteam.workspace.v2.SessionUpdateRequest"> & {
   /**
-   * @generated from field: optional string title = 1;
-   */
-  title?: string | undefined;
-
-  /**
    * @generated from field: optional string agent_id = 2;
    */
   agentId?: string | undefined;
@@ -5727,11 +6090,6 @@ export declare type SessionUpdateRequest = Message<"boxteam.workspace.v2.Session
    * @generated from field: optional string provider_id = 3;
    */
   providerId?: string | undefined;
-
-  /**
-   * @generated from field: optional string title_source = 4;
-   */
-  titleSource?: string | undefined;
 };
 
 /**
@@ -7097,6 +7455,11 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
    * @generated from field: optional boxteam.workspace.v2.TurnActivityStatsDTO activity_stats = 24;
    */
   activityStats?: TurnActivityStatsDTO | undefined;
+
+  /**
+   * @generated from field: int64 root_logical_item_ordinal = 25;
+   */
+  rootLogicalItemOrdinal: bigint;
 };
 
 /**
@@ -7204,6 +7567,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: repeated boxteam.workspace.v2.TurnSummaryDTO summaries = 9;
    */
   summaries: TurnSummaryDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.InternalExecutionHistoryDTO internal_executions = 10;
+   */
+  internalExecutions: InternalExecutionHistoryDTO[];
 };
 
 /**
@@ -7211,6 +7579,144 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
  * Use `create(TurnHistoryPageDTOSchema)` to create a new message.
  */
 export declare const TurnHistoryPageDTOSchema: GenMessage<TurnHistoryPageDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.InternalExecutionHistoryDTO
+ */
+export declare type InternalExecutionHistoryDTO = Message<"boxteam.workspace.v2.InternalExecutionHistoryDTO"> & {
+  /**
+   * @generated from field: string execution_id = 1;
+   */
+  executionId: string;
+
+  /**
+   * @generated from field: string job_id = 2;
+   */
+  jobId: string;
+
+  /**
+   * @generated from field: string status = 3;
+   */
+  status: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 4;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.InternalExecutionDisplayPartDTO display_parts = 5;
+   */
+  displayParts: InternalExecutionDisplayPartDTO[];
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO response_parts = 6;
+   */
+  responseParts: TurnResponsePartDTO[];
+
+  /**
+   * @generated from field: string session_id = 7;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 8;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 9;
+   */
+  updatedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.InternalExecutionHistoryDTO.
+ * Use `create(InternalExecutionHistoryDTOSchema)` to create a new message.
+ */
+export declare const InternalExecutionHistoryDTOSchema: GenMessage<InternalExecutionHistoryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.InternalExecutionDisplayPartDTO
+ */
+export declare type InternalExecutionDisplayPartDTO = Message<"boxteam.workspace.v2.InternalExecutionDisplayPartDTO"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: string text = 2;
+   */
+  text: string;
+
+  /**
+   * @generated from field: string item_id = 3;
+   */
+  itemId: string;
+
+  /**
+   * @generated from field: int64 item_sequence = 4;
+   */
+  itemSequence: bigint;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.InternalDisplayProvenanceDTO provenance = 5;
+   */
+  provenance?: InternalDisplayProvenanceDTO | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 6;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: int64 logical_item_ordinal = 7;
+   */
+  logicalItemOrdinal: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.InternalExecutionDisplayPartDTO.
+ * Use `create(InternalExecutionDisplayPartDTOSchema)` to create a new message.
+ */
+export declare const InternalExecutionDisplayPartDTOSchema: GenMessage<InternalExecutionDisplayPartDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.InternalDisplayProvenanceDTO
+ */
+export declare type InternalDisplayProvenanceDTO = Message<"boxteam.workspace.v2.InternalDisplayProvenanceDTO"> & {
+  /**
+   * @generated from field: optional string source_session_id = 1;
+   */
+  sourceSessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_thread_id = 2;
+   */
+  sourceThreadId?: string | undefined;
+
+  /**
+   * @generated from field: optional string delegation_id = 3;
+   */
+  delegationId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_execution_id = 4;
+   */
+  sourceExecutionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_item_id = 5;
+   */
+  sourceItemId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.InternalDisplayProvenanceDTO.
+ * Use `create(InternalDisplayProvenanceDTOSchema)` to create a new message.
+ */
+export declare const InternalDisplayProvenanceDTOSchema: GenMessage<InternalDisplayProvenanceDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TurnJobSummaryDTO
@@ -7449,6 +7955,11 @@ export declare type TurnResponseSourceDTO = Message<"boxteam.workspace.v2.TurnRe
    * @generated from field: optional int64 elapsed_ms = 11;
    */
   elapsedMs?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 logical_item_ordinal = 12;
+   */
+  logicalItemOrdinal?: bigint | undefined;
 };
 
 /**
@@ -7585,6 +8096,11 @@ export declare type TurnSummaryDTO = Message<"boxteam.workspace.v2.TurnSummaryDT
    * @generated from field: optional boxteam.workspace.v2.TurnActivityStatsDTO activity_stats = 25;
    */
   activityStats?: TurnActivityStatsDTO | undefined;
+
+  /**
+   * @generated from field: int64 root_logical_item_ordinal = 26;
+   */
+  rootLogicalItemOrdinal: bigint;
 };
 
 /**

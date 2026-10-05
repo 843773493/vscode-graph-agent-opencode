@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef
 
@@ -11,6 +13,8 @@ from app.schemas.internal_v2.message import AttachmentRef
 class JobRuntimeStateProtocol(Protocol):
     job_id: str
     session_id: str
+    thread_id: str
+    execution_binding: ExecutionBinding
     message: str
     agent_id: str
     message_id: str
@@ -28,6 +32,7 @@ class JobRuntimeStateProtocol(Protocol):
     updated_at: datetime
     ended_at: datetime | None
     progress_reporter: Callable[[str], None] | None
+    protected_operations_settled: asyncio.Event
 
 
 class JobExecutorProtocol(Protocol):

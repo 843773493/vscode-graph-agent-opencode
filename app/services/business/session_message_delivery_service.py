@@ -39,7 +39,7 @@ class SessionMessageDeliveryService(SessionMessageDeliveryProtocol):
     ) -> MessageRunAccepted:
         target = await self._target_resolver.resolve_session(
             session_id,
-            workspace_id=workspace_id,
+            gateway_workspace_id=workspace_id,
         )
         if target.workspace_id is not None:
             return await self._remote_transport.dispatch(

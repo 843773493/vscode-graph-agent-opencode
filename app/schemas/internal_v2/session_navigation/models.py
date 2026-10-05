@@ -16,6 +16,7 @@ class SessionCatalogNodeDTO(BaseModel):
     session_id: str | None = None
     folder_id: str | None = None
     has_children: bool = False
+    node_revision: int
     # catalog 权威 state：active=已提交可见；deleting=逻辑删除中（pending）。
     # 前端据此区分 confirmed 与 pending，不把 deleting 子树当正常节点渲染。
     state: Literal["active", "deleting"] = "active"
@@ -28,6 +29,7 @@ class SessionCatalogNodeDTO(BaseModel):
 
 class SessionCatalogPageDTO(BaseModel):
     revision: str
+    catalog_revision: int
     parent_node_id: str | None = None
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
     cursor: str | None = None
@@ -37,6 +39,7 @@ class SessionCatalogPageDTO(BaseModel):
 
 class SessionCatalogBreadcrumbDTO(BaseModel):
     revision: str
+    catalog_revision: int
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
 
 
@@ -48,6 +51,7 @@ class SessionCatalogSearchResultDTO(BaseModel):
 
 class SessionCatalogSearchResultsDTO(BaseModel):
     revision: str
+    catalog_revision: int
     items: list[SessionCatalogSearchResultDTO] = Field(default_factory=list)
     cursor: str | None = None
     total: int = 0
@@ -55,41 +59,8 @@ class SessionCatalogSearchResultsDTO(BaseModel):
 
 class SessionCatalogExportDTO(BaseModel):
     revision: str
+    catalog_revision: int
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
-
-
-class SessionFolderCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=200)
-    parent_folder_id: str | None = None
-
-
-class SessionFolderUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    parent_folder_id: str | None = None
-
-    @model_validator(mode="after")
-    def require_field(self) -> SessionFolderUpdateRequest:
-        if not self.model_fields_set:
-            raise ValueError("会话文件夹更新至少需要一个字段")
-        return self
-
-
-class SessionFolderAssignmentRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    folder_id: str | None = None
-
-
-class SessionCatalogNodeMoveRequest(BaseModel):
-    """把会话目录节点移动到根、文件夹或会话 children 边界。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    parent_node_id: str | None = Field(...)
 
 
 class SessionGenerationGeneratorTypeDTO(BaseModel):

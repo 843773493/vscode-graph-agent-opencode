@@ -21,7 +21,7 @@ def unsealed_context_plan_from_dict(value: object) -> ContextRequestPlan:
     if not isinstance(value, Mapping):
         raise ItemSchemaError("ContextRequestPlan 必须是 object")
     fields = {
-        "session_id", "format_version", "plan_id", "plan_state", "assembly_id",
+        "session_id", "thread_id", "format_version", "plan_id", "plan_state", "assembly_id",
         "history_view_revision", "source_overlay_epoch", "active_view_id",
         "selection_policy", "refs", "tool_set_refs", "contributions", "selection",
         "compiler_version", "plan_creation_idempotency_key", "plan_hash",
@@ -41,6 +41,7 @@ def unsealed_context_plan_from_dict(value: object) -> ContextRequestPlan:
         raise ItemSchemaError("ContextRequestPlan.refs 元素非法")
     plan = ContextRequestPlan(
         session_id=_required_string(value["session_id"], "ContextRequestPlan.session_id"),
+        thread_id=_required_string(value["thread_id"], "ContextRequestPlan.thread_id"),
         plan_id=_required_string(value["plan_id"], "ContextRequestPlan.plan_id"),
         refs=tuple(parse_context_ref(ref) for ref in value["refs"]),
         contributions=tuple(

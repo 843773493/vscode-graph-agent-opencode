@@ -76,7 +76,7 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
     try:
         gateway = start_gateway_process(
             workspace_root=workspace_root,
-            default_backend_url="managed-by-gateway",
+            default_backend_url=None,
             port=gateway_port,
             extra_env={
                 "BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist"),

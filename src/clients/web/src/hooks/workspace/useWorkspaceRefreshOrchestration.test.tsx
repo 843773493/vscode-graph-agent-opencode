@@ -37,6 +37,11 @@ async function mountHook(options: {
   function Probe(): React.ReactNode {
     hook = useWorkspaceRefreshOrchestration({
       apiPort: API_PORT,
+      gatewayWorkspaces: [{
+        workspace_id: "workspace-c",
+        backend_workspace_id: "00000000-0000-0000-0000-000000000001",
+        connection_kind: "local",
+      }],
       setState: (update) => {
         current = typeof update === "function"
           ? (update as (previous: AppState) => AppState)(current)
@@ -180,8 +185,12 @@ describe("useWorkspaceRefreshOrchestration", () => {
   test("refreshGatewayWorkspaceSessions 以 force 强制刷新目标工作区列表", async () => {
     const calls: Array<{ apiPort: number; workspaceId: string | null; force: boolean }> = [];
     const spy = spyOn(sessionRefresh, "refreshWorkspaceSessionList").mockImplementation(
-      async (apiPort, workspaceId, _setState, options = {}) => {
-        calls.push({ apiPort, workspaceId, force: options.force ?? false });
+      async (apiPort, workspaceTarget, _setState, options = {}) => {
+        calls.push({
+          apiPort,
+          workspaceId: workspaceTarget?.workspace_id ?? null,
+          force: options.force ?? false,
+        });
       },
     );
     restores.push(() => spy.mockRestore());

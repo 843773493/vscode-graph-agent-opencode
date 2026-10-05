@@ -29,6 +29,7 @@ function rawText(raw) {
 function typedClientMessage(message) {
   if (message.type === "attach") {
     const value = { terminalId: message.terminalId };
+    value.grantToken = message.grantToken;
     if (message.cols !== undefined) value.cols = message.cols;
     if (message.rows !== undefined) value.rows = message.rows;
     if (message.afterSequence !== undefined) value.afterSequence = message.afterSequence;

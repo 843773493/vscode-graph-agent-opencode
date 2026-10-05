@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -103,10 +105,9 @@ class NodeDebugService(
     """通过 Node Inspector 提供 SessionThread 级 JavaScript 源码调试。
 
     运行时、断点、活动方案和动作时间线全部以精确 ``(session_id, thread_id)``
-    owner key 隔离。所有产品入口都要求显式 ``thread_id``；main thread 使用值
-    ``"main"``，owner 别名折叠只由 :mod:`node_debug_thread_owner` 定义。
-    同一实体的别名地址（``(parent_session, child_session)`` 与
-    ``(child_session, main)``）在入口折叠为同一个 owner key。
+    owner key 隔离。所有显式入口都要求 canonical ``thread_id``；Session-only
+    入口必须先通过 catalog 取得 ``main_thread_id(session_id)``，NodeDebug 不接收
+    ``main``、Session ID 或 child Session 别名。
     """
 
     def __init__(
@@ -153,8 +154,8 @@ class NodeDebugService(
             store=session_store,
         )
         self._session_admission = session_admission
-        # 入口别名折叠需要目录索引；无持久化会话树场景（嵌入式/单测）没有可折叠的
-        # thread 节点，只做 owner 归一。
+        # 持久化入口由同一个 catalog resolver 校验 thread 归属；无持久化的
+        # 单测只校验 canonical ID 形态。
         self._thread_path_resolver = (
             session_store.path_resolver if session_store is not None else None
         )
@@ -208,7 +209,6 @@ class NodeDebugService(
             append_action=self._append_action,
         )
 
-
     def _owner_lock(self, owner: NodeDebugOwner) -> asyncio.Lock:
         """取（或懒建）该 owner 的临界区：串行化 start/stop/restart/close 的整段序列。
 
@@ -223,60 +223,55 @@ class NodeDebugService(
             self._owner_locks[owner] = lock
         return lock
 
-
     async def clear_all_breakpoints(
         self,
         session_id: str,
         *,
-        thread_id: str,
+        thread_id: str | None = None,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        owner = self._owner_key(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        runtime = self._runtimes.get(owner)
-        if runtime is None:
-            removed = self._session_state.clear_pending_breakpoints(owner)
-            self._session_state.append_pending_action(
-                session_id,
-                thread_id,
-                "clear_all_breakpoints",
-                f"已清除全部源码断点（{removed} 个）",
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-            self._session_state.persist_runtime_state(
-                session_id, thread_id, None
-            )
-            return await self.get_state(session_id, thread_id)
-        async with runtime.state_lock:
-            breakpoint_ids = tuple(runtime.inspector_breakpoint_ids.values())
-        for inspector_id in breakpoint_ids:
-            if runtime.inspector.socket is not None:
-                await self._inspector.command(
-                    runtime,
-                    "Debugger.removeBreakpoint",
-                    {"breakpointId": inspector_id},
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            owner = self._owner_key(session_id, thread_id)
+            self._session_state.ensure_loaded(session_id, thread_id)
+            runtime = self._runtimes.get(owner)
+            if runtime is None:
+                removed = self._session_state.clear_pending_breakpoints(owner)
+                self._session_state.append_pending_action(
+                    session_id,
+                    thread_id,
+                    "clear_all_breakpoints",
+                    f"已清除全部源码断点（{removed} 个）",
+                    actor=actor,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
                 )
-        async with runtime.state_lock:
-            runtime.breakpoints.clear()
-            runtime.inspector_breakpoint_ids.clear()
-            self._append_action(
-                runtime,
-                "clear_all_breakpoints",
-                "已清除全部源码断点",
-                actor=actor,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-        self._session_state.persist_runtime_state(
-            session_id, thread_id, runtime
-        )
-        return await self.get_state(session_id, thread_id)
-
+                self._session_state.persist_runtime_state(session_id, thread_id, None)
+                return await self._get_state_admitted(session_id, thread_id)
+            async with runtime.state_lock:
+                breakpoint_ids = tuple(runtime.inspector_breakpoint_ids.values())
+            for inspector_id in breakpoint_ids:
+                if runtime.inspector.socket is not None:
+                    await self._inspector.command(
+                        runtime,
+                        "Debugger.removeBreakpoint",
+                        {"breakpointId": inspector_id},
+                    )
+            async with runtime.state_lock:
+                runtime.breakpoints.clear()
+                runtime.inspector_breakpoint_ids.clear()
+                self._append_action(
+                    runtime,
+                    "clear_all_breakpoints",
+                    "已清除全部源码断点",
+                    actor=actor,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                )
+            self._session_state.persist_runtime_state(session_id, thread_id, runtime)
+            return await self._get_state_admitted(session_id, thread_id)
 
     @staticmethod
     def _owner_key(session_id: str, thread_id: str) -> NodeDebugOwner:
@@ -286,30 +281,37 @@ class NodeDebugService(
     def _resolve_owner(
         self,
         session_id: str,
-        thread_id: str,
+        thread_id: str | None,
     ) -> NodeDebugOwner:
-        """读入口的 owner 归一：有目录索引时按受检 thread 节点折叠别名地址。"""
+        """读入口按 catalog 解析精确 canonical SessionThread owner。"""
         if self._thread_path_resolver is None:
+            if thread_id is None:
+                raise RuntimeError(
+                    "Session-only Node 调试入口要求 catalog path resolver"
+                )
             return self._owner_key(session_id, thread_id)
+        resolved_thread_id = (
+            self._thread_path_resolver.main_thread_id(session_id)
+            if thread_id is None
+            else thread_id
+        )
         return resolve_node_debug_owner(
             self._thread_path_resolver,
             session_id=session_id,
-            thread_id=thread_id,
+            thread_id=resolved_thread_id,
         ).key
 
+    @asynccontextmanager
     async def _admit_mutation(
         self,
         session_id: str,
-        thread_id: str,
-    ) -> NodeDebugOwner:
-        """调试 mutation 的 Session 生命周期准入，并返回受检的精确 owner。
-
-        准入同时收口持久 launch claim：能核实旧实例已终结的当场结清，无法核实的保持
-        ``reconcile_required`` 并在后续断言中阻断。
-        """
-        owner = (await self._session_admission.admit(session_id, thread_id)).key
-        await self._lifecycle.reconcile_persisted_claim(owner)
-        return owner
+        thread_id: str | None,
+    ) -> AsyncIterator[NodeDebugOwner]:
+        """整个调试 mutation 期间持有 Session 生命周期准入。"""
+        async with self._session_admission.admit(session_id, thread_id) as admitted:
+            owner = admitted.key
+            await self._lifecycle.reconcile_persisted_claim(owner)
+            yield owner
 
     def residency_blockers(
         self, session_id: str, thread_id: str
@@ -317,7 +319,6 @@ class NodeDebugService(
         """从 claim/runtime 投影读取该 owner 当前仍活跃的占用。"""
         owner = self._owner_key(session_id, thread_id)
         return self._claim_runtime.residency_blockers(*owner)
-
 
     def _assert_no_unsettled_claim(
         self, owner: NodeDebugOwner, *, operation: str
@@ -365,4 +366,3 @@ class NodeDebugService(
             )
             for breakpoint_id, breakpoint in runtime.breakpoints.items()
         }
-

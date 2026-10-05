@@ -5,6 +5,7 @@ from __future__ import annotations
 PLAN_REGISTRY_SCHEMA_SQL = """
 CREATE TABLE context_plans (
     session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     registration_origin TEXT NOT NULL DEFAULT 'runtime'
         CHECK(registration_origin IN ('runtime', 'schema3_import', 'fork_import')),
@@ -23,9 +24,9 @@ CREATE TABLE context_plans (
     seal_input_hash TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY(session_id, plan_id),
-    UNIQUE(session_id, plan_creation_idempotency_key),
-    UNIQUE(session_id, assembly_id),
+    PRIMARY KEY(session_id, thread_id, plan_id),
+    UNIQUE(session_id, thread_id, plan_creation_idempotency_key),
+    UNIQUE(session_id, thread_id, assembly_id),
     CHECK(length(plan_id) > 0),
     CHECK(
         (registration_origin = 'runtime' AND source_provenance_json IS NULL
@@ -52,30 +53,37 @@ CREATE TABLE context_plans (
 );
 CREATE TABLE context_plan_refs (
     session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
+    ref_thread_id TEXT NOT NULL,
     ref_type TEXT NOT NULL CHECK(ref_type IN ('canonical_item', 'request_only')),
     ref_id TEXT NOT NULL,
     ref_json TEXT NOT NULL,
-    PRIMARY KEY(session_id, plan_id, ref_type, ref_id),
-    FOREIGN KEY(session_id, plan_id) REFERENCES context_plans(session_id, plan_id)
+    PRIMARY KEY(session_id, thread_id, plan_id, ref_type, ref_id, ref_thread_id),
+    FOREIGN KEY(session_id, thread_id, plan_id)
+        REFERENCES context_plans(session_id, thread_id, plan_id)
 );
 CREATE TABLE context_plan_contributions (
     session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     contribution_id TEXT NOT NULL,
     manifest_json TEXT NOT NULL,
-    PRIMARY KEY(session_id, plan_id, contribution_id),
-    FOREIGN KEY(session_id, plan_id) REFERENCES context_plans(session_id, plan_id)
+    PRIMARY KEY(session_id, thread_id, plan_id, contribution_id),
+    FOREIGN KEY(session_id, thread_id, plan_id)
+        REFERENCES context_plans(session_id, thread_id, plan_id)
 );
 CREATE TABLE context_plan_seal_failures (
     failure_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK(revision >= 0),
     seal_idempotency_key TEXT NOT NULL,
     error_code TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    FOREIGN KEY(session_id, plan_id) REFERENCES context_plans(session_id, plan_id)
+    FOREIGN KEY(session_id, thread_id, plan_id)
+        REFERENCES context_plans(session_id, thread_id, plan_id)
 );
 """
 
@@ -84,6 +92,7 @@ TOOL_SET_SNAPSHOT_SCHEMA_SQL = """
 CREATE TABLE tool_set_snapshots (
     tool_set_snapshot_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     assembly_id TEXT,
     source_revision TEXT NOT NULL,
@@ -98,9 +107,10 @@ CREATE TABLE tool_set_snapshots (
     tool_policy_json TEXT NOT NULL,
     tools_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    PRIMARY KEY(session_id, plan_id, tool_set_snapshot_id),
+    PRIMARY KEY(session_id, thread_id, plan_id, tool_set_snapshot_id),
     UNIQUE(assembly_id, tool_set_snapshot_id),
-    FOREIGN KEY(session_id, plan_id) REFERENCES context_plans(session_id, plan_id),
+    FOREIGN KEY(session_id, thread_id, plan_id)
+        REFERENCES context_plans(session_id, thread_id, plan_id),
     CHECK((content_hash IS NOT NULL) != (redacted_stable_digest IS NOT NULL))
 );
 """

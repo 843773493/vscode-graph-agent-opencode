@@ -124,7 +124,10 @@ def test_omission_preserves_tag_with_no_body_or_binding(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("detail_ref", DetailRef("session-1", "assembly-omitted", "detail-wrong")),
+        (
+            "detail_ref",
+            DetailRef("session-1", "thread-1", "assembly-omitted", "detail-wrong"),
+        ),
         ("contribution_ordinal", 0),
         ("loss", ()),
         ("omission_reason", None),

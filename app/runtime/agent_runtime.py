@@ -33,16 +33,13 @@ from app.agents.policy import (
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug.service import NodeDebugService
-from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
-    ReactorCreatedCallback,
-)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
@@ -66,7 +63,7 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_checkpointer(self) -> BaseCheckpointSaver: ...
 
-    def get_terminal_manager_client(self) -> TerminalManagerClient: ...
+    def get_terminal_resource_owner(self) -> TerminalResourceOwner: ...
 
     def get_browser_manager_client(self) -> BrowserManagerClient: ...
 
@@ -90,12 +87,14 @@ class AgentRuntimeDependencyProvider(Protocol):
 def build_session_agent_runtime(
     *,
     session_id: str,
+    thread_id: str,
     agent_id: str,
     config_service: ConfigService,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
     job_event_bus: JobEventBusProtocol,
     dependency_provider: AgentRuntimeDependencyProvider,
+    mcp_tools: Sequence[BaseTool],
     name: str | None = None,
     override_model: Any = None,
     model_routing_enabled: bool = True,
@@ -106,12 +105,10 @@ def build_session_agent_runtime(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
-    on_reactor_created: ReactorCreatedCallback | None = None,
-    # OpenSpec 8.4：GraphBinding 持久化端口。None 时构建路径不持久化也不报错
-    # （不伪造持久化成功）；生产由 container 装配唯一 store 实例。
-    graph_binding_store: GraphBindingStorePort | None = None,
+    graph_binding_store: GraphBindingStorePort,
     workspace_root: Path,
     include_team_tools: bool = False,
+    owns_thread: bool = True,
 ) -> Any:
     resolved_agent_id = resolve_agent_id(agent_id, config_service)
     checkpointer = dependency_provider.get_checkpointer()
@@ -119,6 +116,7 @@ def build_session_agent_runtime(
         raise RuntimeError("AgentRuntimeDependencyProvider 必须显式提供 checkpointer")
     return create_runtime_deep_agent_for_session(
         session_id=session_id,
+        thread_id=thread_id,
         agent_id=resolved_agent_id,
         config_service=config_service,
         background_task_registry=background_task_registry,
@@ -131,7 +129,7 @@ def build_session_agent_runtime(
         session_orchestrator=dependency_provider.get_session_orchestrator(),
         session_subagent_service=dependency_provider.get_session_subagent_service(),
         team_service=dependency_provider.get_team_service(),
-        terminal_manager_client=dependency_provider.get_terminal_manager_client(),
+        terminal_resource_owner=dependency_provider.get_terminal_resource_owner(),
         browser_manager_client=dependency_provider.get_browser_manager_client(),
         session_context_query_service=(
             dependency_provider.get_session_context_query_service()
@@ -143,7 +141,7 @@ def build_session_agent_runtime(
         session_message_delivery_service=(
             dependency_provider.get_session_message_delivery_service()
         ),
-        mcp_tools=dependency_provider.get_mcp_tools(),
+        mcp_tools=mcp_tools,
         node_debug_service=(
             # TODO: 所有外部 runtime provider 补齐该依赖后移除兼容分支。
             dependency_provider.get_node_debug_service()
@@ -161,9 +159,9 @@ def build_session_agent_runtime(
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
-        on_reactor_created=on_reactor_created,
         graph_binding_store=graph_binding_store,
         include_team_tools=include_team_tools,
+        owns_thread=owns_thread,
         workspace_root=workspace_root,
     )
 

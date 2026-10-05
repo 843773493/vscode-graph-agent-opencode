@@ -35,14 +35,22 @@ async def handle_step_cancelled(
     message_stream_writer: Any,
     checkpointer: Any,
     session_id: str,
-    turn_id: str,
+    thread_id: str,
+    job_id: str,
+    turn_id: str | None,
+    execution_id: str | None,
     checkpoint_ns: str,
     logger: logging.Logger,
 ) -> None:
     """完成取消事实收口；调用方随后重新抛出 CancelledError。"""
+    if execution_id is None:
+        return
     user_interrupt = state.interrupt_request_id is not None
     cancellation_reason = cancelled_error_reason(cancellation_error)
-    pending_tool_calls = message_stream_runtime.pending_tool_calls()
+    pending_tool_calls = (
+        message_stream_runtime.pending_tool_calls()
+        if message_stream_runtime is not None else ()
+    )
     complete_pending_tool_call_ids = [
         tool_call_id
         for tool_call_id, _tool_name, arguments_complete in pending_tool_calls
@@ -78,12 +86,13 @@ async def handle_step_cancelled(
     if not (user_interrupt and state.user_interrupt_reminder_injected):
         try:
             await asyncio.to_thread(
-            persist_interrupt_checkpoint,
-            checkpointer=checkpointer,
-            session_id=session_id,
-            active_tool_name=state.tool_name,
+                persist_interrupt_checkpoint,
+                checkpointer=checkpointer,
+                session_id=session_id,
+                thread_id=thread_id,
+                active_tool_name=state.tool_name,
                 checkpoint_source=("interrupt" if user_interrupt else failure_code),
-                event_identity=turn_id,
+                event_identity=turn_id or execution_id or job_id,
             )
             logger.info(
                 "[agent_execution_service] cancellation checkpoint persisted: "
@@ -101,31 +110,66 @@ async def handle_step_cancelled(
         if state.user_interrupt_reminder_injected:
             logger.info(
                 "[agent_execution_service] job cancelled after user interrupt "
-                "reminder persisted: turn_id=%s",
-                turn_id,
+                "reminder persisted: job_id=%s",
+                job_id,
             )
-        await message_stream_runtime.finalize_interruption_facts()
-        await message_stream_writer.close_interrupted(state.interrupt_request_id)
+        if message_stream_runtime is not None:
+            await message_stream_runtime.finalize_interruption_facts()
+        if turn_id is None:
+            if message_stream_runtime is not None:
+                await message_stream_runtime.complete_model(
+                    outcome="user_interrupt",
+                    reason="用户中断 internal execution",
+                )
+            if execution_id is None:
+                raise RuntimeError(
+                    f"internal user interruption 缺少 execution_id: job_id={job_id}"
+                )
+            await asyncio.to_thread(
+                checkpointer.mark_execution_lost,
+                session_id,
+                thread_id=thread_id,
+                turn_id=None,
+                execution_id=execution_id,
+                reason="user_interrupt",
+                checkpoint_ns=checkpoint_ns,
+            )
+            return
+        if message_stream_writer is not None:
+            await message_stream_writer.close_interrupted(state.interrupt_request_id)
         return
-    await message_stream_runtime.fail_pending_tool_calls(
-        completion_reason=failure_code,
-        error=failure_message,
-    )
+    if message_stream_runtime is not None:
+        await message_stream_runtime.fail_pending_tool_calls(
+            completion_reason=failure_code,
+            error=failure_message,
+        )
+        await message_stream_runtime.fail_active_tool_executions(
+            completion_reason=failure_code,
+            error=failure_message,
+        )
+        await message_stream_runtime.fail_model(
+            code=failure_code,
+            message=failure_message,
+        )
     mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
     if not callable(mark_execution_lost):
         raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
-    await asyncio.to_thread(
-        mark_execution_lost,
-        session_id,
-        turn_id=turn_id,
-        reason=failure_code,
-        checkpoint_ns=checkpoint_ns,
-    )
-    await message_stream_writer.close_failed(
-        code=failure_code,
-        message=failure_message,
-        resumable=False,
-    )
+    if execution_id is not None:
+        await asyncio.to_thread(
+            mark_execution_lost,
+            session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            execution_id=execution_id,
+            reason=failure_code,
+            checkpoint_ns=checkpoint_ns,
+        )
+    if message_stream_writer is not None:
+        await message_stream_writer.close_failed(
+            code=failure_code,
+            message=failure_message,
+            resumable=False,
+        )
 
 
 async def handle_step_failure(
@@ -136,14 +180,45 @@ async def handle_step_failure(
     message_stream_writer: Any,
     checkpointer: Any,
     session_id: str,
-    turn_id: str,
+    thread_id: str,
+    job_id: str,
+    turn_id: str | None,
+    execution_id: str | None,
     checkpoint_ns: str,
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     logger: logging.Logger,
 ) -> None:
     """把普通异常映射为 v2 execution-lost/stream failure 终态。"""
+    if execution_id is None:
+        await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
+        return
     if interrupt_state.interrupt_request_id is not None:
-        await message_stream_runtime.finalize_interruption_facts()
+        if message_stream_runtime is not None:
+            await message_stream_runtime.finalize_interruption_facts()
+        if turn_id is None:
+            if message_stream_runtime is not None:
+                await message_stream_runtime.complete_model(
+                    outcome="user_interrupt",
+                    reason="用户中断 internal execution",
+                )
+            if execution_id is None:
+                raise RuntimeError(
+                    f"internal user interruption 缺少 execution_id: job_id={job_id}"
+                )
+            mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
+            if not callable(mark_execution_lost):
+                raise TypeError(
+                    "v2 checkpoint saver 缺少可调用端口: mark_execution_lost"
+                )
+            await asyncio.to_thread(
+                mark_execution_lost,
+                session_id,
+                thread_id=thread_id,
+                turn_id=None,
+                execution_id=execution_id,
+                reason="user_interrupt",
+                checkpoint_ns=checkpoint_ns,
+            )
         return
     failure_code = (
         error.code
@@ -159,12 +234,13 @@ async def handle_step_failure(
     if isinstance(error, ScopeCancelledError):
         try:
             await asyncio.to_thread(
-            persist_interrupt_checkpoint,
-            checkpointer=checkpointer,
-            session_id=session_id,
-            active_tool_name=interrupt_state.tool_name,
+                persist_interrupt_checkpoint,
+                checkpointer=checkpointer,
+                session_id=session_id,
+                thread_id=thread_id,
+                active_tool_name=interrupt_state.tool_name,
                 checkpoint_source=failure_code,
-                event_identity=turn_id,
+                event_identity=turn_id or execution_id or job_id,
             )
         except Exception:
             logger.exception(
@@ -172,38 +248,39 @@ async def handle_step_failure(
                 "failed: turn_id=%s",
                 turn_id,
             )
-    await message_stream_runtime.fail_pending_tool_calls(
-        completion_reason=failure_code,
-        error=failure_message,
-    )
-    await message_stream_runtime.fail_model(
-        code=failure_code,
-        message=failure_message,
-    )
+    if message_stream_runtime is not None:
+        await message_stream_runtime.fail_pending_tool_calls(
+            completion_reason=failure_code,
+            error=failure_message,
+        )
+        await message_stream_runtime.fail_active_tool_executions(
+            completion_reason=failure_code,
+            error=failure_message,
+        )
+        await message_stream_runtime.fail_model(
+            code=failure_code,
+            message=failure_message,
+        )
     mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
     if not callable(mark_execution_lost):
         raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
-    await asyncio.to_thread(
-        mark_execution_lost,
-        session_id,
-        turn_id=turn_id,
-        reason=failure_code,
-        checkpoint_ns=checkpoint_ns,
-    )
-    await message_stream_writer.close_failed(
-        code=(
-            "user_interrupt"
-            if interrupt_state.interrupt_request_id is not None
-            else failure_code
-        ),
-        message=(
-            "用户中断后的 AgentLoop 失败"
-            if interrupt_state.interrupt_request_id is not None
-            else failure_message
-        ),
-        after_interrupt_requested=bool(interrupt_state.cancellation_reason),
-        resumable=False,
-    )
+    if execution_id is not None:
+        await asyncio.to_thread(
+            mark_execution_lost,
+            session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            execution_id=execution_id,
+            reason=failure_code,
+            checkpoint_ns=checkpoint_ns,
+        )
+    if message_stream_writer is not None:
+        await message_stream_writer.close_failed(
+            code=failure_code,
+            message=failure_message,
+            after_interrupt_requested=bool(interrupt_state.cancellation_reason),
+            resumable=False,
+        )
     await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
     logger.exception(
         "[agent_execution_service] ERROR published: turn_id=%s",

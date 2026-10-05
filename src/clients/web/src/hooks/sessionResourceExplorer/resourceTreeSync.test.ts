@@ -14,6 +14,9 @@ function session(
   return {
     session_id: sessionId,
     workspace_id: "ws-1",
+    resource_identity: `fixture-${sessionId}`,
+    vrn: `boxteam://workspace/ws-1/resources/session/${sessionId}`,
+    scope: "workspace",
     title,
     title_source: "user",
     current_agent_id: "agent",

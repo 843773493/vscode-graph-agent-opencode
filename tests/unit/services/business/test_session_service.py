@@ -13,7 +13,10 @@ from app.core.path_utils import (
     get_session_path,
     get_session_path_resolver,
     get_sessions_dir,
+    initialize_directories,
+    workspace_context,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.session import (
     SessionCreateRequest,
     SessionUpdateRequest,
@@ -21,6 +24,10 @@ from app.schemas.internal_v2.session import (
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.support.session_navigation_queue import (
+    create_catalog_intent,
+    submit_catalog_intent,
+)
 from tests.unit.services.business.session_service_test_support import (
     SessionServiceConfigStub,
     prepare_session_test_workspace,
@@ -52,7 +59,6 @@ class TestSessionService:
     def setup_workspace(
         self,
         request: pytest.FixtureRequest,
-        monkeypatch: pytest.MonkeyPatch,
         session_config_service: SessionServiceConfigStub,
     ):
         """从完整只读模板准备正式测试工作区，并注入离线配置替身。"""
@@ -61,41 +67,53 @@ class TestSessionService:
             node_id=request.node.nodeid,
         )
         self.temp_dir = workspace_root
-        monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-
-        get_sessions_dir().mkdir(exist_ok=True, parents=True)
-        from app.core.workspace_identity import load_or_create_workspace_id
-
-        self.workspace_id = load_or_create_workspace_id(
-            get_sessions_dir().parent.parent
-        )
-        self.path_resolver = get_session_path_resolver(get_sessions_dir())
-        self.creation_service = get_session_creation_service(get_sessions_dir())
-        self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
+        self.workspace_id = load_or_create_workspace_id(workspace_root)
+        initialize_directories(self.workspace_id, workspace_root)
         self.config_service = session_config_service
-        self.service = SessionService(
-            config_service=self.config_service,
-            trace_event_store=self.trace_event_store,
-            workspace_id=self.workspace_id,
-            path_resolver=self.path_resolver,
-            creation_service=self.creation_service,
-        )
-        # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
-        self.catalog = SessionCatalogService(session_service=self.service)
-        yield
-        self.path_resolver.catalog_store.close()
-        context.close()
+        try:
+            with workspace_context(self.workspace_id, workspace_root):
+                self.path_resolver = get_session_path_resolver()
+                self.creation_service = get_session_creation_service()
+                self.trace_event_store = TraceEventStore(sessions_dir=get_sessions_dir())
+                self.service = SessionService(
+                    config_service=self.config_service,
+                    trace_event_store=self.trace_event_store,
+                    workspace_id=self.workspace_id,
+                    path_resolver=self.path_resolver,
+                    creation_service=self.creation_service,
+                )
+                # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
+                self.catalog = SessionCatalogService(session_service=self.service)
+                yield
+                self.path_resolver.catalog_store.close()
+        finally:
+            context.close()
 
     async def _move_catalog_node(
         self,
         node_id: str,
         parent_node_id: str | None,
     ) -> None:
-        await self.catalog.operations.start()
-        try:
-            await self.catalog.move_node(node_id, parent_node_id)
-        finally:
-            await self.catalog.operations.stop()
+        intent = create_catalog_intent(
+            self.catalog,
+            "move_node",
+            target_node_id=node_id,
+            parent_node_id=parent_node_id,
+        )
+        receipt = await submit_catalog_intent(self.catalog, intent)
+        if receipt.state != "committed":
+            raise RuntimeError(receipt.error_detail or receipt.error_code)
+
+    async def _rename_catalog_node(self, node_id: str, name: str):
+        intent = create_catalog_intent(
+            self.catalog,
+            "rename_node",
+            target_node_id=node_id,
+            name=name,
+        )
+        receipt = await submit_catalog_intent(self.catalog, intent)
+        assert receipt.state == "committed", receipt.error_detail
+        return await self.service.get(node_id)
 
     @pytest.mark.asyncio
     async def test_create_session(self):
@@ -326,18 +344,13 @@ class TestSessionService:
         assert retrieved.created_at == created.created_at
 
     @pytest.mark.asyncio
-    async def test_legacy_workspace_id_is_migrated_to_current_workspace_uuid(self):
-        session = await self.service.create(SessionCreateRequest(title="迁移旧 ID"))
+    async def test_legacy_workspace_id_is_rejected_without_startup_rewrite(self):
+        session = await self.service.create(SessionCreateRequest(title="旧 ID 不迁移"))
         session_file = get_session_file(session.session_id)
         data = json.loads(session_file.read_text(encoding="utf-8"))
         data["workspace_id"] = "ws_local"
-        # catalog 模式下落盘 manifest 是剥离形态（缺 title/title_source），
-        # 迁移入口只对「完整旧形态」做 SessionDTO 校验与重写（剥离形态 +
-        # legacy ID 组合在生产不可达，见 _migrate_legacy_workspace_ids）；
-        # 此处补齐构造完整旧形态再触发迁移。
-        data.setdefault("title", "迁移旧 ID")
-        data.setdefault("title_source", "user")
         session_file.write_text(json.dumps(data), encoding="utf-8")
+        persisted_bytes = session_file.read_bytes()
 
         restarted_service = SessionService(
             config_service=self.config_service,
@@ -347,12 +360,10 @@ class TestSessionService:
             creation_service=self.creation_service,
         )
 
-        restored = await restarted_service.get(session.session_id)
+        with pytest.raises(RuntimeError, match="会话与当前工作区后端标识不一致"):
+            await restarted_service.get(session.session_id)
 
-        assert restored.workspace_id == self.workspace_id
-        assert json.loads(session_file.read_text(encoding="utf-8"))["workspace_id"] == (
-            self.workspace_id
-        )
+        assert session_file.read_bytes() == persisted_bytes
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_session(self):
@@ -360,43 +371,9 @@ class TestSessionService:
             await self.service.get("nonexistent-session-id")
 
     @pytest.mark.asyncio
-    async def test_update_session(self):
-        created = await self.service.create(SessionCreateRequest(title="Original Title"))
-        original_updated_at = created.updated_at
-        original_path = self.service.path_resolver.resolve_session_node(
-            created.session_id
-        )
-
-        updated = await self.service.update(created.session_id, SessionUpdateRequest(title="Updated Title"))
-
-        assert updated.title == "Updated Title"
-        assert updated.title_source == "user"
-        assert updated.session_id == created.session_id
-        assert updated.updated_at > original_updated_at
-        assert self.service.path_resolver.resolve_session_node(
-            created.session_id
-        ) == original_path
-
-        session_file = get_session_file(created.session_id)
-        data = json.loads(session_file.read_text(encoding="utf-8"))
-        assert "title" not in data
-        assert "title_source" not in data
-        assert (
-            self.service.path_resolver.get_node(created.session_id).name
-            == "Updated Title"
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_session_can_mark_auto_title_source(self):
-        created = await self.service.create(SessionCreateRequest(title="新会话"))
-
-        updated = await self.service.update(
-            created.session_id,
-            SessionUpdateRequest(title="hello world", title_source="auto"),
-        )
-
-        assert updated.title == "hello world"
-        assert updated.title_source == "auto"
+    async def test_session_update_does_not_accept_title_changes(self):
+        with pytest.raises(ValidationError):
+            SessionUpdateRequest.model_validate({"title": "Updated Title"})
 
     @pytest.mark.asyncio
     async def test_session_parent_relationship_is_persisted_and_can_be_removed(self):
@@ -436,46 +413,6 @@ class TestSessionService:
         )
 
     @pytest.mark.asyncio
-    async def test_moving_parent_session_carries_complete_child_tree(self):
-        parent = await self.service.create(SessionCreateRequest(title="Parent"))
-        child = await self.service.create_context_fork(
-            title="Child",
-            agent_id=parent.current_agent_id,
-            parent_session_id=parent.session_id,
-            context_source_session_id=parent.session_id,
-        )
-        target_folder = self.service.path_resolver.create_folder(
-            name="目标文件夹",
-            parent_node_id=None,
-        )
-        child_path_before = self.service.path_resolver.resolve_session_node(
-            child.session_id
-        )
-
-        await self._move_catalog_node(
-            parent.session_id,
-            target_folder.node_id,
-        )
-
-        moved_parent_path = self.service.path_resolver.resolve_session_node(
-            parent.session_id
-        )
-        moved_child_path = self.service.path_resolver.resolve_session_node(
-            child.session_id
-        )
-        assert (await self.service.get(parent.session_id)).parent_session_id is None
-        # 逻辑移动不搬磁盘，folder 关系由 catalog 承载，物理目录保持在日期桶。
-        assert moved_parent_path.parent == child_path_before.parent
-        assert moved_child_path.parent == moved_parent_path.parent
-        assert self.service.path_resolver.get_node(
-            parent.session_id
-        ).parent_node_id == target_folder.node_id
-        assert self.service.path_resolver.get_node(
-            child.session_id
-        ).parent_node_id == parent.session_id
-        assert moved_child_path.name == child_path_before.name
-
-    @pytest.mark.asyncio
     async def test_explicit_move_preserves_physical_name_after_title_update(self):
         session = await self.service.create(SessionCreateRequest(title="Original Title"))
         original_path = self.service.path_resolver.resolve_session_node(
@@ -486,10 +423,7 @@ class TestSessionService:
             parent_node_id=None,
         )
 
-        await self.service.update(
-            session.session_id,
-            SessionUpdateRequest(title="Updated Title"),
-        )
+        await self._rename_catalog_node(session.session_id, "Updated Title")
         await self._move_catalog_node(session.session_id, target_folder.node_id)
 
         moved_path = self.service.path_resolver.resolve_session_node(

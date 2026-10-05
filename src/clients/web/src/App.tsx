@@ -1,3 +1,5 @@
+import { useWorkspaceTerminalResources } from "./hooks/workspace/useWorkspaceTerminalResources";
+import { getWorkspaceResource } from "./api/workspaceResources";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
@@ -93,6 +95,8 @@ export default function AppShell() {
     updateUiSettings,
     saveSessionViewState,
     setStatus,
+    sessionCatalogOutboxRuntime,
+    sessionCatalogOutboxSnapshot,
     replayTurn,
     updatePendingRequest,
     removePendingRequest,
@@ -291,6 +295,7 @@ export default function AppShell() {
   });
   const {
     threadId: nodeDebugThreadId,
+    mainThreadId: nodeDebugMainThreadId,
     controller: nodeDebugController,
     activeFrame: nodeDebugActiveFrame,
     selectThread: selectDebugThread,
@@ -318,15 +323,11 @@ export default function AppShell() {
     enabled:
       extensionWindowRequested
       || extensionWindowFallback
-      || (panelVisible && bottomPanelState.tab === "terminal"),
+,
   });
-  const workspaceTerminalEntries = useMemo(
-    () => extensionResources.entries.filter(
-      (entry) => entry.workspace_id === bottomPanelWorkspaceId &&
-        entry.resource.kind === "terminal" &&
-        entry.resource.status === "running",
-    ),
-    [bottomPanelWorkspaceId, extensionResources.entries],
+  const workspaceTerminals = useWorkspaceTerminalResources(
+    resolvedApiPort, bottomPanelWorkspaceId,
+    panelVisible && bottomPanelState.tab === "terminal",
   );
   const activePreviewPath = workspacePreview.activePath;
   const {
@@ -396,6 +397,7 @@ export default function AppShell() {
       workspaceId={activeSessionWorkspaceId}
       sessionId={activeSession?.session_id ?? null}
       threadId={nodeDebugThreadId}
+      mainThreadId={nodeDebugMainThreadId}
       activeFilePath={activeFilePath}
       nodeDebugController={nodeDebugController}
       sessions={sortedSessions}
@@ -576,6 +578,8 @@ export default function AppShell() {
     gatewayWorkspaces: state.gatewayWorkspaces,
     confirm,
     setStatus,
+    sessionCatalogOutboxRuntime,
+    gatewayUserAccess: state.gatewayUserAccess,
     activateGatewayWorkspace,
     createSession,
     openWorkspaceSession,
@@ -675,6 +679,9 @@ export default function AppShell() {
           onInvalidateSessionCatalog={invalidateSessionCatalog}
           catalogSyncKeys={sessionCatalogSyncKeys}
           catalogRefreshVersions={sessionCatalogRefreshVersions}
+          sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
+          sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
+          gatewayUserAccess={state.gatewayUserAccess}
           flexRatio={mainAreaRatios.agent_sessions}
           preferences={agentSessionsPreferences}
           onPreferencesChange={(updater) => {
@@ -748,6 +755,7 @@ export default function AppShell() {
                       contentView={state.contentView}
                       apiPort={resolvedApiPort}
                       workspaceId={activeSessionWorkspaceId}
+                      session={activeSession}
                       sessionId={activeSession?.session_id ?? null}
                       hasActiveSession={Boolean(activeSession)}
                       activeSessionCacheKey={activeSessionCacheKey}
@@ -978,6 +986,15 @@ export default function AppShell() {
                               }
                             }}
                             onControl={controlSessionResource}
+                            onTerminalControl={async (resourceId, action, thread) => {
+                              if (!activeSession || !activeSessionWorkspaceId) throw new Error("终端管理需要当前会话和工作区");
+                              try {
+                                const ownerResource = await getWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, resourceId);
+                                await workspaceTerminals.control(ownerResource, action, thread);
+                              } finally {
+                                await refreshSessionResources(activeSession.session_id);
+                              }
+                            }}
                             onOpenTerminalPreview={(terminalId) => {
                               openTerminalPanel(terminalId);
                             }}
@@ -1015,6 +1032,7 @@ export default function AppShell() {
                             error={childThreads.error}
                             loadedAt={childThreads.loadedAt}
                             sessionId={activeSession?.session_id ?? ""}
+                            mainThreadId={nodeDebugMainThreadId}
                             activeThreadId={nodeDebugThreadId}
                             onRefresh={() => {
                               void childThreads.refresh();
@@ -1085,14 +1103,14 @@ export default function AppShell() {
         workspace={bottomPanelWorkspace}
         workspaceName={state.workspaceName ?? ""}
         currentSessionId={activeSession?.session_id ?? ""}
-        terminalEntries={workspaceTerminalEntries}
-        terminalLoading={extensionResources.loading}
+        terminalController={workspaceTerminals}
+        terminalThread={activeSession && activeSession.thread_id && activeSessionWorkspaceId === bottomPanelWorkspaceId
+          ? { session_id: activeSession.session_id, thread_id: activeSession.thread_id } : null}
         generatorResources={generatorResources}
         workspaces={state.gatewayWorkspaces}
         onUpdateState={updateBottomPanelState}
         onStartResize={startBottomPanelResize}
         onResetHeight={resetBottomPanelHeight}
-        onRefreshTerminals={() => void extensionResources.refresh()}
         onOpenConnectionManager={() => handleWorkbenchViewChange("gateway")}
         onReconnectWorkspace={reconnectGatewayWorkspace}
         onStartWorkspace={startManagedGatewayWorkspaceBackend}

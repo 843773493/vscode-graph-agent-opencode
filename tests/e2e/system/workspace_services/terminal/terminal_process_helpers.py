@@ -13,6 +13,12 @@ from urllib.request import Request, urlopen
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_prefixed_id, create_uuid_hex
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -50,12 +56,14 @@ def seed_historical_terminal_checkpoint(
         "wall_time_seconds": 1.0,
         "output": "HISTORICAL_TERMINAL",
     }
+    thread_id = get_session_path_resolver(Path(workspace_root) / ".boxteam/sessions").main_thread_id(session_id)
+    message_id = create_prefixed_id("msg")
     messages_version = saver.get_next_version(None, None)
     checkpoint = {
         "id": str(uuid.uuid4()),
         "channel_values": {
             "messages": [
-                HumanMessage(content="请启动一个历史终端"),
+                HumanMessage(content="请启动一个历史终端", id=message_id),
                 ToolMessage(
                     content=(
                         "Tool call exec_command with id call_cancelled "
@@ -74,12 +82,11 @@ def seed_historical_terminal_checkpoint(
         "channel_versions": {"messages": messages_version},
         "updated_channels": ["messages"],
     }
-    saver.put(
-        build_checkpoint_config(session_id),
-        checkpoint,
-        metadata={"source": "e2e_seed", "step": -1, "writes": {}},
-        new_versions={"messages": messages_version},
-    )
+    with session_thread_owner_scope(MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id):
+        accepted = saver.accept_turn(session_id, thread_id=thread_id, accepted_ingress_id=message_id, acceptance_idempotency_key=f"terminal-history:{message_id}", job_id=create_prefixed_id("job"), admission_idempotency_key=create_prefixed_id("adm"), payload="请启动一个历史终端", payload_kind="text", turn_id=create_prefixed_id("turn"), root_item_id=f"item-{message_id}")
+        admission = saver.execution_admission(session_id, thread_id=thread_id, execution_id=accepted["execution_id"])
+        with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+            saver.put(build_checkpoint_config(thread_id), checkpoint, metadata={"source": "e2e_seed", "step": -1, "writes": {}}, new_versions={"messages": messages_version})
 
 
 def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
@@ -102,7 +109,6 @@ def wait_for_http_ok(url: str, process: subprocess.Popen[str]) -> None:
 def start_terminal_backend(
     *,
     backend_port: int,
-    frontend_port: int,
     workspace_root: str,
 ) -> subprocess.Popen[str]:
     project_root = Path.cwd().resolve()
@@ -113,6 +119,7 @@ def start_terminal_backend(
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = workspace_root
     env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
+    workspace_id = load_or_create_workspace_id(Path(workspace_root))
     process = subprocess.Popen(
         [
             node_bin,
@@ -121,10 +128,10 @@ def start_terminal_backend(
             "127.0.0.1",
             "--port",
             str(backend_port),
-            "--frontend-url",
-            f"http://127.0.0.1:{frontend_port}",
             "--workspace-root",
             workspace_root,
+            "--workspace-id",
+            workspace_id,
         ],
         cwd=project_root / "src" / "workspace-services" / "terminal" / "server",
         env=env,
@@ -148,11 +155,14 @@ def create_long_running_terminal(
     *,
     backend_port: int,
     workspace_root: str,
-    session_id: str,
+    title: str,
 ) -> dict[str, object]:
+    workspace_id = load_or_create_workspace_id(Path(workspace_root))
     payload = {
-        "session_id": session_id,
-        "title": "lifecycle cleanup test",
+        "workspace_id": workspace_id,
+        "terminal_id": f"term_{create_uuid_hex()}",
+        "owner_revision": 1,
+        "title": title,
         "cwd": str(Path(workspace_root).resolve()),
         "command": "/bin/sh",
         "args": ["-c", "trap '' TERM HUP INT; while true; do sleep 1; done"],
@@ -160,21 +170,26 @@ def create_long_running_terminal(
     request = Request(
         f"http://127.0.0.1:{backend_port}/api/terminals",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers={"content-type": "application/json", "X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
         method="POST",
     )
     with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))["data"]
 
 
-def get_terminal_snapshot(backend_port: int, terminal_id: str) -> dict[str, object]:
-    with urlopen(f"http://127.0.0.1:{backend_port}/api/terminals/{terminal_id}", timeout=5) as response:
+def get_terminal_snapshot(backend_port: int, terminal_id: str, workspace_id: str) -> dict[str, object]:
+    request = Request(
+        f"http://127.0.0.1:{backend_port}/api/terminals/{terminal_id}",
+        headers={"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal"},
+    )
+    with urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))["data"]
 
 
 def wait_terminal_snapshot(
     backend_port: int,
     terminal_id: str,
+    workspace_id: str,
     *,
     timeout_seconds: float = 5,
 ) -> dict[str, object]:
@@ -182,7 +197,7 @@ def wait_terminal_snapshot(
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            return get_terminal_snapshot(backend_port, terminal_id)
+            return get_terminal_snapshot(backend_port, terminal_id, workspace_id)
         except HTTPError as error:
             if error.code != 404:
                 raise
@@ -191,10 +206,10 @@ def wait_terminal_snapshot(
     raise TimeoutError(f"终端快照未恢复: terminal_id={terminal_id}") from last_error
 
 
-def wait_terminal_process_metadata(backend_port: int, terminal_id: str) -> None:
+def wait_terminal_process_metadata(backend_port: int, terminal_id: str, workspace_id: str) -> None:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        snapshot = get_terminal_snapshot(backend_port, terminal_id)
+        snapshot = get_terminal_snapshot(backend_port, terminal_id, workspace_id)
         if snapshot.get("process_session_id") and snapshot.get("process_start_time"):
             return
         time.sleep(0.1)

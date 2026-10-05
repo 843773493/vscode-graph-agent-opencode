@@ -27,6 +27,7 @@ import {
 } from "./workspaceSessionListRefresh";
 import { errorMessage } from "../../utils/errorMessage";
 import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
+import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 type WorkspaceBootstrapPayload = {
   userAccess: Awaited<ReturnType<typeof ensureGatewayUserAccess>>;
@@ -270,7 +271,13 @@ async function loadWorkspaceBootstrap(
     getWorkspace(apiPort, activeWorkspaceId),
     Promise.allSettled(
       activeWorkspaceId
-        ? [fetchWorkspaceSessionListSnapshot(apiPort, activeWorkspaceId)]
+        ? [fetchWorkspaceSessionListSnapshot(
+            apiPort,
+            requireGatewayWorkspaceRequestTarget(
+              gatewayWorkspaces.items,
+              activeWorkspaceId,
+            ),
+          )]
         : [],
     ),
     apiListAgents(apiPort, activeWorkspaceId),

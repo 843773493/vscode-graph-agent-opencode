@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
 
 
-_REGISTRY_SCHEMA_VERSION = 10
+_REGISTRY_SCHEMA_VERSION = 11
 _UNSET = object()
 RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
 @dataclass(slots=True)
@@ -45,6 +45,7 @@ class WorkspaceTarget:
     remote_service_names: tuple[GatewayServiceName, ...] = ()
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
+    backend_workspace_id: str | None = None
 @dataclass(frozen=True, slots=True)
 class WorkspaceRouteLease:
     workspace_id: str
@@ -81,7 +82,7 @@ class GatewayRegistryBatchHandle:
                     continue
                 try:
                     runtime.close()
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 — 关闭全部远端运行时并汇总初始化失败的清理错误。
                     errors.append(f"{connection_id}: {error}")
             if errors:
                 raise RuntimeError(

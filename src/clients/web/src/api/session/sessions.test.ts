@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../http";
-import { listChildThreads, listSessions } from "./sessions";
+import {
+  forkSessionContext,
+  getSessionMainThread,
+  listChildThreads,
+  listSessions,
+} from "./sessions";
 import {
   installSessionCatalogFetchMock,
   unwrapSessionCatalogFetch,
@@ -16,6 +21,40 @@ function installFetchMock(
 
 afterEach(() => {
   unwrapSessionCatalogFetch();
+});
+
+describe("main thread API", () => {
+  test("返回 catalog 冻结的 canonical thread 并编码 session id", async () => {
+    let requestUrl = "";
+    installFetchMock((_init, url) => {
+      requestUrl = url;
+      return Response.json({
+        data: {
+          session_id: "ses/owner",
+          thread_id: "thr_00000000700070008000000000000001",
+        },
+        request_id: "req-main-thread",
+      });
+    });
+
+    const result = await getSessionMainThread(48_310, "ses/owner", "workspace-1");
+
+    expect(result.thread_id).toBe("thr_00000000700070008000000000000001");
+    expect(requestUrl).toContain("/api/v1/sessions/ses%2Fowner/main-thread");
+  });
+
+  test("响应 owner 不匹配时直接失败", async () => {
+    installFetchMock(() => Response.json({
+      data: {
+        session_id: "ses_other",
+        thread_id: "thr_00000000700070008000000000000001",
+      },
+      request_id: "req-main-thread-mismatch",
+    }));
+
+    await expect(getSessionMainThread(48_311, "ses_owner", "workspace-1"))
+      .rejects.toThrow("main thread 协议响应");
+  });
 });
 
 describe("child thread 列表 API", () => {
@@ -107,6 +146,28 @@ describe("child thread 列表 API", () => {
       expect(error).toBeInstanceOf(HttpRequestError);
       expect((error as HttpRequestError).status).toBe(409);
     }
+  });
+});
+
+describe("会话上下文 Fork API", () => {
+  test("将调用方明确选择的来源目录归属发送给后端", async () => {
+    let requestInit: RequestInit | undefined;
+    let requestUrl = "";
+    installFetchMock((init, url) => {
+      requestInit = init;
+      requestUrl = url;
+      return Response.json({ data: {}, request_id: "req-session-fork" });
+    });
+
+    await forkSessionContext(48_308, "ses parent", true, "workspace-1");
+
+    expect(requestUrl).toContain("/api/v1/sessions/ses%20parent/fork-context");
+    expect(requestInit?.method).toBe("POST");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      place_under_source: true,
+    });
+    expect(new Headers(requestInit?.headers).get("X-BoxTeam-Workspace-Id"))
+      .toBe("workspace-1");
   });
 });
 

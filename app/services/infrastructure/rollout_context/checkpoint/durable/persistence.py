@@ -15,6 +15,7 @@ from uuid import uuid4
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.sqlite_state import utc_now_text as _now
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
@@ -54,10 +55,29 @@ class RolloutCheckpointPersistenceMixin:
         current_messages: list[object],
         branch_id: str | None = None,
     ) -> None:
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            jsonl = self.jsonl_path(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        owner = require_current_session_thread_owner(
+            langgraph_thread_id=thread_id
+        )
+        with self._lock(
+            owner.thread_id,
+            checkpoint_ns,
+            session_id=owner.session_id,
+        ):
+            self.initialize(
+                owner.session_id,
+                checkpoint_ns,
+                thread_id=owner.thread_id,
+            )
+            jsonl = self.jsonl_path(
+                owner.session_id,
+                checkpoint_ns,
+                thread_id=owner.thread_id,
+            )
+            with self._connect(
+                owner.thread_id,
+                checkpoint_ns,
+                session_id=owner.session_id,
+            ) as connection:
                 # append_checkpoint 的 JSONL 与 SQLite 共享一个失败回滚边界。
                 # _RolloutSQLiteConnection.__exit__ 会在任意异常退出时把已
                 # fsync 但尚未提交到 catalog/commit 的尾部截回原坐标。
@@ -144,7 +164,8 @@ class RolloutCheckpointPersistenceMixin:
                     raise RuntimeError("checkpoint append 前 JSONL 与 committed offset 不一致")
                 batch = prepare_messages(
                     connection=connection, jsonl=jsonl, codec=self._codec(),
-                    read_item=self._read_v2_item_at, messages=current_messages,
+                    read_item=self._read_v2_item_at, thread_id=thread_id,
+                    messages=current_messages,
                     last_message_sequence=strict_non_negative_int(meta[1], field="database_meta.last_message_sequence"),
                     next_item_sequence=strict_non_negative_int(meta[3], field="database_meta.last_item_sequence") + 1,
                     offset=jsonl_offset_before,
@@ -236,6 +257,7 @@ class RolloutCheckpointPersistenceMixin:
                     visibility,
                     _envelope,
                     canonical_locations,
+                    execution_id,
                 ) in prepared:
                     message_value = json.loads(serialized_json)
                     content = (
@@ -245,11 +267,12 @@ class RolloutCheckpointPersistenceMixin:
                     )
                     content_bytes = _json(content).encode("utf-8")
                     connection.execute(
-                        "INSERT INTO messages(message_sequence, message_id, turn_id, role, jsonl_offset, jsonl_length, content_length, content_hash, visibility, commit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO messages(message_sequence, message_id, turn_id, execution_id, role, jsonl_offset, jsonl_length, content_length, content_hash, visibility, commit_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             sequence,
                             message_id,
                             turn_id,
+                            execution_id,
                             role,
                             message_offset,
                             byte_length,
@@ -263,15 +286,16 @@ class RolloutCheckpointPersistenceMixin:
                     self._insert_message_projection(
                         connection, sequence, message_value, timestamp
                     )
-                    self._upsert_turn(
-                        connection,
-                        turn_id,
-                        sequence,
-                        message_id,
-                        role,
-                        active_branch,
-                        timestamp,
-                    )
+                    if turn_id is not None:
+                        self._upsert_turn(
+                            connection,
+                            turn_id,
+                            sequence,
+                            message_id,
+                            role,
+                            active_branch,
+                            timestamp,
+                        )
                     for canonical_item, item_offset, item_length in canonical_locations:
                         self._insert_canonical_item(
                             connection,
@@ -281,15 +305,44 @@ class RolloutCheckpointPersistenceMixin:
                             jsonl_length=item_length,
                             created_at=timestamp,
                         )
+                        stored_execution = connection.execute(
+                            "SELECT execution_id FROM item_catalog WHERE item_id = ?",
+                            (canonical_item.item_id,),
+                        ).fetchone()
+                        if stored_execution is None:
+                            raise RuntimeError(
+                                "canonical item 插入后 catalog 行缺失: "
+                                f"{canonical_item.item_id}"
+                            )
+                        if stored_execution[0] is None:
+                            update = connection.execute(
+                                "UPDATE item_catalog SET execution_id = ? "
+                                "WHERE item_id = ? AND execution_id IS NULL",
+                                (execution_id, canonical_item.item_id),
+                            )
+                            if update.rowcount != 1:
+                                raise RuntimeError(
+                                    "canonical item execution attribution 写入失败: "
+                                    f"{canonical_item.item_id}"
+                                )
+                        elif stored_execution[0] != execution_id:
+                            raise RuntimeError(
+                                "canonical item execution attribution 冲突: "
+                                f"{canonical_item.item_id}"
+                            )
                         # fork checkpoint 只是把 source 的临时 LangChain view
                         # 写入 target，真实 Turn identity 要等 canonical item
                         # remap 和 fork completion 一起建立。若在这里按 source
                         # turn_id 建 checkpoint-origin TurnRecord，completion
                         # 只能把它取消，最终留下 source/target 两套 Turn。
-                        if metadata.get("source") != "fork":
+                        if (
+                            canonical_item.turn_id is not None
+                            and metadata.get("source") != "fork"
+                        ):
                             self._ensure_v2_turn_record_from_root(
                                 connection,
-                                thread_id=thread_id,
+                                session_id=owner.session_id,
+                                thread_id=owner.thread_id,
                                 item=canonical_item,
                                 branch_id=active_branch,
                                 timestamp=timestamp,

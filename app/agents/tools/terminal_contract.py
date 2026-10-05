@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import re
+from secrets import token_hex
 from typing import Any
-
-from app.core.identifier import create_uuid_hex
 
 DEFAULT_EXEC_YIELD_TIME_MS = 10_000
 DEFAULT_WRITE_STDIN_YIELD_TIME_MS = 250
@@ -141,7 +140,7 @@ def tool_output(
         max_output_tokens,
     )
     result: dict[str, Any] = {
-        "chunk_id": create_uuid_hex()[:6],
+        "chunk_id": token_hex(3),
         "terminal_id": terminal_id,
         "wall_time_seconds": wall_time_seconds,
         "original_token_count": original_token_count,

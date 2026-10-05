@@ -31,7 +31,9 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
     checkpoint_ns = state.checkpoint_ns
     new_lines = state.new_lines
     mapped = state.mapped
-    jsonl_path = self.jsonl_path(target_session_id, checkpoint_ns)
+    jsonl_path = self.jsonl_path(
+        target_session_id, checkpoint_ns, thread_id=state.target_thread_id
+    )
     temporary = jsonl_path.with_name(f".{jsonl_path.name}.{fork_id}.tmp")
     # 第一处物理写入前记录恢复路径，detail 中途失败也必须恢复 JSONL。
     state.jsonl_path = jsonl_path
@@ -60,7 +62,9 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         ).fetchall()
     )
 
-    session_root = self.root(target_session_id, checkpoint_ns).parent
+    session_root = self.root(
+        target_session_id, checkpoint_ns, thread_id=state.target_thread_id
+    ).parent
 
     for old_detail_ref, old_assembly_id, old_relative_path in detail_rows:
         old_detail_ref = required_text(
@@ -75,7 +79,9 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         )
         old_relative = Path(relative_path_text)
         source_ref = detail_ref_from_key(old_detail_ref)
-        source_ref.require_owner(state.source_session_id, old_assembly_id)
+        source_ref.require_owner(
+            state.source_session_id, state.source_thread_id, old_assembly_id
+        )
         if relative_path_text != detail_relative_path(source_ref).as_posix():
             raise RuntimeError(f"full_rollout_copy detail path 越界: {old_detail_ref}")
         old_path = self._safe_session_relative_path(session_root, old_relative)
@@ -88,7 +94,7 @@ def materialize_full_copy_files(state: FullCopyRemapState) -> None:
         target_ref = detail_ref_from_key(new_detail_ref)
         # target assembly 段由 typed target detail ref 决定：activation lineage
         # detail 的 assembly 段是 activation snapshot id，不在 assembly mapping 中。
-        target_ref.require_owner(state.target_session_id)
+        target_ref.require_owner(state.target_session_id, state.target_thread_id)
         new_relative = detail_relative_path(target_ref)
         self._safe_session_relative_path(session_root, new_relative.parent)
         new_path = session_root / new_relative

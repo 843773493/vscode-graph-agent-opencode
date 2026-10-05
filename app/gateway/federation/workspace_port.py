@@ -46,30 +46,35 @@ class WorkspaceCatalogPort:
 
     def __init__(self, *, request_timeout: float = 5.0) -> None:
         self._request_timeout = request_timeout
-        self._backend_urls: dict[str, str] = {}
+        self._backend_endpoints: dict[str, tuple[str, str]] = {}
 
-    def project_workspaces(self, workspaces: tuple[tuple[str, str], ...]) -> None:
+    def project_workspaces(
+        self,
+        workspaces: tuple[tuple[str, str, str], ...],
+    ) -> None:
         """整体重建本地工作区路由表；远端子工作区不参与。"""
 
-        self._backend_urls = {
-            workspace_id: backend_url.rstrip("/")
-            for workspace_id, backend_url in workspaces
+        self._backend_endpoints = {
+            workspace_id: (backend_url.rstrip("/"), backend_workspace_id)
+            for workspace_id, backend_url, backend_workspace_id in workspaces
         }
 
     async def _export(self, *, workspace_id: str) -> dict[str, object]:
         request_id = f"federation-catalog-{secrets.token_hex(8)}"
-        backend_url = self._backend_urls.get(workspace_id)
-        if backend_url is None:
+        backend_endpoint = self._backend_endpoints.get(workspace_id)
+        if backend_endpoint is None:
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 f"本地工作区后端未连接，无法查询 cold catalog: {workspace_id}",
                 detail={"workspace_id": workspace_id},
             )
+        backend_url, backend_workspace_id = backend_endpoint
         async with httpx.AsyncClient(timeout=self._request_timeout) as client:
             response = await client.get(
                 f"{backend_url}/api/v1/session-catalog/export",
                 headers={
                     "X-Local-Token": LOCAL_TOKEN,
+                    "X-BoxTeam-Workspace-Id": backend_workspace_id,
                     "X-Request-ID": request_id,
                     # 按请求注入 Gateway 自身稳定身份，取值与两条 HTTP 代理同源。
                     "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(),
@@ -94,7 +99,7 @@ class WorkspaceCatalogPort:
         """返回包含该 session 的本地工作区；未授权与不存在不可区分。"""
 
         found: list[str] = []
-        for workspace_id in sorted(self._backend_urls):
+        for workspace_id in sorted(self._backend_endpoints):
             try:
                 data = await self._export(workspace_id=workspace_id)
             except FederationError:
@@ -124,20 +129,31 @@ class WorkspaceSessionMainPort:
     def __init__(self, *, request_timeout: float = 5.0) -> None:
         self._request_timeout = request_timeout
         self._backend_urls: dict[str, str] = {}
+        self._backend_workspace_ids: dict[str, str] = {}
 
-    def project_workspaces(self, workspaces: tuple[tuple[str, str], ...]) -> None:
+    def project_workspaces(
+        self,
+        workspaces: tuple[tuple[str, str, str], ...],
+    ) -> None:
         """整体重建本地工作区路由表；远端子工作区不参与。"""
 
         self._backend_urls = {
             workspace_id: backend_url.rstrip("/")
-            for workspace_id, backend_url in workspaces
+            for workspace_id, backend_url, _backend_workspace_id in workspaces
+        }
+        self._backend_workspace_ids = {
+            workspace_id: backend_workspace_id
+            for workspace_id, _backend_url, backend_workspace_id in workspaces
         }
 
     async def resolve_main_thread(
         self, *, gateway_id: str, workspace_id: str, session_id: str
     ) -> str:
         del gateway_id
-        if workspace_id not in self._backend_urls:
+        if (
+            workspace_id not in self._backend_urls
+            or workspace_id not in self._backend_workspace_ids
+        ):
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
                 f"目标工作区未注册到当前 Gateway: {workspace_id}",

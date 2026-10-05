@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-from pathlib import Path
-from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from app.core.path_utils import get_workspace_root
+from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
@@ -25,7 +21,7 @@ class TerminalManagerClient:
         self,
         *,
         backend_url: str | None = None,
-        workspace_id: str | None = None,
+        workspace_id: str,
         config_service: ConfigService | None = None,
     ) -> None:
         configured_backend_url = backend_url or os.environ.get(
@@ -36,22 +32,9 @@ class TerminalManagerClient:
         )
         self._backend_url = (
             configured_backend_url
-            or (
-                config_service.get_terminal_backend_url()
-                if config_service is not None
-                else None
-            )
             or DEFAULT_TERMINAL_BACKEND_URL
         ).rstrip("/")
-        workspace_root = get_workspace_root()
-        self._workspace_id = workspace_id or self._managed_workspace_id(workspace_root)
-
-    @staticmethod
-    def _managed_workspace_id(workspace_root: Path) -> str:
-        digest = hashlib.sha256(
-            f"local-managed\n{workspace_root.resolve()}".encode()
-        ).hexdigest()
-        return f"gw_{digest[:32]}"
+        self._workspace_id = validate_workspace_id(workspace_id)
 
     @property
     def backend_url(self) -> str:
@@ -65,49 +48,45 @@ class TerminalManagerClient:
     async def create_terminal(
         self,
         *,
-        session_id: str,
+        terminal_id: str,
+        owner_revision: int,
         title: str,
+        cwd: str,
         agent_id: str | None = None,
-        cwd: str | None = None,
         cols: int = 100,
         rows: int = 30,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         payload = {
+            "terminal_id": terminal_id,
+            "owner_revision": owner_revision,
             "workspace_id": self._workspace_id,
-            "session_id": session_id,
             "agent_id": agent_id,
             "title": title,
-            "cwd": cwd or str(get_workspace_root()),
+            "cwd": cwd,
             "cols": cols,
             "rows": rows,
         }
         response = await self._json_request("POST", "/api/terminals", payload)
         return self._require_data(response)
 
-    async def get_terminal(self, terminal_id: str) -> dict[str, Any]:
+    async def get_resource(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request("GET", f"/api/terminals/{terminal_id}")
         return self._require_data(response)
 
-    async def list_terminals(
-        self,
-        *,
-        session_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    async def list_resources(self) -> list[dict[str, object]]:
         path = "/api/terminals"
-        if session_id is not None:
-            path = f"{path}?session_id={quote(session_id, safe='')}"
         response = await self._json_request("GET", path)
         data = response.get("data")
         if not isinstance(data, list):
             raise TypeError(f"终端管理器返回格式错误: {response}")
-        result: list[dict[str, Any]] = []
+        result: list[dict[str, object]] = []
         for item in data:
             if not isinstance(item, dict):
                 raise TypeError(f"终端管理器列表包含非对象记录: {response}")
             result.append(self._normalize_terminal(item))
         return result
 
-    async def read_terminal(self, terminal_id: str) -> dict[str, Any]:
+    async def read_terminal(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/read"
         )
@@ -118,13 +97,13 @@ class TerminalManagerClient:
         normalized["terminal"] = self._normalize_terminal(data["terminal"])
         return normalized
 
-    async def mark_terminal_backgrounded(self, terminal_id: str) -> dict[str, Any]:
+    async def mark_terminal_backgrounded(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/background"
         )
         return self._require_data(response)
 
-    async def claim_terminal_steering(self, terminal_id: str) -> dict[str, Any]:
+    async def claim_terminal_steering(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
             "POST", f"/api/terminals/{terminal_id}/claim-steering"
         )
@@ -135,7 +114,7 @@ class TerminalManagerClient:
         terminal_id: str,
         *,
         dispatched: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         response = await self._json_request(
             "POST",
             f"/api/terminals/{terminal_id}/finish-steering",
@@ -150,7 +129,7 @@ class TerminalManagerClient:
         data: str,
         source: str = "agent",
         command: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         response = await self._json_request(
             "POST",
             f"/api/terminals/{terminal_id}/write",
@@ -162,12 +141,12 @@ class TerminalManagerClient:
         )
         return self._require_data(response)
 
-    async def kill_terminal(
+    async def stop_resource(
         self,
         terminal_id: str,
         *,
         reason: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         response = await self._json_request(
             "POST",
             f"/api/terminals/{terminal_id}/kill",
@@ -175,17 +154,35 @@ class TerminalManagerClient:
         )
         return self._require_terminal_envelope(response)
 
-    async def delete_terminal(self, terminal_id: str) -> dict[str, Any]:
+    async def delete_resource(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request("DELETE", f"/api/terminals/{terminal_id}")
         return self._require_terminal_envelope(response)
 
-    def _require_data(self, response: dict[str, Any]) -> dict[str, Any]:
+    async def sync_owner_revision(self, terminal_id: str, owner_revision: int) -> None:
+        await self._json_request(
+            "POST", f"/api/terminals/{terminal_id}/owner-revision",
+            {"owner_revision": owner_revision},
+        )
+
+    async def issue_transport_grant(
+        self, terminal_id: str, *, owner_revision: int, association: str | None,
+    ) -> dict[str, object]:
+        result = await self._json_request(
+            "POST", f"/api/terminals/{terminal_id}/transport-grant",
+            {"owner_revision": owner_revision, "association": association},
+        )
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise TypeError("Terminal 传输授权缺少完整结果")
+        return data
+
+    def _require_data(self, response: dict[str, object]) -> dict[str, object]:
         data = response.get("data")
         if not isinstance(data, dict):
             raise TypeError(f"终端管理器返回格式错误: {response}")
         return self._normalize_terminal(data)
 
-    def _require_terminal_envelope(self, response: dict[str, Any]) -> dict[str, Any]:
+    def _require_terminal_envelope(self, response: dict[str, object]) -> dict[str, object]:
         data = response.get("data")
         if not isinstance(data, dict):
             raise TypeError(f"终端管理器返回格式错误: {response}")
@@ -197,7 +194,7 @@ class TerminalManagerClient:
         return normalized
 
     @staticmethod
-    def _normalize_terminal(data: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_terminal(data: dict[str, object]) -> dict[str, object]:
         normalized = terminal_session_to_json(terminal_session_to_proto(data))
         normalized.pop("attach_url", None)
         return normalized
@@ -206,22 +203,26 @@ class TerminalManagerClient:
         self,
         method: str,
         path: str,
-        payload: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         return await asyncio.to_thread(self._json_request_sync, method, path, payload)
 
     def _json_request_sync(
         self,
         method: str,
         path: str,
-        payload: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+        payload: dict[str, object] | None,
+    ) -> dict[str, object]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         request = Request(
             f"{self._resolve_backend_url()}{path}",
             data=body,
             method=method,
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                "X-BoxTeam-Workspace-Id": self._workspace_id,
+                "X-BoxTeam-Resource-Owner": "workspace-terminal",
+            },
         )
         try:
             with urlopen(request, timeout=10) as response:

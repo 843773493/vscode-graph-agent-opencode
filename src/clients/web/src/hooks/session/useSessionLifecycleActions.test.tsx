@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Session } from "../../types/backend";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
+import type { SessionCatalogOutboxRuntime } from "./sessionCatalogOutboxRuntime";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   apiResponse,
   buildSessionHookState,
-  deleteSessionResponse,
+  catalogChildrenResponse,
+  createTestSessionCatalogOutboxRuntime,
+  errorResponse,
   installGatewayFetch,
-  installSessionDeleteFetch,
   mountSessionLifecycleActions,
   restoreSessionHookGlobals,
   sessionsListResponse,
@@ -25,6 +28,9 @@ function session(
   return {
     session_id: sessionId,
     workspace_id: "ws_local",
+    resource_identity: `fixture-${sessionId}`,
+    vrn: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
+    scope: "workspace",
     title,
     title_source: "user",
     current_agent_id: "default",
@@ -111,6 +117,9 @@ function raceSession(sessionId: string, agentId = "default"): Session {
   return {
     session_id: sessionId,
     workspace_id: "ws_local",
+    resource_identity: `fixture-${sessionId}`,
+    vrn: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
+    scope: "workspace",
     title: sessionId,
     title_source: "user",
     current_agent_id: agentId,
@@ -132,13 +141,19 @@ function raceState(current: Session | null, sessions: Session[]) {
 }
 
 /** 挂载生命周期动作：以当前会话为焦点，raceState 作为初始镜像。 */
-function mountRace(current: Session, sessions: Session[], abort?: () => void) {
+function mountRace(
+  current: Session,
+  sessions: Session[],
+  abort?: () => void,
+  sessionCatalogOutboxRuntime?: ReturnType<typeof createTestSessionCatalogOutboxRuntime>["runtime"],
+) {
   return mountSessionLifecycleActions({
     apiPort: 8014,
     currentSession: current,
     workspaceId: RACE_WORKSPACE,
     state: raceState(current, sessions),
     abortCurrentStream: abort,
+    sessionCatalogOutboxRuntime,
   });
 }
 
@@ -146,12 +161,16 @@ function mountRace(current: Session, sessions: Session[], abort?: () => void) {
 function mountLifecycle(
   currentSession: Session | null,
   state: ReturnType<typeof raceState>,
+  sessionCatalogOutboxRuntime?: ReturnType<typeof createTestSessionCatalogOutboxRuntime>["runtime"],
+  workspaceRequestTargets?: readonly GatewayWorkspaceRequestTarget[],
 ) {
   return mountSessionLifecycleActions({
     apiPort: 8014,
     currentSession,
     workspaceId: RACE_WORKSPACE,
     state,
+    sessionCatalogOutboxRuntime,
+    workspaceRequestTargets,
   });
 }
 describe("会话生命周期写动作的竞态与失败补偿", () => {
@@ -216,23 +235,111 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     expect(readState().status).toContain("列表不可用");
   });
 
-  test("W6 删除成功但列表刷新失败时不报删除失败且本地列表收敛", async () => {
+  test("W6 删除提交后刷新真实父分支，再按精确 operation ID 清理回执", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installSessionDeleteFetch({
-      deleteResponse: deleteSessionResponse(sesB.session_id),
-      listResponse: apiResponse({ message: "列表不可用" }, 500),
+    const outbox = createTestSessionCatalogOutboxRuntime();
+    const pruneAfterReceiptRuntime: SessionCatalogOutboxRuntime = {
+      ...outbox.runtime,
+      async waitForTerminal(handle, operationId) {
+        const receipt = await outbox.runtime.waitForTerminal(handle, operationId);
+        // 模拟另一个消费者在回执返回后抢先清理：删除流程必须继续依赖回执本身。
+        await handle.driver.prune(4, [operationId]);
+        return receipt;
+      },
+    };
+    const refreshedParents: Array<string | null> = [];
+    installGatewayFetch(({ path, method, url }) => {
+      if (path === `/api/v1/session-catalog/breadcrumb/${sesB.session_id}`) {
+        return apiResponse({
+          revision: "catalog-revision-3",
+          catalog_revision: 3,
+          items: [
+            {
+              node_id: "folder_parent",
+              kind: "folder",
+              name: "上级目录",
+              parent_node_id: null,
+              folder_id: "folder_parent",
+              has_children: true,
+              node_revision: 1,
+              state: "active",
+              session: null,
+            },
+            {
+              node_id: sesB.session_id,
+              kind: "session",
+              name: sesB.title,
+              parent_node_id: "folder_parent",
+              session_id: sesB.session_id,
+              has_children: false,
+              node_revision: 2,
+              state: "active",
+              session: sesB,
+            },
+          ],
+        });
+      }
+      if (path === "/api/v1/session-catalog/children" && method === "GET") {
+        const parentNodeId = new URL(url, "http://localhost").searchParams.get("parent_node_id");
+        refreshedParents.push(parentNodeId);
+        return catalogChildrenResponse("catalog-revision-4", [], parentNodeId, 4);
+      }
+      return undefined;
     });
 
-    const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
+    const { state: readState, actions } = mountRace(
+      sesA,
+      [sesA, sesB],
+      undefined,
+      pruneAfterReceiptRuntime,
+    );
     await actions.deleteSession(sesB.session_id);
 
     expect(readState().status).not.toContain("删除会话失败");
     expect(readState().status).toContain("已删除会话");
-    // 成功路径不重拉会话列表（§10.3 前端半边）：即使列表端点不可用，删除也已
-    // 被后端确认，收敛完全靠本地删除闭包，状态里不应再出现列表错误。
-    expect(readState().status).not.toContain("列表不可用");
     expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
+    expect(refreshedParents).toEqual(["folder_parent"]);
+    expect(outbox.submitted).toMatchObject([{
+      workspaceId: RACE_WORKSPACE,
+      intent: { kind: "delete_session", targetNodeId: sesB.session_id },
+      options: { baseCatalogRevision: 3, expectedRevision: 2 },
+    }]);
+    expect(outbox.pruneCalls).toEqual([
+      { catalogRevision: 4, operationIds: ["test_catalog_operation_1"] },
+      { catalogRevision: 4, operationIds: ["test_catalog_operation_1"] },
+    ]);
+    expect([...outbox.runtime.getSnapshot().values()][0]?.outbox.operations).toEqual([]);
+  });
+
+  test("删除分支刷新失败时保留终态回执、报告错误并仍收敛会话镜像", async () => {
+    const sesA = raceSession("ses_a");
+    const sesB = raceSession("ses_b");
+    const outbox = createTestSessionCatalogOutboxRuntime();
+    installGatewayFetch(({ path, method }) => {
+      if (path === "/api/v1/session-catalog/children" && method === "GET") {
+        return errorResponse(503, "目录暂不可读");
+      }
+      return undefined;
+    });
+
+    const { state: readState, actions } = mountRace(
+      sesA,
+      [sesA, sesB],
+      undefined,
+      outbox.runtime,
+    );
+    await actions.deleteSession(sesB.session_id);
+
+    expect(readState().status).toContain("已删除会话");
+    expect(readState().status).toContain("目录分支刷新失败");
+    expect(readState().status).toContain("目录暂不可读");
+    expect(readState().sessions.map((item) => item.session_id)).toEqual(["ses_a"]);
+    expect(outbox.errors.join("\n")).toContain("目录暂不可读");
+    expect(outbox.pruneCalls).toHaveLength(0);
+    expect([...outbox.runtime.getSnapshot().values()][0]?.outbox.operations).toMatchObject([
+      { client_operation_id: "test_catalog_operation_1", state: "committed" },
+    ]);
   });
 
   test("§10.3 删除成功后零次全量列表请求，且级联删除的子会话一并从镜像消失", async () => {
@@ -240,13 +347,13 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
     const child = { ...raceSession("ses_child"), parent_session_id: "ses_parent" };
     const unrelated = raceSession("ses_other");
     let listCalls = 0;
-    installSessionDeleteFetch({
-      deleteResponse: deleteSessionResponse(parent.session_id),
-      listResponse: () => {
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/v1/sessions") {
         listCalls += 1;
         // 若成功路径误重拉，这里会返回一个不该出现的陈旧条目。
         return sessionsListResponse([unrelated, child]);
-      },
+      }
+      return undefined;
     });
 
     const { state: readState, actions } = mountRace(parent, [parent, child, unrelated]);
@@ -262,10 +369,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("删除会话后不得把它的事件队列残留在本地镜像", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installSessionDeleteFetch({
-      deleteResponse: deleteSessionResponse(sesA.session_id),
-      listResponse: sessionsListResponse([sesB]),
-    });
+    installGatewayFetch(() => undefined);
 
     const initial = raceState(sesB, [sesA, sesB]);
     const deletedKey = sessionScopeKey(RACE_WORKSPACE, sesA.session_id);
@@ -284,10 +388,7 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
   test("删除当前会话的抢占分支同样清空它的事件队列与未读标记", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installSessionDeleteFetch({
-      deleteResponse: deleteSessionResponse(sesA.session_id),
-      listResponse: sessionsListResponse([sesB]),
-    });
+    installGatewayFetch(() => undefined);
 
     const initial = raceState(sesA, [sesA, sesB]);
     const deletedKey = sessionScopeKey(RACE_WORKSPACE, sesA.session_id);
@@ -345,14 +446,11 @@ describe("会话生命周期失败后的后端重取校准", () => {
     ).toBe("agent_server_truth");
   });
 
-  test("W9-b 会话命名失败后用后端真值校准标题", async () => {
+  test("W9-b 会话命名只有提交并对账后才更新会话镜像", async () => {
     const before = raceSession(RACE_WORKSPACE, "default");
     before.title = "旧标题";
     let getCalls = 0;
     installGatewayFetch(({ path, method }) => {
-      if (path === "/api/v1/sessions/" + before.session_id && method === "PATCH") {
-        return apiResponse({ message: "标题已存在" }, 409);
-      }
       if (path === "/api/v1/sessions/" + before.session_id && method === "GET") {
         getCalls += 1;
         return apiResponse({ ...before, title: "服务端标题" });
@@ -360,13 +458,42 @@ describe("会话生命周期失败后的后端重取校准", () => {
       return undefined;
     });
 
-    const { state: readState, actions } = mountRace(before, [before]);
+    const runtime = createTestSessionCatalogOutboxRuntime({
+      result: () => ({ state: "rejected", errorDetail: "标题已存在" }),
+    });
+    const { state: readState, actions } = mountRace(before, [before], undefined, runtime.runtime);
     await expect(actions.renameSession(before.session_id, "新标题"))
       .rejects.toThrow("标题已存在");
 
-    expect(getCalls).toBe(1);
-    expect(readState().currentSession?.title).toBe("服务端标题");
+    expect(getCalls).toBe(0);
+    expect(runtime.submitted[0]?.intent).toEqual({
+      kind: "rename_node",
+      targetNodeId: before.session_id,
+      name: "新标题",
+    });
+    expect(runtime.submitted[0]?.options.expectedRevision).toBe(2);
+    expect(readState().currentSession?.title).toBe("旧标题");
     expect(readState().status).toContain("会话命名失败");
+  });
+
+  test("提交后的会话重命名以后端返回的完整对象替换镜像", async () => {
+    const before = raceSession(RACE_WORKSPACE, "default");
+    before.title = "旧标题";
+    const committed = { ...before, title: "新标题", updated_at: "2026-10-04T00:00:00Z" };
+    installGatewayFetch(({ path, method }) => {
+      if (path === `/api/v1/sessions/${before.session_id}` && method === "GET") {
+        return apiResponse(committed);
+      }
+      return undefined;
+    });
+
+    const runtime = createTestSessionCatalogOutboxRuntime();
+    const { state: readState, actions } = mountRace(before, [before], undefined, runtime.runtime);
+    await actions.renameSession(before.session_id, "新标题");
+
+    expect(runtime.submitted[0]?.intent.kind).toBe("rename_node");
+    expect(readState().currentSession).toEqual(committed);
+    expect(readState().sessions[0]).toEqual(committed);
   });
 
   test("W9-b2 会话命名空标题也走统一失败上报", async () => {
@@ -380,42 +507,44 @@ describe("会话生命周期失败后的后端重取校准", () => {
     expect(readState().status).toContain("会话命名失败");
   });
 
-  test("W9-c 删除失败后用后端列表校准本地镜像", async () => {
+  test("W9-c 会话删除被拒绝时保留会话镜像", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
     let listCalls = 0;
-    installSessionDeleteFetch({
-      deleteResponse: apiResponse({ message: "会话正在运行" }, 409),
-      listResponse: () => {
+    installGatewayFetch(({ path }) => {
+      if (path === "/api/v1/sessions") {
         listCalls += 1;
         return sessionsListResponse([sesA, raceSession("ses_server")]);
-      },
+      }
+      return undefined;
     });
 
-    const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
+    const runtime = createTestSessionCatalogOutboxRuntime({
+      result: () => ({ state: "rejected", errorDetail: "会话正在运行" }),
+    });
+    const { state: readState, actions } = mountRace(sesA, [sesA, sesB], undefined, runtime.runtime);
     await expect(actions.deleteSession(sesB.session_id)).rejects.toThrow("会话正在运行");
 
-    expect(listCalls).toBe(1);
-    // 失败后本地镜像以后端为准：既有会话保留，后端新出现的会话也要补上。
+    expect(listCalls).toBe(0);
+    // 被拒绝的 operation 没有提交 receipt，不能伪造删除成功或改写会话镜像。
     expect(readState().sessions.map((item) => item.session_id))
-      .toEqual(["ses_a", "ses_server"]);
+      .toEqual(["ses_a", "ses_b"]);
     expect(readState().status).toContain("删除会话失败");
   });
 
-  test("W9-c2 删除失败且重取也失败时保留原始错误", async () => {
+  test("W9-c2 删除被拒绝的原始错误保留在状态中", async () => {
     const sesA = raceSession("ses_a");
     const sesB = raceSession("ses_b");
-    installSessionDeleteFetch({
-      deleteResponse: apiResponse({ message: "会话正在运行" }, 409),
-      listResponse: apiResponse({ message: "列表服务不可用" }, 503),
+    installGatewayFetch(() => undefined);
+    const runtime = createTestSessionCatalogOutboxRuntime({
+      result: () => ({ state: "rejected", errorDetail: "会话正在运行" }),
     });
 
-    const { state: readState, actions } = mountRace(sesA, [sesA, sesB]);
+    const { state: readState, actions } = mountRace(sesA, [sesA, sesB], undefined, runtime.runtime);
     await expect(actions.deleteSession(sesB.session_id)).rejects.toThrow("会话正在运行");
 
     expect(readState().status).toContain("会话正在运行");
-    expect(readState().status).toContain("列表服务不可用");
-    // 重取失败时不得凭空删掉本地条目。
+    // 终态拒绝不得凭空删除本地条目。
     expect(readState().sessions.map((item) => item.session_id))
       .toEqual(["ses_a", "ses_b"]);
   });
@@ -477,15 +606,16 @@ describe("会话列表收敛的活动工作区边界", () => {
     const active = raceSession("ses_active");
     const otherInOther = raceSession("ses_other");
     const otherRemaining = raceSession("ses_other_keep");
-    installSessionDeleteFetch({
-      deleteResponse: deleteSessionResponse(otherInOther.session_id),
-      listResponse: sessionsListResponse([otherRemaining]),
-    });
+    installGatewayFetch(() => undefined);
     const initial = crossWorkspaceState(active);
     // 非活动工作区镜像里同时有「将被删的 ses_other」与「应保留的 ses_other_keep」。
     initial.sessionsByWorkspace.set(OTHER_WORKSPACE, [otherInOther, otherRemaining]);
 
-    const { state: readState, actions } = mountLifecycle(active, initial);
+    const runtime = createTestSessionCatalogOutboxRuntime();
+    const { state: readState, actions } = mountLifecycle(active, initial, runtime.runtime, [
+      { workspace_id: RACE_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000001", connection_kind: "local" },
+      { workspace_id: OTHER_WORKSPACE, backend_workspace_id: "00000000-0000-0000-0000-000000000002", connection_kind: "local" },
+    ]);
     await actions.deleteSession(otherInOther.session_id, OTHER_WORKSPACE);
 
     // 非活动工作区的收敛只更新它自己的镜像：被删会话消失，其余（含后端未返回的
@@ -504,18 +634,14 @@ describe("会话列表收敛的活动工作区边界", () => {
 });
 
 describe("删除非当前会话的失败路径与后端真值校准", () => {
-  test("删除请求报错但后端其实已删且补偿重取成功时，级联消失的当前会话必须同步切走", async () => {
+  test("入队结果未知但终态对账为 committed 时，级联删除后切走当前子会话", async () => {
     // 当前会话是被删父会话的后代：后端级联删除会把当前会话一并带走了。
     const current = raceSession("ses_child");
     current.parent_session_id = "ses_parent";
     const parent = raceSession("ses_parent");
     const survivor = raceSession("ses_survivor");
     let listCalls = 0;
-    installGatewayFetch(({ path, method }) => {
-      if (path === "/api/v1/sessions/" + parent.session_id && method === "DELETE") {
-        // 响应丢失：前端看到删除失败，但后端其实已经提交。
-        return apiResponse({ message: "响应丢失" }, 500);
-      }
+    installGatewayFetch(({ path }) => {
       if (path === "/api/v1/sessions") {
         listCalls += 1;
         // 补偿重取成功：后端权威列表里当前会话已随父会话级联消失。
@@ -524,12 +650,18 @@ describe("删除非当前会话的失败路径与后端真值校准", () => {
       return undefined;
     });
 
-    const { state: readState, actions } = mountRace(current, [current, parent, survivor]);
-    await expect(actions.deleteSession(parent.session_id)).rejects.toThrow("响应丢失");
+    const runtime = createTestSessionCatalogOutboxRuntime({ dispatchOutcome: "unknown" });
+    const { state: readState, actions } = mountRace(
+      current,
+      [current, parent, survivor],
+      undefined,
+      runtime.runtime,
+    );
+    await actions.deleteSession(parent.session_id);
 
-    expect(listCalls).toBe(1);
-    // 关键：重新校准后 currentSession 绝不能悬空指向一个已不在 sessions 里的
-    // 幽灵会话，必须与删除成功路径一样切到剩余会话。
+    expect(listCalls).toBe(0);
+    // unknown 不是拒绝：终态 receipt 与 catalog revision 对账确认提交后，
+    // 本地按已提交的删除闭包收敛，当前会话不能悬空指向幽灵子会话。
     expect(readState().currentSession?.session_id).toBe(survivor.session_id);
     expect(readState().sessions.some(
       (item) => item.session_id === readState().currentSession?.session_id,
@@ -537,6 +669,6 @@ describe("删除非当前会话的失败路径与后端真值校准", () => {
     expect(readState().sessions.map((item) => item.session_id)).toEqual([
       survivor.session_id,
     ]);
-    expect(readState().status).toContain("删除会话失败");
+    expect(readState().status).toContain("已删除会话");
   });
 });

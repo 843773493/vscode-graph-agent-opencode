@@ -271,9 +271,8 @@ class NavigationMutationExecutor:
             try:
                 with self._store.write_transaction() as connection:
                     # 领取、node 变更、终态 record 与事件 outbox 在**同一**写事务内
-                    # 提交：整条 operation 恰好推进一次 catalog generation，因此
-                    # receipt 上报的 committed_catalog_revision 事后必然等于 snapshot
-                    # 读到的 revision（不再有「领取单独提交一次」造成的额外推进）。
+                    # 提交。备份 generation 按事务推进；导航 triggers 按实际变化的
+                    # node 行推进 revision，receipt 在所有 node 写入后读取该事务值。
                     claimed = self._claim(connection, record)
                     if claimed is None:
                         raise NavigationSkipped(record.operation_id)
@@ -281,20 +280,34 @@ class NavigationMutationExecutor:
                     expected_revision = self._resolve_expected_revision(
                         connection, claimed
                     )
-                    affected, result_node_id = self._apply_node_change(
+                    change = self._apply_node_change(
                         connection, claimed, parent_node_id, expected_revision
                     )
-                    result_node_revision = self._node_revision(
-                        connection, result_node_id
-                    )
-                    terminal = self._finish(
-                        connection,
-                        claimed,
-                        state="committed",
-                        result_node_id=result_node_id,
-                        result_node_revision=result_node_revision,
-                        affected=affected,
-                    )
+                    if change is None:
+                        terminal = self._finish(
+                            connection,
+                            claimed,
+                            state="rejected",
+                            result_node_id=None,
+                            affected=[str(claimed.target_node_id)],
+                            error_code="session_title_not_applicable",
+                            error_detail=(
+                                "会话已被用户改名或目录状态已变化，自动标题不再适用"
+                            ),
+                        )
+                    else:
+                        affected, result_node_id = change
+                        result_node_revision = self._node_revision(
+                            connection, result_node_id
+                        )
+                        terminal = self._finish(
+                            connection,
+                            claimed,
+                            state="committed",
+                            result_node_id=result_node_id,
+                            result_node_revision=result_node_revision,
+                            affected=affected,
+                        )
                 return NavigationExecutionOutcome(record=terminal, settled=True)
             except NavigationSkipped:
                 # 本轮被其它 owner 抢先：不是业务拒绝，绝不可在下面被归类为
@@ -311,7 +324,7 @@ class NavigationMutationExecutor:
         record: NavigationMutationRecord,
         parent_node_id: str | None,
         expected_revision: int | None,
-    ) -> tuple[list[str], str]:
+    ) -> tuple[list[str], str] | None:
         """在同一事务内应用 node 变更；返回 (受影响 node ID, 结果 node ID)。"""
         if record.kind == "create_folder":
             created = self._store.create_folder(
@@ -329,6 +342,17 @@ class NavigationMutationExecutor:
                 new_display_name=str(record.params["name"]),
                 connection=connection,
             )
+            return [updated.node_id], updated.node_id
+        if record.kind == "auto_title_session":
+            updated = self._store.apply_auto_title_mutation(
+                record.target_node_id,
+                expected_revision=int(record.params["expected_revision"]),
+                expected_title=str(record.params["expected_title"]),
+                new_title=str(record.params["name"]),
+                connection=connection,
+            )
+            if updated is None:
+                return None
             return [updated.node_id], updated.node_id
         if record.kind == "move_node":
             updated = self._store.apply_navigation_mutation(
@@ -622,6 +646,7 @@ class NavigationMutationExecutor:
                 connection,
                 workspace_id=self._workspace_id,
                 failed_operation_id=terminal.operation_id,
+                committed_catalog_revision=self._committed_revision(connection),
                 now=utc_now_text(),
             )
             for successor in successors:
@@ -867,8 +892,8 @@ class NavigationMutationExecutor:
 
     @staticmethod
     def _committed_revision(connection: sqlite3.Connection) -> int:
-        """本次写事务提交后的 catalog revision（与队列层共用同一读取口径）。"""
-        return read_catalog_revision(connection, committed=True)
+        """读取本次 node 变更在当前写事务中实际推进的导航 revision。"""
+        return read_catalog_revision(connection)
 
 
 def _error_code(error: Exception) -> str:

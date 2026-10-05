@@ -13,6 +13,7 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
+from tests.support.processes import workspace_backend_id_for_root
 
 
 def _node_for_workspace(nodes: list[dict[str, object]], workspace_id: str) -> dict[str, object]:
@@ -32,14 +33,16 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
         "# workspace navigation secondary\n",
         encoding="utf-8",
     )
+    secondary_backend_workspace_id = workspace_backend_id_for_root(secondary_workspace)
     secondary_backend_port = port_block.port(1)
     with generation_target_stub(
         secondary_backend_port,
         output_workspace_id="gw_stub_secondary",
+        backend_workspace_id=secondary_backend_workspace_id,
     ):
         gateway = start_gateway_process(
             workspace_root=workspace_root,
-            default_backend_url="http://127.0.0.1:9",
+            default_backend_url=None,
             port=port_block.port(0),
         )
         try:
@@ -67,6 +70,7 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
                 for item in add_response.json()["data"]["items"]
                 if Path(item["root_path"]).resolve() == secondary_workspace
             )
+            assert secondary_workspace_id != secondary_backend_workspace_id
 
             initial_response = await client.get("/api/gateway/workspace-navigation")
             assert initial_response.status_code == 200, initial_response.text
@@ -193,7 +197,7 @@ async def test_workspace_navigation_crud_cycle_nonempty_delete_and_restart(
             close_gateway_process(gateway)
             gateway = start_gateway_process(
                 workspace_root=workspace_root,
-                default_backend_url="http://127.0.0.1:9",
+                default_backend_url=None,
                 port=port_block.port(0),
             )
             async with httpx.AsyncClient(

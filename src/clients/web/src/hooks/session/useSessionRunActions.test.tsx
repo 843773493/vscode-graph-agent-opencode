@@ -27,6 +27,9 @@ function session(): Session {
   return {
     session_id: SESSION_ID,
     workspace_id: "workspace_send_regression",
+    resource_identity: `fixture-${SESSION_ID}`,
+    vrn: `boxteam://workspace/workspace_send_regression/resources/session/${SESSION_ID}`,
+    scope: "workspace",
     title: "发送回归",
     title_source: "user",
     current_agent_id: "default",

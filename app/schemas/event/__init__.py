@@ -73,8 +73,9 @@ class JobCreatedPayload(BaseModel):
 
 class JobStartedPayload(BaseModel):
     """JOB_STARTED 事件的 payload。"""
-    # 生命周期事件必须自带 session_id，不能依赖 job_created 监听顺序建立映射。
-    session_id: str | None = None
+    # started 冻结真实执行 owner；终态与重启收口不得把 Job 映射到默认 thread。
+    session_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
 
 
 class JobCompletedPayload(BaseModel):
@@ -280,7 +281,7 @@ class JobCreatedEvent(BaseEvent):
 class JobStartedEvent(BaseEvent):
     """任务已开始事件"""
     type: Literal["job_started"] = "job_started"
-    payload: JobStartedPayload = Field(default_factory=JobStartedPayload)
+    payload: JobStartedPayload
 
 
 class JobCompletedEvent(BaseEvent):

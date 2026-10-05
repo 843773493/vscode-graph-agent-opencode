@@ -237,6 +237,44 @@
   min-width: 0;
 }
 
+.terminal-panel-resource-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--bt-panel-border);
+  font-size: 12px;
+}
+
+.terminal-panel-resource-actions button,
+.terminal-panel-resource-actions select {
+  padding: 3px 7px;
+  border: 1px solid var(--bt-input-border);
+  border-radius: 4px;
+  color: inherit;
+  background: var(--bt-input-background);
+  font: inherit;
+}
+
+.terminal-panel-resource-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.terminal-panel-association {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.terminal-panel-final-output {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
 .terminal-panel-header {
   align-items: stretch;
   justify-content: space-between;

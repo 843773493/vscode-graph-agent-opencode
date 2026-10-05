@@ -90,6 +90,7 @@ async def test_fork_copies_agent_state_into_independent_child(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
+        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="source-final-1",
     )
@@ -179,6 +180,7 @@ async def test_detached_fork_survives_parent_deletion(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
+        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )
@@ -227,6 +229,7 @@ async def test_pinned_fork_blocks_parent_deletion(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
+        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
         turn_id="pinned-turn-1",
         final_message_id="pinned-final-1",
     )
@@ -358,6 +361,7 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
+        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )
@@ -438,6 +442,7 @@ async def test_full_rollout_copy_without_activation_schema_succeeds(
     )
     fork_services.checkpointer.finalize_turn(
         session_id=source.session_id,
+        thread_id=fork_services.checkpointer._storage.main_thread_id(source.session_id),
         turn_id="turn-1",
         final_message_id="a1",
     )

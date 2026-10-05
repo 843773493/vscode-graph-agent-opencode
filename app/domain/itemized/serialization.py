@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.redaction import validate_hash_redaction
 from app.domain.itemized.identity.refs import selection_ref_identity
+from app.domain.itemized.redaction import validate_hash_redaction
 from app.domain.itemized.validation import _non_empty_string
 
 # 凭据字段必须先由 producer 显式脱敏；token 数量、工具 schema 等不是凭据。

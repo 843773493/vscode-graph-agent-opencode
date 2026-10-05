@@ -132,7 +132,7 @@ export class TerminalOutputMultiplexer {
 
   async detach(client, { beforeNotify = null } = {}) {
     const state = this.clients.get(client);
-    if (state?.retryTimer !== null) {
+    if (state && state.retryTimer !== null) {
       clearTimeout(state.retryTimer);
     }
     this.clients.delete(client);

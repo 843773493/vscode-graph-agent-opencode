@@ -307,7 +307,7 @@ class ContextRef:
         else:
             if self.source_ref is not None:
                 if isinstance(self.source_ref, DetailRef):
-                    self.source_ref.require_owner(self.session_id)
+                    self.source_ref.require_owner(self.session_id, self.thread_id)
                 else:
                     _non_empty_string(self.source_ref, "ContextRef.source_ref")
             if self.availability == "available":
@@ -518,6 +518,7 @@ class ToolSetRef:
 
     ref_id: str
     session_id: str
+    thread_id: str
     plan_id: str
     source_revision: str
     tool_set_schema: str
@@ -539,6 +540,7 @@ class ToolSetRef:
         *,
         snapshot_id: str,
         session_id: str,
+        thread_id: str,
         plan_id: str,
         tools: Sequence[Mapping[str, object]],
         source_revision: str,
@@ -552,6 +554,7 @@ class ToolSetRef:
         for value, field_name in (
             (snapshot_id, "ToolSetRef.snapshot_id"),
             (session_id, "ToolSetRef.session_id"),
+            (thread_id, "ToolSetRef.thread_id"),
             (plan_id, "ToolSetRef.plan_id"),
             (source_revision, "ToolSetRef.source_revision"),
             (tool_set_schema, "ToolSetRef.tool_set_schema"),
@@ -585,6 +588,7 @@ class ToolSetRef:
         return cls(
             ref_id=snapshot_id,
             session_id=session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             source_revision=source_revision,
             tool_set_schema=tool_set_schema,
@@ -603,6 +607,7 @@ class ToolSetRef:
         for name in (
             "ref_id",
             "session_id",
+            "thread_id",
             "plan_id",
             "source_revision",
             "tool_set_schema",
@@ -701,6 +706,7 @@ class ToolSetRef:
             "ref_id": self.ref_id,
             "plan_id": self.plan_id,
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "assembly_id": self.assembly_id,
             "source_revision": self.source_revision,
             "tool_set_schema": self.tool_set_schema,

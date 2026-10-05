@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceCopySnapshot,
@@ -52,6 +54,10 @@ def full_rollout_copy(
     detail_capability: ForkDetailCapability,
     debug_snapshot: NodeDebugSourceCopySnapshot | None = None,
     debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig] | None = None,
+    fork_id: str | None = None,
+    materialization_id: str | None = None,
+    source_snapshot_sha256: str,
+    defer_completion: bool = False,
 ) -> tuple[str | None, str]:
     source_session_id = required_text(source_session_id, field="fork.source_session_id")
     target_session_id = required_text(target_session_id, field="fork.target_session_id")
@@ -60,10 +66,31 @@ def full_rollout_copy(
     )
     if source_session_id == target_session_id:
         raise ValueError("fork source/target session 必须不同")
-    target = storage.root(target_session_id, checkpoint_ns)
-    source = storage.root(source_session_id, checkpoint_ns)
+    source_snapshot_sha256 = required_text(
+        source_snapshot_sha256, field="source_snapshot_sha256"
+    )
+    if re.fullmatch(r"[0-9a-f]{64}", source_snapshot_sha256) is None:
+        raise ValueError("source_snapshot_sha256 必须是小写 SHA-256 hex digest")
+    fork_id = fork_id or uuid4().hex
+    materialization_id = materialization_id or uuid4().hex
+    source_thread_id = storage._resolve_thread_identity(source_session_id, None)
+    target_thread_id = storage._resolve_thread_identity(target_session_id, None)
+    target = storage.root(
+        target_session_id,
+        checkpoint_ns,
+        thread_id=target_thread_id,
+    )
+    source = storage.root(
+        source_session_id,
+        checkpoint_ns,
+        thread_id=source_thread_id,
+    )
     storage._safe_session_relative_path(target.parent, target.name)
-    with storage._lock(target_session_id, checkpoint_ns):
+    with storage._lock(
+        target_thread_id,
+        checkpoint_ns,
+        session_id=target_session_id,
+    ):
         if target.exists():
             raise FileExistsError(target)
         with TemporaryDirectory(
@@ -87,8 +114,10 @@ def full_rollout_copy(
                 source_lock.acquire()
                 source_locks.callback(source_lock.release)
                 source_view = stage.clone_rollout(
-                    source_thread_id=source_session_id,
-                    target_thread_id=target_session_id,
+                    source_session_id=source_session_id,
+                    source_thread_id=source_thread_id,
+                    target_session_id=target_session_id,
+                    target_thread_id=target_thread_id,
                     source_checkpoint_id=source_checkpoint_id,
                     checkpoint_ns=checkpoint_ns,
                     detail_capability=detail_capability,
@@ -102,8 +131,15 @@ def full_rollout_copy(
                     "fork_mode": "full_rollout_copy",
                     "relationship": relationship,
                     "checkpoint_ns": checkpoint_ns,
+                    "source_thread_id": source_thread_id,
+                    "target_thread_id": target_thread_id,
+                    "source_snapshot_sha256": source_snapshot_sha256,
                 }
-                materialization, fork_id = stage.begin_fork_materialization(**fields)
+                materialization, fork_id = stage.begin_fork_materialization(
+                    **fields,
+                    fork_id=fork_id,
+                    materialization_id=materialization_id,
+                )
                 prepared_debug = prepare_node_debug_fork(
                     stage,
                     debug_snapshot,
@@ -126,7 +162,11 @@ def full_rollout_copy(
                 stage.commit_fork_materialization(
                     materialization, **fields, defer_completion=True
                 )
-            with stage._connect(target_session_id, checkpoint_ns) as connection:
+            with stage._connect(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+            ) as connection:
                 stage._validate_schema_state(connection)
                 stage._validate_v2_commit_offsets(
                     connection, stage_root / "rollout.jsonl"
@@ -142,6 +182,9 @@ def full_rollout_copy(
                 ):
                     raise RuntimeError("fork staging SQLite checkpoint failed")
             install_staging(stage_root, target)
+            storage._active_fork_materializations.add(
+                (target_session_id, target_thread_id, checkpoint_ns)
+            )
             if debug_snapshot is not None and prepared_debug is not None:
                 installed_prepared = PreparedNodeDebugFork(
                     staging_root=target
@@ -149,6 +192,7 @@ def full_rollout_copy(
                     / materialization
                     / "node",
                     target_node=prepared_debug.target_node,
+                    target_thread_id=prepared_debug.target_thread_id,
                     target_manifest_sha256=prepared_debug.target_manifest_sha256,
                 )
                 # rollout 与 ready journal 已先原子安装。后续任意崩溃都能由
@@ -161,7 +205,13 @@ def full_rollout_copy(
                     checkpoint_ns=checkpoint_ns,
                 )
         # 安装后 journal 为 target_committed；retention 失败由既有恢复链重试。
-        storage.commit_fork_materialization(materialization, **fields)
+        if not defer_completion:
+            storage.complete_fork_materialization(
+                materialization_id=materialization,
+                target_session_id=target_session_id,
+                target_thread_id=target_thread_id,
+                checkpoint_ns=checkpoint_ns,
+            )
     return source_view, fork_id
 
 

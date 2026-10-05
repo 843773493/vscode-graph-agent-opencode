@@ -44,6 +44,8 @@ class ResourceLease:
     operation_id: str
     status: str = "active"
     updated_at: str = ""
+    holder_session_id: str | None = None
+    holder_thread_id: str | None = None
 
 
 class ExternalResourceLeaseLedger:
@@ -89,7 +91,7 @@ class ExternalResourceLeaseLedger:
     ) -> ResourceRecord:
         if not resource_id or not kind:
             raise ValueError("lease 账本登记缺少 resource_id 或 kind")
-        if lifetime_scope not in {"turn", "session", "workspace", "global"}:
+        if lifetime_scope not in {"turn", "thread", "session", "workspace", "global"}:
             raise ValueError(f"未知资源生命周期范围: {lifetime_scope}")
         record = self._records.get(resource_id)
         if record is None:
@@ -118,9 +120,12 @@ class ExternalResourceLeaseLedger:
         turn_stream_id: str,
         lease_id: str,
         operation_id: str,
+        holder_session_id: str | None = None,
+        holder_thread_id: str | None = None,
+        allow_stopped: bool = False,
     ) -> ResourceLease:
         record = self._require_record(resource_id)
-        if record.status not in {"running", "recovered"}:
+        if record.status not in ({"running", "recovered", "stopped"} if allow_stopped else {"running", "recovered"}):
             raise RuntimeError(
                 f"资源当前不可获取 lease: resource_id={resource_id} status={record.status}"
             )
@@ -132,6 +137,8 @@ class ExternalResourceLeaseLedger:
                 existing.resource_id != resource_id
                 or existing.turn_stream_id != turn_stream_id
                 or existing.operation_id != operation_id
+                or existing.holder_session_id != holder_session_id
+                or existing.holder_thread_id != holder_thread_id
             ):
                 raise RuntimeError(f"资源 lease 重复但关联键不一致: lease_id={lease_id}")
             return self._copy_lease(existing)
@@ -141,6 +148,8 @@ class ExternalResourceLeaseLedger:
             turn_stream_id=turn_stream_id,
             operation_id=operation_id,
             updated_at=self._now(),
+            holder_session_id=holder_session_id,
+            holder_thread_id=holder_thread_id,
         )
         self._leases[lease_id] = lease
         self._persist()
@@ -171,6 +180,9 @@ class ExternalResourceLeaseLedger:
         turn_stream_id: str,
         operation_id: str,
         lease_id: str | None = None,
+        holder_session_id: str | None = None,
+        holder_thread_id: str | None = None,
+        allow_stopped: bool = False,
     ) -> ResourceLease:
         """为一次 Tool/Activity 操作取得 lease；不自动重放操作。"""
         resolved_lease_id = lease_id or f"{turn_stream_id}:{operation_id}:{resource_id}"
@@ -179,6 +191,9 @@ class ExternalResourceLeaseLedger:
             turn_stream_id=turn_stream_id,
             lease_id=resolved_lease_id,
             operation_id=operation_id,
+            holder_session_id=holder_session_id,
+            holder_thread_id=holder_thread_id,
+            allow_stopped=allow_stopped,
         )
 
     def release(self, lease_id: str, *, reason: str = "operation_finished") -> ResourceLease:
@@ -224,6 +239,8 @@ class ExternalResourceLeaseLedger:
     def reconcile(
         self,
         observed_status: Mapping[str, str],
+        *,
+        kind: str | None = None,
     ) -> list[ResourceRecord]:
         """用外部资源清单对崩溃后的 record/lease 做保守对账。
 
@@ -233,6 +250,8 @@ class ExternalResourceLeaseLedger:
         """
         reconciled: list[ResourceRecord] = []
         for record in self._records.values():
+            if kind is not None and record.kind != kind:
+                continue
             observed = observed_status.get(record.resource_id)
             if observed in {"running", "stopped"}:
                 record.status = "recovered" if observed == "running" else "stopped"
@@ -243,7 +262,8 @@ class ExternalResourceLeaseLedger:
             record.updated_at = self._now()
             reconciled.append(self._copy_record(record))
         for lease in self._leases.values():
-            if lease.status == "active":
+            record = self._require_record(lease.resource_id)
+            if lease.status == "active" and (kind is None or record.kind == kind):
                 lease.status = "reconcile_required"
                 lease.updated_at = self._now()
         self._persist()
@@ -286,6 +306,30 @@ class ExternalResourceLeaseLedger:
             for lease in self._leases.values()
             if lease.turn_stream_id == turn_stream_id
         ]
+
+    def leases_for_resource(self, resource_id: str) -> list[ResourceLease]:
+        """包括崩溃后未结清占用；owner 不能把未知 operation 当作已完成。"""
+        self._require_record(resource_id)
+        return [
+            self._copy_lease(lease)
+            for lease in self._leases.values()
+            if lease.resource_id == resource_id
+            and lease.status in {"active", "reconcile_required"}
+        ]
+
+    def update_external_state(
+        self, resource_id: str, *, lifetime_scope: str, status: str
+    ) -> None:
+        """只有实际 owner 已核实的范围与运行事实能更新登记投影。"""
+        if lifetime_scope not in {"thread", "workspace"}:
+            raise ValueError(f"外部资源保留范围无效: {lifetime_scope}")
+        if status not in {"running", "stopped", "unknown", "orphaned"}:
+            raise ValueError(f"外部资源核实状态无效: {status}")
+        record = self._require_record(resource_id)
+        record.lifetime_scope = lifetime_scope
+        record.status = status
+        record.updated_at = self._now()
+        self._persist()
 
     def _require_record(self, resource_id: str) -> ResourceRecord:
         record = self._records.get(resource_id)

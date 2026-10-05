@@ -16,8 +16,8 @@ from app.domain.itemized.enums import (
     SelectionKind,
     SemanticKind,
 )
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -38,10 +38,15 @@ def item_matrix() -> dict[str, object]:
 def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
     scenario = hash_vectors["scenario"]
     item = CanonicalItemRecord.from_dict(scenario["item"])
-    ref = ContextRef.canonical_item(item, session_id=scenario["session_id"], thread_id="thread-1")
+    ref = ContextRef.canonical_item(
+        item,
+        session_id=scenario["session_id"],
+        thread_id=scenario["thread_id"],
+    )
     tools = ToolSetRef.from_tool_snapshot(
         snapshot_id="tools-golden",
         session_id=scenario["session_id"],
+        thread_id=scenario["thread_id"],
         plan_id=scenario["plan_id"],
         source_revision="tools-rev-golden",
         tools=scenario["tools"],
@@ -67,6 +72,7 @@ def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
     )
     return ContextRequestPlan(
         session_id=scenario["session_id"],
+        thread_id=scenario["thread_id"],
         plan_id=scenario["plan_id"],
         refs=(ref,),
         tool_set_refs=(tools,),
@@ -115,12 +121,14 @@ def omitted_snapshot(user_item: CanonicalItemRecord) -> ContextAssemblySnapshot:
     )
     plan = ContextRequestPlan(
         session_id="session-1",
+        thread_id="thread-1",
         plan_id="plan-omitted",
         refs=(item_ref,),
     ).seal_for_assembly("assembly-omitted", selection=(omitted,))
     return ContextAssemblySnapshot(
         assembly_id="assembly-omitted",
         session_id="session-1",
+        thread_id="thread-1",
         turn_id="turn-1",
         execution_id="execution-1",
         plan_id=plan.plan_id,

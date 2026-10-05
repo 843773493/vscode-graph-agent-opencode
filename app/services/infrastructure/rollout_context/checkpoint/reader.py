@@ -9,6 +9,9 @@ from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.primitives import (
+    ContextTurnItemWindow,
+    HistorySnapshotBounds,
+    InternalExecutionHistoryPage,
     RolloutCheckpointIndex,
     RolloutReadSnapshot,
     RolloutTurnAnchor,
@@ -37,6 +40,7 @@ class RolloutContextReader:
 
     def open_snapshot(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
@@ -44,8 +48,13 @@ class RolloutContextReader:
         validate_integrity: bool = False,
     ) -> RolloutReadSnapshot:
         if recover:
-            self._storage.initialize(thread_id, checkpoint_ns)
+            self._storage.initialize(
+                session_id,
+                checkpoint_ns,
+                thread_id=thread_id,
+            )
         return self._storage.open_read_snapshot(
+            session_id,
             thread_id,
             checkpoint_ns,
             validate_integrity=validate_integrity,
@@ -65,6 +74,7 @@ class RolloutContextReader:
         checkpoint_id: str | None = None,
     ) -> RolloutCheckpointIndex | None:
         return self._storage.latest_checkpoint(
+            snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
             checkpoint_id,
@@ -92,6 +102,7 @@ class RolloutContextReader:
         """显式 full 模式，返回 LangGraph 可执行的完整消息列表。"""
         resolved_chain = chain or self.resolve_chain(snapshot, message_sequence)
         return self._storage.materialize_messages(
+            snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
             message_sequence,
@@ -107,6 +118,7 @@ class RolloutContextReader:
     ) -> list[CanonicalItemRecord]:
         """按已提交 catalog 读取 canonical item，不扫描 JSONL 头部。"""
         return self._storage.read_items(
+            snapshot.session_id,
             snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns,
             item_ids=item_ids,
@@ -168,6 +180,7 @@ class RolloutContextReader:
     ) -> list[dict[str, object]]:
         """projection/detail 模式的有限 offset 记录读取。"""
         return self._storage.read_indexed_records(
+            snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
             after_sequence=after_sequence,
@@ -231,6 +244,17 @@ class RolloutContextReader:
             self.context_view_id(chain),
         )
 
+    def read_history_snapshot_bounds(
+        self,
+        snapshot: RolloutReadSnapshot,
+        chain: ContextChain,
+    ) -> HistorySnapshotBounds:
+        """读取本 snapshot/view 的冻结 history revision 与分页上界。"""
+        return self._storage.read_history_snapshot_bounds(
+            snapshot,
+            self.context_view_id(chain),
+        )
+
     def read_context_turn_page(
         self,
         snapshot: RolloutReadSnapshot,
@@ -238,6 +262,7 @@ class RolloutContextReader:
         *,
         direction: str,
         anchor_ordinal: int | None,
+        upper_ordinal: int | None,
         limit: int,
     ) -> tuple[list[tuple[str, int, int, int]], bool]:
         return self._storage.read_context_turn_page(
@@ -245,6 +270,7 @@ class RolloutContextReader:
             self.context_view_id(chain),
             direction=direction,
             anchor_ordinal=anchor_ordinal,
+            upper_ordinal=upper_ordinal,
             limit=limit,
         )
 
@@ -275,6 +301,44 @@ class RolloutContextReader:
             snapshot,
             self.context_view_id(chain),
             turn_ids,
+        )
+
+    def resolve_context_turn_item_window(
+        self,
+        snapshot: RolloutReadSnapshot,
+        chain: ContextChain,
+        *,
+        first_logical_turn_ordinal: int,
+        last_logical_turn_ordinal: int,
+    ) -> ContextTurnItemWindow:
+        """在本 snapshot 中解析 Turn window 对应的 membership ordinal bounds。"""
+        return self._storage.resolve_context_turn_item_window(
+            snapshot,
+            self.context_view_id(chain),
+            first_logical_turn_ordinal=first_logical_turn_ordinal,
+            last_logical_turn_ordinal=last_logical_turn_ordinal,
+        )
+
+    def read_internal_execution_history_page(
+        self,
+        snapshot: RolloutReadSnapshot,
+        chain: ContextChain,
+        *,
+        direction: str,
+        anchor_logical_item_ordinal: int | None,
+        lower_logical_item_ordinal: int | None,
+        upper_logical_item_ordinal: int | None,
+        limit: int,
+    ) -> InternalExecutionHistoryPage:
+        """复用已解析的 view 与 snapshot 读取一页 internal execution history。"""
+        return self._storage.read_internal_execution_history_page(
+            snapshot,
+            self.context_view_id(chain),
+            direction=direction,
+            anchor_logical_item_ordinal=anchor_logical_item_ordinal,
+            lower_logical_item_ordinal=lower_logical_item_ordinal,
+            upper_logical_item_ordinal=upper_logical_item_ordinal,
+            limit=limit,
         )
 
     def decode_message(

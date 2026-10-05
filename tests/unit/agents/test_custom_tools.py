@@ -33,7 +33,7 @@ def _context() -> CustomToolFactoryContext:
         workspace_session_context_client=MagicMock(),
         session_orchestrator=MagicMock(),
         config_service=MagicMock(),
-        terminal_manager_client=MagicMock(),
+        terminal_resource_owner=MagicMock(),
         browser_manager_client=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )

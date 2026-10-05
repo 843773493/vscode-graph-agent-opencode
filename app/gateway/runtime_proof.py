@@ -82,14 +82,21 @@ def _refresh_federation_workspace_ports(
         return
     if not isinstance(service.session_main, WorkspaceSessionMainPort):
         return
-    local_workspaces: list[tuple[str, str]] = []
+    local_workspaces: list[tuple[str, str, str]] = []
     for target in registry.targets():
         if target.connection_kind != "local":
             continue
         backend_url = target.backend_url.strip()
         if not backend_url:
             continue
-        local_workspaces.append((target.workspace_id, backend_url))
+        if target.backend_workspace_id is None:
+            raise RuntimeError(
+                "联邦工作区端口缺少 backend UUID: "
+                f"workspace_id={target.workspace_id}"
+            )
+        local_workspaces.append(
+            (target.workspace_id, backend_url, target.backend_workspace_id)
+        )
     projected = tuple(local_workspaces)
     service.catalog.project_workspaces(projected)
     service.session_main.project_workspaces(projected)

@@ -12,8 +12,9 @@ DEFAULT_INITIAL_INCLUDE: tuple[str, ...] = (
     "reasoning_summary",
     "tool_summary",
     "final_response",
+    "internal",
 )
-DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response")
+DEFAULT_ANCHOR_INCLUDE: tuple[str, ...] = ("user", "final_response", "internal")
 DEFAULT_INITIAL_TURNS = 5
 DEFAULT_ANCHOR_BEFORE_TURNS = 3
 DEFAULT_ANCHOR_AFTER_TURNS = 3

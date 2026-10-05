@@ -1,4 +1,5 @@
 from app.core import path_utils
+from app.core.workspace_identity import load_or_create_workspace_id
 
 
 def test_initialize_directories_only_creates_current_workspace_root(tmp_path, monkeypatch):
@@ -6,8 +7,10 @@ def test_initialize_directories_only_creates_current_workspace_root(tmp_path, mo
     runtime_workspace_root = tmp_path / "remote-workspace"
     monkeypatch.setenv("BOXTEAM_USER_WORKSPACE_ROOT", str(user_workspace_root))
     monkeypatch.setenv("WORKSPACE_ROOT", str(runtime_workspace_root))
+    runtime_workspace_root.mkdir(parents=True)
+    workspace_id = load_or_create_workspace_id(runtime_workspace_root)
 
-    path_utils.initialize_directories()
+    path_utils.initialize_directories(workspace_id, runtime_workspace_root)
 
     assert (runtime_workspace_root / ".boxteam" / "sessions").is_dir()
     assert (
@@ -60,7 +63,8 @@ def test_initialize_directories_does_not_scan_or_mutate_legacy_storage(
         )
     }
 
-    path_utils.initialize_directories()
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    path_utils.initialize_directories(workspace_id, workspace_root)
 
     for path, content in tracked_files.items():
         assert path.is_file()

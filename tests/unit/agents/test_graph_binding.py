@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import re
 from pathlib import Path
 
@@ -27,18 +26,19 @@ from app.agents.graph_binding import (
     GraphFactoryRegistrationConflictError,
     GraphFactoryRegistry,
     InvocationGraphBinding,
-    JsonFileGraphBindingStore,
+    SessionControlGraphBindingStore,
     binding_for,
     compute_capability_profile_hash,
     compute_graph_schema_hash,
+    resolve_graph_binding,
 )
 from app.agents.tool_invocation_context import ThreadRuntimeBinding
+from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
+from tests.support.canonical_id_at import thread_id_at
 
 _DIGEST_A = "sha256:" + "a" * 64
 _DIGEST_B = "sha256:" + "b" * 64
 _DIGEST_C = "sha256:" + "c" * 64
-
-_STORE_FILE_NAME = "graph-bindings.json"
 
 
 def _binding(
@@ -260,7 +260,9 @@ def test_hash_helpers_reject_invalid_inputs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_registry_register_and_resolve_roundtrip(registry: GraphFactoryRegistry) -> None:
+def test_registry_register_and_resolve_roundtrip(
+    registry: GraphFactoryRegistry,
+) -> None:
     binding = _binding()
     builder = _make_builder("blueprint")
     registry.register(binding, builder)
@@ -412,278 +414,108 @@ def test_deep_agent_graph_binding_is_registered_in_process_registry() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 持久化：JSON 独立小存储
+# session-control thread_catalog 只读 authority
 # ---------------------------------------------------------------------------
 
 
-def test_json_store_roundtrip_preserves_four_tuple(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    binding = _binding()
-    store.save_graph_binding(_owner(), binding)
-    loaded = store.load_graph_binding(_owner())
-    assert loaded is not None
-    assert loaded == binding
-    assert loaded.selector_fields() == binding.selector_fields()
-
-
-def test_json_store_load_returns_none_without_persistence(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    assert store.load_graph_binding(_owner()) is None
-
-
-def test_json_store_save_is_idempotent_for_identical_binding(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    binding = _binding()
-    store.save_graph_binding(_owner(), binding)
-    store.save_graph_binding(_owner(), binding)
-    assert store.load_graph_binding(_owner()) == binding
-
-
-def test_json_store_conflict_on_different_binding(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    with pytest.raises(RuntimeError) as excinfo:
-        store.save_graph_binding(_owner(), _binding(graph_revision=2))
-    message = str(excinfo.value)
-    assert "graph-binding-store-conflict" in message
-    assert "graph_revision=1" in message
-    assert "graph_revision=2" in message
-
-
-def test_json_store_keeps_owners_isolated(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(thread_id="main"), _binding())
-    store.save_graph_binding(
-        _owner(thread_id="child"),
-        _binding(graph_revision=2),
-    )
-    assert store.load_graph_binding(_owner(thread_id="main")) == _binding()
-    assert (
-        store.load_graph_binding(_owner(thread_id="child"))
-        == _binding(graph_revision=2)
-    )
-    assert store.load_graph_binding(_owner(session_id="other")) is None
-
-
-def test_json_store_rejects_wrong_types(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    with pytest.raises(TypeError):
-        store.save_graph_binding("not-owner", _binding())  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        store.save_graph_binding(_owner(), "not-binding")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        store.load_graph_binding("not-owner")  # type: ignore[arg-type]
-
-
-def test_persisted_document_is_plain_selector_not_python_object(
+def test_session_control_adapter_loads_catalog_binding_without_json_store(
     tmp_path: Path,
 ) -> None:
-    """红线：持久化的是 factory selector 文档，不是 CompiledStateGraph 或对象引用。"""
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    raw = (tmp_path / _STORE_FILE_NAME).read_text(encoding="utf-8")
-    document = json.loads(raw)
-    entry = document["bindings"]["ses_graph"]["main"]
-    assert set(entry) == {
-        "graph_id",
-        "graph_revision",
-        "graph_schema_hash",
-        "capability_profile_hash",
-    }
-    # 文档不含宿主机路径或任何对象引用形态。
-    assert str(tmp_path) not in raw
+    from datetime import UTC, datetime
 
-
-def test_json_store_rejects_corrupted_json(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    (tmp_path / _STORE_FILE_NAME).write_text("{not-json", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="无法解析 JSON"):
-        store.load_graph_binding(_owner())
-
-
-def test_json_store_rejects_unknown_entry_fields(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    document = json.loads((tmp_path / _STORE_FILE_NAME).read_text(encoding="utf-8"))
-    document["bindings"]["ses_graph"]["main"]["unexpected"] = "field"
-    (tmp_path / _STORE_FILE_NAME).write_text(
-        json.dumps(document),
-        encoding="utf-8",
+    database_path = tmp_path / "session-control.sqlite"
+    thread_id = thread_id_at(datetime(2026, 6, 1, tzinfo=UTC))
+    expected = _binding()
+    record = ThreadGraphBindingRecord(*expected.selector_fields())
+    control = SessionControlStore(database_path)
+    control.initialize_main_thread(
+        thread_id,
+        datetime(2026, 6, 1, tzinfo=UTC),
+        record,
     )
-    with pytest.raises(RuntimeError, match="字段集非法"):
-        store.load_graph_binding(_owner())
+    control.close()
 
-
-def test_json_store_rejects_wrong_document_version(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    document = json.loads((tmp_path / _STORE_FILE_NAME).read_text(encoding="utf-8"))
-    document["version"] = 99
-    (tmp_path / _STORE_FILE_NAME).write_text(
-        json.dumps(document),
-        encoding="utf-8",
+    reader = SessionControlGraphBindingStore(
+        lambda _session_id: SessionControlStore(database_path)
     )
-    with pytest.raises(RuntimeError, match="版本非法"):
-        store.load_graph_binding(_owner())
+    loaded = reader.load_graph_binding(_owner(thread_id=thread_id))
+
+    assert loaded == expected
+    assert not hasattr(reader, "save_graph_binding")
+    assert not (tmp_path / "graph-bindings.json").exists()
 
 
-def test_json_store_rejects_invalid_persisted_digest(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-    document = json.loads((tmp_path / _STORE_FILE_NAME).read_text(encoding="utf-8"))
-    document["bindings"]["ses_graph"]["main"]["graph_schema_hash"] = "abc"
-    (tmp_path / _STORE_FILE_NAME).write_text(
-        json.dumps(document),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="graph_schema_hash"):
-        store.load_graph_binding(_owner())
-
-
-# ---------------------------------------------------------------------------
-# 显式重绑（remove-agent-memory 7.3.2 一次性迁移入口）
-# ---------------------------------------------------------------------------
-
-
-def test_store_persisted_owners_enumerates_document_owners(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    assert store.persisted_owners() == ()
-    store.save_graph_binding(_owner(thread_id="main"), _binding())
-    store.save_graph_binding(
-        _owner(thread_id="child"),
-        _binding(graph_revision=2),
-    )
-    store.save_graph_binding(_owner(session_id="ses_other"), _binding())
-    assert store.persisted_owners() == (
-        GraphBindingOwnerKey(session_id="ses_graph", thread_id="child"),
-        GraphBindingOwnerKey(session_id="ses_graph", thread_id="main"),
-        GraphBindingOwnerKey(session_id="ses_other", thread_id="main"),
-    )
-
-
-def test_rebind_replaces_expected_selector_and_is_idempotent(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-
-    assert store.rebind_graph_binding(
-        _owner(),
-        expected=_binding(),
-        new=_binding(graph_revision=2),
-    )
-    assert store.load_graph_binding(_owner()) == _binding(graph_revision=2)
-    # 幂等：磁盘已是 new 时不再改写。
-    assert not store.rebind_graph_binding(
-        _owner(),
-        expected=_binding(),
-        new=_binding(graph_revision=2),
-    )
-    assert store.load_graph_binding(_owner()) == _binding(graph_revision=2)
-
-
-def test_rebind_rejects_stale_expected_without_writing(tmp_path: Path) -> None:
-    """红线：调用方声明的 expected 与磁盘不一致时拒绝重绑，绝不盲目覆盖。"""
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(), _binding())
-
-    with pytest.raises(RuntimeError, match="graph-binding-rebind-stale-expected"):
-        store.rebind_graph_binding(
-            _owner(),
-            expected=_binding(graph_revision=3),
-            new=_binding(graph_revision=2),
-        )
-    assert store.load_graph_binding(_owner()) == _binding()
-
-
-def test_rebind_rejects_never_persisted_owner(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    with pytest.raises(RuntimeError, match="graph-binding-rebind-no-persistence"):
-        store.rebind_graph_binding(
-            _owner(),
-            expected=_binding(),
-            new=_binding(graph_revision=2),
-        )
-
-
-def test_rebind_leaves_sibling_owners_untouched(tmp_path: Path) -> None:
-    store = JsonFileGraphBindingStore(tmp_path)
-    store.save_graph_binding(_owner(thread_id="main"), _binding())
-    store.save_graph_binding(_owner(thread_id="child"), _binding())
-
-    store.rebind_graph_binding(
-        _owner(thread_id="main"),
-        expected=_binding(),
-        new=_binding(graph_revision=2),
-    )
-    assert store.load_graph_binding(_owner(thread_id="main")) == _binding(
-        graph_revision=2
-    )
-    assert store.load_graph_binding(_owner(thread_id="child")) == _binding()
-
-
-# ---------------------------------------------------------------------------
-# 重启重建
-# ---------------------------------------------------------------------------
-
-
-def test_restart_rebuild_resolves_persisted_binding(tmp_path: Path) -> None:
-    directory = tmp_path / "graph_binding"
-    binding = _binding()
-    builder = _make_builder("blueprint")
-    GraphFactoryRegistry().register(binding, builder)
-    JsonFileGraphBindingStore(directory).save_graph_binding(_owner(), binding)
-
-    # 模拟重启：全新 store 与 registry 实例，重新注册同一 family。
-    restarted_store = JsonFileGraphBindingStore(directory)
-    restarted_registry = GraphFactoryRegistry()
-    restarted_builder = _make_builder("rebuilt")
-    restarted_registry.register(binding, restarted_builder)
-
-    loaded = restarted_store.load_graph_binding(_owner())
-    assert loaded == binding
-    assert restarted_registry.resolve(loaded) is restarted_builder
-
-
-@pytest.mark.parametrize(
-    "tamper",
-    [
-        pytest.param(
-            lambda loaded: dataclasses.replace(loaded, graph_id="other-graph"),
-            id="graph_id-drift",
-        ),
-        pytest.param(
-            lambda loaded: dataclasses.replace(
-                loaded,
-                graph_revision=loaded.graph_revision + 1,
-            ),
-            id="graph_revision-drift",
-        ),
-        pytest.param(
-            lambda loaded: dataclasses.replace(loaded, graph_schema_hash=_DIGEST_C),
-            id="schema-hash-drift",
-        ),
-        pytest.param(
-            lambda loaded: dataclasses.replace(
-                loaded,
-                capability_profile_hash=_DIGEST_C,
-            ),
-            id="capability-hash-drift",
-        ),
-    ],
-)
-def test_restart_rebuild_fails_when_persisted_binding_tampered(
+def test_session_control_adapter_returns_none_for_unbound_catalog_row(
     tmp_path: Path,
-    tamper,
 ) -> None:
-    directory = tmp_path / "graph_binding"
-    JsonFileGraphBindingStore(directory).save_graph_binding(_owner(), _binding())
+    from datetime import UTC, datetime
+
+    database_path = tmp_path / "session-control.sqlite"
+    thread_id = thread_id_at(datetime(2026, 6, 1, tzinfo=UTC))
+    control = SessionControlStore(database_path)
+    control.connection.execute(
+        "INSERT INTO thread_catalog (thread_id, kind, created_at) "
+        "VALUES (?, 'main', ?)",
+        (thread_id, datetime(2026, 6, 1, tzinfo=UTC).isoformat()),
+    )
+    control.close()
+
+    reader = SessionControlGraphBindingStore(
+        lambda _session_id: SessionControlStore(database_path)
+    )
+    assert reader.load_graph_binding(_owner(thread_id=thread_id)) is None
+
+
+def test_resolve_graph_binding_requires_persisted_selector() -> None:
+    from unittest.mock import MagicMock
+
+    from app.agents.graph_binding import GraphBindingStorePort
+
+    store = MagicMock(spec=GraphBindingStorePort)
+    store.load_graph_binding.return_value = None
+    with pytest.raises(GraphBindingUnavailableError, match="graph_binding_unavailable"):
+        resolve_graph_binding(store=store, owner=_owner())
+    store.load_graph_binding.assert_called_once_with(_owner())
+
+
+def test_resolve_graph_binding_returns_exact_registered_selector() -> None:
+    from unittest.mock import MagicMock
+
+    from app.agents.graph_binding import GraphBindingStorePort
+
+    binding = _binding()
     registry = GraphFactoryRegistry()
-    registry.register(_binding(), _make_builder("b"))
+    registry.register(binding, _make_builder("exact"))
+    store = MagicMock(spec=GraphBindingStorePort)
+    store.load_graph_binding.return_value = binding
 
-    loaded = JsonFileGraphBindingStore(directory).load_graph_binding(_owner())
-    assert loaded is not None
-    with pytest.raises(GraphBindingUnavailableError):
-        registry.resolve(tamper(loaded))
+    assert (
+        resolve_graph_binding(
+            store=store,
+            owner=_owner(),
+            registry=registry,
+        )
+        is binding
+    )
+
+
+def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None:
+    from unittest.mock import MagicMock
+
+    from app.agents.graph_binding import GraphBindingStorePort
+
+    registered = _binding()
+    registry = GraphFactoryRegistry()
+    registry.register(registered, _make_builder("exact"))
+    store = MagicMock(spec=GraphBindingStorePort)
+    store.load_graph_binding.return_value = _binding(graph_revision=2)
+
+    with pytest.raises(GraphBindingUnavailableError, match="不回退"):
+        resolve_graph_binding(
+            store=store,
+            owner=_owner(),
+            registry=registry,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -35,19 +35,97 @@ def _make_request(
     method: str,
     path: str,
     workspace_id: str,
+    backend_workspace_id: str | None = None,
 ) -> Request:
+    headers = [(b"x-boxteam-workspace-id", workspace_id.encode())]
+    if backend_workspace_id is not None:
+        headers.append(
+            (
+                b"x-boxteam-backend-workspace-id",
+                backend_workspace_id.encode(),
+            )
+        )
     request = Request(
         {
             "type": "http",
             "method": method,
             "path": path,
             "query_string": b"",
-            "headers": [(b"x-boxteam-workspace-id", workspace_id.encode())],
+            "headers": headers,
             "app": application,
         }
     )
     request.state.request_id = "req_route_ref"
     return request
+
+
+@pytest.mark.asyncio
+async def test_local_proxy_validates_and_forwards_backend_workspace_identity(
+    tmp_path: Path,
+) -> None:
+    backend_workspace_id = "00000000-0000-4000-8000-000000000001"
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id="gateway-target",
+            name="workspace",
+            root_path=str(tmp_path / "workspace"),
+            backend_url="http://127.0.0.1:41001",
+            connection_kind="local",
+            backend_workspace_id=backend_workspace_id,
+        ),
+        activate=False,
+    )
+    forwarded_headers: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        forwarded_headers.append(request.headers)
+        return httpx.Response(200, json={"request_id": "req_proxy", "data": {}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    application = FastAPI()
+    application.state.registry = registry
+    application.state.http_client = client
+    application.state.streaming_http_client = client
+    matching_request = _make_request(
+        application,
+        method="GET",
+        path="/api/v1/workspace",
+        workspace_id="gateway-target",
+        backend_workspace_id=backend_workspace_id,
+    )
+
+    try:
+        response = await _proxy_workspace_request(
+            "workspace",
+            matching_request,
+            auth=None,
+            user_access=None,
+            include_credentials=False,
+        )
+        assert response.status_code == 200
+        assert forwarded_headers[0]["x-boxteam-workspace-id"] == backend_workspace_id
+        assert "x-boxteam-backend-workspace-id" not in forwarded_headers[0]
+
+        mismatching_request = _make_request(
+            application,
+            method="GET",
+            path="/api/v1/workspace",
+            workspace_id="gateway-target",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
+        )
+        with pytest.raises(HTTPException) as error:
+            await _proxy_workspace_request(
+                "workspace",
+                mismatching_request,
+                auth=None,
+                user_access=None,
+                include_credentials=False,
+            )
+        assert error.value.status_code == 400
+        assert len(forwarded_headers) == 1
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -115,6 +193,7 @@ async def test_message_stream_retry_resolve_failure_releases_route_reference(
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )
@@ -178,6 +257,7 @@ async def test_client_disconnect_releases_route_reference(
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )

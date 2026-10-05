@@ -9,7 +9,6 @@ from app.domain.itemized.assembly_snapshot import (
     ContextAssemblySnapshot,
     context_request_hash,
 )
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     PayloadKind,
@@ -17,6 +16,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
 )
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -111,6 +111,7 @@ class ContextPlanComposer:
             (
                 ToolSetRef.from_tool_snapshot(
                     session_id=session_id,
+                    thread_id=thread_id,
                     snapshot_id=f"tool-set:{source_revision}",
                     plan_id=plan_id,
                     tools=tool_snapshot,
@@ -122,6 +123,7 @@ class ContextPlanComposer:
         )
         return ContextRequestPlan(
             session_id=session_id,
+            thread_id=thread_id,
             plan_id=plan_id,
             refs=normalized_refs,
             contributions=self.ledger.snapshot_contributions(),
@@ -159,7 +161,8 @@ class ContextPlanComposer:
         plan: ContextRequestPlan,
         assembly_id: str,
         session_id: str,
-        turn_id: str,
+        thread_id: str,
+        turn_id: str | None,
         execution_id: str,
         provider_version: str,
         model_call_id: str | None = None,
@@ -171,8 +174,8 @@ class ContextPlanComposer:
         omitted_ref_ids: Iterable[str] = (),
         request_detail_refs: Mapping[str, DetailRef] | None = None,
     ) -> ContextAssemblySnapshot:
-        if plan.session_id != session_id:
-            raise ValueError("source-mismatch: plan 与 assembly session 不一致")
+        if (plan.session_id, plan.thread_id) != (session_id, thread_id):
+            raise ValueError("source-mismatch: plan 与 assembly session/thread 不一致")
         # source_ordinal 是 context_contributions 表的独立 registry 排序列，
         # 不是 contribution provenance metadata。它只在 ledger 重建时参与
         # 排序，不能复制进 sealed snapshot；否则 snapshot 与 registry 的
@@ -193,7 +196,7 @@ class ContextPlanComposer:
                 )
             if not isinstance(detail_ref, DetailRef):
                 raise TypeError("source-mismatch: final detail 必须是 typed DetailRef")
-            detail_ref.require_owner(session_id, assembly_id)
+            detail_ref.require_owner(session_id, thread_id, assembly_id)
         known_ids = {ref.ref_id for ref in registry_refs}
         known_ids.update(ref.ref_id for ref in plan.tool_set_refs)
         unknown_omitted_ids = omitted_ids - known_ids
@@ -336,6 +339,7 @@ class ContextPlanComposer:
         for tool_ref in plan.tool_set_refs:
             bound = ToolSetRef(
                 session_id=tool_ref.session_id,
+                thread_id=tool_ref.thread_id,
                 ref_id=tool_ref.ref_id,
                 plan_id=tool_ref.plan_id,
                 source_revision=tool_ref.source_revision,
@@ -402,6 +406,7 @@ class ContextPlanComposer:
         return ContextAssemblySnapshot(
             assembly_id=assembly_id,
             session_id=session_id,
+            thread_id=thread_id,
             turn_id=turn_id,
             execution_id=execution_id,
             plan_id=plan.plan_id,

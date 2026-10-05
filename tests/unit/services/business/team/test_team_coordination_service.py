@@ -7,6 +7,10 @@ import pytest
 
 from app.abstractions.session_subagent import SessionSubagentAccepted
 from app.schemas.internal_v2.session import SessionDTO
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.team.store import TeamStore
 
@@ -16,6 +20,9 @@ def _session(session_id: str, *, title: str = "会话") -> SessionDTO:
     return SessionDTO(
         session_id=session_id,
         workspace_id="ws_test",
+        resource_identity=session_resource_identity("ws_test", session_id),
+        vrn=session_resource_vrn("ws_test", session_id),
+        scope="workspace",
         title=title,
         current_agent_id="default",
         kind="normal",

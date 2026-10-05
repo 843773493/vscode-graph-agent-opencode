@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
-from datetime import datetime, timezone
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.abstractions.internal_message import PreparedInternalMessage
-from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.session import SessionDTO
@@ -138,13 +140,15 @@ class SessionGenerationReportingSupport:
         record = self._read_ledger(ledger_path)
         raw_result = record.get("result")
         if not isinstance(raw_result, dict):
-            raise RuntimeError(f"会话生成运行记录缺少 result: {ledger_path}")
+            raise RuntimeError(  # noqa: TRY004 —— 保留账本损坏的统一运行时错误合同
+                f"会话生成运行记录缺少 result: {ledger_path}"
+            )
         result = SessionGenerationExecuteResultDTO.model_validate(raw_result)
         record["status"] = status
         record["result"] = result.model_copy(
             update={"status": status, "error": error}
         ).model_dump(mode="json")
-        record["ended_at"] = datetime.now(timezone.utc).isoformat()
+        record["ended_at"] = datetime.now(UTC).isoformat()
         self._write_ledger(ledger_path, record)
 
     @staticmethod
@@ -256,6 +260,16 @@ class SessionGenerationReportingSupport:
         *,
         ledger_path: Path,
     ) -> str:
+        record = self._read_ledger(ledger_path)
+        raw_job_id = record.get("report_back_job_id")
+        raw_intent = record.get("report_back_execution_intent")
+        if "report_back_job_id" in record and (
+            not isinstance(raw_job_id, str) or not raw_job_id.strip()
+        ):
+            raise RuntimeError(
+                f"生成回报账本的 report_back_job_id 无效: {ledger_path}"
+            )
+
         message = self._load_prepared_message(
             payload=payload,
             session_id=target_session_id,
@@ -267,20 +281,45 @@ class SessionGenerationReportingSupport:
                 internal_message,
             )
             self._persist_prepared_message(payload, "report_back", message)
-        record = self._read_ledger(ledger_path)
-        raw_job_id = record.get("report_back_job_id")
-        if raw_job_id is not None and not isinstance(raw_job_id, str):
-            raise RuntimeError(f"生成回报账本的 Job ID 类型无效: {ledger_path}")
-        job_id = raw_job_id or self._trace_job_id_for_message(
-            target_session_id,
-            message.message_id,
+        expected_intent = self._report_back_execution_intent(
+            payload,
+            target_session_id=target_session_id,
+            message_id=message.message_id,
         )
-        if job_id is None:
-            job_id = create_prefixed_id("job")
-        record["report_back_phase"] = "message_prepared"
-        record["report_back_message_id"] = message.message_id
-        record["report_back_job_id"] = job_id
-        self._write_ledger(ledger_path, record)
+        if "report_back_job_id" not in record and "report_back_execution_intent" not in record:
+            job_id = self._session_orchestrator.reserve_internal_job_id()
+            if not isinstance(job_id, str) or not job_id.strip():
+                raise RuntimeError(
+                    f"生成回报预留的 Job ID 无效: {ledger_path}"
+                )
+            execution_intent = expected_intent
+            record["report_back_phase"] = "message_prepared"
+            record["report_back_message_id"] = message.message_id
+            record["report_back_job_id"] = job_id
+            record["report_back_execution_intent"] = asdict(execution_intent)
+            self._write_ledger(ledger_path, record)
+        elif isinstance(raw_job_id, str) and isinstance(raw_intent, dict):
+            try:
+                execution_intent = InternalExecutionIntent(**raw_intent)
+            except (TypeError, ValueError) as error:
+                raise RuntimeError(
+                    f"生成回报账本的 execution intent 无效: {ledger_path}: {error}"
+                ) from error
+            if execution_intent != expected_intent:
+                raise RuntimeError(
+                    "生成回报账本的 execution intent 与稳定业务事件不一致: "
+                    f"{ledger_path}"
+                )
+            if record.get("report_back_message_id") != message.message_id:
+                raise RuntimeError(
+                    f"生成回报账本的 message identity 不一致: {ledger_path}"
+                )
+            job_id = raw_job_id
+        else:
+            raise RuntimeError(
+                "生成回报账本没有完整、原子预留的 internal Job binding: "
+                f"{ledger_path}"
+            )
         if self._persisted_terminal_status(
             target_session_id,
             job_id,
@@ -289,7 +328,8 @@ class SessionGenerationReportingSupport:
             dispatch = await self._session_orchestrator.dispatch_existing_message(
                 target_session_id,
                 message,
-                job_id=job_id,
+                execution_binding=execution_intent,
+                reserved_job_id=job_id,
             )
             if dispatch.job_id != job_id:
                 raise RuntimeError(
@@ -301,6 +341,24 @@ class SessionGenerationReportingSupport:
         record["report_back_job_id"] = job_id
         self._write_ledger(ledger_path, record)
         return job_id
+
+    @staticmethod
+    def _report_back_execution_intent(
+        payload: SessionGenerationExecuteRequest,
+        *,
+        target_session_id: str,
+        message_id: str,
+    ) -> InternalExecutionIntent:
+        event_identity = (
+            f"{payload.generator_id}\0{payload.run_id}\0"
+            f"{target_session_id}\0report_back"
+        )
+        digest = hashlib.sha256(event_identity.encode("utf-8")).hexdigest()
+        return InternalExecutionIntent(
+            message_id=message_id,
+            execution_id=f"genexec_{digest}",
+            admission_idempotency_key=f"genadm_{digest}",
+        )
 
     async def _wait_for_job_terminal(
         self,
@@ -420,7 +478,9 @@ class SessionGenerationReportingSupport:
         record = self._read_ledger(ledger_path)
         raw_result = record.get("result")
         if not isinstance(raw_result, dict):
-            raise RuntimeError(f"会话生成回写记录缺少 result: {ledger_path}")
+            raise RuntimeError(  # noqa: TRY004 —— 保留账本损坏的统一运行时错误合同
+                f"会话生成回写记录缺少 result: {ledger_path}"
+            )
         result = SessionGenerationExecuteResultDTO.model_validate(raw_result)
         record["status"] = status
         record["result"] = result.model_copy(
@@ -431,7 +491,7 @@ class SessionGenerationReportingSupport:
             }
         ).model_dump(mode="json")
         record["ended_at"] = (
-            datetime.now(timezone.utc).isoformat()
+            datetime.now(UTC).isoformat()
             if status in {"completed", "failed"}
             else None
         )

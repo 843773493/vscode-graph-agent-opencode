@@ -112,7 +112,10 @@ class ResourceActivationReadMixin:
         """按稳定 identity 读取并重算 hash；篡改 fail closed。"""
 
         with self._storage._connect(
-            session_id, checkpoint_ns, read_only=True
+            self._storage._resolve_thread_identity(session_id, thread_id),
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
         ) as connection:
             self._storage._require_v2_runtime(connection)
             self.require_schema(connection)
@@ -128,13 +131,14 @@ class ResourceActivationReadMixin:
         self,
         session_id: str,
         *,
+        thread_id: str,
         assembly_id: str,
         checkpoint_ns: str = "",
     ) -> Mapping[str, object]:
         """读取 assembly 绑定的 activation identity/hash 与 snapshot。"""
 
         binding = self.find_assembly_binding(
-            session_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns
+            session_id, thread_id=thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns
         )
         if binding is None:
             raise KeyError(
@@ -147,6 +151,7 @@ class ResourceActivationReadMixin:
         self,
         session_id: str,
         *,
+        thread_id: str,
         assembly_id: str,
         checkpoint_ns: str = "",
     ) -> Mapping[str, object] | None:
@@ -157,8 +162,9 @@ class ResourceActivationReadMixin:
         retention 清理，仍显式失败，绝不静默返回替代 snapshot。
         """
 
+        thread_id = self._storage.main_thread_id(session_id)
         with self._storage._connect(
-            session_id, checkpoint_ns, read_only=True
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
         ) as connection:
             self._storage._require_v2_runtime(connection)
             if not activation_tables_ready(connection):
@@ -167,8 +173,8 @@ class ResourceActivationReadMixin:
             row = connection.execute(
                 f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
                 "FROM resource_activation_assembly_bindings "
-                "WHERE assembly_id = ? AND session_id = ?",
-                (assembly_id, session_id),
+                "WHERE assembly_id = ? AND session_id = ? AND thread_id = ?",
+                (assembly_id, session_id, thread_id),
             ).fetchone()
             if row is None:
                 return None
@@ -176,7 +182,7 @@ class ResourceActivationReadMixin:
             raw = self._read_raw_snapshot(
                 connection,
                 session_id=session_id,
-                thread_id=strict_text(record["thread_id"], field="thread_id"),
+                thread_id=thread_id,
                 activation_snapshot_id=strict_text(
                     record["activation_snapshot_id"],
                     field="activation_snapshot_id",
@@ -261,7 +267,8 @@ class ResourceActivationReadMixin:
         body_ref = _detail_ref_from_key(
             record["lineage_detail_ref"], field="lineage_detail_ref"
         )
-        body_ref.require_owner(session_id)
+        thread_id = strict_text(record["thread_id"], field="thread_id")
+        body_ref.require_owner(session_id, thread_id)
         try:
             manifest = self._lineage_body.read_lineage_manifest(
                 detail_ref=body_ref, checkpoint_ns=checkpoint_ns

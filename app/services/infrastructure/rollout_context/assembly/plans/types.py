@@ -12,6 +12,8 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 class ContextPlanRegistration:
     """draft 仅属于真实创建记录，导入来源只允许读取已封存的 snapshot。"""
 
+    session_id: str
+    thread_id: str
     draft: ContextRequestPlan | None
     creation_hash: str | None
     revision: int

@@ -96,7 +96,7 @@ async def iter_agent_events(
     input_payload: dict[str, Any],
     stream_config: dict[str, Any],
     session_id: str,
-    turn_id: str,
+    job_id: str,
     message_stream_runtime: MessageStreamRuntime | None,
     cancellation_signal: CancellationSignal | None,
     idle_model_timeout_seconds: float | None,
@@ -135,7 +135,7 @@ async def iter_agent_events(
         )
         raise AgentEventStreamTimeoutError(
             f"Agent 事件流等待{phase}超过 {timeout_seconds:.0f} 秒: "
-            f"session_id={session_id} job_id={turn_id}",
+            f"session_id={session_id} job_id={job_id}",
             code=code,
         )
 

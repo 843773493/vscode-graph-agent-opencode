@@ -22,6 +22,7 @@ class JobDispatchSnapshotDTO(BaseModel):
     """JobService 在调度锁内生成的目标会话队列快照。"""
 
     session_id: str
+    thread_id: str
     job_id: str
     job_status: JobDispatchStatus
     active_job_id: str | None = None
@@ -38,6 +39,7 @@ class JobDTO(TimestampedDTO):
     job_id: str
     message_id: str
     session_id: str
+    thread_id: str
     mode: RunMode
     status: JobStatus
     entry_agent: str

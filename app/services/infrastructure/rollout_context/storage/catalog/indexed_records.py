@@ -81,6 +81,7 @@ class IndexedRecordQueryMixin:
 
     def _records_for_turns(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         turn_ids: Iterable[str],
@@ -102,9 +103,13 @@ class IndexedRecordQueryMixin:
             return []
         if connection is None:
             with self._connect(
-                thread_id, checkpoint_ns, read_only=True
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
             ) as owned_connection:
                 return self._records_for_turns(
+                    session_id,
                     thread_id,
                     checkpoint_ns,
                     ids,
@@ -220,6 +225,7 @@ class IndexedRecordQueryMixin:
 
     def read_indexed_records(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str = "",
         *,
@@ -231,6 +237,7 @@ class IndexedRecordQueryMixin:
         kinds: Iterable[str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
     ) -> list[dict[str, object]]:
+        strict_text(session_id, field="read_indexed_records.session_id")
         strict_text(thread_id, field="read_indexed_records.thread_id")
         strict_text(
             checkpoint_ns, field="read_indexed_records.checkpoint_ns", allow_empty=True
@@ -259,11 +266,20 @@ class IndexedRecordQueryMixin:
                     raise ValueError(f"未知 indexed record kind: {kind}")
         ranges = _sequence_ranges(sequence_ranges)
         if snapshot is not None:
+            if (
+                snapshot.session_id != session_id
+                or snapshot.thread_id != thread_id
+                or snapshot.checkpoint_ns != checkpoint_ns
+            ):
+                raise ValueError("indexed records snapshot owner 不一致")
             self._require_v2_runtime(self._snapshot_connection(snapshot))
         else:
-            self.initialize(thread_id, checkpoint_ns)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._connect(
-                thread_id, checkpoint_ns, read_only=True
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
             ) as check_connection:
                 self._require_v2_runtime(check_connection)
         if turn_id is None:
@@ -272,6 +288,7 @@ class IndexedRecordQueryMixin:
             through_sequence if through_sequence is not None else after_sequence
         )
         rows = self._records_for_turns(
+            session_id,
             thread_id,
             checkpoint_ns,
             (turn_id,),
@@ -280,6 +297,7 @@ class IndexedRecordQueryMixin:
             connection=(self._snapshot_connection(snapshot) if snapshot else None),
         )
         return self._read_record_envelopes(
+            session_id,
             thread_id,
             checkpoint_ns,
             rows,
@@ -312,6 +330,17 @@ class IndexedRecordQueryMixin:
                     raise ValueError(f"未知 indexed record kind: {kind}")
         connection = self._snapshot_connection(snapshot)
         self._require_v2_runtime(connection)
+        session_id = strict_text(
+            snapshot.session_id, field="read_indexed_records_batch.session_id"
+        )
+        thread_id = strict_text(
+            snapshot.thread_id, field="read_indexed_records_batch.thread_id"
+        )
+        checkpoint_ns = strict_text(
+            snapshot.checkpoint_ns,
+            field="read_indexed_records_batch.checkpoint_ns",
+            allow_empty=True,
+        )
         ids = tuple(
             dict.fromkeys(
                 strict_text(value, field="read_indexed_records_batch.turn_id")
@@ -322,8 +351,9 @@ class IndexedRecordQueryMixin:
         view_id = ranges[-1][0] if ranges else None
         result: dict[str, list[dict[str, object]]] = {turn_id: [] for turn_id in ids}
         rows = self._records_for_turns(
-            snapshot.thread_id,
-            snapshot.checkpoint_ns,
+            session_id,
+            thread_id,
+            checkpoint_ns,
             ids,
             message_roles=message_roles,
             tool_kinds=tool_kinds,
@@ -342,8 +372,9 @@ class IndexedRecordQueryMixin:
         if required_values:
             rows.extend(
                 self._records_for_turns(
-                    snapshot.thread_id,
-                    snapshot.checkpoint_ns,
+                    session_id,
+                    thread_id,
+                    checkpoint_ns,
                     ids,
                     sequences=required_values,
                     view_id=view_id,
@@ -355,8 +386,9 @@ class IndexedRecordQueryMixin:
             for sequence, turn_id, offset, length in rows
         }
         records = self._read_record_envelopes(
-            snapshot.thread_id,
-            snapshot.checkpoint_ns,
+            session_id,
+            thread_id,
+            checkpoint_ns,
             sorted(unique_rows.values()),
             connection=connection,
         )
@@ -369,12 +401,20 @@ class IndexedRecordQueryMixin:
 
     def _read_record_envelopes(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         rows: Iterable[tuple[int, str, int, int]],
         *,
         connection: sqlite3.Connection | None = None,
     ) -> list[dict[str, object]]:
+        session_id = strict_text(session_id, field="_read_record_envelopes.session_id")
+        thread_id = strict_text(thread_id, field="_read_record_envelopes.thread_id")
+        checkpoint_ns = strict_text(
+            checkpoint_ns,
+            field="_read_record_envelopes.checkpoint_ns",
+            allow_empty=True,
+        )
         row_values = tuple(rows)
         if not row_values:
             return []
@@ -385,7 +425,12 @@ class IndexedRecordQueryMixin:
         result: list[dict[str, object]] = []
         owned_connection = None
         if connection is None:
-            owned_connection = self._connect(thread_id, checkpoint_ns, read_only=True)
+            owned_connection = self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            )
             connection = owned_connection
         try:
             self._require_v2_runtime(connection)
@@ -406,7 +451,11 @@ class IndexedRecordQueryMixin:
                 )
                 for row in message_rows
             }
-            with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+            with self.jsonl_path(
+                session_id,
+                checkpoint_ns,
+                thread_id=thread_id,
+            ).open("rb") as stream:
                 for sequence, turn_id_value, offset, length in indexed_rows:
                     items = read_message_group(
                         connection,
@@ -513,8 +562,14 @@ class IndexedRecordQueryMixin:
             connection = self._snapshot_connection(snapshot)
             return read(connection, snapshot.manifest.active_branch_id)
         else:
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+            session_id = self._session_id_from_owner_scope(thread_id)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as connection:
                 branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
                     (checkpoint_ns,),

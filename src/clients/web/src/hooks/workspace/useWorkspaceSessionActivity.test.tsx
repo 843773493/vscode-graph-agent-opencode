@@ -7,10 +7,16 @@ import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/ses
 import type { AppState } from "../../types/frontend";
 import type { SessionActivity } from "../../types/backend";
 import { useWorkspaceSessionActivity } from "./useWorkspaceSessionActivity";
+import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const API_PORT = 49_712;
 const WORKSPACE_ID = "ws-activity";
+const WORKSPACE_TARGET = {
+  workspace_id: WORKSPACE_ID,
+  backend_workspace_id: "00000000-0000-0000-0000-000000000001",
+  connection_kind: "local" as const,
+};
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -58,11 +64,30 @@ function activity(eventId: string): SessionActivity {
   return { event_id: eventId, session_id: "session-1" } as unknown as SessionActivity;
 }
 
-function appState(): AppState {
-  return { status: "准备就绪" } as unknown as AppState;
+function appState(
+  gatewayWorkspaces: AppState["gatewayWorkspaces"] = [],
+): AppState {
+  return {
+    apiPort: API_PORT,
+    activeGatewayWorkspaceId: WORKSPACE_ID,
+    gatewayWorkspaces,
+    status: "准备就绪",
+  } as unknown as AppState;
+}
+
+function gatewayWorkspace(backendWorkspaceId: string): AppState["gatewayWorkspaces"][number] {
+  return {
+    workspace_id: WORKSPACE_ID,
+    backend_workspace_id: backendWorkspaceId,
+    connection_kind: "local",
+    name: "测试工作区",
+    root_path: "/tmp/test-workspace",
+    status: "ready",
+  } as AppState["gatewayWorkspaces"][number];
 }
 
 let renderer: ReactTestRenderer | undefined;
+const restoreSpies: Array<() => void> = [];
 
 async function mountActivity(
   state: AppState,
@@ -71,7 +96,7 @@ async function mountActivity(
   function Probe(): React.ReactNode {
     useWorkspaceSessionActivity({
       apiPort: API_PORT,
-      workspaceId: WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       currentSessionCacheKey: null,
       setState: (update) => {
         const next = typeof update === "function"
@@ -109,11 +134,84 @@ afterEach(() => {
     act(() => renderer!.unmount());
     renderer = undefined;
   }
+  for (const restore of restoreSpies.splice(0)) restore();
   restoreGlobalDescriptor("window", originalWindowDescriptor);
   restoreGlobalDescriptor("document", originalDocumentDescriptor);
 });
 
 describe("useWorkspaceSessionActivity 重连与卸载", () => {
+  test("AppState 重新加载后只重建一次订阅，并使用新 backend UUID", async () => {
+    installWindow();
+    const listedBackendWorkspaceIds: Array<string | null | undefined> = [];
+    const streamedBackendWorkspaceIds: Array<string | null | undefined> = [];
+    const listSpy = spyOn(sessionActivityApi, "listSessionActivity")
+      .mockImplementation(async (_apiPort, target) => {
+        listedBackendWorkspaceIds.push(target.backend_workspace_id);
+        return { items: [], next_cursor: 0 } as never;
+      });
+    const streamSpy = spyOn(sessionActivityApi, "streamSessionActivity")
+      .mockImplementation(async (_apiPort, target, options) => {
+        streamedBackendWorkspaceIds.push(target.backend_workspace_id);
+        return await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+    restoreSpies.push(() => listSpy.mockRestore(), () => streamSpy.mockRestore());
+    let reloadGatewayWorkspaces!: (
+      workspaces: AppState["gatewayWorkspaces"],
+    ) => void;
+    let updateUnrelatedState!: () => void;
+
+    function Probe(): React.ReactNode {
+      const [state, setState] = React.useState<AppState>(
+        appState([gatewayWorkspace("00000000-0000-0000-0000-000000000001")]),
+      );
+      reloadGatewayWorkspaces = (workspaces) => {
+        setState((previous) => ({ ...previous, gatewayWorkspaces: workspaces }));
+      };
+      updateUnrelatedState = () => {
+        setState((previous) => ({ ...previous, status: "其他状态更新" }));
+      };
+      const workspaceTarget = requireGatewayWorkspaceRequestTarget(
+        state.gatewayWorkspaces,
+        state.activeGatewayWorkspaceId!,
+      );
+      useWorkspaceSessionActivity({
+        apiPort: state.apiPort,
+        workspaceTarget,
+        currentSessionCacheKey: null,
+        setState,
+      });
+      return null;
+    }
+
+    await act(async () => {
+      renderer = create(<Probe />);
+    });
+    await drainMicrotasks();
+    expect(streamedBackendWorkspaceIds).toEqual([
+      "00000000-0000-0000-0000-000000000001",
+    ]);
+
+    await act(async () => {
+      reloadGatewayWorkspaces([
+        gatewayWorkspace("00000000-0000-0000-0000-000000000002"),
+      ]);
+    });
+    await drainMicrotasks();
+    await act(async () => updateUnrelatedState());
+    await drainMicrotasks();
+
+    expect(listedBackendWorkspaceIds).toEqual([
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+    ]);
+    expect(streamedBackendWorkspaceIds).toEqual([
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002",
+    ]);
+  });
+
   test("流持续关闭时有界重连，耗尽后给可见终态而不是无限重连", async () => {
     installWindow();
     const listSpy = spyOn(sessionActivityApi, "listSessionActivity")

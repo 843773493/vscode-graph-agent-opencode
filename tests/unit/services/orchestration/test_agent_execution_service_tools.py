@@ -429,7 +429,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=config_service,
-        terminal_manager_client=_FakeTerminalManagerClient(),
+        terminal_resource_owner=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -473,7 +473,7 @@ async def test_agent_omits_test_tool_without_development_config(monkeypatch, tmp
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=_DummyConfigService(),
-        terminal_manager_client=_FakeTerminalManagerClient(),
+        terminal_resource_owner=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -498,7 +498,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(monkeypatch, tmp_pat
         session_orchestrator=_FakeSessionOrchestrator(),
         session_subagent_service=_FakeSessionSubagentService(),
         config_service=_DummyConfigService(),
-        terminal_manager_client=_FakeTerminalManagerClient(),
+        terminal_resource_owner=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -549,7 +549,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=config_service,
-        terminal_manager_client=_FakeTerminalManagerClient(),
+        terminal_resource_owner=_FakeTerminalManagerClient(),
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"

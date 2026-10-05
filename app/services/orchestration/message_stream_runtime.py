@@ -31,7 +31,7 @@ class MessageStreamRuntime(
 
     def __init__(
         self,
-        writer: MessageStreamWriter,
+        writer: MessageStreamWriter | None,
         *,
         normalized_block_observer: NormalizedBlockObserver | None = None,
         activity_registry: ActivityHandlerRegistry | None = None,
@@ -41,9 +41,10 @@ class MessageStreamRuntime(
         model_call_outcome_sink: ModelCallOutcomeSink | None = None,
     ) -> None:
         self.writer = writer
-        self.activities = ActivityRuntime(
-            writer,
-            activity_registry or ActivityHandlerRegistry(),
+        self.activities = (
+            ActivityRuntime(writer, activity_registry or ActivityHandlerRegistry())
+            if writer is not None
+            else None
         )
         self._normalized_block_observer = normalized_block_observer
         self._canonical_item_sink = canonical_item_sink

@@ -290,6 +290,7 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
     missing_tool_fields = sorted(
         {
             "session_id",
+            "thread_id",
             "ref_type",
             "ref_id",
             "plan_id",
@@ -313,13 +314,14 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
             "ToolSetRef 缺少字段: " + ",".join(missing_tool_fields)
         )
     if set(tool) - {
-        "session_id", "ref_type", "ref_id", "plan_id", "assembly_id", "source_revision",
+        "session_id", "thread_id", "ref_type", "ref_id", "plan_id", "assembly_id", "source_revision",
         "tool_set_schema", "tool_set_schema_version", "tool_policy_version", "content_length",
         "content_hash", "redacted_stable_digest", "protection", "availability", "tool_policy", "tools",
     }:
         raise ItemSchemaError("ToolSetRef 含未知或不属于 registry 的字段")
     return ToolSetRef(
         session_id=_required_string(tool["session_id"], "ToolSetRef.session_id"),
+        thread_id=_required_string(tool["thread_id"], "ToolSetRef.thread_id"),
         ref_id=_required_string(tool["ref_id"], "ToolSetRef.ref_id"),
         plan_id=_required_string(tool["plan_id"], "ToolSetRef.plan_id"),
         source_revision=_required_string(

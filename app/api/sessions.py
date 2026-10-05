@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.abstractions.job_service import JobServiceProtocol
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_config_service,
@@ -16,7 +15,6 @@ from app.api.deps import (
     get_file_tree_settings_service,
     get_goal_runtime_service,
     get_goal_service,
-    get_job_service,
     get_llm_request_log_service,
     get_request_id,
     get_session_changes_service,
@@ -46,7 +44,6 @@ from app.schemas.internal_v2.goal import (
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogRecordDTO
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
-    DeleteSessionResultDTO,
     SessionCompactResultDTO,
     SessionCreateRequest,
     SessionDTO,
@@ -90,6 +87,7 @@ from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,
 )
+from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
@@ -375,10 +373,12 @@ async def fork_session_context(
             turn_id=request.turn_id,
             anchor_mode=request.anchor_mode,
             pinned=request.pinned,
-            place_under_source=request.pinned,
+            place_under_source=request.place_under_source,
         )
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -548,7 +548,10 @@ async def control_session_resource(
             kind=kind,
             resource_id=resource_id,
             action=payload.action,
+            operation_id=request_id,
         )
+    except ResourceConflict as error:
+        raise HTTPException(409, detail=str(error)) from error
     except (KeyError, NotFoundError, ValueError) as error:
         # 会话缺失由 SessionService.get 抛 NotFoundError：与 list_session_resources 同口径落 404。
         raise _not_found_or_invalid_input_http_error(error) from error
@@ -770,35 +773,6 @@ async def update_session(
         raise state_conflict_http_error(error) from error
     except (NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.delete(
-    "/{session_id}",
-    response_model=APIResponse[DeleteSessionResultDTO],
-    summary="删除会话",
-)
-async def delete_session(
-    session_id: CanonicalSessionId,
-    cascade: bool = Query(default=False),
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_service: SessionService = Depends(get_session_service),
-    job_service: JobServiceProtocol = Depends(get_job_service),
-):
-    try:
-        session_ids = session_service.path_resolver.descendant_session_ids(
-            session_id,
-            include_self=True,
-        )
-        result = await job_service.run_sessions_delete_operation(
-            session_ids,
-            lambda: session_service.delete(session_id, cascade=cascade),
-        )
-    except KeyError as error:
-        raise not_found_http_error(error) from error
-    except RuntimeError as error:
-        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

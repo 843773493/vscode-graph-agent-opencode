@@ -32,6 +32,7 @@ _EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
         "x-boxteam-gateway-id",
+        "x-boxteam-navigation-actor",
     }
 )
 
@@ -169,9 +170,10 @@ def test_gateway_proxy_dropped_header_set_is_exactly_the_shared_contract() -> No
     from app.gateway.server.workspace_proxy import PROXY_ONLY_DROPPED_HEADERS
 
     assert GATEWAY_PROXY_DROPPED_HEADERS == _EXPECTED_GATEWAY_DROPPED_HEADERS
-    # 工作区 API 代理只在其上追加会话加载策略与浏览器 Cookie。
+    # 工作区 API 代理额外剥离后端 UUID proof、会话加载策略和浏览器 Cookie。
     assert PROXY_ONLY_DROPPED_HEADERS == GATEWAY_PROXY_DROPPED_HEADERS | {
         "x-boxteam-history-loading",
+        "x-boxteam-backend-workspace-id",
         "cookie",
     }
 

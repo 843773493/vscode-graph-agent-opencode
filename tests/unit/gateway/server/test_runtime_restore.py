@@ -9,6 +9,15 @@ from app.gateway.server import bootstrap
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 
 
+@pytest.fixture(autouse=True)
+def _stub_backend_workspace_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bootstrap,
+        "resolve_backend_workspace_id",
+        lambda *_: "00000000-0000-4000-8000-000000000001",
+    )
+
+
 def test_default_backend_port_is_optional_and_validated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,6 +55,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
             root_path=str(default_root),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             removable=False,
             system_default=True,
@@ -59,6 +69,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
             root_path=str(running_root),
             backend_url="http://127.0.0.1:42000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             desired_running=True,
         )
@@ -70,6 +81,7 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
             root_path=str(stopped_root),
             backend_url="http://127.0.0.1:43000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             desired_running=False,
         ),
@@ -93,7 +105,8 @@ async def test_gateway_start_restores_all_desired_managed_workspaces(
                 "workspace_api": f"http://127.0.0.1:{port}",
                 "terminal_manager": f"http://127.0.0.1:{port + 1}",
                 "browser_manager": f"http://127.0.0.1:{port + 2}",
-            }
+            },
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
@@ -156,6 +169,7 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(
                 root_path=str(workspace_root),
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
                 managed=True,
                 desired_running=True,
             ),
@@ -168,7 +182,8 @@ async def test_gateway_restore_failure_keeps_intent_and_restores_other_targets(
                 "workspace_api": "http://127.0.0.1:42000",
                 "terminal_manager": "http://127.0.0.1:42001",
                 "browser_manager": "http://127.0.0.1:42002",
-            }
+            },
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
     monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
@@ -209,6 +224,7 @@ async def test_gateway_restore_failure_falls_back_from_active_workspace(
             root_path=str(default_root),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             system_default=True,
             desired_running=True,
@@ -228,6 +244,7 @@ async def test_gateway_restore_failure_falls_back_from_active_workspace(
             root_path=str(missing_root),
             backend_url="http://127.0.0.1:42000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             desired_running=True,
         )
@@ -280,6 +297,7 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(
             root_path=str(default_root),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             removable=False,
             system_default=True,
@@ -292,6 +310,7 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(
             root_path=str(stopped_root),
             backend_url="http://127.0.0.1:42000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             desired_running=False,
         ),
@@ -304,7 +323,8 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(
                 "workspace_api": "http://127.0.0.1:44000",
                 "terminal_manager": "http://127.0.0.1:44001",
                 "browser_manager": "http://127.0.0.1:44002",
-            }
+            },
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
     monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
@@ -327,3 +347,186 @@ async def test_startup_fallback_from_stopped_managed_workspace_logs_warning(
         for record in caplog.records
     ), [record.getMessage() for record in caplog.records]
     registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize("preserve_existing_managed_runtimes", [False, True])
+async def test_create_registry_closes_runtime_when_later_startup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fails: bool,
+    preserve_existing_managed_runtimes: bool,
+) -> None:
+    gateway_root = tmp_path / "gateway"
+    default_root = tmp_path / "default"
+    default_root.mkdir()
+    startup_error = RuntimeError("configured remote Gateway reconciliation failed")
+    cleanup_error = RuntimeError("owned workspace runtime close failed")
+
+    class Process:
+        def __init__(self, close_error: BaseException | None = None) -> None:
+            self.close_error = close_error
+            self.close_calls = 0
+            self.detach_calls = 0
+
+        def is_alive(self) -> bool:
+            return True
+
+        def request_terminate(self) -> None:
+            return
+
+        def close(self, *, timeout_seconds: float = 8) -> None:
+            self.close_calls += 1
+            if self.close_error is not None:
+                raise self.close_error
+
+        def detach(self) -> None:
+            self.detach_calls += 1
+
+    process = Process(cleanup_error if cleanup_fails else None)
+    adopted_process = Process()
+
+    async def fail_remote_reconciliation(**_: object) -> None:
+        raise startup_error
+
+    async def start_runtime(**_: object) -> WorkspaceRuntime:
+        runtime = WorkspaceRuntime(
+            service_urls={
+                "workspace_api": "http://127.0.0.1:44000",
+                "terminal_manager": "http://127.0.0.1:44001",
+                "browser_manager": "http://127.0.0.1:44002",
+            },
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        )
+        runtime.set_process("workspace_api", adopted_process, adopted=True)
+        runtime.set_process("terminal_manager", process)
+        return runtime
+
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_URL", raising=False)
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_PORT", raising=False)
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT", raising=False)
+    monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
+    monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
+    monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
+    monkeypatch.setattr(
+        bootstrap, "start_managed_local_workspace_runtime", start_runtime
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "reconcile_configured_remote_gateways",
+        fail_remote_reconciliation,
+    )
+
+    if cleanup_fails:
+        with pytest.raises(BaseExceptionGroup) as raised:
+            await bootstrap.create_registry(
+                preserve_existing_managed_runtimes=preserve_existing_managed_runtimes
+            )
+        assert raised.value.exceptions[0] is startup_error
+        assert "owned workspace runtime close failed" in str(raised.value.exceptions[1])
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            await bootstrap.create_registry(
+                preserve_existing_managed_runtimes=preserve_existing_managed_runtimes
+            )
+        assert raised.value is startup_error
+
+    assert process.close_calls == 1
+    assert process.detach_calls == 0
+    assert adopted_process.close_calls == (
+        0 if preserve_existing_managed_runtimes else 1
+    )
+    assert adopted_process.detach_calls == (
+        1 if preserve_existing_managed_runtimes else 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["default_runtime_fields", "registry_upsert"])
+async def test_candidate_default_runtime_failure_detaches_adopted_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    gateway_root = tmp_path / "gateway"
+    default_root = tmp_path / "default"
+    default_root.mkdir()
+    startup_error = RuntimeError("candidate default workspace registry upsert failed")
+
+    class Process:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.detach_calls = 0
+
+        def is_alive(self) -> bool:
+            return True
+
+        def request_terminate(self) -> None:
+            return
+
+        def close(self, *, timeout_seconds: float = 8) -> None:
+            self.close_calls += 1
+
+        def detach(self) -> None:
+            self.detach_calls += 1
+
+    adopted_process = Process()
+    new_process = Process()
+
+    async def start_runtime(**kwargs: object) -> WorkspaceRuntime:
+        assert kwargs["adopt_existing_backend"] is True
+        assert kwargs["preserve_adopted_processes_on_failure"] is True
+        service_urls = {
+            "terminal_manager": "http://127.0.0.1:44001",
+            "browser_manager": "http://127.0.0.1:44002",
+        }
+        if failure_point != "default_runtime_fields":
+            service_urls["workspace_api"] = "http://127.0.0.1:44000"
+        runtime = WorkspaceRuntime(
+            service_urls=service_urls,
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        )
+        runtime.set_process("workspace_api", adopted_process, adopted=True)
+        runtime.set_process("terminal_manager", new_process)
+        return runtime
+
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_URL", raising=False)
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_PORT", raising=False)
+    monkeypatch.delenv("BOXTEAM_DEFAULT_BACKEND_DEBUG_PORT", raising=False)
+    monkeypatch.setattr(bootstrap, "get_gateway_root", lambda: gateway_root)
+    monkeypatch.setattr(bootstrap, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
+    monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
+    monkeypatch.setattr(
+        bootstrap, "start_managed_local_workspace_runtime", start_runtime
+    )
+    if failure_point == "registry_upsert":
+        original_upsert = GatewayWorkspaceRegistry.upsert
+
+        def fail_default_upsert(
+            registry: GatewayWorkspaceRegistry,
+            target: WorkspaceTarget,
+            *,
+            runtime: WorkspaceRuntime | None = None,
+            **kwargs: object,
+        ) -> WorkspaceTarget:
+            if target.system_default and runtime is not None:
+                raise startup_error
+            return original_upsert(registry, target, runtime=runtime, **kwargs)
+
+        monkeypatch.setattr(GatewayWorkspaceRegistry, "upsert", fail_default_upsert)
+
+    if failure_point == "default_runtime_fields":
+        with pytest.raises(KeyError, match="workspace_api"):
+            await bootstrap.create_registry(preserve_existing_managed_runtimes=True)
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            await bootstrap.create_registry(preserve_existing_managed_runtimes=True)
+        assert raised.value is startup_error
+
+    assert adopted_process.detach_calls == 1
+    assert adopted_process.close_calls == 0
+    assert new_process.close_calls == 1
+    assert new_process.detach_calls == 0

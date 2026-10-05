@@ -160,7 +160,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
         config_service=MagicMock(),
-        terminal_manager_client=MagicMock(),
+        terminal_resource_owner=MagicMock(),
         invocation_context=invocation_context,
         workspace_root=tmp_path,
         communication_binding_lookup=MagicMock(),

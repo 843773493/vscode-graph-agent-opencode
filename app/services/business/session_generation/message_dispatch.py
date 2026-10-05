@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import asdict
 from pathlib import Path
 
-from app.core.identifier import create_prefixed_id
-from app.core.job_event_bus import EventType
+from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session_navigation import SessionGenerationExecuteRequest
@@ -25,6 +25,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         phase: str,
         ledger_path: Path,
     ) -> tuple[str, str]:
+        reservation_phase = self._read_ledger(ledger_path).get("phase")
         self._update_execution_phase(
             ledger_path,
             phase="session_ready",
@@ -49,42 +50,69 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             message=message,
         )
         record = self._read_ledger(ledger_path)
-        raw_job_id = record.get("dispatched_job_id")
-        if raw_job_id is not None and not isinstance(raw_job_id, str):
-            raise RuntimeError(f"生成账本的 Job ID 类型无效: {ledger_path}")
-        job_id = raw_job_id or self._trace_job_id_for_message(
-            session_id,
-            message.message_id,
-        )
-        if job_id is None:
-            job_id = create_prefixed_id("job")
+        raw_identity = record.get("dispatched_execution_identity")
+        if "dispatched_job_id" in record:
+            raise RuntimeError(
+                "生成账本仍包含旧式单字段 Job 预留，拒绝从 trace 或缺省值恢复: "
+                f"{ledger_path}"
+            )
+        if "dispatched_execution_identity" not in record:
+            if reservation_phase in {
+                "job_reserved",
+                "child_dispatched",
+            }:
+                raise RuntimeError(
+                    "生成账本已进入派发阶段但缺少完整 execution identity: "
+                    f"{ledger_path}"
+                )
+            execution_identity = (
+                self._session_orchestrator.reserve_user_execution_identity()
+            )
+        else:
+            if not isinstance(raw_identity, dict):
+                raise RuntimeError(
+                    f"生成账本的 execution identity 格式无效: {ledger_path}"
+                )
+            try:
+                execution_identity = UserExecutionIdentity(**raw_identity)
+            except (TypeError, ValueError) as error:
+                raise RuntimeError(
+                    f"生成账本的 execution identity 无效: {ledger_path}: {error}"
+                ) from error
         self._update_execution_phase(
             ledger_path,
             phase="job_reserved",
             session_id=session_id,
             message=message,
-            job_id=job_id,
+            execution_identity=execution_identity,
         )
         terminal_types = self._terminal_event_types()
-        if self._persisted_terminal_status(session_id, job_id, terminal_types) is None:
+        if (
+            self._persisted_terminal_status(
+                session_id,
+                execution_identity.job_id,
+                terminal_types,
+            )
+            is None
+        ):
             dispatch = await self._session_orchestrator.dispatch_existing_message(
                 session_id,
                 message,
-                job_id=job_id,
+                execution_binding=execution_identity,
             )
-            if dispatch.job_id != job_id:
+            if dispatch.job_id != execution_identity.job_id:
                 raise RuntimeError(
                     "会话生成派发没有采用预留 Job ID: "
-                    f"reserved={job_id}, actual={dispatch.job_id}"
+                    f"reserved={execution_identity.job_id}, actual={dispatch.job_id}"
                 )
         self._update_execution_phase(
             ledger_path,
             phase="child_dispatched",
             session_id=session_id,
             message=message,
-            job_id=job_id,
+            execution_identity=execution_identity,
         )
-        return message.message_id, job_id
+        return message.message_id, execution_identity.job_id
 
     def _load_prepared_message(
         self,
@@ -98,7 +126,9 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             return None
         raw_message = self._read_ledger(intent_path).get("message")
         if not isinstance(raw_message, dict):
-            raise RuntimeError(f"会话生成消息意图格式无效: {intent_path}")
+            raise RuntimeError(  # noqa: TRY004 —— 保留账本损坏的统一运行时错误合同
+                f"会话生成消息意图格式无效: {intent_path}"
+            )
         message = MessageDTO.model_validate(raw_message)
         expected_metadata = self._message_metadata(payload, phase)
         if (
@@ -159,7 +189,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             self._session_catalog_service.path_resolver.resolve_session_node(session_id)
         )
         run_digest = hashlib.sha256(
-            f"{payload.generator_id}\n{payload.run_id}".encode("utf-8")
+            f"{payload.generator_id}\n{payload.run_id}".encode()
         ).hexdigest()
         return session_path / "generation_intents" / run_digest / f"{phase}.json"
 
@@ -190,27 +220,6 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             # 会话包或同一运行的意图目录并发删除后，清理目标已经不存在。
             return
 
-    def _trace_job_id_for_message(
-        self,
-        session_id: str,
-        message_id: str,
-    ) -> str | None:
-        job_ids = {
-            event.job_id
-            for event in self._trace_event_store.read_events(
-                session_id,
-            )
-            if event.type == EventType.MESSAGE_CREATED
-            and getattr(event.payload, "message_id", None) == message_id
-        }
-        if len(job_ids) > 1:
-            raise RuntimeError(
-                "同一生成消息关联了多个 Job，拒绝选择恢复目标: "
-                f"session_id={session_id}, message_id={message_id}, "
-                f"job_ids={','.join(sorted(job_ids))}"
-            )
-        return next(iter(job_ids), None)
-
     def _update_execution_phase(
         self,
         ledger_path: Path,
@@ -218,7 +227,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         phase: str,
         session_id: str,
         message: MessageDTO | None = None,
-        job_id: str | None = None,
+        execution_identity: UserExecutionIdentity | None = None,
     ) -> None:
         record = self._read_ledger(ledger_path)
         record.update(
@@ -230,6 +239,12 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         )
         if message is not None:
             record["prepared_message_id"] = message.message_id
-        if job_id is not None:
-            record["dispatched_job_id"] = job_id
+        if execution_identity is not None:
+            raw_identity = record.get("dispatched_execution_identity")
+            if raw_identity is not None and raw_identity != asdict(execution_identity):
+                raise RuntimeError(
+                    "生成账本的 execution identity 与预留值冲突: "
+                    f"{ledger_path}"
+                )
+            record["dispatched_execution_identity"] = asdict(execution_identity)
         self._write_ledger(ledger_path, record)

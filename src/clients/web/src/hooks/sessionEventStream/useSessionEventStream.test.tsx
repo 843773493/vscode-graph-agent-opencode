@@ -9,6 +9,14 @@ import { useSessionEventStream } from "./useSessionEventStream";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 
 const originalFetch = globalThis.fetch;
+
+function workspaceRequestTarget(workspaceId: string) {
+  return {
+    workspace_id: workspaceId,
+    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
+    connection_kind: "local" as const,
+  };
+}
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocumentDescriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
 
@@ -56,6 +64,7 @@ async function mountSessionStream(
       apiPort: 49_902,
       sessionId: "session-reconnect",
       workspaceId: "workspace-reconnect",
+      workspaceRequestTarget: workspaceRequestTarget("workspace-reconnect"),
       sessionCacheKey: "workspace-reconnect::session-reconnect",
       activeJobId: null,
       timelineReady: true,
@@ -94,6 +103,7 @@ describe("useSessionEventStream readiness", () => {
         apiPort: 49_401,
         sessionId: "session-partial",
         workspaceId: "workspace-partial",
+        workspaceRequestTarget: workspaceRequestTarget("workspace-partial"),
         sessionCacheKey: "workspace-partial::session-partial",
         activeJobId: null,
         timelineReady: false,
@@ -183,6 +193,7 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
         apiPort: 49_903,
         sessionId: "session-cursor-gone",
         workspaceId: "workspace-cursor-gone",
+        workspaceRequestTarget: workspaceRequestTarget("workspace-cursor-gone"),
         sessionCacheKey: "workspace-cursor-gone::session-cursor-gone",
         activeJobId: null,
         timelineReady,
@@ -238,6 +249,7 @@ describe("useSessionEventStream 有界游标失效恢复", () => {
         apiPort: 49_904,
         sessionId: "session-cursor-gone-active",
         workspaceId: "workspace-cursor-gone-active",
+        workspaceRequestTarget: workspaceRequestTarget("workspace-cursor-gone-active"),
         sessionCacheKey: "workspace-cursor-gone-active::session-cursor-gone-active",
         activeJobId: null,
         timelineReady,

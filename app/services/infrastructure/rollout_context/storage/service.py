@@ -10,21 +10,26 @@ from __future__ import annotations
 import sqlite3
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
 
 from app.core.path_utils import get_session_path_resolver
-from app.core.session_catalog_store import validate_session_id
+from app.core.session_catalog_store import (
+    SessionCreationRecord,
+    validate_session_id,
+    validate_thread_id,
+)
+from app.core.session_thread_context import require_current_session_thread_owner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.store import (
     ContextAssemblyStorageMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     RolloutCompactionPreflightOwnerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
-    ContextSourceControlStorageMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
     RolloutForkBoundaryOwnerMixin,
@@ -35,6 +40,12 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.operations 
 from app.services.infrastructure.rollout_context.checkpoint.durable.persistence import (
     RolloutCheckpointPersistenceMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.durable.view_anchor import (
+    RolloutViewAnchorMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
+    ContextSourceControlStorageMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
     RolloutMessageMaterializerMixin,
 )
@@ -43,9 +54,6 @@ from app.services.infrastructure.rollout_context.checkpoint.projection.message_p
 )
 from app.services.infrastructure.rollout_context.checkpoint.projection.message_view import (
     RolloutMessageViewMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.view_anchor import (
-    RolloutViewAnchorMixin,
 )
 from app.services.infrastructure.rollout_context.execution.executions import (
     RolloutExecutionsMixin,
@@ -85,11 +93,11 @@ from app.services.infrastructure.rollout_context.fork.remap import ForkRemapMixi
 from app.services.infrastructure.rollout_context.operations.pruning_owner import (
     RolloutPruningOwner,
 )
-from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
-    RolloutMaintenanceOwner,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.indexed_records import (
     IndexedRecordQueryMixin,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.internal_history import (
+    InternalExecutionHistoryMixin,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.items import (
     RolloutItemsMixin,
@@ -120,12 +128,15 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
     _RolloutSQLiteConnection,
 )
+from app.services.infrastructure.rollout_context.storage.queries import (
+    RolloutCheckpointQueriesMixin,
+)
+from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
+    RolloutMaintenanceOwner,
+)
 from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
     SchemaUpgradeArtifacts,
     SchemaUpgradePlan,
-)
-from app.services.infrastructure.rollout_context.storage.queries import (
-    RolloutCheckpointQueriesMixin,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     RolloutSerializationMixin,
@@ -145,6 +156,23 @@ __all__ = (
 )
 
 _ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS = 10.0
+_prepared_fork_target: ContextVar[SessionCreationRecord | None] = ContextVar(
+    "prepared_fork_target",
+    default=None,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ForkSourceSnapshot:
+    session_id: str
+    thread_id: str
+    session_node: Path
+
+
+_fork_source_snapshot: ContextVar[_ForkSourceSnapshot | None] = ContextVar(
+    "fork_source_snapshot",
+    default=None,
+)
 
 
 class SerializerPort(Protocol):
@@ -183,6 +211,7 @@ class RolloutStorage(
     ForkItemCopyMixin,
     RolloutItemsMixin,
     RolloutViewMembershipMixin,
+    InternalExecutionHistoryMixin,
     RolloutPartsMixin,
     ContextAssemblyStorageMixin,
     ContextSourceControlStorageMixin,
@@ -206,7 +235,7 @@ class RolloutStorage(
         self._message_codec = message_codec
         self._locks: dict[tuple[str, str, str], _RolloutOperationLock] = {}
         self._locks_guard = threading.Lock()
-        self._active_fork_materializations: set[tuple[str, str]] = set()
+        self._active_fork_materializations: set[tuple[str, str, str]] = set()
         self._maintenance_owner = RolloutMaintenanceOwner(self)
         self._pruning_owner = RolloutPruningOwner(self)
 
@@ -218,27 +247,29 @@ class RolloutStorage(
             )
         return self._message_codec
 
-    def _legacy_migration_is_active(self, key: tuple[str, str]) -> bool:
-        """仅供显式 migration storage 暂停其自身的 staging recovery。"""
-        active = getattr(self, "_active_legacy_migrations", None)
-        return isinstance(active, set) and key in active
+
+    @staticmethod
+    def _session_id_from_owner_scope(thread_id: str) -> str:
+        """取显式 LangGraph owner scope 中与 thread_id 绑定的 Session。"""
+        return require_current_session_thread_owner(
+            langgraph_thread_id=thread_id
+        ).session_id
 
     def _lock(
         self,
         thread_id: str,
         checkpoint_ns: str,
         *,
-        session_id: str | None = None,
+        session_id: str,
     ) -> _RolloutOperationLock:
-        owner_session_id = thread_id if session_id is None else session_id
-        owner_thread_id = None if session_id is None else thread_id
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         with self._locks_guard:
-            key = (owner_session_id, owner_thread_id or "", checkpoint_ns)
+            key = (session_id, owner_thread_id, checkpoint_ns)
             return self._locks.setdefault(
                 key,
                 _RolloutOperationLock(
                     self.root(
-                        owner_session_id,
+                        session_id,
                         checkpoint_ns,
                         thread_id=owner_thread_id,
                     ).parent
@@ -246,6 +277,95 @@ class RolloutStorage(
                     timeout_seconds=_ROLLOUT_FILE_LOCK_TIMEOUT_SECONDS,
                 ),
             )
+
+    @contextmanager
+    def prepared_fork_target_scope(
+        self,
+        record: SessionCreationRecord,
+    ) -> Iterator[Path]:
+        """把创建记录 capability 限定为本次 fork 的 target 路径解析权限。"""
+        if not isinstance(record, SessionCreationRecord):
+            raise TypeError("prepared fork target 必须是 SessionCreationRecord")
+        target_path = self._path_resolver.resolve_prepared_session_node(record)
+        token: Token[SessionCreationRecord | None] = _prepared_fork_target.set(record)
+        try:
+            yield target_path
+        finally:
+            _prepared_fork_target.reset(token)
+
+    @contextmanager
+    def fork_source_snapshot_scope(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        session_node: Path,
+    ) -> Iterator[Path]:
+        """把 fork source 的所有 rollout I/O 定向到已冻结的私有目录。"""
+        validate_session_id(session_id)
+        validate_thread_id(thread_id)
+        if not isinstance(session_node, Path):
+            raise TypeError("fork source snapshot session_node 必须是 Path")
+        if _fork_source_snapshot.get() is not None:
+            raise RuntimeError("fork source snapshot scope 不能嵌套")
+        snapshot_node = session_node.resolve(strict=True)
+        thread_node = snapshot_node
+        if (
+            snapshot_node.is_symlink()
+            or not snapshot_node.is_dir()
+            or thread_node.is_symlink()
+            or not thread_node.is_dir()
+        ):
+            raise RuntimeError(
+                "fork source snapshot 必须是含冻结 main thread 的普通目录: "
+                f"session_node={snapshot_node}, thread_id={thread_id}"
+            )
+        snapshot = _ForkSourceSnapshot(session_id, thread_id, snapshot_node)
+        token: Token[_ForkSourceSnapshot | None] = _fork_source_snapshot.set(
+            snapshot
+        )
+        try:
+            yield thread_node
+        finally:
+            _fork_source_snapshot.reset(token)
+
+    @staticmethod
+    def _fork_source_snapshot_for_session(
+        session_id: str,
+    ) -> _ForkSourceSnapshot | None:
+        snapshot = _fork_source_snapshot.get()
+        return snapshot if snapshot is not None and snapshot.session_id == session_id else None
+
+    @staticmethod
+    def _prepared_target_record(
+        session_id: str,
+    ) -> SessionCreationRecord | None:
+        record = _prepared_fork_target.get()
+        return record if record is not None and record.session_id == session_id else None
+
+    def _resolve_session_node(self, session_id: str) -> Path:
+        record = self._prepared_target_record(session_id)
+        if record is not None:
+            return self._path_resolver.resolve_prepared_session_node(record)
+        snapshot = self._fork_source_snapshot_for_session(session_id)
+        if snapshot is not None:
+            return snapshot.session_node
+        return self._path_resolver.resolve_session_node(session_id)
+
+    def _resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
+        record = self._prepared_target_record(session_id)
+        if record is not None:
+            return self._path_resolver.resolve_prepared_thread_node(record, thread_id)
+        snapshot = self._fork_source_snapshot_for_session(session_id)
+        if snapshot is not None:
+            if thread_id != snapshot.thread_id:
+                raise RuntimeError(
+                    "fork source snapshot 只包含冻结的 source main thread: "
+                    f"session_id={session_id}, expected={snapshot.thread_id}, "
+                    f"actual={thread_id}"
+                )
+            return snapshot.session_node
+        return self._path_resolver.resolve_thread_node(session_id, thread_id)
 
     def _resolve_thread_identity(self, session_id: str, thread_id: str | None) -> str:
         """解析 (session_id, thread_id) 的 thread 半。
@@ -263,12 +383,32 @@ class RolloutStorage(
                 "rollout 定位的 session_id 不是 canonical Session 身份（OpenSpec "
                 f"8.3 要求 (session_id, thread_id)）：session_id={session_id!r}"
             ) from error
-        if thread_id is None or thread_id in ("", "main", session_id):
-            # 裸 main/session_id 不是 thread identity，必须经 thread catalog 取
-            # 该 Session 冻结的唯一 main thread。
-            return self._path_resolver.main_thread_id(session_id)
+        if thread_id is None:
+            record = self._prepared_target_record(session_id)
+            snapshot = self._fork_source_snapshot_for_session(session_id)
+            thread_id = (
+                record.main_thread_id
+                if record is not None
+                else snapshot.thread_id
+                if snapshot is not None
+                else self._path_resolver.main_thread_id(session_id)
+            )
         if not isinstance(thread_id, str):
             raise TypeError("rollout 定位的 thread_id 必须是字符串")
+        if thread_id in ("", "main", session_id):
+            raise RuntimeError(
+                "rollout 定位拒绝 thread alias；必须传入 catalog 的真实 thread_id: "
+                f"session_id={session_id!r}, thread_id={thread_id!r}"
+            )
+        try:
+            validate_thread_id(thread_id)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"rollout 定位的 thread_id 不是 canonical Thread 身份: {thread_id!r}"
+            ) from error
+        record = self._prepared_target_record(session_id)
+        if record is not None:
+            self._path_resolver.resolve_prepared_thread_node(record, thread_id)
         return thread_id
 
     def root(
@@ -280,21 +420,18 @@ class RolloutStorage(
     ) -> Path:
         """返回该 SessionThread 的 rollout 目录（OpenSpec 8.3 thread-qualified）。
 
-        rollout 物理节点、index.sqlite、rollout.jsonl 与单行 database_meta 由精确
-        (session_id, thread_id) 的 thread node 独占；checkpoint_ns 不是 owner
-        维度，不参与定位。thread_id 缺省时经 thread catalog 显式解析 main thread。
+        main thread 折叠到 Session 根目录，child thread 位于受检 thread node；
+        每个 rollout、index.sqlite、rollout.jsonl 与 database_meta 都由精确
+        (session_id, thread_id) 独占。checkpoint_ns 不是 owner 维度。
+        thread_id 缺省时经 thread catalog 显式解析 main thread。
 
-        TODO(8.3 main 落点)：设计冻结 main thread node 为 threads/{main_thread_id}，
-        但 SessionCatalogPathResolver.resolve_thread_node 目前仍把 main 折叠到
-        session node（R3a 过渡形态）。该解析属 app/core/session_catalog_resolver.py
-        （本切片禁改），主 thread 物理落点须待该 resolver 改造后收敛；非 main
-        durable thread 已按其自身 frozen locator 解析到独立节点。
+        字面量 `main`、Session ID 或缺失 Thread 只允许在入口显式解析一次；
+        此处将缺省 main 映射到 catalog 中冻结的真实 ID，之后所有路径都由该
+        `(session_id, thread_id)` 解析，不保留第二套旧物理布局。
         """
         resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
-        return (
-            self._path_resolver.resolve_thread_node(session_id, resolved_thread_id)
-            / "rollout"
-        )
+        thread_node = self._resolve_thread_node(session_id, resolved_thread_id)
+        return thread_node / "rollout"
 
     def index_path(
         self,
@@ -349,17 +486,14 @@ class RolloutStorage(
         thread_id: str,
         checkpoint_ns: str = "",
         *,
-        session_id: str | None = None,
+        session_id: str,
         read_only: bool = False,
     ) -> sqlite3.Connection:
-        if not isinstance(thread_id, str) or not thread_id:
-            raise TypeError("rollout thread_id 必须是非空字符串")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("rollout checkpoint_ns 必须是字符串")
-        owner_session_id = thread_id if session_id is None else session_id
-        owner_thread_id = None if session_id is None else thread_id
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         index_path = self.index_path(
-            owner_session_id, checkpoint_ns, thread_id=owner_thread_id
+            session_id, checkpoint_ns, thread_id=owner_thread_id
         )
         rollout_root = index_path.parent
         if rollout_root.is_symlink():
@@ -445,11 +579,11 @@ class RolloutStorage(
     def _require_plain_directory(self, path: Path, *, field: str) -> None:
         return self._maintenance_owner._require_plain_directory(path, field=field)
 
-    def _validate_offline_restore_candidate(self, connection: sqlite3.Connection, *, thread_id: str, checkpoint_ns: str) -> None:
-        return self._maintenance_owner._validate_offline_restore_candidate(connection, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
+    def _validate_offline_restore_candidate(self, connection: sqlite3.Connection, *, session_id: str, thread_id: str, checkpoint_ns: str) -> None:
+        return self._maintenance_owner._validate_offline_restore_candidate(connection, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
 
-    def _prepare_offline_restore_candidate(self, source_path: Path, candidate_path: Path, *, thread_id: str, checkpoint_ns: str) -> str:
-        return self._maintenance_owner._prepare_offline_restore_candidate(source_path, candidate_path, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
+    def _prepare_offline_restore_candidate(self, source_path: Path, candidate_path: Path, *, session_id: str, thread_id: str, checkpoint_ns: str) -> str:
+        return self._maintenance_owner._prepare_offline_restore_candidate(source_path, candidate_path, session_id=session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns)
 
     def _require_standalone_offline_restore_source(self, source_path: Path) -> None:
         return self._maintenance_owner._require_standalone_offline_restore_source(source_path)
@@ -457,29 +591,42 @@ class RolloutStorage(
     def _require_offline_restore_target(self, target_path: Path) -> None:
         return self._maintenance_owner._require_offline_restore_target(target_path)
 
-    def backup_index(self, thread_id: str, checkpoint_ns: str='', *, destination: str | Path | None=None) -> Path:
-        return self._maintenance_owner.backup_index(thread_id, checkpoint_ns, destination=destination)
+    def backup_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, destination: str | Path | None=None) -> Path:
+        return self._maintenance_owner.backup_index(thread_id, checkpoint_ns, session_id=session_id, destination=destination)
 
-    def _backup_index_unlocked(self, thread_id: str, checkpoint_ns: str, *, destination: str | Path | None) -> Path:
-        return self._maintenance_owner._backup_index_unlocked(thread_id, checkpoint_ns, destination=destination)
+    def _backup_index_unlocked(self, thread_id: str, checkpoint_ns: str, *, session_id: str, destination: str | Path | None) -> Path:
+        return self._maintenance_owner._backup_index_unlocked(thread_id, checkpoint_ns, session_id=session_id, destination=destination)
 
-    def restore_index_backup(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='') -> RolloutReadSnapshot:
-        return self._maintenance_owner.restore_index_backup(thread_id, backup_path, checkpoint_ns)
+    def restore_index_backup(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='', *, session_id: str) -> RolloutReadSnapshot:
+        return self._maintenance_owner.restore_index_backup(thread_id, backup_path, checkpoint_ns, session_id=session_id)
 
-    def restore_index_backup_offline(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='') -> RolloutReadSnapshot:
-        return self._maintenance_owner.restore_index_backup_offline(thread_id, backup_path, checkpoint_ns)
+    def restore_index_backup_offline(self, thread_id: str, backup_path: str | Path, checkpoint_ns: str='', *, session_id: str) -> RolloutReadSnapshot:
+        return self._maintenance_owner.restore_index_backup_offline(thread_id, backup_path, checkpoint_ns, session_id=session_id)
 
-    def _restore_index_backup_unlocked(self, thread_id: str, checkpoint_ns: str, source_path: Path) -> None:
-        return self._maintenance_owner._restore_index_backup_unlocked(thread_id, checkpoint_ns, source_path)
+    def _restore_index_backup_unlocked(self, thread_id: str, checkpoint_ns: str, source_path: Path, *, session_id: str) -> None:
+        return self._maintenance_owner._restore_index_backup_unlocked(thread_id, checkpoint_ns, source_path, session_id=session_id)
 
-    def _recover_fork_materialization(self, thread_id: str, checkpoint_ns: str, connection: sqlite3.Connection, jsonl_path: Path) -> None:
-        return self._maintenance_owner._recover_fork_materialization(thread_id, checkpoint_ns, connection, jsonl_path)
+    def _recover_fork_materialization(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_ns: str,
+        connection: sqlite3.Connection,
+        jsonl_path: Path,
+    ) -> None:
+        self._maintenance_owner._recover_fork_materialization(
+            session_id,
+            thread_id,
+            checkpoint_ns,
+            connection,
+            jsonl_path,
+        )
 
-    def migrate_schema(self, thread_id: str, *, to_version: int, migration_name: str, migration_sql: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
-        return self._maintenance_owner.migrate_schema(thread_id, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, checkpoint_ns=checkpoint_ns)
+    def migrate_schema(self, thread_id: str, *, session_id: str, to_version: int, migration_name: str, migration_sql: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.migrate_schema(thread_id, session_id=session_id, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, checkpoint_ns=checkpoint_ns)
 
-    def _migrate_schema_locked(self, thread_id: str, *, checkpoint_ns: str, to_version: int, migration_name: str, migration_sql: str, validate_migrated: Callable[[sqlite3.Connection], None] | None=None, pending_artifact_audit: bool=False, allow_failed_retry: bool=False) -> None:
-        return self._maintenance_owner._migrate_schema_locked(thread_id, checkpoint_ns=checkpoint_ns, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, validate_migrated=validate_migrated, pending_artifact_audit=pending_artifact_audit, allow_failed_retry=allow_failed_retry)
+    def _migrate_schema_locked(self, thread_id: str, *, session_id: str, checkpoint_ns: str, to_version: int, migration_name: str, migration_sql: str, validate_migrated: Callable[[sqlite3.Connection], None] | None=None, pending_artifact_audit: bool=False, allow_failed_retry: bool=False) -> None:
+        return self._maintenance_owner._migrate_schema_locked(thread_id, session_id=session_id, checkpoint_ns=checkpoint_ns, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, validate_migrated=validate_migrated, pending_artifact_audit=pending_artifact_audit, allow_failed_retry=allow_failed_retry)
 
     def _manifest_from_connection(self, connection: sqlite3.Connection, checkpoint_ns: str, *, allow_migrating: bool=False) -> RolloutManifest:
         return self._maintenance_owner._manifest_from_connection(connection, checkpoint_ns, allow_migrating=allow_migrating)
@@ -490,8 +637,8 @@ class RolloutStorage(
     def _ensure_namespace_state(self, connection: sqlite3.Connection, checkpoint_ns: str, timestamp: str) -> None:
         return self._maintenance_owner._ensure_namespace_state(connection, checkpoint_ns, timestamp)
 
-    def _initialize_schema(self, thread_id: str, checkpoint_ns: str) -> None:
-        return self._maintenance_owner._initialize_schema(thread_id, checkpoint_ns)
+    def _initialize_schema(self, session_id: str, thread_id: str, checkpoint_ns: str) -> None:
+        return self._maintenance_owner._initialize_schema(session_id, thread_id, checkpoint_ns)
 
     def _commit_connection(self, connection: sqlite3.Connection) -> None:
         return self._maintenance_owner._commit_connection(connection)
@@ -505,47 +652,58 @@ class RolloutStorage(
     def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
         return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items)
 
-    def open_read_snapshot(self, thread_id: str, checkpoint_ns: str='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
-        return self._maintenance_owner.open_read_snapshot(thread_id, checkpoint_ns, validate_integrity=validate_integrity)
+    def open_read_snapshot(self, session_id: str, thread_id: str, checkpoint_ns: str='', *, validate_integrity: bool=False) -> RolloutReadSnapshot:
+        return self._maintenance_owner.open_read_snapshot(session_id, thread_id, checkpoint_ns, validate_integrity=validate_integrity)
 
-    def validate_index(self, thread_id: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
-        return self._maintenance_owner.validate_index(thread_id, checkpoint_ns)
+    def validate_index(self, session_id: str, thread_id: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
+        return self._maintenance_owner.validate_index(session_id, thread_id, checkpoint_ns)
 
-    def repair_index(self, thread_id: str, checkpoint_ns: str='', *, manifest: RolloutManifest | None=None) -> None:
-        return self._maintenance_owner.repair_index(thread_id, checkpoint_ns, manifest=manifest)
+    def main_thread_id(self, session_id: str) -> str:
+        record = self._prepared_target_record(session_id)
+        if record is not None:
+            self._path_resolver.resolve_prepared_session_node(record)
+            return record.main_thread_id
+        snapshot = self._fork_source_snapshot_for_session(session_id)
+        if snapshot is not None:
+            return snapshot.thread_id
+        return self._path_resolver.main_thread_id(session_id)
 
-    def _append_v2_records_transaction(self, connection: sqlite3.Connection, thread_id: str, checkpoint_ns: str, items: Sequence[CanonicalItemRecord], *, commit_kind: str, commit_mode: str | None=None, outcome: str | None=None, metadata: Mapping[str, object] | None=None, subject_id: str | None=None, idempotency_key: str | None=None, begin_transaction: bool=True) -> tuple[int, int]:
-        return self._maintenance_owner._append_v2_records_transaction(connection, thread_id, checkpoint_ns, items, commit_kind=commit_kind, commit_mode=commit_mode, outcome=outcome, metadata=metadata, subject_id=subject_id, idempotency_key=idempotency_key, begin_transaction=begin_transaction)
+    def repair_index(self, thread_id: str, checkpoint_ns: str='', *, session_id: str, manifest: RolloutManifest | None=None) -> None:
+        return self._maintenance_owner.repair_index(thread_id, checkpoint_ns, session_id=session_id, manifest=manifest)
+
+    def _append_v2_records_transaction(self, connection: sqlite3.Connection, thread_id: str, checkpoint_ns: str, items: Sequence[CanonicalItemRecord], *, session_id: str, commit_kind: str, commit_mode: str | None=None, outcome: str | None=None, metadata: Mapping[str, object] | None=None, subject_id: str | None=None, idempotency_key: str | None=None, begin_transaction: bool=True) -> tuple[int, int]:
+        return self._maintenance_owner._append_v2_records_transaction(connection, thread_id, checkpoint_ns, items, session_id=session_id, commit_kind=commit_kind, commit_mode=commit_mode, outcome=outcome, metadata=metadata, subject_id=subject_id, idempotency_key=idempotency_key, begin_transaction=begin_transaction)
 
     def _checkpoint_index(self, row: Sequence[object]) -> RolloutCheckpointIndex:
         return self._maintenance_owner._checkpoint_index(row)
 
-    def rollout_id(self, thread_id: str, checkpoint_ns: str='') -> str:
-        return self._maintenance_owner.rollout_id(thread_id, checkpoint_ns)
+    def rollout_id(self, thread_id: str, checkpoint_ns: str='', *, session_id: str) -> str:
+        return self._maintenance_owner.rollout_id(thread_id, checkpoint_ns, session_id=session_id)
 
-    def _existing_index_connection(self, thread_id: str, checkpoint_ns: str) -> Iterator[sqlite3.Connection]:
-        return self._maintenance_owner._existing_index_connection(thread_id, checkpoint_ns)
+    def _existing_index_connection(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> Iterator[sqlite3.Connection]:
+        return self._maintenance_owner._existing_index_connection(thread_id, checkpoint_ns, session_id=session_id)
 
-    def initialize(self, thread_id: str, checkpoint_ns: str='', *, validate_jsonl_items: bool=True, _allow_schema_upgrade: bool=False) -> RolloutManifest:
-        return self._maintenance_owner.initialize(thread_id, checkpoint_ns, validate_jsonl_items=validate_jsonl_items, _allow_schema_upgrade=_allow_schema_upgrade)
+    def initialize(self, session_id: str, checkpoint_ns: str='', *, thread_id: str | None=None, validate_jsonl_items: bool=True, _allow_schema_upgrade: bool=False) -> RolloutManifest:
+        return self._maintenance_owner.initialize(session_id, checkpoint_ns, thread_id=thread_id, validate_jsonl_items=validate_jsonl_items, _allow_schema_upgrade=_allow_schema_upgrade)
 
-    def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str) -> None:
-        return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns)
+    def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> None:
+        return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns, session_id=session_id)
 
-    def repair_active_context_view(self, thread_id: str, checkpoint_ns: str='') -> bool:
-        return self._maintenance_owner.repair_active_context_view(thread_id, checkpoint_ns)
+    def repair_active_context_view(self, thread_id: str, checkpoint_ns: str='', *, session_id: str) -> bool:
+        return self._maintenance_owner.repair_active_context_view(thread_id, checkpoint_ns, session_id=session_id)
 
-    def ensure_active_view_contains_turn_root(self, thread_id: str, *, turn_id: str, checkpoint_ns: str='') -> bool:
-        return self._maintenance_owner.ensure_active_view_contains_turn_root(thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns)
+    def ensure_active_view_contains_turn_root(self, session_id: str, thread_id: str, *, turn_id: str, checkpoint_ns: str='') -> bool:
+        return self._maintenance_owner.ensure_active_view_contains_turn_root(session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns)
 
     def upgrade_v2_schema(
-        self, thread_id: str, *, checkpoint_ns: str = "",
+        self, thread_id: str, *, session_id: str, checkpoint_ns: str = "",
         prepare_artifact_upgrade: Callable[[sqlite3.Connection], SchemaUpgradeArtifacts] | None = None,
         resume_artifact_upgrade: Callable[[sqlite3.Connection], bool] | None = None,
         prepare_plan_upgrade: Callable[[sqlite3.Connection], SchemaUpgradePlan] | None = None,
     ) -> RolloutReadSnapshot:
         return self._maintenance_owner.upgrade_v2_schema(
             thread_id,
+            session_id=session_id,
             checkpoint_ns=checkpoint_ns,
             prepare_artifact_upgrade=prepare_artifact_upgrade,
             resume_artifact_upgrade=resume_artifact_upgrade,

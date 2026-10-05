@@ -25,7 +25,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -121,7 +120,7 @@ async def _seed_session_with_tracked_skill(
     )
     owner = ContextSourceOwnerKey(
         session_id=session.session_id,
-        thread_id=MAIN_THREAD_ID,
+        thread_id=session_service.path_resolver.main_thread_id(session.session_id),
     )
     manager = ContextSourceManager(owner=owner, control_state_port=saver)
     manager.register(_descriptor())
@@ -143,12 +142,12 @@ async def test_untrack_success_persists_frozen_state_without_reading_source(
 
     result = await service.untrack(
         session_id=session_id,
-        thread_id=MAIN_THREAD_ID,
+        thread_id=owner.thread_id,
         name=SKILL_NAME,
     )
 
     assert result.session_id == session_id
-    assert result.thread_id == MAIN_THREAD_ID
+    assert result.thread_id == owner.thread_id
     assert result.status == "loaded"
     assert result.tracked is False
     assert result.queued is False
@@ -167,14 +166,14 @@ async def test_untrack_not_tracked_is_deterministic_and_zero_state_change(
 ) -> None:
     session_id, owner = await _seed_session_with_tracked_skill(session_service, saver)
     first = await service.untrack(
-        session_id=session_id, thread_id=MAIN_THREAD_ID, name=SKILL_NAME
+        session_id=session_id, thread_id=owner.thread_id, name=SKILL_NAME
     )
     assert first.status == "loaded"
     (tracked_state,) = saver.load_context_source_control_states(owner)
     revision_before = tracked_state.state_revision
 
     second = await service.untrack(
-        session_id=session_id, thread_id=MAIN_THREAD_ID, name=SKILL_NAME
+        session_id=session_id, thread_id=owner.thread_id, name=SKILL_NAME
     )
 
     assert second.status == "not_tracked"
@@ -213,7 +212,9 @@ def test_untrack_api_http_envelope_auth_and_success(
         _seed_session_with_tracked_skill(session_service, saver)
     )
     (before,) = saver.load_context_source_control_states(owner)
-    url = f"/api/v1/sessions/{session_id}/threads/main/skills/untrack"
+    url = (
+        f"/api/v1/sessions/{session_id}/threads/{owner.thread_id}/skills/untrack"
+    )
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")

@@ -12,7 +12,11 @@ import pytest
 from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -52,22 +56,6 @@ def _hermetic_proxy_env():
         yield
     finally:
         os.environ.update(saved)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _integration_runtime_manifest_env(
-    runtime_manifest_path: Path,
-) -> Generator[None, None, None]:
-    """在 integration 会话启动前注入 manifest，供模块级后端进程继承。"""
-    previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
-    os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(runtime_manifest_path)
-    try:
-        yield
-    finally:
-        if previous_manifest is None:
-            os.environ.pop("BOXTEAM_RUNTIME_MANIFEST", None)
-        else:
-            os.environ["BOXTEAM_RUNTIME_MANIFEST"] = previous_manifest
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -162,13 +150,20 @@ def integration_backend_process(
 async def integration_client(
     integration_backend_process: subprocess.Popen[str],
     integration_backend_port: int,
+    integration_workspace_root_path: str,
     integration_is_debug: bool,
 ) -> AsyncIterator[httpx.AsyncClient]:
     del integration_backend_process
+    backend_workspace_id = workspace_backend_id_for_root(
+        integration_workspace_root_path
+    )
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{integration_backend_port}",
         timeout=None if integration_is_debug else 60,
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": backend_workspace_id,
+        },
     ) as client:
         yield client
 

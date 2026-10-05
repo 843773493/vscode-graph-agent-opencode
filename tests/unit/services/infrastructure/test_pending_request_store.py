@@ -4,6 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.schemas.internal_v2.pending_request import PendingRequestDTO
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 
@@ -15,12 +20,22 @@ def _request(
     content: str = "内容",
     gateway_id: str | None = "gateway_test",
     request_id: str | None = "request_test",
+    execution_binding: ExecutionBinding | None = None,
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
+    job_id = f"job_{sequence}"
+    message_id = f"msg_{sequence}"
     return PendingRequestDTO(
-        job_id=f"job_{sequence}",
-        message_id=f"msg_{sequence}",
+        job_id=job_id,
+        execution_binding=execution_binding
+        or UserExecutionIdentity(
+            job_id=job_id,
+            turn_id=f"turn_{sequence}",
+            admission_idempotency_key=f"adm_{sequence}",
+        ),
+        message_id=message_id,
         session_id=session_id,
+        thread_id=f"thr_{session_id}",
         content=content,
         delivery_policy="after_turn",
         enqueue_sequence=sequence,
@@ -47,7 +62,70 @@ async def test_pending_request_store_round_trip(tmp_path, session_bundle_factory
     restored = await store.load(session_id)
 
     assert restored == [request]
+    assert restored[0].execution_binding == request.execution_binding
     assert (session_dir / "pending_requests.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_pending_request_store_round_trip_preserves_internal_execution_intent(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    intent = InternalExecutionIntent(
+        message_id="msg_1",
+        execution_id="intr_round_trip",
+        admission_idempotency_key="adm_round_trip",
+    )
+    request = _request(
+        session_id,
+        sequence=1,
+        execution_binding=intent,
+    )
+
+    await store.save(session_id, [request])
+    restored = await store.load(session_id)
+
+    assert restored[0].execution_binding == intent
+
+
+@pytest.mark.asyncio
+async def test_pending_request_store_rejects_missing_execution_binding(
+    tmp_path,
+    session_bundle_factory,
+):
+    sessions_dir = tmp_path / "sessions"
+    session_id = "ses_019c71c26c4f7859827c53d8b2f17d9b"
+    session_dir = session_bundle_factory(sessions_dir, session_id)
+    store = PendingRequestStore(sessions_dir=sessions_dir)
+    await store.save(session_id, [_request(session_id, sequence=1)])
+    path = session_dir / "pending_requests.json"
+    header, detail = path.read_text(encoding="utf-8").split("\n", 1)
+    records = json.loads(detail)
+    records[0].pop("execution_binding")
+    path.write_text(
+        header + "\n" + json.dumps(records, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="待处理队列恢复失败"):
+        await store.load(session_id)
+
+
+def test_pending_request_rejects_binding_for_different_message() -> None:
+    with pytest.raises(ValueError, match="消息 identity 不一致"):
+        _request(
+            "ses_pending_binding",
+            sequence=1,
+            execution_binding=InternalExecutionIntent(
+                message_id="msg_other",
+                execution_id="intr_other",
+                admission_idempotency_key="adm_other",
+            ),
+        )
 
 
 @pytest.mark.asyncio

@@ -26,22 +26,28 @@ def _status(value: object) -> int:
 
 
 def terminal_session_to_proto(value: Mapping[str, object]) -> terminal_pb2.TerminalSession:
-    required = ("terminal_id", "session_id", "status")
+    required = ("terminal_id", "workspace_id", "status")
     for field_name in required:
         if not isinstance(value.get(field_name), str) or not value[field_name]:
             raise ValueError(f"Terminal 会话缺少字段: {field_name}")
     message = terminal_pb2.TerminalSession(
         terminal_id=cast(str, value["terminal_id"]),
-        session_id=cast(str, value["session_id"]),
+        workspace_id=cast(str, value["workspace_id"]),
         status=_status(value["status"]),
     )
-    for field_name in ("title", "cwd"):
+    for field_name in ("title", "cwd_relative"):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, str):
                 raise ValueError(f"Terminal 会话字段类型错误: {field_name}")
             setattr(message, field_name, field_value)
-    for field_name in ("cols", "rows", "sequence"):
+    for field_name in ("exit_code", "last_command_exit_code"):
+        field_value = value.get(field_name)
+        if field_value is not None:
+            if not isinstance(field_value, int):
+                raise ValueError(f"Terminal 会话退出码必须是整数: {field_name}")
+            setattr(message, field_name, field_value)
+    for field_name in ("cols", "rows", "sequence", "transport_owner_revision"):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, int) or field_value < 0:
@@ -57,4 +63,10 @@ def terminal_session_to_json(value: terminal_pb2.TerminalSession) -> dict[str, o
     raw = struct_to_mapping(value.metadata).get("raw")
     if not isinstance(raw, dict):
         raise TypeError(f"Terminal Protobuf 会话 raw metadata 格式错误: terminal_id={value.terminal_id}")
-    return cast(dict[str, object], raw)
+    result = cast(dict[str, object], raw)
+    # Struct 的 JSON 数值会解为 float；transport fence 使用官方 uint64 字段。
+    result["transport_owner_revision"] = value.transport_owner_revision
+    for field_name in ("exit_code", "last_command_exit_code"):
+        if value.HasField(field_name):
+            result[field_name] = getattr(value, field_name)
+    return result

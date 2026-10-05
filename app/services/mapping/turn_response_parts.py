@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
+from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
 
 #: 文本部件正文上限；canonical 投影按此截断，超限只置 truncated 供前端补拉。
@@ -481,3 +482,177 @@ def response_parts_from_records(
     if final_part is not None:
         parts.append(final_part)
     return parts[:max_parts]
+
+
+def response_parts_from_internal_item(
+    item: CanonicalItemRecord,
+    *,
+    include: frozenset[str],
+    logical_item_ordinal: int,
+) -> list[TurnResponsePartDTO]:
+    """把单个 standalone execution canonical item 映射为受 include 控制的响应部件。"""
+    metadata = item.metadata
+    semantic_kind = item.semantic_kind
+    payload = item.payload
+    kind: str | None = None
+    allowed_include: frozenset[str] = frozenset()
+    if semantic_kind == "assistant_output":
+        kind = "text"
+        allowed_include = _INCLUDE_BY_KIND[kind]
+    elif semantic_kind == "reasoning":
+        kind = (
+            "reasoning_summary"
+            if item.payload_kind == "summary"
+            else "reasoning_encrypted"
+            if item.payload_kind in {"opaque", "extension"}
+            else "reasoning"
+        )
+        allowed_include = _INCLUDE_BY_KIND[kind]
+    elif semantic_kind == "compaction_summary":
+        kind = "reasoning_summary"
+        allowed_include = _INCLUDE_BY_KIND[kind]
+    elif semantic_kind == "tool_call":
+        kind = "tool_call"
+        allowed_include = _INCLUDE_BY_KIND[kind]
+    elif semantic_kind == "tool_result":
+        kind = "tool_result"
+        allowed_include = _INCLUDE_BY_KIND[kind]
+    if kind is None or not include & allowed_include:
+        return []
+
+    part_ordinal = _int_or_none(metadata, "block_index") or 0
+    message_sequence = _int_or_none(metadata, "message_sequence") or 0
+    common_source = {
+        "message_sequence": message_sequence,
+        "assistant_message_sequence": _int_or_none(
+            metadata, "assistant_message_sequence"
+        ),
+        "content_block_index": _int_or_none(metadata, "content_block_index"),
+        "item_index": _int_or_none(metadata, "item_index"),
+        "item_id": item.item_id,
+        "item_sequence": item.item_sequence,
+        "logical_item_ordinal": logical_item_ordinal,
+        "created_at": item.created_at,
+    }
+    projection: Projection = (
+        "detail"
+        if include
+        & {
+            "text",
+            "assistant_text",
+            "assistant",
+            "thinking",
+            "reasoning_detail",
+            "tool_call",
+            "tool_result",
+        }
+        else "summary"
+    )
+    if kind == "reasoning_encrypted":
+        return [
+            TurnResponsePartDTO(
+                part_id=f"{item.item_id}:part:{part_ordinal}",
+                kind=kind,
+                projection=projection,
+                status=_response_status(item.status),
+                source=TurnResponseSourceDTO(
+                    **common_source,
+                    part_ordinal=part_ordinal,
+                ),
+            )
+        ]
+
+    if kind == "tool_call":
+        raw_calls = payload.get("tool_calls") if isinstance(payload, Mapping) else None
+        calls = raw_calls if isinstance(raw_calls, list) else [payload]
+        parts: list[TurnResponsePartDTO] = []
+        for call_index, raw_call in enumerate(calls):
+            if not isinstance(raw_call, Mapping):
+                raise TypeError(f"canonical tool_call payload 非法: {item.item_id}")
+            raw_id = raw_call.get("id", raw_call.get("tool_call_id"))
+            tool_call_id = (
+                raw_id if isinstance(raw_id, str) and raw_id else None
+            )
+            tool_name = raw_call.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                tool_name = metadata.get("tool_name")
+            tool_name = tool_name if isinstance(tool_name, str) else None
+            raw_arguments = raw_call.get("args", raw_call.get("arguments"))
+            arguments = (
+                raw_arguments
+                if isinstance(raw_arguments, str)
+                else json.dumps(raw_arguments, ensure_ascii=False, separators=(",", ":"))
+                if raw_arguments is not None
+                else None
+            )
+            ordinal = part_ordinal + call_index
+            parts.append(
+                TurnResponsePartDTO(
+                    part_id=f"{item.item_id}:part:{ordinal}",
+                    kind=kind,
+                    projection=("detail" if "tool_call" in include else "summary"),
+                    status=_response_status(item.status),
+                    source=TurnResponseSourceDTO(
+                        **common_source,
+                        call_index=call_index,
+                        part_ordinal=ordinal,
+                    ),
+                    text=tool_name or "",
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=arguments if "tool_call" in include else None,
+                )
+            )
+        return parts
+
+    if kind == "tool_result":
+        tool_call_id = payload.get("tool_call_id") if isinstance(payload, Mapping) else None
+        tool_name = payload.get("name") if isinstance(payload, Mapping) else None
+        raw_result = payload.get("content") if isinstance(payload, Mapping) else payload
+        result, truncated = _bounded(raw_result)
+        detailed = "tool_result" in include
+        ordinal = part_ordinal
+        return [
+            TurnResponsePartDTO(
+                part_id=f"{item.item_id}:part:{ordinal}",
+                kind=kind,
+                projection=("detail" if detailed else "summary"),
+                status=_response_status(item.status),
+                source=TurnResponseSourceDTO(
+                    **common_source,
+                    part_ordinal=ordinal,
+                ),
+                text=result if detailed else "",
+                tool_call_id=tool_call_id if isinstance(tool_call_id, str) else None,
+                tool_name=tool_name if isinstance(tool_name, str) else None,
+                result=result if detailed else None,
+                truncated=truncated,
+            )
+        ]
+
+    if kind == "reasoning_summary" and isinstance(payload, Mapping):
+        text_value = payload.get("summary", payload.get("text", ""))
+    else:
+        text_value = payload
+    text, truncated = _bounded(text_value)
+    ordinal = part_ordinal
+    return [
+        TurnResponsePartDTO(
+            part_id=f"{item.item_id}:part:{ordinal}",
+            kind=kind,
+            projection=projection,
+            status=_response_status(item.status),
+            source=TurnResponseSourceDTO(
+                **common_source,
+                part_ordinal=ordinal,
+            ),
+            text=text,
+            truncated=truncated,
+            completion_reason=(
+                metadata.get("completion_reason")
+                if isinstance(metadata.get("completion_reason"), str)
+                else None
+            ),
+            partial=item.status in {"partial", "incomplete"},
+        )
+    ]

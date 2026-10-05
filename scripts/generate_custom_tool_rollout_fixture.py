@@ -18,22 +18,27 @@ if str(PROJECT_ROOT) not in sys.path:
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
+from app.container import WorkspaceContainerRegistry
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.path_utils import get_session_path_resolver
-from app.core.session_catalog_migration import migrate_workspace_session_catalog
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.path_utils import catalog_provider_scope, get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 FIXTURE_VERSION: Final = 3
-STATIC_LONG_SESSION_ID: Final = "ses_a1b2c3d4e5f6478899aabbccddeeff00"
-REAL_MODEL_SESSION_ID: Final = "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018"
-LARGE_LONG_SESSION_ID: Final = "ses_9f4e2c7a1b6d4830a5e8f2c1d7b90436"
-COMPACTION_SESSION_ID: Final = "ses_4c0a1d6e7f8b49a2b5c6d7e8f9012345"
-TOOL_SESSION_ID: Final = "ses_7e5d3c1b9a8f4762b4d6e8f0a1c23579"
-FORK_SESSION_ID: Final = "ses_6b2d4f8a0c1e4937b5d9f1a3c7e24680"
+STATIC_LONG_SESSION_ID: Final = "ses_019c642bc2ec78718d0a296b3319d6df"
+REAL_MODEL_SESSION_ID: Final = "ses_019c27f816b17ee394a67f9312bb669e"
+LARGE_LONG_SESSION_ID: Final = "ses_019be55bdf8d715d8efbb8419fbc7cd7"
+COMPACTION_SESSION_ID: Final = "ses_019c3afc2c2674a58a36a8a7b1ad0f8b"
+TOOL_SESSION_ID: Final = "ses_019c46b09524769f8e70304bc6f23f31"
+FORK_SESSION_ID: Final = "ses_019c29b9cf2e7c08858d95552eeb02e8"
 MOCK_SESSION_IDS: Final = (
     STATIC_LONG_SESSION_ID,
     LARGE_LONG_SESSION_ID,
@@ -41,6 +46,7 @@ MOCK_SESSION_IDS: Final = (
     TOOL_SESSION_ID,
     FORK_SESSION_ID,
 )
+FIXTURE_SESSION_IDS: Final = (*MOCK_SESSION_IDS, REAL_MODEL_SESSION_ID)
 BASE_TIME: Final = datetime(2026, 8, 1, tzinfo=UTC)
 # 刻意生成超过 64 KiB 的单条 JSONL record，验证大 canonical message 仍以内联
 # 形式保存；详情接口仍按当前 64 KiB 单项预算返回有界结果并标记 detail_truncated。
@@ -100,7 +106,11 @@ def _stamp(turn_index: int) -> str:
 
 
 def _metadata(
-    turn_id: str, stamp: str, *, phase: str | None = None
+    turn_id: str,
+    stamp: str,
+    *,
+    phase: str | None = None,
+    provider_id: str | None = None,
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "created_at": stamp,
@@ -109,6 +119,8 @@ def _metadata(
     }
     if phase is not None:
         result["phase"] = phase
+    if provider_id is not None:
+        result["provider_id"] = provider_id
     return result
 
 
@@ -140,10 +152,22 @@ def _large_tool_result(turn_index: int) -> str:
     return _large_payload(f"LARGE_RESULT turn-{turn_index:04d}")
 
 
-def _tool_specs(turn_index: int) -> list[tuple[str, dict[str, object], str]]:
+def _tool_specs(
+    turn_index: int,
+    *,
+    include_large_payload: bool,
+) -> list[tuple[str, dict[str, object], str]]:
     fixture_path = f"fixture/{turn_index:04d}.json"
     mode = turn_index % 11
     if mode == 0:
+        if not include_large_payload:
+            return [
+                (
+                    "read_fixture",
+                    {"path": fixture_path},
+                    f"fixture result {turn_index}",
+                )
+            ]
         return [
             (
                 "invoke_extension_tool",
@@ -206,7 +230,14 @@ def _tool_specs(turn_index: int) -> list[tuple[str, dict[str, object], str]]:
     ]
 
 
-def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseMessage]:
+def _turn_messages(
+    turn_index: int,
+    *,
+    long_fixture: bool = False,
+    provider_id: str | None = None,
+    include_tool_calls: bool = True,
+    include_large_payload: bool = False,
+) -> list[BaseMessage]:
     turn_id = f"job-{turn_index:04d}"
     stamp = _stamp(turn_index)
     topic = TOPICS[(turn_index - 1) % len(TOPICS)]
@@ -219,7 +250,7 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
         HumanMessage(
             id=f"user-{turn_index:04d}",
             content=user_text,
-            response_metadata=_metadata(turn_id, stamp),
+            response_metadata=_metadata(turn_id, stamp, provider_id=provider_id),
         )
     ]
     if turn_index % 17 == 0:
@@ -228,7 +259,12 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
                 id=f"internal-progress-{turn_index:04d}",
                 content=f"内部进度：第 {turn_index} 轮已完成上下文路由和索引检查。",
                 response_metadata={
-                    **_metadata(turn_id, stamp, phase="internal"),
+                    **_metadata(
+                        turn_id,
+                        stamp,
+                        phase="internal",
+                        provider_id=provider_id,
+                    ),
                     "internal": True,
                     "message_metadata": {
                         "turn_id": turn_id,
@@ -238,7 +274,11 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
                 },
             )
         )
-    tool_specs = [] if turn_index % 13 == 0 else _tool_specs(turn_index)
+    tool_specs = (
+        _tool_specs(turn_index, include_large_payload=include_large_payload)
+        if include_tool_calls
+        else []
+    )
     if tool_specs:
         tool_calls = [
             {
@@ -258,7 +298,12 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
                     }
                 ],
                 tool_calls=tool_calls,
-                response_metadata=_metadata(turn_id, stamp, phase="tool_call"),
+                response_metadata=_metadata(
+                    turn_id,
+                    stamp,
+                    phase="tool_call",
+                    provider_id=provider_id,
+                ),
             )
         )
         for call_index, (tool_name, args, tool_result) in enumerate(
@@ -270,7 +315,12 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
                     content=tool_result,
                     name=tool_name,
                     tool_call_id=f"call-{turn_index:04d}-{call_index:02d}",
-                    response_metadata=_metadata(turn_id, stamp, phase="tool_result"),
+                    response_metadata=_metadata(
+                        turn_id,
+                        stamp,
+                        phase="tool_result",
+                        provider_id=provider_id,
+                    ),
                 )
             )
 
@@ -295,6 +345,20 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
                         "text": f"Provider 摘要 {turn_index}",
                     }
                 ],
+            }
+        )
+    if provider_id is not None and turn_index % 8 == 0:
+        final_blocks.append(
+            {
+                "type": "reasoning_content",
+                "reasoning_content": f"Provider 原始思考内容 {turn_index}",
+            }
+        )
+    if provider_id is not None and turn_index % 10 == 0:
+        final_blocks.append(
+            {
+                "type": "redacted_thinking",
+                "data": f"encrypted-redacted-thinking-{turn_index:04d}",
             }
         )
     if turn_index % 4 == 0:
@@ -334,25 +398,23 @@ def _turn_messages(turn_index: int, *, long_fixture: bool = False) -> list[BaseM
         AIMessage(
             id=f"assistant-final-{turn_index:04d}",
             content=final_content,
-            response_metadata=_metadata(turn_id, stamp, phase="final_answer"),
+            response_metadata=_metadata(
+                turn_id,
+                stamp,
+                phase="final_answer",
+                provider_id=provider_id,
+            ),
         )
     )
     return messages
 
 
 def _catalog_resolver(sessions_dir: Path) -> SessionCatalogPathResolver:
-    """取得 fixture 专用 catalog resolver，旧 JSON 只走显式迁移入口。"""
+    """取得 fixture 专用的 SQLite catalog resolver。"""
     resolved_sessions = sessions_dir.expanduser().resolve()
-    boxteam_root = resolved_sessions.parent
-    workspace_root = boxteam_root.parent
-    navigation_root = boxteam_root / "navigation"
-    database_path = navigation_root / "session-catalog.sqlite"
-    legacy_index_path = navigation_root / "session-catalog-index.json"
-    if not database_path.is_file() and legacy_index_path.is_file():
-        asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     resolver = get_session_path_resolver(resolved_sessions)
     if not isinstance(resolver, SessionCatalogPathResolver):
-        raise RuntimeError(
+        raise TypeError(
             "fixture 生成要求 SQLite catalog resolver: "
             f"sessions_root={resolved_sessions}"
         )
@@ -364,6 +426,7 @@ def _write_session_manifest(
     session_id: str,
     title: str,
     *,
+    workspace_id: str,
     created_at: str,
     context_source_session_id: str | None = None,
 ) -> None:
@@ -379,7 +442,7 @@ def _write_session_manifest(
                 "created_at": persisted_created_at,
                 "updated_at": created_at,
                 "session_id": session_id,
-                "workspace_id": "ws_local",
+                "workspace_id": workspace_id,
                 "current_agent_id": "default",
                 "current_provider_id": "primary",
                 "context_source_session_id": context_source_session_id,
@@ -404,87 +467,137 @@ def _create_session(
     long_fixture: bool = False,
     compaction_points: tuple[int, ...] = (),
     fork_source: tuple[str, str] | None = None,
+    checkpoint_each_turn: bool = False,
+    real_provider_fixture: bool = False,
+    sparse_tool_fixture: bool = False,
+    large_tool_payloads: bool = False,
+    checkpoint_prefix: str = "checkpoint",
+    final_compaction_cutoff: int | None = None,
 ) -> None:
     resolver = _catalog_resolver(sessions_dir)
-    seed_catalog_session_bundle(
-        sessions_dir,
-        session_id,
-        workspace_id="ws_local",
-        title=title,
-    )
-    session_dir = resolver.resolve_session_node(session_id)
-    created_at = _stamp(0)
+    bundle = seed_catalog_session_bundle(sessions_dir, session_id, title=title)
+    session_dir = bundle.directory
     _write_session_manifest(
         session_dir,
         session_id,
         title,
-        created_at=created_at,
+        workspace_id=resolver.workspace_id,
+        created_at=_stamp(0),
         context_source_session_id=fork_source[0] if fork_source else None,
     )
-    saver = RolloutCheckpointSaver(sessions_dir)
-    if fork_source is not None:
-        source_session_id, source_checkpoint_id = fork_source
-        saver.record_fork_origin(
-            target_thread_id=session_id,
-            source_session_id=source_session_id,
-            source_checkpoint_id=source_checkpoint_id,
-            source_view_id=None,
-            fork_mode="reference",
-            relationship="detached",
+    thread_id = bundle.main_thread_id
+    owner = MutationIntentOwner(session_id, thread_id)
+    with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+        saver = RolloutCheckpointSaver(sessions_dir)
+        if fork_source is not None:
+            source_session_id, source_checkpoint_id = fork_source
+            saver.record_fork_origin(
+                target_session_id=session_id,
+                source_session_id=source_session_id,
+                source_checkpoint_id=source_checkpoint_id,
+                source_view_id=None,
+                fork_mode="context_fork",
+                relationship="detached",
+            )
+        config = build_checkpoint_config(thread_id)
+        messages: list[BaseMessage] = []
+        start = 1
+        cutoff_index = 0
+        checkpoint_ends = set(
+            range(1, turn_count + 1)
+            if checkpoint_each_turn
+            else (*compaction_points, turn_count)
         )
-    config = build_checkpoint_config(session_id)
-    messages: list[BaseMessage] = []
-    start = 1
-    for end in (*compaction_points, turn_count):
-        if end < start or end > turn_count:
-            raise ValueError(f"fixture checkpoint 边界非法: start={start}, end={end}")
-        cutoff_index = len(messages)
-        for turn_index in range(start, end + 1):
-            messages.extend(_turn_messages(turn_index, long_fixture=long_fixture))
-        event = None
-        if start > 1:
-            event = {
-                "event_id": f"compaction-{start:04d}",
-                "strategy": "cache_preserving",
-                "cutoff_index": cutoff_index,
-                "cache_prefix_messages": [],
-                "summary_message": HumanMessage(
-                    id=f"summary-{start:04d}",
-                    content=(
-                        f"第 {start} 轮前完成上下文压缩，保留主题和工具结论。"
+        if any(end < 1 or end > turn_count for end in checkpoint_ends):
+            raise ValueError(f"fixture checkpoint 边界非法: {sorted(checkpoint_ends)}")
+        compaction_boundaries = set(compaction_points) | {turn_count}
+        for turn_index in range(1, turn_count + 1):
+            provider_id = (
+                "handwritten_chat" if turn_index % 2 else "handwritten_responses"
+            ) if real_provider_fixture else None
+            latest_turn_messages = _turn_messages(
+                turn_index,
+                long_fixture=long_fixture,
+                provider_id=provider_id,
+                include_tool_calls=not sparse_tool_fixture or turn_index % 8 == 0,
+                include_large_payload=large_tool_payloads,
+            )
+            messages.extend(latest_turn_messages)
+            turn_id = f"job-{turn_index:04d}"
+            accepted = saver.accept_turn(
+                session_id,
+                thread_id=thread_id,
+                accepted_ingress_id=f"ingress-{turn_index:04d}",
+                acceptance_idempotency_key=f"acceptance-{turn_index:04d}",
+                job_id=f"fixture-job-{turn_index:04d}",
+                admission_idempotency_key=f"admission-{turn_index:04d}",
+                payload=latest_turn_messages[0].content,
+                turn_id=turn_id,
+                root_item_id=f"item-user-{turn_index:04d}",
+                initial_execution_id=f"execution-{turn_index:04d}",
+            )
+            admission = saver.execution_admission(
+                session_id, thread_id=thread_id,
+                execution_id=str(accepted["initial_execution_id"]),
+            )
+            boundary = turn_index in checkpoint_ends
+            event = None
+            if boundary and start > 1 and turn_index in compaction_boundaries:
+                event = {
+                    "event_id": f"compaction-{start:04d}",
+                    "strategy": "cache_preserving",
+                    "cutoff_index": (
+                        final_compaction_cutoff
+                        if turn_index == turn_count and final_compaction_cutoff is not None
+                        else cutoff_index
                     ),
-                    additional_kwargs={"lc_source": "summarization"},
-                ),
-                "file_path": f".boxteam/context-history/compaction-{start:04d}.json",
-            }
-        config = saver.put(
-            config,
-            _checkpoint(
-                f"checkpoint-{end:04d}",
-                messages,
-                channel_version=end,
-                event=event,
-            ),
-            {
-                "source": "custom-tool-rollout-fixture",
-                "checkpoint_end_turn": end,
-                "semantic_boundary": "compaction" if event else "initial",
-                "contains_internal_messages": any(
-                    turn_index % 17 == 0 for turn_index in range(start, end + 1)
-                ),
-                "contains_large_tool_payload": any(
-                    turn_index % 11 == 0 for turn_index in range(start, end + 1)
-                ),
-            },
-            {"messages": str(end)},
-        )
-        for turn_index in range(start, end + 1):
+                    "cache_prefix_messages": [],
+                    "summary_message": HumanMessage(
+                        id=f"summary-{start:04d}",
+                        content=f"第 {start} 轮前完成上下文压缩，保留主题和工具结论。",
+                        additional_kwargs={"lc_source": "summarization"},
+                    ),
+                    "file_path": f".boxteam/context-history/compaction-{start:04d}.json",
+                }
+            # 每轮消息必须归属本轮真实 admission；原有压缩 checkpoint 边界保持原 ID。
+            checkpoint_id = (
+                f"{checkpoint_prefix}-{turn_index:04d}" if boundary
+                else f"{checkpoint_prefix}-ingress-{turn_index:04d}"
+            )
+            with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+                config = saver.put(
+                    config,
+                    _checkpoint(
+                        checkpoint_id,
+                        messages if boundary and (
+                            not checkpoint_each_turn or turn_index == turn_count
+                        ) else latest_turn_messages,
+                        channel_version=turn_index,
+                        event=event,
+                    ),
+                    {
+                        "source": "custom-tool-rollout-fixture",
+                        "checkpoint_end_turn": turn_index,
+                        "semantic_boundary": "compaction" if event else "initial",
+                        "contains_internal_messages": any(
+                            index % 17 == 0 for index in range(start, turn_index + 1)
+                        ),
+                        "contains_large_tool_payload": large_tool_payloads and any(
+                            index % 11 == 0 for index in range(start, turn_index + 1)
+                        ),
+                        **({"provider_id": provider_id} if real_provider_fixture else {}),
+                    },
+                    {"messages": str(turn_index)},
+                )
             saver.finalize_turn(
                 session_id=session_id,
-                turn_id=f"job-{turn_index:04d}",
+                thread_id=thread_id,
+                turn_id=turn_id,
                 final_message_id=f"assistant-final-{turn_index:04d}",
             )
-        start = end + 1
+            if boundary:
+                start = turn_index + 1
+                cutoff_index = len(messages)
 
 
 def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
@@ -519,8 +632,8 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         )
     resolver = _catalog_resolver(sessions_dir)
     if clean:
-        # 只删除本生成器拥有的确定性 mock；真实模型快照必须作为长期测试资源保留。
-        for session_id in MOCK_SESSION_IDS:
+        # 只删除本生成器拥有的 canonical Session；边界会话由独立播种器管理。
+        for session_id in FIXTURE_SESSION_IDS:
             try:
                 resolver.catalog_store.get_node(session_id)
             except KeyError:
@@ -532,7 +645,21 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         title="自定义工具工作区：128 Turn 历史压测",
         turn_count=128,
         long_fixture=True,
+        compaction_points=(64,),
+        sparse_tool_fixture=True,
+    )
+    _create_session(
+        sessions_dir=sessions_dir,
+        session_id=REAL_MODEL_SESSION_ID,
+        title="Provider reasoning carrier 128 Turn 压测",
+        turn_count=128,
+        long_fixture=True,
         compaction_points=(32, 64, 96),
+        checkpoint_each_turn=True,
+        real_provider_fixture=True,
+        sparse_tool_fixture=True,
+        large_tool_payloads=True,
+        checkpoint_prefix="real-checkpoint",
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -540,7 +667,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         title="大型工具调用：128 Turn 历史投影压测",
         turn_count=128,
         long_fixture=True,
-        compaction_points=(32, 64, 96),
+        sparse_tool_fixture=True,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -548,6 +675,7 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
         title="上下文压缩与摘要示例",
         turn_count=24,
         compaction_points=(8, 16),
+        final_compaction_cutoff=64,
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -574,6 +702,12 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
             "kind": "deterministic_mock",
         },
         {
+            "session_id": REAL_MODEL_SESSION_ID,
+            "turn_count": 128,
+            "title": "Provider reasoning carrier 128 Turn 压测",
+            "kind": "canonical_provider_history",
+        },
+        {
             "session_id": LARGE_LONG_SESSION_ID,
             "turn_count": 128,
             "title": "大型工具调用：128 Turn 历史投影压测",
@@ -598,21 +732,11 @@ def _write_fixture(workspace_root: Path, *, clean: bool) -> None:
             "kind": "deterministic_mock",
         },
     ]
-    if (sessions_dir / REAL_MODEL_SESSION_ID).is_dir():
-        fixture_sessions.insert(
-            1,
-            {
-                "session_id": REAL_MODEL_SESSION_ID,
-                "turn_count": 128,
-                "title": "真实模型 128 Turn checkpoint 压测",
-                "kind": "real_model_snapshot",
-            },
-        )
     (workspace_root / "rollout-fixture.json").write_text(
         json.dumps(
             {
                 "fixture_version": FIXTURE_VERSION,
-                "description": "custom_tool_test_workspace 的静态 rollout 历史 fixture",
+                "description": "custom_tool_test_workspace 的 canonical rollout 历史 fixture",
                 "history_semantics": [
                     "user_message",
                     "internal_message",
@@ -662,6 +786,19 @@ def _write_static_long_session(workspace_root: Path) -> None:
     )
 
 
+def generate_custom_tool_rollout_fixture(workspace_root: Path) -> None:
+    """在明确传入的工作区中重建 canonical 静态 Session 与 rollout。"""
+
+    registry = WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([
+            MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
+        ]),
+        project_root=Path.cwd(),
+    )
+    with registry, catalog_provider_scope(registry):
+        _write_fixture(workspace_root, clean=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -694,45 +831,52 @@ def main() -> None:
     workspace_root = args.workspace.resolve()
     if not workspace_root.is_dir():
         raise FileNotFoundError(f"fixture 工作区不存在: {workspace_root}")
-    if args.only_static_long_session:
-        _write_static_long_session(workspace_root)
-    elif args.only_large_session:
-        sessions_dir = workspace_root / ".boxteam" / "sessions"
-        resolver = _catalog_resolver(sessions_dir)
-        try:
-            resolver.catalog_store.get_node(LARGE_LONG_SESSION_ID)
-        except KeyError:
-            pass
+    registry = WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([
+            MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
+        ]),
+        project_root=Path.cwd(),
+    )
+    with registry, catalog_provider_scope(registry):
+        if args.only_static_long_session:
+            _write_static_long_session(workspace_root)
+        elif args.only_large_session:
+            sessions_dir = workspace_root / ".boxteam" / "sessions"
+            resolver = _catalog_resolver(sessions_dir)
+            try:
+                resolver.catalog_store.get_node(LARGE_LONG_SESSION_ID)
+            except KeyError:
+                pass
+            else:
+                asyncio.run(resolver.delete_session_subtree(LARGE_LONG_SESSION_ID))
+            _create_session(
+                sessions_dir=sessions_dir,
+                session_id=LARGE_LONG_SESSION_ID,
+                title="大型工具调用：128 Turn 历史投影压测",
+                turn_count=128,
+                long_fixture=True,
+                compaction_points=(32, 64, 96),
+            )
+            manifest_path = workspace_root / "rollout-fixture.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            sessions = manifest.get("sessions")
+            if isinstance(sessions, list) and not any(
+                isinstance(item, dict) and item.get("session_id") == LARGE_LONG_SESSION_ID
+                for item in sessions
+            ):
+                sessions.append(
+                    {
+                        "session_id": LARGE_LONG_SESSION_ID,
+                        "turn_count": 128,
+                        "title": "大型工具调用：128 Turn 历史投影压测",
+                    }
+                )
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
         else:
-            asyncio.run(resolver.delete_session_subtree(LARGE_LONG_SESSION_ID))
-        _create_session(
-            sessions_dir=sessions_dir,
-            session_id=LARGE_LONG_SESSION_ID,
-            title="大型工具调用：128 Turn 历史投影压测",
-            turn_count=128,
-            long_fixture=True,
-            compaction_points=(32, 64, 96),
-        )
-        manifest_path = workspace_root / "rollout-fixture.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        sessions = manifest.get("sessions")
-        if isinstance(sessions, list) and not any(
-            isinstance(item, dict) and item.get("session_id") == LARGE_LONG_SESSION_ID
-            for item in sessions
-        ):
-            sessions.append(
-                {
-                    "session_id": LARGE_LONG_SESSION_ID,
-                    "turn_count": 128,
-                    "title": "大型工具调用：128 Turn 历史投影压测",
-                }
-            )
-            manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-    else:
-        _write_fixture(workspace_root, clean=args.clean)
+            _write_fixture(workspace_root, clean=args.clean)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ _MAX_PATH_TOTAL_BYTES = 4096
 _LOCATOR_PREFIX = "sessions/"
 
 _NODE_COLUMNS = (
-    "node_id, kind, parent_node_id, display_name, state, revision, "
+    "node_id, kind, parent_node_id, display_name, title_source, state, revision, "
     "workspace_id, created_at, storage_relative_locator, main_thread_id"
 )
 
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
     parent_node_id TEXT REFERENCES nodes(node_id),
     display_name TEXT NOT NULL,
+    title_source TEXT CHECK (title_source IN ('default', 'user', 'auto')),
     state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
     revision INTEGER NOT NULL DEFAULT 1,
     workspace_id TEXT NOT NULL,
@@ -52,11 +53,13 @@ CREATE TABLE IF NOT EXISTS nodes (
         (kind = 'session'
             AND created_at IS NOT NULL
             AND storage_relative_locator IS NOT NULL
-            AND main_thread_id IS NOT NULL)
+            AND main_thread_id IS NOT NULL
+            AND title_source IS NOT NULL)
         OR (kind = 'folder'
             AND created_at IS NULL
             AND storage_relative_locator IS NULL
-            AND main_thread_id IS NULL)
+            AND main_thread_id IS NULL
+            AND title_source IS NULL)
     ),
     UNIQUE (workspace_id, main_thread_id),
     UNIQUE (workspace_id, storage_relative_locator)
@@ -81,6 +84,14 @@ CREATE TABLE IF NOT EXISTS session_creation_records (
     workspace_id TEXT NOT NULL,
     parent_node_id TEXT,
     display_name TEXT NOT NULL,
+    title_source TEXT NOT NULL CHECK (title_source IN ('default', 'user', 'auto')),
+    purpose TEXT NOT NULL CHECK (purpose IN ('normal', 'context_fork')),
+    graph_id TEXT NOT NULL CHECK (length(graph_id) > 0),
+    graph_revision INTEGER NOT NULL CHECK (graph_revision >= 1),
+    graph_schema_hash TEXT NOT NULL,
+    capability_profile_hash TEXT NOT NULL,
+    session_metadata_json TEXT NOT NULL,
+    request_intent_json TEXT,
     created_at TEXT NOT NULL,
     storage_relative_locator TEXT NOT NULL UNIQUE,
     preimage_hash TEXT NOT NULL,
@@ -99,7 +110,10 @@ _IDX_CREATION_RECORDS_STATE_DDL = (
 
 _CREATION_RECORD_COLUMNS = (
     "session_creation_idempotency_key, session_id, main_thread_id, workspace_id, "
-    "parent_node_id, display_name, created_at, storage_relative_locator, "
+    "parent_node_id, display_name, title_source, purpose, "
+    "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
+    "session_metadata_json, request_intent_json, "
+    "created_at, storage_relative_locator, "
     "preimage_hash, parent_revision, state, abort_reason, "
     "record_created_at, record_updated_at"
 )
@@ -166,37 +180,92 @@ _FORK_RETENTION_CLAIM_COLUMNS = (
 # catalog 单调 generation（8.1-F）：每个写事务提交时自增一次，作为可校验
 # 一致性快照/备份的版本锚点。备份清单记录 snapshot 时刻的 generation 与
 # sqlite 文件 checksum；当前 generation 大于备份 generation 即「备份落后于
-# 已提交操作」，只能进入维护模式核对。
+# 已提交操作」，只能进入维护模式核对。导航 revision 单独跟踪 nodes 真实变化。
 _CATALOG_METADATA_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS catalog_metadata (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    generation INTEGER NOT NULL
+    generation INTEGER NOT NULL,
+    navigation_revision INTEGER NOT NULL
 )
 """
 
-# user_version 与「必须已存在」的表绑定：已登记应用的版本若缺表，说明库被
-# 外部进程改写（或被截断）。此时下面的 ``CREATE TABLE IF NOT EXISTS`` 会把
-# 权威表静默重建为**空表**，等于把全部会话位置与父子关系悄悄丢光，因此必须
-# 在写任何 DDL 之前 fail closed。
-#
-# v3（8.1-D/8.1-F）新增 ``fork_retention_claims``（pinned retention 占位）
-# 与 ``catalog_metadata``（单调 generation）两张表，是**显式一次性 schema
-# 迁移**：v2 库在同一 ``_initialize`` 事务内加法补建并升 v3，无动态分支、无
-# 双读路径。``subtree_delete_records`` 是 R14 加法补表（``user_version``
-# 保持 2），不属于任何版本的硬性要求，故不在绑定表中。
+_NAVIGATION_REVISION_TRIGGER_DDLS = (
+    """
+    CREATE TRIGGER IF NOT EXISTS nodes_navigation_revision_insert
+    AFTER INSERT ON nodes
+    BEGIN
+        UPDATE catalog_metadata
+        SET navigation_revision = navigation_revision + 1
+        WHERE singleton_id = 1;
+        SELECT CASE WHEN changes() != 1
+            THEN RAISE(ABORT, 'session catalog navigation revision row missing')
+        END;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS nodes_navigation_revision_update
+    AFTER UPDATE OF node_id, kind, parent_node_id, display_name, title_source,
+                    state, revision,
+                    workspace_id, created_at, storage_relative_locator, main_thread_id
+    ON nodes
+    WHEN OLD.node_id IS NOT NEW.node_id
+      OR OLD.kind IS NOT NEW.kind
+      OR OLD.parent_node_id IS NOT NEW.parent_node_id
+      OR OLD.display_name IS NOT NEW.display_name
+      OR OLD.title_source IS NOT NEW.title_source
+      OR OLD.state IS NOT NEW.state
+      OR OLD.revision IS NOT NEW.revision
+      OR OLD.workspace_id IS NOT NEW.workspace_id
+      OR OLD.created_at IS NOT NEW.created_at
+      OR OLD.storage_relative_locator IS NOT NEW.storage_relative_locator
+      OR OLD.main_thread_id IS NOT NEW.main_thread_id
+    BEGIN
+        UPDATE catalog_metadata
+        SET navigation_revision = navigation_revision + 1
+        WHERE singleton_id = 1;
+        SELECT CASE WHEN changes() != 1
+            THEN RAISE(ABORT, 'session catalog navigation revision row missing')
+        END;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS nodes_navigation_revision_delete
+    AFTER DELETE ON nodes
+    BEGIN
+        UPDATE catalog_metadata
+        SET navigation_revision = navigation_revision + 1
+        WHERE singleton_id = 1;
+        SELECT CASE WHEN changes() != 1
+            THEN RAISE(ABORT, 'session catalog navigation revision row missing')
+        END;
+    END
+    """,
+)
+
+_REQUIRED_NAVIGATION_REVISION_TRIGGERS = (
+    "nodes_navigation_revision_insert",
+    "nodes_navigation_revision_update",
+    "nodes_navigation_revision_delete",
+)
+
+# 已登记为 v7 的目录缺少权威表、元数据列或 revision triggers 说明 catalog
+# 被外部改写，必须在任何 DDL 前 fail closed。旧 schema 不作运行期迁移；只能由
+# 明确维护流程处理，不能把日期目录或旧 JSON 当作回退来源。
 _REQUIRED_TABLES_BY_VERSION = {
-    1: ("nodes",),
-    2: ("nodes", "session_creation_records"),
-    3: (
+    7: (
         "nodes",
         "session_creation_records",
+        "subtree_delete_records",
         "fork_retention_claims",
         "catalog_metadata",
     ),
 }
 
-# 首批 catalog_metadata 行（v3 迁移时写入；generation 从 0 起，写事务自增）。
-_CATALOG_METADATA_SEED = "INSERT OR IGNORE INTO catalog_metadata (singleton_id, generation) VALUES (1, 0)"
+# 全新 v7 catalog 的备份 generation 与导航 revision 都从 0 起。
+_CATALOG_METADATA_SEED = (
+    "INSERT INTO catalog_metadata "
+    "(singleton_id, generation, navigation_revision) VALUES (1, 0, 0)"
+)
 
 _SUBTREE_DELETE_RECORD_COLUMNS = (
     "subtree_delete_idempotency_key, workspace_id, root_node_id, "

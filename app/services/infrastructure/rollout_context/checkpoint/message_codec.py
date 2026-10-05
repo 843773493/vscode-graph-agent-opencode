@@ -26,7 +26,18 @@ from app.domain.itemized.enums import (
     TurnScope,
 )
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    InternalDisplayPart,
+    InternalDisplayProvenance,
+    RuntimeNoticePayload,
+)
+from app.prompting.factory import INTERNAL_PROMPT_SCHEMA_VERSION
+from app.prompting.registry import (
+    InternalDisplayPolicy,
+    structured_prompt_registry,
+)
+from app.prompting.validation import internal_prompt_metadata, validate_internal_message
 from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
     expand_tool_message,
     group_content,
@@ -70,6 +81,54 @@ def _stringify_content(value: object) -> str:
             part for part in (_stringify_content(item) for item in value) if part
         )
     return ""
+
+
+def _internal_display_provenance(
+    response_metadata: Mapping[str, object],
+) -> InternalDisplayProvenance:
+    raw = response_metadata.get("internal_display_provenance")
+    nested = response_metadata.get("message_metadata")
+    nested_value = (
+        nested.get("internal_display_provenance")
+        if isinstance(nested, Mapping)
+        else None
+    )
+    if raw is not None and nested_value is not None and raw != nested_value:
+        raise ValueError("internal display provenance 在顶层与 message_metadata 中冲突")
+    value = raw if raw is not None else nested_value
+    if value is None:
+        return InternalDisplayProvenance()
+    return InternalDisplayProvenance.from_dict(value)
+
+
+def _runtime_notice_payload(
+    prompt: object,
+    response_metadata: Mapping[str, object],
+) -> RuntimeNoticePayload | None:
+    metadata = internal_prompt_metadata(response_metadata)
+    if metadata is None:
+        return None
+    if not isinstance(prompt, str):
+        raise TypeError("内部结构消息 content 必须是字符串")
+    validate_internal_message(prompt, response_metadata)
+    kind = metadata.get("structured_prompt_kind")
+    if not isinstance(kind, str):
+        raise TypeError("内部结构消息 structured_prompt_kind 必须是字符串")
+    kind_spec = structured_prompt_registry.internal_message_kind(kind)
+    if kind_spec.display_policy != InternalDisplayPolicy.explicit:
+        return None
+    display_kind = kind_spec.display_kind
+    display_text = metadata.get("display_content")
+    if display_kind is None or not isinstance(display_text, str):
+        raise ValueError(f"显式展示内部消息 kind={kind} 缺少 typed display")
+    return RuntimeNoticePayload(
+        prompt=prompt,
+        display_part=InternalDisplayPart(
+            kind=display_kind,
+            text=display_text,
+            provenance=_internal_display_provenance(response_metadata),
+        ),
+    )
 
 
 def _serialized_tool_calls(value: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -131,7 +190,6 @@ class LangChainMessageCodec:
         metadata = self._message_metadata(message)
         for value in (
             metadata.get("turn_id"),
-            metadata.get("job_id"),
             self._metadata(message).get("turn_id"),
         ):
             if isinstance(value, str) and value:
@@ -193,15 +251,38 @@ class LangChainMessageCodec:
         *,
         item_sequence: int,
         message_id: str,
-        turn_id: str,
+        turn_id: str | None,
+        execution_id: str | None = None,
         timestamp: str,
         model_call_id: str | None = None,
     ) -> tuple[CanonicalItemRecord, ...]:
+        if turn_id is not None and (not isinstance(turn_id, str) or not turn_id):
+            raise ValueError("items_for_message.turn_id 必须是非空字符串或 None")
+        if execution_id is not None and (
+            not isinstance(execution_id, str) or not execution_id
+        ):
+            raise ValueError(
+                "items_for_message.execution_id 必须是非空字符串或 None"
+            )
+        if turn_id is None and execution_id is None:
+            raise ValueError(
+                "Turn-less canonical message 必须带 admission 的 execution_id"
+            )
         message_value = self.to_dict(message)
         data = message_value.get("data")
         data_mapping = data if isinstance(data, Mapping) else {}
         role = self.message_role(message)
         internal = self.is_internal(message)
+        content = data_mapping.get("content")
+        response_metadata = self._metadata(message)
+        display_payload = (
+            _runtime_notice_payload(content, response_metadata)
+            if (
+                isinstance(message, HumanMessage)
+                and internal_prompt_metadata(response_metadata) is not None
+            )
+            else None
+        )
         item_metadata: dict[str, object] = {
             "projection_message_id": message_id,
             "wire_role": role,
@@ -209,7 +290,6 @@ class LangChainMessageCodec:
         }
         if isinstance(model_call_id, str) and model_call_id:
             item_metadata["model_call_id"] = model_call_id
-        response_metadata = self._metadata(message)
         item_metadata.update(semantic_metadata(response_metadata))
         for key in (
             "context_fork_source_session_id",
@@ -237,28 +317,27 @@ class LangChainMessageCodec:
                 attachments.append(safe_attachment)
             if attachments:
                 item_metadata["attachments"] = attachments
-        message_turn_ids = tuple(
-            value
-            for name in ("turn_id", "job_id")
-            if isinstance(
-                value := self._message_metadata(message).get(name), str
-            )
-            and value
+        internal_notice = internal and isinstance(message, HumanMessage) and (
+            turn_id is None or display_payload is not None
         )
-        has_execution_turn = any(
-            not value.startswith("internal-") for value in message_turn_ids
-        )
-        if internal and not (
-            isinstance(message, HumanMessage) and has_execution_turn
-        ):
+        if internal_notice:
             semantic_kind = SemanticKind.RUNTIME_NOTICE
-            payload_kind = PayloadKind.TEXT
-            payload = _stringify_content(data_mapping.get("content"))
+            if display_payload is not None:
+                if execution_id is None:
+                    raise ValueError(
+                        "显式 internal display notice 必须绑定 admission execution_id"
+                    )
+                payload_kind = PayloadKind.STRUCTURED_CONTENT
+                payload = display_payload.to_dict()
+            else:
+                payload_kind = PayloadKind.TEXT
+                payload = _stringify_content(content)
             item_turn_id: str | None = None
             turn_scope: str | None = TurnScope.PENDING_NEXT_TURN
         elif isinstance(message, HumanMessage):
             semantic_kind = SemanticKind.USER_INPUT
-            content = data_mapping.get("content")
+            if turn_id is None:
+                raise ValueError("user_input root 必须带已接受的 turn_id")
             payload_kind = (
                 PayloadKind.TEXT
                 if isinstance(content, str)
@@ -285,7 +364,7 @@ class LangChainMessageCodec:
             }
             item_metadata["tool_call_id"] = tool_call_id
             item_turn_id = turn_id
-            turn_scope = TurnScope.TURN_MEMBER
+            turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
         elif self.tool_calls(message_value):
             semantic_kind = SemanticKind.TOOL_CALL
             payload_kind = PayloadKind.TOOL_CALL
@@ -293,10 +372,9 @@ class LangChainMessageCodec:
                 "tool_calls": [dict(call) for call in self.tool_calls(message_value)]
             }
             item_turn_id = turn_id
-            turn_scope = TurnScope.TURN_MEMBER
+            turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
         else:
             semantic_kind = SemanticKind.ASSISTANT_OUTPUT
-            content = data_mapping.get("content")
             invalid_tool_calls = data_mapping.get("invalid_tool_calls")
             if isinstance(invalid_tool_calls, list) and invalid_tool_calls:
                 # LangChain 将无法解析的工具参数放在 invalid_tool_calls 中。
@@ -319,7 +397,8 @@ class LangChainMessageCodec:
                 )
                 payload = content
             item_turn_id = turn_id
-            turn_scope = TurnScope.TURN_MEMBER
+            turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
+        invocation_id = execution_id if execution_id is not None else turn_id
         producer_kind = (
             "user"
             if semantic_kind == SemanticKind.USER_INPUT
@@ -336,7 +415,11 @@ class LangChainMessageCodec:
             producer_ref={
                 "producer_kind": producer_kind,
                 "producer_id": message_id,
-                "invocation_id": turn_id,
+                **(
+                    {"invocation_id": invocation_id}
+                    if invocation_id is not None
+                    else {}
+                ),
             },
             payload=payload,
             created_at=timestamp,
@@ -363,11 +446,33 @@ class LangChainMessageCodec:
             # runtime notice 仍沿用 checkpoint 的 HumanMessage wire projection，
             # 但通过 canonical semantic kind 恢复 internal 标记，避免它被
             # 历史读取误当成真实用户 Turn。
-            message = HumanMessage(
-                content=_message_content_value(item.payload),
-                id=message_id,
-                response_metadata={"internal": True},
-            )
+            if (
+                item.payload_kind == PayloadKind.STRUCTURED_CONTENT
+                and isinstance(item.payload, Mapping)
+                and set(item.payload) & {"prompt", "display_part"}
+            ):
+                notice_payload = RuntimeNoticePayload.from_dict(item.payload)
+                display = notice_payload.display_part
+                response_metadata: dict[str, object] = {
+                    "internal": True,
+                    "structured_prompt_kind": display.kind,
+                    "structured_prompt_schema_version": INTERNAL_PROMPT_SCHEMA_VERSION,
+                    "internal_display_kind": display.kind,
+                    "display_content": display.text,
+                    "internal_display_provenance": display.provenance.to_dict(),
+                }
+                validate_internal_message(notice_payload.prompt, response_metadata)
+                message = HumanMessage(
+                    content=notice_payload.prompt,
+                    id=message_id,
+                    response_metadata=response_metadata,
+                )
+            else:
+                message = HumanMessage(
+                    content=_message_content_value(item.payload),
+                    id=message_id,
+                    response_metadata={"internal": True},
+                )
         elif item.semantic_kind == SemanticKind.TOOL_RESULT:
             payload = item.payload if isinstance(item.payload, Mapping) else {}
             tool_status = (
@@ -510,6 +615,13 @@ class LangChainMessageCodec:
             SemanticKind.REASONING,
             SemanticKind.RUNTIME_NOTICE,
         }:
+            if (
+                item.semantic_kind == SemanticKind.RUNTIME_NOTICE
+                and item.payload_kind == PayloadKind.STRUCTURED_CONTENT
+                and isinstance(item.payload, Mapping)
+                and set(item.payload) & {"prompt", "display_part"}
+            ):
+                return RuntimeNoticePayload.from_dict(item.payload).prompt
             if (
                 item.semantic_kind == SemanticKind.ASSISTANT_OUTPUT
                 and isinstance(payload, Mapping)

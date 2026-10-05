@@ -306,6 +306,7 @@ class RegistryRuntimeMixin:
         preserve_browser_managers: bool = False,
         preserve_terminal_managers: bool = False,
         preserve_workspace_backends: bool = False,
+        detach_adopted_managed_processes: bool = False,
     ) -> None:
         errors: list[str] = []
         for workspace_id in tuple(self._targets):
@@ -318,6 +319,9 @@ class RegistryRuntimeMixin:
             for connection_id, runtimes in self._retired_remote_gateway_runtimes.items()
             for runtime in runtimes
         ]
+        if detach_adopted_managed_processes:
+            for _, runtime in local_runtimes:
+                runtime.detach_adopted_processes()
         if preserve_browser_managers:
             for _, runtime in local_runtimes:
                 runtime.detach_process("browser_manager")
@@ -337,7 +341,7 @@ class RegistryRuntimeMixin:
         ):
             try:
                 runtime.request_terminate()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — 回收全部已拥有运行时并聚合清理错误。
                 errors.append(f"{runtime_id} 发送终止信号失败: {error}")
 
         for runtime_id, runtime in (
@@ -347,7 +351,7 @@ class RegistryRuntimeMixin:
         ):
             try:
                 runtime.wait_closed()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 — 回收全部已拥有运行时并聚合清理错误。
                 errors.append(f"{runtime_id}: {error}")
         self._runtimes.clear()
         self._remote_gateway_runtimes.clear()

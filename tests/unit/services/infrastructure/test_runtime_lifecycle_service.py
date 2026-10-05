@@ -10,6 +10,7 @@ import pytest
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.event import (
     JobFailedEvent,
     JobFailedPayload,
@@ -50,15 +51,16 @@ class RecordingTurnStatusWriter:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
-    def mark_turn_terminal_status(
+    def mark_job_terminal_status(
         self,
         *,
         session_id: str,
-        turn_id: str,
+        thread_id: str,
+        job_id: str,
         status: str,
     ) -> bool:
         self.calls.append(
-            {"session_id": session_id, "turn_id": turn_id, "status": status}
+            {"session_id": session_id, "thread_id": thread_id, "job_id": job_id, "status": status}
         )
         return True
 
@@ -153,6 +155,8 @@ async def test_force_interrupt_persists_event_and_cancels_job(
         agent_id="default",
         status=JobStatus.running,
         task=task,
+        thread_id="thr_runtime_test",
+        execution_binding=UserExecutionIdentity(job_id="job_running", turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")),
     )
     jobs._jobs[job.job_id] = job
     jobs._session_current_job[job.session_id] = job.job_id
@@ -188,7 +192,7 @@ async def test_startup_reconciles_job_without_terminal_event(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
             timestamp=now,
-            payload=JobStartedPayload(),
+            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
         ),
     )
 
@@ -201,7 +205,7 @@ async def test_startup_reconciles_job_without_terminal_event(
 
 
 @pytest.mark.asyncio
-async def test_startup_keeps_session_with_invalid_trace_available(
+async def test_startup_rejects_invalid_trace(
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -230,17 +234,8 @@ async def test_startup_keeps_session_with_invalid_trace_available(
         tmp_path, session_lifecycle_guard=session_lifecycle_guard
     )
 
-    assert await runtime.reconcile_stale_executions() == 0
-    assert runtime.startup_reconciliation_errors == [
-        {
-            "session_id": "ses_019b7e56befb747788f3efc9aace9dbc",
-            "error": "Trace 事件协议无效: session_id=ses_019b7e56befb747788f3efc9aace9dbc event="
-            "{'event_id': 'evt_legacy_text_start', 'job_id': 'job_legacy', "
-            "'step_id': None, 'agent_id': 'default', "
-            "'timestamp': '2026-07-05T14:51:24.999582+00:00', "
-            "'type': 'text_start', 'payload': {}}",
-        }
-    ]
+    with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
+        await runtime.reconcile_stale_executions()
 
 
 @pytest.mark.asyncio
@@ -264,7 +259,7 @@ async def test_startup_reconciles_persisted_turn_as_failed(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
             timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(),
+            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
         ),
     )
 
@@ -273,8 +268,9 @@ async def test_startup_reconciles_persisted_turn_as_failed(
     assert writer.calls == [
         {
             "session_id": "ses_019c70f868da751480de63aa344e28c9",
-            "turn_id": "job_stale",
-            "status": "failed",
+            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9"),
+            "job_id": "job_stale",
+            "status": "execution_lost",
         }
     ]
     event = runtime._trace_event_store.read_events(
@@ -306,7 +302,7 @@ async def test_startup_repairs_existing_process_exit_turn_status(
             event_id=create_prefixed_id("evt"),
             job_id="job_stale",
             timestamp=now,
-            payload=JobStartedPayload(),
+            payload=JobStartedPayload(session_id="ses_019c70f868da751480de63aa344e28c9", thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9")),
         ),
     )
     await runtime._trace_event_store.append(
@@ -330,8 +326,9 @@ async def test_startup_repairs_existing_process_exit_turn_status(
     assert writer.calls == [
         {
             "session_id": "ses_019c70f868da751480de63aa344e28c9",
-            "turn_id": "job_stale",
-            "status": "failed",
+            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c70f868da751480de63aa344e28c9"),
+            "job_id": "job_stale",
+            "status": "execution_lost",
         }
     ]
     assert (
@@ -361,6 +358,16 @@ async def test_startup_preserves_timeout_status_from_failed_event(
     )
     await runtime._trace_event_store.append(
         "ses_019c162a2dfb7cf08123d546495a99c8",
+        JobStartedEvent(
+            event_id=create_prefixed_id("evt"), job_id="job_timeout", timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(
+                session_id="ses_019c162a2dfb7cf08123d546495a99c8",
+                thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c162a2dfb7cf08123d546495a99c8"),
+            ),
+        ),
+    )
+    await runtime._trace_event_store.append(
+        "ses_019c162a2dfb7cf08123d546495a99c8",
         JobFailedEvent(
             event_id=create_prefixed_id("evt"),
             job_id="job_timeout",
@@ -378,14 +385,15 @@ async def test_startup_preserves_timeout_status_from_failed_event(
     assert writer.calls == [
         {
             "session_id": "ses_019c162a2dfb7cf08123d546495a99c8",
-            "turn_id": "job_timeout",
+            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c162a2dfb7cf08123d546495a99c8"),
+            "job_id": "job_timeout",
             "status": "timed_out",
         }
     ]
 
 
 @pytest.mark.asyncio
-async def test_startup_preserves_legacy_timeout_text_status(
+async def test_startup_requires_structured_timeout_code(
     tmp_path: Path,
     session_bundle_factory,
     session_lifecycle_guard,
@@ -398,6 +406,16 @@ async def test_startup_preserves_legacy_timeout_text_status(
         tmp_path,
         writer,
         session_lifecycle_guard=session_lifecycle_guard,
+    )
+    await runtime._trace_event_store.append(
+        "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
+        JobStartedEvent(
+            event_id=create_prefixed_id("evt"), job_id="job_legacy_timeout", timestamp=datetime.now(UTC),
+            payload=JobStartedPayload(
+                session_id="ses_019c1bbd6ff678cf8f3e8598a8ae7327",
+                thread_id=get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c1bbd6ff678cf8f3e8598a8ae7327"),
+            ),
+        ),
     )
     await runtime._trace_event_store.append(
         "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
@@ -414,7 +432,8 @@ async def test_startup_preserves_legacy_timeout_text_status(
     assert writer.calls == [
         {
             "session_id": "ses_019c1bbd6ff678cf8f3e8598a8ae7327",
-            "turn_id": "job_legacy_timeout",
-            "status": "timed_out",
+            "thread_id": get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id("ses_019c1bbd6ff678cf8f3e8598a8ae7327"),
+            "job_id": "job_legacy_timeout",
+            "status": "failed",
         }
     ]

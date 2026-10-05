@@ -58,13 +58,17 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.catalog_session_bundle import (
+    fixture_main_thread_id,
+    seed_catalog_session_bundle,
+)
 from tests.support.node_debug_dependencies import (
     permissive_node_debug_session_admission,
 )
 
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
 _CONFIGURATION_ID = "dbgcfg_22222222222222222222222222222222"
+_PARENT_MAIN_THREAD_ID = fixture_main_thread_id(_PARENT_SESSION_ID)
 
 
 def _create_session(resolver: object, session_id: str) -> Path:
@@ -73,6 +77,7 @@ def _create_session(resolver: object, session_id: str) -> Path:
         resolver.sessions_root,
         session_id,
         title=title,
+        main_thread_id=fixture_main_thread_id(session_id),
     ).directory
 
 
@@ -262,7 +267,7 @@ async def test_release_failure_publishes_release_failed_state_event(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -278,7 +283,7 @@ async def test_release_failure_publishes_release_failed_state_event(
             claim_with_spawn_identity(
                 new_launch_claim(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     configuration_id=configuration_id,
                     inspector_host="127.0.0.1",
                     inspector_port=9229,
@@ -298,12 +303,12 @@ async def test_release_failure_publishes_release_failed_state_event(
         )
         runtime.process_identity_source = real_identity.source
         runtime.process_start_marker = real_identity.start_marker
-        service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
+        service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime
 
         blocked = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
@@ -325,7 +330,7 @@ async def test_release_failure_publishes_release_failed_state_event(
         await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
@@ -344,7 +349,7 @@ def _sleeper_child() -> subprocess.Popen[bytes]:
 def _lease_identity(process_instance_id: str) -> NodeDebugProcessLeaseIdentity:
     return NodeDebugProcessLeaseIdentity.for_process_instance(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         process_instance_id=process_instance_id,
     )
 
@@ -377,7 +382,7 @@ def _runtime_for(
 ) -> NodeDebugRuntime:
     runtime = NodeDebugRuntime(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         configuration_id=configuration_id,
         workspace_root=workspace_root,
         script_path=workspace_root / "entry.mjs",
@@ -401,7 +406,7 @@ def _claim(
     now = datetime.now(UTC)
     return NodeDebugLaunchClaimDTO(
         session_id=_PARENT_SESSION_ID,
-        thread_id="main",
+        thread_id=_PARENT_MAIN_THREAD_ID,
         process_instance_id=process_instance_id,
         nonce="nonce-lease",
         phase=phase,  # type: ignore[arg-type]
@@ -443,13 +448,13 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
     try:
         state = await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             path="entry.mjs",
             args=[],
             breakpoints=[],
         )
         assert state.status == "running"
-        claim = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        claim = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert claim is not None
         assert claim.phase == "running"
 
@@ -469,12 +474,12 @@ async def test_handshake_registers_typed_lease_and_verified_stop_settles_it(
         stopped = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
         assert stopped.status == "exited"
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "settled"
         settled = manager.get_lease(identity.lease_id)
@@ -513,7 +518,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="入口调试",
             script_path="entry.mjs",
         )
@@ -529,7 +534,7 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
             claim_with_spawn_identity(
                 new_launch_claim(
                     session_id=_PARENT_SESSION_ID,
-                    thread_id="main",
+                    thread_id=_PARENT_MAIN_THREAD_ID,
                     configuration_id=configuration_id,
                     inspector_host="127.0.0.1",
                     inspector_port=9229,
@@ -549,17 +554,17 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
         )
         runtime.process_identity_source = real_identity.source
         runtime.process_start_marker = real_identity.start_marker
-        service._runtimes[(_PARENT_SESSION_ID, "main")] = runtime
+        service._runtimes[(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)] = runtime
 
         blocked = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
         assert blocked.status == "reconcile_required"
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "reconcile_required"
         kept = manager.get_lease(identity.lease_id)
@@ -572,12 +577,12 @@ async def test_reconcile_required_keeps_lease_active_until_termination_verified(
         released = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
         assert released.status == "exited"
-        persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted_after = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted_after is not None
         assert persisted_after.phase == "settled"
         assert manager.get_lease(identity.lease_id).status == "settled"
@@ -618,7 +623,7 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
             manager_after,
         )
 
-        first = await service.get_state(_PARENT_SESSION_ID, "main")
+        first = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert first.status == "reconcile_required"
         assert child.poll() is None
         kept = manager_after.get_lease(identity.lease_id)
@@ -626,7 +631,7 @@ async def test_restart_recovery_keeps_active_lease_without_duplicate_acquire(
         assert kept.status == "active"
 
         # 轮询读接口幂等：不重复 acquire、不新增占用行、也不虚报终态。
-        second = await service.get_state(_PARENT_SESSION_ID, "main")
+        second = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert second.status == "reconcile_required"
         leases = manager_after.leases_for_turn(identity.holder_id)
         assert [lease.lease_id for lease in leases] == [identity.lease_id]
@@ -667,9 +672,9 @@ async def test_restart_recovery_settles_lease_only_after_instance_verified_gone(
         manager_after,
     )
 
-    state = await service.get_state(_PARENT_SESSION_ID, "main")
+    state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert state.status == "idle"
-    persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+    persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert persisted is not None
     assert persisted.phase == "settled"
     settled = manager_after.get_lease(identity.lease_id)
@@ -691,13 +696,13 @@ async def test_active_lease_without_claim_or_process_reports_idle(
     service, _store, _workspace_root = _make_service(tmp_path, session_tree, manager)
     ghost = _seed_active_lease(manager, "node-debug-proc_ghost")
 
-    state = await service.get_state(_PARENT_SESSION_ID, "main")
+    state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
     assert state.status == "idle"
     # 也不会阻断 owner 级操作：lease 不驱动任何服务行为。
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             name="账本孤儿占用不阻断",
             script_path="entry.mjs",
         )
@@ -733,26 +738,26 @@ async def test_ledger_settlement_does_not_change_verified_running_report(
     try:
         await service.start(
             session_id=_PARENT_SESSION_ID,
-            thread_id="main",
+            thread_id=_PARENT_MAIN_THREAD_ID,
             path="entry.mjs",
             args=[],
             breakpoints=[],
         )
-        claim = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        claim = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert claim is not None
         identity = _lease_identity(claim.process_instance_id)
         # 外部把账本占用错误结清：进程与 claim 事实不变。
         manager.settle(identity.lease_id)
         assert manager.get_lease(identity.lease_id).status == "settled"
 
-        state = await service.get_state(_PARENT_SESSION_ID, "main")
+        state = await service.get_state(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert state.status == "running"
         assert state.pid == child.pid
 
         stopped = await service.apply_action(
             command=NodeDebugControlActionRequest(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 action="stop",
             ),
         )
@@ -779,7 +784,9 @@ async def test_ledger_conflict_fails_start_closed_without_fake_registration(
         manager,
         inspector_port=0,
     )
-    conflicting_id = f"node_debug_process:{_PARENT_SESSION_ID}:main"
+    conflicting_id = (
+        f"node_debug_process:{_PARENT_SESSION_ID}:{_PARENT_MAIN_THREAD_ID}"
+    )
     manager.register(
         resource_id=conflicting_id,
         kind="terminal",
@@ -799,7 +806,7 @@ async def test_ledger_conflict_fails_start_closed_without_fake_registration(
         with pytest.raises(RuntimeError, match="资源类型发生冲突"):
             await service.start(
                 session_id=_PARENT_SESSION_ID,
-                thread_id="main",
+                thread_id=_PARENT_MAIN_THREAD_ID,
                 path="entry.mjs",
                 args=[],
                 breakpoints=[],
@@ -807,10 +814,15 @@ async def test_ledger_conflict_fails_start_closed_without_fake_registration(
 
         # 失败收口：进程被真实停止、claim 结清，账本里没有伪造出的占用行。
         assert child.poll() is not None
-        persisted = store.read_launch_claim(_PARENT_SESSION_ID, "main")
+        persisted = store.read_launch_claim(_PARENT_SESSION_ID, _PARENT_MAIN_THREAD_ID)
         assert persisted is not None
         assert persisted.phase == "settled"
-        assert manager.leases_for_turn(f"node-debug-owner:{_PARENT_SESSION_ID}:main") == []
+        assert (
+            manager.leases_for_turn(
+                f"node-debug-owner:{_PARENT_SESSION_ID}:{_PARENT_MAIN_THREAD_ID}"
+            )
+            == []
+        )
     finally:
         await service.close()
         if child.poll() is None:

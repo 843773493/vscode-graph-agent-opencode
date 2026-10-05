@@ -1,10 +1,11 @@
 """per-session ``session-control.sqlite`` 的 schema 初始化与版本升级链路。
 
-承载 ``SessionControlStore._initialize`` 与 ``thread_execution_intents`` 的
-v2→v3 加法升级：幂等建表、``PRAGMA user_version`` fail-closed 版本闸门，以及
-升级期间「建临时新表→确定性拷贝→行数校验→删旧→改名」的单事务迁移。
+承载 ``SessionControlStore._initialize``、历史 v1/v2 schema 加法升级与
+thread_catalog GraphBinding 列升级；各表 DDL 的唯一定义点仍在对应垂直链路
+模块，本模块只负责编排事务与版本推进。
 
-各表 DDL 的唯一定义点仍在对应垂直链路模块，本模块只负责编排建表顺序。
+历史 thread_catalog 行在升级时 selector 保持 NULL，不读取旧 JSON，也不从
+当前 registry 推断；runtime 读取会 fail closed。
 
 错误分类沿用宿主约定：``TypeError`` 输入类型错误、``ValueError`` 输入形态
 非法、``KeyError`` 目标行不存在、``RuntimeError`` 语义冲突。
@@ -57,19 +58,12 @@ class SchemaInitMixin:
     def _initialize(self) -> None:
         """幂等建表并设置 user_version；未知版本 fail-closed 拒绝打开。
 
-        支持的 current：0（全新库，建全部表并置 v3）、1（R12/R13 v1 库，
-        同一事务内先以「建临时新表→拷贝→校验→删旧→改名」升级
-        ``thread_catalog`` 的 kind CHECK、再幂等补建 8.5-B 新表并升
-        v3，既有 main row 数据零丢失）、2（R20 v2 库，同一事务内以
-        「建临时新表→确定性拷贝→校验→删旧→改名」升级
-        ``thread_execution_intents`` 补齐稳定 binding/job identity）、
-        3/4/5（历史版本，幂等补建新表后推进）、6（当前版本；全部 DDL
-        均为幂等 no-op）。
+        支持 current=0（全新库）以及历史 1–7；历史行按各自版本在此单事务
+        内补齐 schema，thread_catalog 缺失的 GraphBinding 四字段保持 NULL。
+        current=8 是当前版本；未知版本 fail closed。
         """
-        current = int(
-            self._connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        if current not in (0, 1, 2, 3, 4, 5, 6, self.SCHEMA_VERSION):
+        current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if current not in (0, 1, 2, 3, 4, 5, 6, 7, self.SCHEMA_VERSION):
             raise RuntimeError(
                 "session control schema 版本未知，fail-closed 拒绝打开: "
                 f"path={self.database_path}, user_version={current}, "
@@ -82,6 +76,9 @@ class SchemaInitMixin:
             if current == 2:
                 self._upgrade_thread_execution_intents_v2_to_v3()
             self._connection.execute(THREAD_CATALOG_TABLE_DDL)
+            self._upgrade_thread_catalog_graph_binding_columns(
+                allow_upgrade=current != self.SCHEMA_VERSION
+            )
             self._connection.execute(LIFECYCLE_FENCE_TABLE_DDL)
             self._connection.execute(_THREAD_CREATION_RECORDS_TABLE_DDL)
             self._connection.execute(_IDX_THREAD_CREATION_DELEGATION_DDL)
@@ -95,17 +92,13 @@ class SchemaInitMixin:
             self._connection.execute(_IDX_THREAD_EXECUTION_INTENT_THREAD_DDL)
             self._connection.execute(_IDX_THREAD_EXECUTION_INTENT_STATE_DDL)
             self._connection.execute(SESSION_OPERATION_LEASES_TABLE_DDL)
-            self._connection.execute(
-                IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL
-            )
+            self._connection.execute(IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL)
             self._connection.execute(THREAD_OWNER_BINDINGS_TABLE_DDL)
             self._connection.execute(COMMUNICATION_OUTBOX_TABLE_DDL)
             self._connection.execute(COMMUNICATION_INBOX_TABLE_DDL)
             self._connection.execute(IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL)
             if current != self.SCHEMA_VERSION:
-                self._connection.execute(
-                    f"PRAGMA user_version = {self.SCHEMA_VERSION}"
-                )
+                self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         except BaseException:
             self._connection.execute("ROLLBACK")
             raise
@@ -125,9 +118,7 @@ class SchemaInitMixin:
         →删旧→改名」，任何失败随 ``_initialize`` 事务整体回滚
         （``user_version`` 保持 2，库可原样重开）。
         """
-        self._connection.execute(
-            _THREAD_EXECUTION_INTENTS_V3_UPGRADE_TABLE_DDL
-        )
+        self._connection.execute(_THREAD_EXECUTION_INTENTS_V3_UPGRADE_TABLE_DDL)
         rows = self._connection.execute(
             f"SELECT {_THREAD_EXECUTION_INTENT_V2_COLUMNS} "
             "FROM thread_execution_intents "
@@ -158,9 +149,7 @@ class SchemaInitMixin:
                     f"initial_state 行（fail closed）: admission_key="
                     f"{admission_key!r}, initial_state={initial_state!r}"
                 )
-            binding_id, job_id = derive_initial_execution_identity(
-                admission_key
-            )
+            binding_id, job_id = derive_initial_execution_identity(admission_key)
             preimage_hash = compute_initial_execution_binding_preimage_hash(
                 admission_idempotency_key=admission_key,
                 session_id=session_id,

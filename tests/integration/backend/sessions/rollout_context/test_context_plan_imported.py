@@ -7,8 +7,8 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
 )
@@ -48,16 +48,19 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 
 @pytest.fixture
 def snapshot(registry_db, draft):
-    _saver, session, _connection, accepted = registry_db
+    saver, session, _connection, accepted = registry_db
     result = ContextPlanComposer().assembly(
         plan=draft,
         assembly_id="imported-assembly",
         session_id=session,
+        thread_id=saver._storage.main_thread_id(session),
         turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         provider_version="imported-fixture",
         request_detail_refs={
-            draft.refs[0].ref_id: DetailRef(session, "imported-assembly", "source")
+            draft.refs[0].ref_id: DetailRef(
+                session, draft.thread_id, "imported-assembly", "source"
+            )
         },
     )
     return replace(
@@ -69,7 +72,8 @@ def snapshot(registry_db, draft):
 @pytest.fixture
 def source_manifest(draft):
     return build_source_manifest(
-        session_id=draft.session_id, plan_id=draft.plan_id, refs=draft.refs,
+        session_id=draft.session_id, thread_id=draft.thread_id,
+        plan_id=draft.plan_id, refs=draft.refs,
         contributions=tuple(replace(item, body=None) for item in draft.contributions),
     )
 
@@ -140,9 +144,11 @@ def test_import_roundtrip_is_sealed_without_fabricated_draft(
                 ),
             )
     import_snapshot(source=source, origin=origin)
-    registered = read_registration(connection, session, snapshot.plan_id)
+    registered = read_registration(
+        connection, session, snapshot.thread_id, snapshot.plan_id
+    )
     assert registered == read_imported_registration(
-        connection, session, snapshot.plan_id
+        connection, session, snapshot.thread_id, snapshot.plan_id
     )
     assert registered.draft is None and registered.creation_hash is None
     assert registered.registration_origin == origin
@@ -254,7 +260,7 @@ def test_import_read_rejects_missing_rows_without_backfill(
     with connection:
         connection.execute(f"DELETE FROM {table}")
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_registration(connection, session, snapshot.plan_id)
+        read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
     assert connection.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
 
 
@@ -311,7 +317,7 @@ def test_import_recovery_rejects_tampering(
                 "UPDATE context_assemblies SET snapshot_json=?", (json_text(value),)
             )
     with pytest.raises(ValueError, match="source-mismatch") as caught:
-        read_registration(connection, session, snapshot.plan_id)
+        read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
     assert "do-not-leak" not in str(caught.value)
 
 
@@ -347,12 +353,13 @@ def test_import_retry_is_exact_and_does_not_create_second_plan(
     assert tuple(connection.iterdump()) == before
 
 
-@pytest.mark.parametrize("owner", ["session", "assembly"])
+@pytest.mark.parametrize("owner", ["session", "thread", "assembly"])
 def test_import_rejects_cross_owner_header_detail(
     registry_db, snapshot, import_snapshot, owner
 ):
     detail = DetailRef(
         "other" if owner == "session" else snapshot.session_id,
+        "foreign-thread" if owner == "thread" else snapshot.thread_id,
         "other" if owner == "assembly" else snapshot.assembly_id,
         "header",
     )
@@ -427,7 +434,7 @@ def test_import_hash_binds_each_source_field(
             (origin, json_text(source)),
         )
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_registration(connection, session, snapshot.plan_id)
+        read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
 
 
 @pytest.mark.parametrize(
@@ -480,7 +487,7 @@ def test_import_snapshot_json_inline_body_is_rejected_before_normalization(
             "UPDATE context_assemblies SET snapshot_json=?", (json_text(value),)
         )
     with pytest.raises(ValueError, match="snapshot schema/hash/privacy") as caught:
-        read_registration(connection, session, snapshot.plan_id)
+        read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
     assert "secret not allowed" not in str(caught.value)
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert connection.execute(
@@ -514,7 +521,9 @@ def test_import_rejects_runtime_input_hash_even_when_sql_check_is_bypassed(
         connection.execute("UPDATE context_plans SET seal_input_hash='runtime-only'")
     connection.execute("PRAGMA ignore_check_constraints=OFF")
     with pytest.raises(ValueError, match="source-mismatch"):
-        read_imported_registration(connection, session, snapshot.plan_id)
+        read_imported_registration(
+            connection, session, snapshot.thread_id, snapshot.plan_id
+        )
 
 
 def test_fork_import_requires_source_audit(registry_db, provenance, import_snapshot):

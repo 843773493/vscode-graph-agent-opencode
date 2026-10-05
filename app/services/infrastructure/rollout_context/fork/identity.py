@@ -8,10 +8,12 @@ import hashlib
 class RolloutIdentityMixin:
     """生成 rollout 的稳定本地标识。"""
 
-    def _rollout_id(self, thread_id: str) -> str:
+    def _rollout_id(self, session_id: str, *, thread_id: str | None = None) -> str:
         return (
             "rollout-"
-            + hashlib.sha256(str(self.root(thread_id)).encode()).hexdigest()[:24]
+            + hashlib.sha256(
+                str(self.root(session_id, thread_id=thread_id)).encode()
+            ).hexdigest()[:24]
         )
 
 

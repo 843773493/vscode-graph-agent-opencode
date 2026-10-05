@@ -13,8 +13,8 @@ import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -103,17 +103,28 @@ def session_root(sessions_dir) -> Path:
 
 
 @pytest.fixture
+def thread_root(sessions_dir) -> Path:
+    resolver = get_session_path_resolver(sessions_dir)
+    return resolver.resolve_thread_node(
+        SESSION_ID, resolver.main_thread_id(SESSION_ID)
+    )
+
+
+@pytest.fixture
 def upgrade_store(sessions_dir) -> ContextPlanDetailStore:
     return ContextPlanDetailStore(sessions_dir, protected_key=b"p" * 32)
 
 
 @pytest.fixture
-def upgrade_arguments() -> dict[str, object]:
+def upgrade_arguments(sessions_dir) -> dict[str, object]:
+    thread_id = get_session_path_resolver(sessions_dir).main_thread_id(SESSION_ID)
     return {
         "legacy_blob": _OLD_BLOB,
         "legacy_aad": _OLD_AAD,
         "expected_digest": _DIGEST,
-        "target_ref": DetailRef(SESSION_ID, "new-assembly", "new-detail"),
+        "target_ref": DetailRef(
+            SESSION_ID, thread_id, "new-assembly", "new-detail"
+        ),
         "detail_kind": "request_source",
         "retention_class": "request_replay",
         "visibility": "private",
@@ -244,9 +255,9 @@ def test_prepare_is_memory_only_and_new_record_roundtrips(
     assert _SECRET.encode() not in prepared.manifest_bytes + prepared.protected_bytes
     # 测试模拟 migration 安装 prepared bytes；生产升级入口本身不负责发布。
     for path, raw in (
-        (session_root / record.relative_path, prepared.manifest_bytes),
+        (thread_root / record.relative_path, prepared.manifest_bytes),
         (
-            session_root / protected_detail_relative_path(record.detail_ref),
+            thread_root / protected_detail_relative_path(record.detail_ref),
             prepared.protected_bytes,
         ),
     ):
@@ -255,7 +266,10 @@ def test_prepare_is_memory_only_and_new_record_roundtrips(
     restarted = ContextPlanDetailStore(sessions_dir, protected_key=b"p" * 32)
     assert (
         restarted.read(
-            session_id=SESSION_ID, record=record, include_sensitive=True
+            session_id=SESSION_ID,
+            thread_id=record.thread_id,
+            record=record,
+            include_sensitive=True,
         )["detail"]
         == old_plaintext["detail"]
     )
@@ -465,7 +479,12 @@ def test_rehashed_replacement_body_cannot_forge_session_provenance(
         ("target_ref", "old-string", "source-owner"),
         (
             "target_ref",
-            DetailRef("other-session", "assembly", "detail"),
+            DetailRef(
+                "other-session",
+                upgrade_arguments["target_ref"].thread_id,
+                "assembly",
+                "detail",
+            ),
             "source-owner",
         ),
         ("detail_kind", "", "session-digest"),
@@ -544,7 +563,10 @@ def test_preparation_preserves_expiry_and_is_retryable(
     assert first.record.expires_at == args["expires_at"]
     with pytest.raises(DetailUnavailableError, match="已过期"):
         upgrade_store.read(
-            session_id=SESSION_ID, record=first.record, include_sensitive=True
+            session_id=SESSION_ID,
+            thread_id=first.record.thread_id,
+            record=first.record,
+            include_sensitive=True,
         )
 
 
@@ -552,11 +574,14 @@ def test_preparation_preserves_expiry_and_is_retryable(
 def test_normal_write_uses_same_new_envelope_without_old_ingress(
     upgrade_store,
     session_root,
+    thread_root,
+    upgrade_arguments,
     protection,
 ):
     body = {"text": "normal-new-write"}
     record = upgrade_store.write(
         session_id=SESSION_ID,
+        thread_id=upgrade_arguments["target_ref"].thread_id,
         assembly_id="normal-assembly",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -566,19 +591,25 @@ def test_normal_write_uses_same_new_envelope_without_old_ingress(
         protection=protection,
         source_revision="normal-producer",
     )
-    payload = json.loads((session_root / record.relative_path).read_bytes())
+    payload = json.loads((thread_root / record.relative_path).read_bytes())
     assert payload["format_version"] == 2
     assert payload["detail_ref"] == record.detail_ref.to_dict()
     assert sha256_jcs(payload) == record.content_hash
     if protection == "redacted":
         with pytest.raises(DetailUnavailableError, match="没有 protected body"):
             upgrade_store.read(
-                session_id=SESSION_ID, record=record, include_sensitive=True
+                session_id=SESSION_ID,
+                thread_id=record.thread_id,
+                record=record,
+                include_sensitive=True,
             )
     else:
         assert (
             upgrade_store.read(
-                session_id=SESSION_ID, record=record, include_sensitive=True
+                session_id=SESSION_ID,
+                thread_id=record.thread_id,
+                record=record,
+                include_sensitive=True,
             )["detail"]
             == body
         )
@@ -666,6 +697,7 @@ def test_factory_rejects_missing_protected_key(sessions_dir):
 def test_volta_upgrade_detail_consumes_real_capability(
     upgrade_store,
     session_root,
+    upgrade_arguments,
     legacy_envelope,
     old_plaintext,
 ):
@@ -697,6 +729,7 @@ def test_volta_upgrade_detail_consumes_real_capability(
         row,
         rollout_root=session_root / "rollout",
         session_id=SESSION_ID,
+        thread_id=upgrade_arguments["target_ref"].thread_id,
         checkpoint_ns="branch",
         purpose=("request_source", "request_replay", "private"),
         detail_capability=upgrade_store.schema_v3_detail_capability(),

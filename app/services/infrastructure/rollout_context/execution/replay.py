@@ -25,6 +25,7 @@ class RolloutReplayMixin:
 
     def replay_as_new_turn(
         self,
+        session_id: str,
         thread_id: str,
         *,
         source_turn_id: str,
@@ -44,8 +45,13 @@ class RolloutReplayMixin:
             acceptance_idempotency_key,
             field="acceptance_idempotency_key",
         )
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             source = connection.execute(
                 "SELECT root_input_item_id FROM turn_records WHERE turn_id = ?",
@@ -57,6 +63,7 @@ class RolloutReplayMixin:
                 source[0], field=f"turn_records.root_input_item_id: {source_turn_id}"
             )
         roots = self.read_items(
+            session_id,
             thread_id,
             item_ids=(root_item_id,),
             checkpoint_ns=checkpoint_ns,
@@ -70,7 +77,12 @@ class RolloutReplayMixin:
         )
         existing_commit: CommittedStorageCommit | None = None
         if acceptance_idempotency_key is not None:
-            with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
+            ) as connection:
                 active_branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",
                     (checkpoint_ns,),
@@ -173,9 +185,12 @@ class RolloutReplayMixin:
             f"replay:{thread_id}:{source_turn_id}:{replay_id}"
         )
         result = self.accept_turn(
-            thread_id,
+            session_id,
+            thread_id=thread_id,
             accepted_ingress_id=accepted_ingress_id,
             acceptance_idempotency_key=acceptance_key,
+            job_id=f"replay-job:{replay_id}",
+            admission_idempotency_key=f"replay-admission:{replay_id}",
             payload=source_root.payload,
             payload_kind=source_root.payload_kind,
             checkpoint_ns=checkpoint_ns,
@@ -190,6 +205,7 @@ class RolloutReplayMixin:
             identity_origin="replay_as_new_turn",
         )
         self.register_provenance_edge(
+            session_id,
             thread_id,
             ProvenanceEdge(
                 edge_id=f"replay-lineage:{replay_id}",

@@ -8,7 +8,7 @@ from app.abstractions.session_context import WorkspaceSessionContextAccessError
 
 @dataclass(frozen=True, slots=True)
 class SessionTarget:
-    """经过解析的会话目标；workspace_id 为空表示当前工作区。"""
+    """经过解析的会话目标；workspace_id 为空表示当前工作区，否则是 Gateway 路由 ID。"""
 
     session_id: str
     workspace_id: str | None = None
@@ -23,8 +23,14 @@ class SessionTargetResolverProtocol(Protocol):
         self,
         session_id: str,
         *,
-        workspace_id: str | None = None,
+        gateway_workspace_id: str | None = None,
+        backend_workspace_id: str | None = None,
     ) -> SessionTarget: ...
+
+    async def resolve_backend_workspace(
+        self,
+        backend_workspace_id: str,
+    ) -> str: ...
 
 
 __all__ = [

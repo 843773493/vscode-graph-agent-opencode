@@ -23,6 +23,7 @@ from app.services.infrastructure.rollout_context.fork.full_copy.sqlite_snapshot 
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
     detail_copy_row,
+    non_negative_int,
     optional_text,
     required_text,
 )
@@ -72,7 +73,9 @@ class ForkCloneMixin:
     def clone_rollout(
         self,
         *,
+        source_session_id: str,
         source_thread_id: str,
+        target_session_id: str,
         target_thread_id: str,
         checkpoint_ns: str = "",
         source_checkpoint_id: str | None,
@@ -85,21 +88,40 @@ class ForkCloneMixin:
             _RolloutFileLock,
         )
 
-        source_thread_id = required_text(
-            source_thread_id, field="clone.source_thread_id"
+        source_session_id = required_text(
+            source_session_id, field="clone.source_session_id"
         )
-        target_thread_id = required_text(
-            target_thread_id, field="clone.target_thread_id"
+        target_session_id = required_text(
+            target_session_id, field="clone.target_session_id"
         )
-        if source_thread_id == target_thread_id:
+        source_thread_id = self._resolve_thread_identity(
+            source_session_id,
+            required_text(source_thread_id, field="clone.source_thread_id"),
+        )
+        target_thread_id = self._resolve_thread_identity(
+            target_session_id,
+            required_text(target_thread_id, field="clone.target_thread_id"),
+        )
+        if (source_session_id, source_thread_id) == (
+            target_session_id,
+            target_thread_id,
+        ):
             raise ValueError("clone source 与 target session 不能相同")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("clone.checkpoint_ns 必须是字符串")
         source_checkpoint_id = optional_text(
             source_checkpoint_id, field="clone.source_checkpoint_id"
         )
-        source = self.root(source_thread_id, checkpoint_ns)
-        target = self.root(target_thread_id, checkpoint_ns)
+        source = self.root(
+            source_session_id,
+            checkpoint_ns,
+            thread_id=source_thread_id,
+        )
+        target = self.root(
+            target_session_id,
+            checkpoint_ns,
+            thread_id=target_thread_id,
+        )
         self._safe_session_relative_path(source.parent, source.name)
         self._safe_session_relative_path(target.parent, target.name)
         if not source.is_dir():
@@ -108,7 +130,11 @@ class ForkCloneMixin:
             source.parent / ".rollout.write.lock",
             exclusive=False,
         )
-        target_lock = self._lock(target_thread_id, checkpoint_ns)
+        target_lock = self._lock(
+            target_thread_id,
+            checkpoint_ns,
+            session_id=target_session_id,
+        )
         source_lock.acquire()
         source_view_id: str | None = None
         source_detail_rows: tuple[tuple[object, ...], ...] = ()
@@ -117,12 +143,11 @@ class ForkCloneMixin:
                 source_format_version = self._rollout_format(source_connection)
                 if source_format_version == 1:
                     raise FormatDispatchError(
-                        "v1_migration_required: full_rollout_copy 不得隐式迁移 v1；"
-                        "请先显式运行 legacy_import_v1_to_v2"
+                        "unsupported_legacy_rollout: full_rollout_copy 不接受旧格式"
                     )
                 if source_format_version != storage_version.ROLLOUT_FORMAT_VERSION:
                     raise ValueError(
-                        "v1_migration_required: normal full_rollout_copy 不读取 v1 rollout"
+                        "unsupported_rollout_format_version: full_rollout_copy 只接受 v2"
                     )
                 schema_version = source_connection.execute(
                     "SELECT schema_version FROM database_meta WHERE singleton_id=1"
@@ -164,8 +189,8 @@ class ForkCloneMixin:
                 source_detail_rows = tuple(
                     detail_copy_row(row)
                     for row in source_connection.execute(
-                        "SELECT detail_ref, assembly_id, relative_path, content_hash, required, status, detail_id FROM context_plan_details WHERE session_id = ? AND checkpoint_ns = ? ORDER BY detail_ref",
-                        (source_thread_id, checkpoint_ns),
+                        "SELECT detail_ref, assembly_id, relative_path, content_hash, required, status, detail_id FROM context_plan_details WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? ORDER BY detail_ref",
+                        (source_session_id, source_thread_id, checkpoint_ns),
                     ).fetchall()
                 )
                 if source_connection.execute(
@@ -186,7 +211,11 @@ class ForkCloneMixin:
                     status,
                 ) in source_detail_rows:
                     detail_path = Path(relative_path)
-                    detail_ref.require_owner(source_thread_id, assembly_id)
+                    detail_ref.require_owner(
+                        source_session_id,
+                        source_thread_id,
+                        assembly_id,
+                    )
                     if relative_path != detail_relative_path(detail_ref).as_posix():
                         raise RuntimeError(
                             f"source context detail locator 非法: {detail_ref}"
@@ -247,11 +276,23 @@ class ForkCloneMixin:
                     ignore=ignore_live_sqlite,
                 )
                 copy_live_sqlite_snapshot(source, target)
-                with self._connect(target_thread_id, checkpoint_ns) as connection:
-                    target_rollout_id = self._rollout_id(target_thread_id)
+                with self._connect(
+                    target_thread_id,
+                    checkpoint_ns,
+                    session_id=target_session_id,
+                ) as connection:
+                    target_rollout_id = self._rollout_id(
+                        target_session_id,
+                        thread_id=target_thread_id,
+                    )
                     connection.execute(
-                        "UPDATE database_meta SET rollout_id = ?, session_id = ?, updated_at = ? WHERE singleton_id = 1",
-                        (target_rollout_id, target_thread_id, _now()),
+                        "UPDATE database_meta SET rollout_id = ?, session_id = ?, thread_id = ?, updated_at = ? WHERE singleton_id = 1",
+                        (
+                            target_rollout_id,
+                            target_session_id,
+                            target_thread_id,
+                            _now(),
+                        ),
                     )
                     # fork_origins 和 retention_refs 属于原 rollout 的会话关系，
                     # 其中的 child/source/owner ID 不能随完整副本带入新会话。
@@ -262,27 +303,95 @@ class ForkCloneMixin:
                     # fork journal 只描述这次目标物化，不能把父会话过去的
                     # prepared/committed 记录复制成子会话的新操作历史。
                     connection.execute("DELETE FROM fork_materializations")
-                    # 这些表的物理文件随副本落在 target session 节点中，但
-                    # session owner 字段仍是 source；若不改写，Saver 的
-                    # target-local assembly/detail/overlay 查询会看不到已复制
-                    # 的记录。正文、item/view/checkpoint local id 保持不变，
-                    # 由 fork identity mapping 记录 source lineage。
-                    connection.execute(
-                        "UPDATE turn_acceptances SET session_id = ?",
-                        (target_thread_id,),
-                    )
-                    connection.execute(
-                        "UPDATE context_assemblies SET session_id = ?",
-                        (target_thread_id,),
-                    )
+                    # 这些表的物理文件随副本落在 target thread 节点中，owner
+                    # 必须从 source pair 一起改到 target pair；否则 target-local
+                    # 查询看不到记录，或把 source Thread 冒充成 Session。
+                    # 一库只能含一个 pair，先验证 owner 闭包，再按精确 source
+                    # owner 更新并核对行数。
+                    for owner_table in (
+                        "turn_acceptances",
+                        "turn_records",
+                        "executions",
+                        "model_calls",
+                        "turn_execution_links",
+                        "context_assemblies",
+                        "context_source_control_states",
+                    ):
+                        source_owner_count = connection.execute(
+                            f"SELECT COUNT(*) FROM {owner_table} "
+                            "WHERE session_id = ? AND thread_id = ?",
+                            (source_session_id, source_thread_id),
+                        ).fetchone()
+                        other_owner_count = connection.execute(
+                            f"SELECT COUNT(*) FROM {owner_table} "
+                            "WHERE session_id != ? OR thread_id != ?",
+                            (source_session_id, source_thread_id),
+                        ).fetchone()
+                        if source_owner_count is None or other_owner_count != (0,):
+                            raise RuntimeError(
+                                "full_rollout_copy pair-owned table 不属于唯一 source "
+                                f"SessionThread: table={owner_table}"
+                            )
+                        expected_rows = non_negative_int(
+                            source_owner_count[0],
+                            field=f"full_rollout_copy.{owner_table}_owner_count",
+                        )
+                        result = connection.execute(
+                            f"UPDATE {owner_table} SET session_id = ?, thread_id = ? "
+                            "WHERE session_id = ? AND thread_id = ?",
+                            (
+                                target_session_id,
+                                target_thread_id,
+                                source_session_id,
+                                source_thread_id,
+                            ),
+                        )
+                        if result.rowcount != expected_rows:
+                            raise RuntimeError(
+                                "full_rollout_copy pair owner remap 行数不一致: "
+                                f"table={owner_table}, expected={expected_rows}, "
+                                f"actual={result.rowcount}"
+                            )
                     # 保留原始 snapshot 字节，后续 remap 同时处理所有 typed owner，
                     # 并将精确 source fingerprint 写入显式 fork import provenance。
                     # detail 的 owner、typed key 和 leaf 由 catalog remap 同步改写；
                     # 单独修改 session_id 会破坏 schema3 的 typed identity CHECK。
-                    connection.execute(
-                        "UPDATE source_overlays SET session_id = ?",
-                        (target_thread_id,),
+                    source_overlay_count = connection.execute(
+                        "SELECT COUNT(*) FROM source_overlays WHERE session_id = ? "
+                        "AND thread_id = ?",
+                        (source_session_id, source_thread_id),
+                    ).fetchone()
+                    if source_overlay_count is None:
+                        raise RuntimeError(
+                            "full_rollout_copy source overlay 行数读取失败"
+                        )
+                    source_overlay_count_value = non_negative_int(
+                        source_overlay_count[0],
+                        field="full_rollout_copy.source_overlay_count",
                     )
+                    other_overlay_owner_count = connection.execute(
+                        "SELECT COUNT(*) FROM source_overlays WHERE session_id != ? "
+                        "OR thread_id != ?",
+                        (source_session_id, source_thread_id),
+                    ).fetchone()
+                    if other_overlay_owner_count != (0,):
+                        raise RuntimeError(
+                            "full_rollout_copy source overlays 存在不匹配的 SessionThread owner"
+                        )
+                    result = connection.execute(
+                        "UPDATE source_overlays SET session_id = ?, thread_id = ? WHERE session_id = ? AND thread_id = ?",
+                        (
+                            target_session_id,
+                            target_thread_id,
+                            source_session_id,
+                            source_thread_id,
+                        ),
+                    )
+                    if result.rowcount != source_overlay_count_value:
+                        raise RuntimeError(
+                            "full_rollout_copy source overlay owner remap 行数不一致: "
+                            f"expected={source_overlay_count_value}, actual={result.rowcount}"
+                        )
                     # schema4 工具行与 plan header 有复合 FK；不能在克隆阶段单改
                     # session owner。remap 事务按子表→父表移除私有副本，再完整重写。
                     unavailable_detail_refs: list[str] = []
@@ -327,10 +436,6 @@ class ForkCloneMixin:
                             f"UPDATE context_plan_details SET status = 'unavailable' WHERE detail_ref IN ({placeholders})",
                             tuple(unavailable_detail_refs),
                         )
-                    connection.execute(
-                        "UPDATE legacy_migration_reports SET target_session_id = ? WHERE target_session_id IS NOT NULL",
-                        (target_thread_id,),
-                    )
         finally:
             source_lock.release()
         return source_view_id

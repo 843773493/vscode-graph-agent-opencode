@@ -34,6 +34,7 @@ _RESOLVE_REASON_CODES = frozenset(
         "capability_denied",
         "snapshot_unavailable",
         "historical_snapshot_missing",
+        "unsupported_view",
     }
 )
 

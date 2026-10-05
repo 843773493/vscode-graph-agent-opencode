@@ -256,7 +256,6 @@ export default function NodeDebugConfigurationView({
           source_session_id: sessionId,
           source_thread_id: threadId,
           target_session_id: copyTargetSessionId,
-          target_thread_id: "main",
           activate: false,
         },
         workspaceId,

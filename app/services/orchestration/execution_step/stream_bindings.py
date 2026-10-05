@@ -34,6 +34,7 @@ class CanonicalItemSink:
         checkpointer: object,
         *,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str,
     ) -> None:
         append_items = getattr(checkpointer, "append_items", None)
@@ -41,6 +42,7 @@ class CanonicalItemSink:
             raise TypeError("canonical item sink 必须绑定 Saver append_items 端口")
         self._append_items = append_items
         self._session_id = session_id
+        self._thread_id = thread_id
         self._checkpoint_ns = checkpoint_ns
 
     async def append(self, items: Sequence[object]) -> None:
@@ -53,6 +55,7 @@ class CanonicalItemSink:
             self._append_items,
             self._session_id,
             typed_items,
+            thread_id=self._thread_id,
             checkpoint_ns=self._checkpoint_ns,
         )
 

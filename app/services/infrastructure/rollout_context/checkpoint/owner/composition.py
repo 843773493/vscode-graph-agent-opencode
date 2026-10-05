@@ -69,9 +69,14 @@ class ContextPlanCompositionMixin:
     def _composer_for(
         self,
         session_id: str,
+        thread_id: str,
         checkpoint_ns: str = "",
     ) -> ContextPlanComposer:
-        key = (_manifest_string(session_id, field="session_id"), checkpoint_ns)
+        key = (
+            _manifest_string(session_id, field="session_id"),
+            _manifest_string(thread_id, field="thread_id"),
+            checkpoint_ns,
+        )
         with self._lock:
             composer = self._context_plan_composers.get(key)
             if composer is None:
@@ -83,6 +88,7 @@ class ContextPlanCompositionMixin:
         self,
         *,
         session_id: str,
+        thread_id: str,
         plan_id: str,
         refs: Sequence[ContextRef],
         tool_snapshot: Sequence[Mapping[str, object]] = (),
@@ -91,8 +97,7 @@ class ContextPlanCompositionMixin:
         compiler_version: str = "itemized-context-v1",
     ) -> ContextRequestPlan:
         """业务层唯一的 ContextRequestPlan 入口。"""
-        thread_id = self._resolve_main_thread_control(session_id)[1]
-        return self._composer_for(session_id).compose(
+        return self._composer_for(session_id, thread_id).compose(
             session_id=session_id,
             thread_id=thread_id,
             plan_id=plan_id,
@@ -106,13 +111,14 @@ class ContextPlanCompositionMixin:
     def register_context_contribution(
         self,
         session_id: str,
+        thread_id: str,
         contribution: ContextContribution,
         *,
         checkpoint_ns: str = "",
         request_content: object | None = None,
     ) -> None:
         """登记 middleware/source provenance；贡献正文仍由 request-only source 持有。"""
-        composer = self._composer_for(session_id, checkpoint_ns)
+        composer = self._composer_for(session_id, thread_id, checkpoint_ns)
         # replacement_policy 是 producer 声明的 typed core 字段，决定是否
         # 允许在同一 owner slot 内原位更新 revision；自由 metadata/extensions
         # 的同名 key 不再拥有任何解释权（旧路径已物理下线）。
@@ -132,6 +138,7 @@ class ContextPlanCompositionMixin:
             # cache，避免 storage 失败后出现仅内存可见的 source。
             self._storage.register_context_contribution(
                 session_id,
+                thread_id,
                 contribution,
                 checkpoint_ns=checkpoint_ns,
             )
@@ -144,6 +151,7 @@ class ContextPlanCompositionMixin:
                     row
                     for row in self._storage.list_context_contributions(
                         session_id,
+                        thread_id,
                         checkpoint_ns=checkpoint_ns,
                     )
                     if row.get("contribution_id") == contribution.contribution_id
@@ -163,12 +171,13 @@ class ContextPlanCompositionMixin:
                 composer.ledger.add_contribution(contribution)
             if request_content is not None:
                 self._request_only_content[
-                    (session_id, checkpoint_ns, contribution.contribution_id)
+                    (session_id, thread_id, checkpoint_ns, contribution.contribution_id)
                 ] = request_content
 
     def compose_committed_context_plan(
         self,
         session_id: str,
+        thread_id: str,
         *,
         plan_id: str,
         tool_snapshot: Sequence[Mapping[str, object]] = (),
@@ -182,11 +191,10 @@ class ContextPlanCompositionMixin:
         持有同一个 read snapshot，同时读取 item refs 和 revision，避免 plan
         在 view 切换过程中拼出跨 snapshot 的混合上下文。
         """
-        # thread identity 只能由该 owner 经权威 catalog 解析一次，并同时供
-        # overlay ref 与 composer 使用；composer 不得自行解析 session→thread。
-        thread_id = self._resolve_main_thread_control(session_id)[1]
+        # 调用方必须提供当前真实 thread；composer 不得从 session 推断。
         with self._context_reader.open_snapshot(
             session_id,
+            thread_id,
             checkpoint_ns,
         ) as snapshot:
             committed_items = self._storage.committed_context_items(
@@ -212,6 +220,7 @@ class ContextPlanCompositionMixin:
             active_overlay_contribution_ids: set[str] = set()
             persisted_overlays = self._storage.list_source_overlays(
                 session_id,
+                thread_id,
                 checkpoint_ns=checkpoint_ns,
                 snapshot=snapshot,
             )
@@ -287,7 +296,7 @@ class ContextPlanCompositionMixin:
                     )
                     with self._lock:
                         overlay_content = self._request_only_content.get(
-                            (session_id, checkpoint_ns, source_ref)
+                            (session_id, thread_id, checkpoint_ns, source_ref)
                         )
                     source_revision = _manifest_optional_string(
                         overlay.get(f"{role}_source_revision"),
@@ -374,10 +383,11 @@ class ContextPlanCompositionMixin:
             history_view_revision = snapshot.manifest.history_view_revision
             source_overlay_epoch = snapshot.manifest.source_overlay_epoch
             active_view_id = self._storage.active_view_id(snapshot)
-            composer = self._composer_for(session_id, checkpoint_ns)
+            composer = self._composer_for(session_id, thread_id, checkpoint_ns)
             loaded_contributions: list[ContextContribution] = []
             for raw in self._storage.list_context_contributions(
                 session_id,
+                thread_id,
                 checkpoint_ns=checkpoint_ns,
                 snapshot=snapshot,
             ):

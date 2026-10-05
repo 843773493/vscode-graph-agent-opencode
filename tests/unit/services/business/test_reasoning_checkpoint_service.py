@@ -10,10 +10,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Send
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
-from app.prompting import internal_message_factory
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.reasoning_checkpoint_service import (
@@ -39,10 +43,41 @@ from tests.support.message_service import build_message_service
 MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=UTC)
 
 
+def _accept_user_turn(
+    saver: RolloutCheckpointSaver,
+    *,
+    session_id: str,
+    thread_id: str,
+    message_id: str,
+    turn_id: str,
+    job_id: str,
+    payload: str,
+):
+    execution_id = f"execution-{turn_id}"
+    saver.accept_turn(
+        session_id,
+        thread_id=thread_id,
+        accepted_ingress_id=message_id,
+        acceptance_idempotency_key=f"acceptance:{message_id}",
+        job_id=job_id,
+        admission_idempotency_key=f"admission:{message_id}",
+        payload=payload,
+        turn_id=turn_id,
+        root_item_id=f"item-{message_id}",
+        initial_execution_id=execution_id,
+    )
+    return saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id=execution_id,
+    )
+
+
 @pytest.fixture
 def accept_previous_message():
     """先建立真实已提交 root；空库不能伪造一个有 commit 的 checkpoint。"""
     def accept(saver: RolloutCheckpointSaver, session_id: str) -> HumanMessage:
+        thread_id = saver._storage.main_thread_id(session_id)
         message = HumanMessage(
             id="msg_previous",
             content="上一条已接受的输入",
@@ -55,8 +90,11 @@ def accept_previous_message():
         )
         saver.accept_turn(
             session_id,
+            thread_id=thread_id,
             accepted_ingress_id="msg_previous",
             acceptance_idempotency_key="message:msg_previous",
+            job_id="job_previous",
+            admission_idempotency_key="execution-admission:msg_previous",
             payload=message.content,
             turn_id="turn_previous",
             root_item_id="item-msg_previous",
@@ -76,95 +114,166 @@ async def test_persist_user_message_checkpoint_is_idempotent(
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
-    config = build_checkpoint_config(session_id)
-    await saver.aput(
-        config,
-        {
-            "channel_values": {"messages": [previous_message]},
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-user-input",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    thread_id = saver._storage.main_thread_id(session_id)
+    config = build_checkpoint_config(thread_id)
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        await saver.aput(
+            config,
+            {
+                "channel_values": {"messages": [previous_message]},
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-user-input",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
     message = HumanMessage(
         content="失败后也必须可重试",
         response_metadata={
             "message_id": "msg_user_checkpoint",
             "created_at": MESSAGE_TIME.isoformat(),
             "updated_at": MESSAGE_TIME.isoformat(),
+            "message_metadata": {"turn_id": "turn_user_checkpoint"},
         },
     )
 
-    assert persist_user_message_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        message=message,
-    ) is True
-    assert persist_user_message_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        message=message,
-    ) is False
-    latest = await saver.aget_tuple(config)
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        assert (
+            persist_user_message_checkpoint(
+                checkpointer=saver,
+                session_id=session_id,
+                thread_id=thread_id,
+                job_id="job_user_checkpoint",
+                admission_idempotency_key="admission-job-user-checkpoint",
+                message=message,
+            )
+            is True
+        )
+        assert (
+            persist_user_message_checkpoint(
+                checkpointer=saver,
+                session_id=session_id,
+                thread_id=thread_id,
+                job_id="job_user_checkpoint",
+                admission_idempotency_key="admission-job-user-checkpoint",
+                message=message,
+            )
+            is False
+        )
+    execution_id = saver.execution_for_turn(
+        session_id,
+        thread_id=thread_id,
+        turn_id="turn_user_checkpoint",
+    )
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id=execution_id,
+    )
+    assert admission.job_id == "job_user_checkpoint"
+    assert admission.turn_id == "turn_user_checkpoint"
+    assert admission.job_id != admission.turn_id
+    assert admission.admission_idempotency_key == "admission-job-user-checkpoint"
+    assert admission.admission_idempotency_key != "message:msg_user_checkpoint"
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        latest = await saver.aget_tuple(config)
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
     assert [item.response_metadata["message_id"] for item in messages] == [
-        "msg_previous", "msg_user_checkpoint"
+        "msg_previous",
+        "msg_user_checkpoint",
     ]
 
 
-def test_persist_user_message_checkpoint_preserves_internal_acceptance_metadata(
+def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
     tmp_path,
     session_bundle_factory,
 ):
     session_id = "ses_019c21595f0c70388c187be23ef92b9b"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    prepared = internal_message_factory.build(
+        kind="generated_session_result",
+        control="继续 Goal。",
+        sections=(
+            PromptSection("control_context", {"source": "goal_runtime"}),
+            PromptSection("generated_session_result", "继续执行后续步骤。"),
+        ),
+        display_content="Goal 后续任务继续执行。",
+    )
     message = HumanMessage(
-        content="<system_reminder>继续 Goal</system_reminder>",
+        content=prepared.content,
+        id="msg_internal_goal",
         response_metadata={
             "message_id": "msg_internal_goal",
             "created_at": MESSAGE_TIME.isoformat(),
             "updated_at": MESSAGE_TIME.isoformat(),
-            "message_metadata": {
-                "internal": True,
-                "turn_id": "job_internal_goal",
-                "job_id": "job_internal_goal",
-            },
+            "message_metadata": prepared.metadata,
         },
     )
-
-    assert persist_user_message_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        message=message,
-    ) is False
-
-    database_path = (
-        get_session_path_resolver(tmp_path).resolve_session_node(session_id)
-        / "rollout"
-        / "index.sqlite"
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    intent = InternalExecutionIntent(
+        message_id="msg_internal_goal",
+        execution_id="execution_internal_goal",
+        admission_idempotency_key="internal-goal:resume-1",
     )
+
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        assert (
+            persist_user_message_checkpoint(
+                checkpointer=saver,
+                session_id=session_id,
+                thread_id=thread_id,
+                job_id="job_internal_goal",
+                admission_idempotency_key=intent.admission_idempotency_key,
+                message=message,
+                execution_intent=intent,
+            )
+            is False
+        )
+
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id=intent.execution_id,
+    )
+    database_path = saver._storage.index_path(session_id, thread_id=thread_id)
     with sqlite3.connect(database_path) as connection:
         row = connection.execute(
-            "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
+            "SELECT turn_id, turn_scope, metadata_json FROM item_catalog "
+            "WHERE item_id = ?",
             ("item-msg_internal_goal",),
         ).fetchone()
     assert row is not None
-    assert json.loads(row[0])["message_metadata"]["internal"] is True
-
+    assert admission.execution_origin == "internal"
+    assert admission.turn_id is None
+    assert row[:2] == (None, "pending_next_turn")
+    assert json.loads(row[2])["internal"] is True
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM turns").fetchone() == (0,)
     page = RolloutHistoryReader(
         RolloutContextReader(
             RolloutStorage(tmp_path, message_codec=LangChainMessageCodec())
         )
     ).load(
         session_id,
+        thread_id,
         TurnHistoryLoadRequest(direction="tail", turns=1),
     )
-    assert len(page.items) == 1
-    assert page.items[0].user_messages == []
+    assert page.items == []
 
 
 @pytest.mark.asyncio
@@ -177,7 +286,8 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
     previous_message = accept_previous_message(saver, session_id)
-    config = build_checkpoint_config(session_id)
+    thread_id = saver._storage.main_thread_id(session_id)
+    config = build_checkpoint_config(thread_id)
     stale_send = Send(
         "tools",
         {
@@ -186,37 +296,56 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
             "args": {"cmd": "pwd"},
         },
     )
-    await saver.aput(
-        config,
-        {
-            "channel_values": {
-                "messages": [previous_message],
-                "__pregel_tasks": [stale_send],
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        await saver.aput(
+            config,
+            {
+                "channel_values": {
+                    "messages": [previous_message],
+                    "__pregel_tasks": [stale_send],
+                },
+                "channel_versions": {"messages": "1", "__pregel_tasks": "2"},
+                "updated_channels": ["__pregel_tasks"],
+                "pending_sends": [stale_send],
+                "id": "ckpt-stale-task",
             },
-            "channel_versions": {"messages": "1", "__pregel_tasks": "2"},
-            "updated_channels": ["__pregel_tasks"],
-            "pending_sends": [stale_send],
-            "id": "ckpt-stale-task",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1", "__pregel_tasks": "2"},
-    )
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1", "__pregel_tasks": "2"},
+        )
     message = HumanMessage(
         content="失败后重新开始",
         response_metadata={
             "message_id": "msg_after_stale_task",
             "created_at": MESSAGE_TIME.isoformat(),
             "updated_at": MESSAGE_TIME.isoformat(),
+            "message_metadata": {"turn_id": "turn_after_stale_task"},
         },
     )
 
-    assert persist_user_message_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        message=message,
-    ) is True
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        assert (
+            persist_user_message_checkpoint(
+                checkpointer=saver,
+                session_id=session_id,
+                thread_id=thread_id,
+                job_id="job_after_stale_task",
+                admission_idempotency_key="admission-job-after-stale-task",
+                message=message,
+            )
+            is True
+        )
 
-    latest = await saver.aget_tuple(config)
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        latest = await saver.aget_tuple(config)
     assert latest is not None
     checkpoint = latest.checkpoint
     assert "__pregel_tasks" not in checkpoint["channel_values"]
@@ -239,7 +368,18 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     reasoning_text = "用户只要求回复 OK。"
     final_text = "OK"
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    config = build_checkpoint_config(session_id)
+    thread_id = saver._storage.main_thread_id(session_id)
+    turn_id = "turn-standard-assistant"
+    admission = _accept_user_turn(
+        saver,
+        session_id=session_id,
+        thread_id=thread_id,
+        message_id="msg_user",
+        turn_id=turn_id,
+        job_id="job-standard-assistant",
+        payload="只回复 OK",
+    )
+    config = build_checkpoint_config(thread_id)
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -249,6 +389,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
                         "message_id": "msg_user",
                         "created_at": MESSAGE_TIME.isoformat(),
                         "updated_at": MESSAGE_TIME.isoformat(),
+                        "message_metadata": {"turn_id": turn_id},
                     },
                 ),
                     AIMessage(
@@ -266,53 +407,74 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         "updated_channels": ["messages"],
         "id": "ckpt-mixed",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        await saver.aput(
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
-    changed = persist_standard_assistant_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        content_blocks=(
-            {
-                "type": "reasoning",
-                "reasoning": reasoning_text,
-                "id": "part_reasoning",
-                "index": 0,
-            },
-            {
-                "type": "text",
-                "text": final_text,
-                "id": "part_answer",
-                "index": 1,
-            },
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
         ),
-        final_text=final_text,
-        message_id="msg_assistant",
-        message_created_at=MESSAGE_TIME,
-        token_usage=ModelTokenUsagePayload(
-            input_tokens=100,
-            output_tokens=20,
-            total_tokens=120,
-            cache_read_input_tokens=80,
-            model_calls=2,
-            reported_model_calls=2,
-        ),
-    )
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        changed = persist_standard_assistant_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            content_blocks=(
+                {
+                    "type": "reasoning",
+                    "reasoning": reasoning_text,
+                    "id": "part_reasoning",
+                    "index": 0,
+                },
+                {
+                    "type": "text",
+                    "text": final_text,
+                    "id": "part_answer",
+                    "index": 1,
+                },
+            ),
+            final_text=final_text,
+            message_id="msg_assistant",
+            message_created_at=MESSAGE_TIME,
+            token_usage=ModelTokenUsagePayload(
+                input_tokens=100,
+                output_tokens=20,
+                total_tokens=120,
+                cache_read_input_tokens=80,
+                model_calls=2,
+                reported_model_calls=2,
+            ),
+        )
 
     assert changed is True
     plan = saver.compose_committed_context_plan(
         session_id,
+        thread_id=thread_id,
         plan_id="plan-standard-assistant",
         include_pending_notices=False,
     )
     canonical_ref_ids = [ref.ref_id for ref in plan.refs]
     assert "item-msg_intermediate" not in canonical_ref_ids
     assert "item-msg_assistant" in canonical_ref_ids
-    latest = await saver.aget_tuple(config)
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        latest = await saver.aget_tuple(config)
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
     assistant = messages[-1]
@@ -366,20 +528,45 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     session_id = "ses_019bfa27d86b7e5e8bef9be8c2075691"
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    config = build_checkpoint_config(session_id)
-    await saver.aput(
-        config,
-        {
-            "channel_values": {
-                "messages": [HumanMessage(content="问题"), AIMessage(content="回答")]
-            },
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-encrypted",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
+    thread_id = saver._storage.main_thread_id(session_id)
+    turn_id = "turn-encrypted-reasoning"
+    admission = _accept_user_turn(
+        saver,
+        session_id=session_id,
+        thread_id=thread_id,
+        message_id="msg-encrypted-user",
+        turn_id=turn_id,
+        job_id="job-encrypted-reasoning",
+        payload="问题",
     )
+    config = build_checkpoint_config(thread_id)
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        await saver.aput(
+            config,
+            {
+                "channel_values": {
+                    "messages": [
+                        HumanMessage(
+                            content="问题",
+                            id="msg-encrypted-user",
+                            response_metadata={"message_metadata": {"turn_id": turn_id}},
+                        ),
+                        AIMessage(content="回答"),
+                    ]
+                },
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-encrypted",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
     reasoning_item = {
         "type": "reasoning",
         "id": "rs_item_001",
@@ -389,18 +576,27 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
         "summary": [],
     }
 
-    assert persist_standard_assistant_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        content_blocks=(
-            reasoning_item,
-            {"type": "text", "text": "回答"},
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
         ),
-        final_text="回答",
-        message_id="msg_assistant",
-        message_created_at=MESSAGE_TIME,
-    )
-    latest = await saver.aget_tuple(config)
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        assert persist_standard_assistant_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            content_blocks=(
+                reasoning_item,
+                {"type": "text", "text": "回答"},
+            ),
+            final_text="回答",
+            message_id="msg_assistant",
+            message_created_at=MESSAGE_TIME,
+        )
+        latest = await saver.aget_tuple(config)
     assert latest is not None
     assistant = latest.checkpoint["channel_values"]["messages"][-1]
     assert assistant.content[0] == {
@@ -434,6 +630,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
             "message_id": "msg_user",
             "created_at": MESSAGE_TIME.isoformat(),
             "updated_at": MESSAGE_TIME.isoformat(),
+            "message_metadata": {"turn_id": "turn-reminder-assistant"},
         },
     )
     tool_call_message = AIMessage(
@@ -463,56 +660,130 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     )
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    config = build_checkpoint_config(session_id)
+    thread_id = saver._storage.main_thread_id(session_id)
+    turn_id = "turn-reminder-assistant"
+    user_admission = _accept_user_turn(
+        saver,
+        session_id=session_id,
+        thread_id=thread_id,
+        message_id="msg_user",
+        turn_id=turn_id,
+        job_id="job-reminder-assistant",
+        payload="调用工具",
+    )
+    config = build_checkpoint_config(thread_id)
     prepared_reminder = internal_message_factory.build(
         kind="checkpoint_reminder",
         control=reminder,
     )
-    checkpoint = {
-        "channel_values": {
-            "messages": [
-                user_message,
-                tool_call_message,
-                tool_message,
-                HumanMessage(
-                    content=prepared_reminder.content,
-                    response_metadata=prepared_reminder.metadata,
-                ),
-                final_message,
-            ],
+    reminder_message_id = "msg_checkpoint_reminder"
+    reminder_message = HumanMessage(
+        content=prepared_reminder.content,
+        id=reminder_message_id,
+        response_metadata={
+            "message_id": reminder_message_id,
+            "created_at": MESSAGE_TIME.isoformat(),
+            "updated_at": MESSAGE_TIME.isoformat(),
+            "message_metadata": prepared_reminder.metadata,
         },
-        "channel_versions": {"messages": "1"},
-        "updated_channels": ["messages"],
-        "id": "ckpt-reminder",
-    }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
     )
-
-    changed = persist_standard_assistant_checkpoint(
-        checkpointer=saver,
-        session_id=session_id,
-        content_blocks=(
-            {
-                "type": "reasoning",
-                "reasoning": final_reasoning,
-                "id": "part_final_reasoning",
-                "index": 0,
-            },
-            {
-                "type": "text",
-                "text": final_text,
-                "id": "part_final_answer",
-                "index": 1,
-            },
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
         ),
-        final_text=final_text,
-        message_id="msg_assistant",
-        message_created_at=MESSAGE_TIME,
+        execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
+    ):
+        await saver.aput(
+            config,
+            {
+                "channel_values": {
+                    "messages": [user_message, tool_call_message, tool_message],
+                },
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-reminder-turn",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
+        assert persist_user_message_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            job_id="job-checkpoint-reminder",
+            admission_idempotency_key="admission-checkpoint-reminder",
+            message=reminder_message,
+            execution_intent=InternalExecutionIntent(
+                message_id=reminder_message_id,
+                execution_id="execution-checkpoint-reminder",
+                admission_idempotency_key="admission-checkpoint-reminder",
+            ),
+        )
+
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id),
+        langgraph_thread_id=thread_id,
+    ):
+        reminder_tuple = await saver.aget_tuple(config)
+    assert reminder_tuple is not None
+    checkpoint = reminder_tuple.checkpoint.copy()
+    channel_values = dict(checkpoint["channel_values"])
+    checkpoint_messages = channel_values.get("messages")
+    assert isinstance(checkpoint_messages, list)
+    channel_values["messages"] = [*checkpoint_messages, final_message]
+    checkpoint["channel_values"] = channel_values
+    checkpoint["id"] = "ckpt-reminder-final"
+    channel_versions = dict(checkpoint["channel_versions"])
+    messages_version = saver.get_next_version(
+        channel_versions.get("messages"), None
     )
+    channel_versions["messages"] = messages_version
+    checkpoint["channel_versions"] = channel_versions
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
+    ):
+        await saver.aput(
+            reminder_tuple.config,
+            checkpoint,
+            {"source": "test", "step": 2, "writes": {}},
+            {"messages": messages_version},
+        )
+
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
+    ):
+        changed = persist_standard_assistant_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            content_blocks=(
+                {
+                    "type": "reasoning",
+                    "reasoning": final_reasoning,
+                    "id": "part_final_reasoning",
+                    "index": 0,
+                },
+                {
+                    "type": "text",
+                    "text": final_text,
+                    "id": "part_final_answer",
+                    "index": 1,
+                },
+            ),
+            final_text=final_text,
+            message_id="msg_assistant",
+            message_created_at=MESSAGE_TIME,
+        )
 
     assert changed is True
     state_snapshot = await build_message_service(tmp_path, checkpointer=saver).get_agent_state_messages(

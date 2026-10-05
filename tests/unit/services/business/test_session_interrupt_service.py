@@ -3,13 +3,24 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_interrupt_state import SessionInterruptState
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.common import ControlAction, JobStatus, RunMode
 from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO
 from app.services.business.session_interrupt_service import SessionInterruptService
@@ -19,10 +30,21 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from tests.support.message_service import build_message_service
 
+pytestmark = pytest.mark.usefixtures("workspace_scope")
+
 
 class FakeJobService:
-    def __init__(self, job: JobDTO) -> None:
+    def __init__(
+        self,
+        job: JobDTO,
+        execution_binding: InternalExecutionIntent | UserExecutionIdentity | None = None,
+    ) -> None:
         self.job = job
+        self.execution_binding = execution_binding or UserExecutionIdentity(
+            job_id=job.job_id,
+            turn_id=f"turn:{job.job_id}",
+            admission_idempotency_key=f"admission:{job.job_id}",
+        )
         self.control_requests: list[JobControlRequest] = []
         self.boundary_notifications: list[tuple[str, bool]] = []
 
@@ -30,6 +52,14 @@ class FakeJobService:
         if session_id is None or self.job.session_id == session_id:
             return [self.job]
         return []
+
+    def get_execution_binding(
+        self,
+        job_id: str,
+    ) -> InternalExecutionIntent | UserExecutionIdentity:
+        if job_id != self.job.job_id:
+            raise KeyError(job_id)
+        return self.execution_binding
 
     async def control(
         self,
@@ -55,6 +85,124 @@ class FakeJobService:
         assert session_id == self.job.session_id
         assert boundary == "after_interrupt"
         self.boundary_notifications.append((boundary, tool_result_available))
+
+
+def _thread_binding(
+    tmp_path,
+    session_id: str,
+) -> ThreadRuntimeBinding:
+    return ThreadRuntimeBinding(
+        session_id=session_id,
+        thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
+    )
+
+
+def _accept_user_execution(
+    saver: RolloutCheckpointSaver,
+    binding: ThreadRuntimeBinding,
+    *,
+    job_id: str,
+    message_id: str,
+    content: str,
+) -> tuple[UserExecutionIdentity, ExecutionAdmission, HumanMessage]:
+    turn_id = f"turn:{job_id}"
+    execution_id = f"execution:{job_id}"
+    admission_key = f"admission:{job_id}"
+    saver.accept_turn(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        accepted_ingress_id=message_id,
+        acceptance_idempotency_key=f"acceptance:{job_id}",
+        job_id=job_id,
+        admission_idempotency_key=admission_key,
+        payload=content,
+        turn_id=turn_id,
+        root_item_id=f"item-{message_id}",
+        initial_execution_id=execution_id,
+    )
+    admission = saver.execution_admission(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        execution_id=execution_id,
+    )
+    identity = UserExecutionIdentity(
+        job_id=job_id,
+        turn_id=turn_id,
+        admission_idempotency_key=admission_key,
+    )
+    return identity, admission, HumanMessage(content=content, id=message_id)
+
+
+def _admit_internal_execution(
+    saver: RolloutCheckpointSaver,
+    binding: ThreadRuntimeBinding,
+    *,
+    job_id: str,
+    message_id: str,
+) -> tuple[InternalExecutionIntent, ExecutionAdmission, HumanMessage]:
+    intent = InternalExecutionIntent(
+        message_id=message_id,
+        execution_id=f"execution:{job_id}",
+        admission_idempotency_key=f"admission:{job_id}",
+    )
+    prepared = internal_message_factory.build(
+        kind="generated_session_result",
+        control="继续处理父会话工作。",
+        sections=(
+            PromptSection("control_context", {"source": "session_interrupt_test"}),
+            PromptSection("generated_session_result", "内部任务待处理。"),
+        ),
+        display_content="内部任务待处理。",
+    )
+    message = HumanMessage(
+        content=prepared.content,
+        id=message_id,
+        response_metadata={
+            "message_id": message_id,
+            "created_at": "2026-10-04T00:00:00+00:00",
+            "message_metadata": prepared.metadata,
+        },
+    )
+    admission = saver.admit_internal_execution(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        job_id=job_id,
+        intent=intent,
+        message=message,
+    )
+    return intent, admission, message
+
+
+async def _persist_checkpoint(
+    saver: RolloutCheckpointSaver,
+    binding: ThreadRuntimeBinding,
+    admission: ExecutionAdmission,
+    message: HumanMessage,
+) -> None:
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(
+                session_id=binding.session_id,
+                thread_id=binding.thread_id,
+            ),
+            langgraph_thread_id=binding.thread_id,
+        ),
+        execution_admission_scope(
+            admission,
+            langgraph_thread_id=binding.thread_id,
+        ),
+    ):
+        await saver.aput(
+            build_checkpoint_config(binding.thread_id),
+            {
+                "channel_values": {"messages": [message]},
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": f"checkpoint:{admission.execution_id}",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
 
 class FakeJobEventBus:
@@ -107,26 +255,19 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    binding = _thread_binding(tmp_path, session_id)
+    execution_binding, admission, user_message = _accept_user_execution(
+        saver,
+        binding,
+        job_id=job_id,
+        message_id=f"msg_user_interrupt_{phase}",
+        content="请执行一个可以被取消的任务",
+    )
     message_service = build_message_service(tmp_path, checkpointer=saver)
     message_stream_store = MessageStreamStore(
         path_resolver=get_session_path_resolver(tmp_path),
     )
-    config = build_checkpoint_config(session_id)
-    await saver.aput(
-        config,
-        {
-            "channel_values": {
-                "messages": [
-                    HumanMessage(content="请执行一个可以被取消的任务"),
-                ]
-            },
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-user-interrupt",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    await _persist_checkpoint(saver, binding, admission, user_message)
 
     SessionInterruptState.set(
         session_id,
@@ -136,15 +277,16 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     )
     job = JobDTO(
         job_id=job_id,
-        message_id="msg_interrupt",
+        message_id=f"msg_user_interrupt_{phase}",
         session_id=session_id,
+        thread_id=binding.thread_id,
         mode=RunMode.single_agent,
         status=JobStatus.streaming,
         entry_agent="default",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    job_service = FakeJobService(job)
+    job_service = FakeJobService(job, execution_binding=execution_binding)
     event_bus = FakeJobEventBus()
     service = SessionInterruptService(
         job_service=job_service,
@@ -185,7 +327,7 @@ async def test_user_interrupt_injects_system_reminder_before_task_cancel(
     else:
         assert "文本生成" in reminder_content
 
-    with saver._storage._connect(session_id, "", read_only=True) as connection:
+    with saver._storage._connect(binding.thread_id, "", session_id=session_id, read_only=True) as connection:
         metadata_json = connection.execute(
             "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
             (reminder["item_id"],),
@@ -220,6 +362,14 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
     session_bundle_factory(tmp_path, session_id)
 
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    binding = _thread_binding(tmp_path, session_id)
+    execution_binding, _admission, _user_message = _accept_user_execution(
+        saver,
+        binding,
+        job_id=job_id,
+        message_id="msg_missing_checkpoint",
+        content="没有已有 checkpoint 的用户请求",
+    )
     message_service = build_message_service(tmp_path, checkpointer=saver)
     message_stream_store = MessageStreamStore(
         path_resolver=get_session_path_resolver(tmp_path),
@@ -234,13 +384,14 @@ async def test_user_interrupt_submits_reminder_without_existing_checkpoint(
         job_id=job_id,
         message_id="msg_missing_checkpoint",
         session_id=session_id,
+        thread_id=binding.thread_id,
         mode=RunMode.single_agent,
         status=JobStatus.streaming,
         entry_agent="default",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    job_service = FakeJobService(job)
+    job_service = FakeJobService(job, execution_binding=execution_binding)
     service = SessionInterruptService(
         job_service=job_service,
         job_event_bus=FakeJobEventBus(),
@@ -283,10 +434,12 @@ async def test_interrupt_ignores_interrupt_pending_job(
     SessionInterruptState.clear(session_id)
     session_bundle_factory(tmp_path, session_id)
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    binding = _thread_binding(tmp_path, session_id)
     job = JobDTO(
         job_id="job_interrupt_pending",
         message_id="msg_interrupt_pending",
         session_id=session_id,
+        thread_id=binding.thread_id,
         mode=RunMode.single_agent,
         status=JobStatus.interrupt_pending,
         entry_agent="default",
@@ -307,3 +460,64 @@ async def test_interrupt_ignores_interrupt_pending_job(
         await service.interrupt(session_id=session_id)
 
     assert job_service.control_requests == []
+
+@pytest.mark.asyncio
+async def test_internal_job_interrupt_never_opens_a_turn_stream(
+    tmp_path,
+    session_bundle_factory,
+) -> None:
+    session_id = "ses_019c75960c0c763d844344c4deaada6e"
+    job_id = "job_internal_interrupt"
+    message_id = "msg_internal_interrupt"
+    SessionInterruptState.clear(session_id)
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    binding = _thread_binding(tmp_path, session_id)
+    execution_binding, admission, internal_message = _admit_internal_execution(
+        saver,
+        binding,
+        job_id=job_id,
+        message_id=message_id,
+    )
+    message_service = build_message_service(tmp_path, checkpointer=saver)
+    message_stream_store = MessageStreamStore(
+        path_resolver=get_session_path_resolver(tmp_path),
+    )
+    message_stream_store.open = AsyncMock(
+        side_effect=AssertionError("Turn-less internal execution opened a stream")
+    )
+    await _persist_checkpoint(saver, binding, admission, internal_message)
+    job = JobDTO(
+        job_id=job_id,
+        message_id=message_id,
+        session_id=session_id,
+        thread_id=binding.thread_id,
+        mode=RunMode.single_agent,
+        status=JobStatus.streaming,
+        entry_agent="default",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    job_service = FakeJobService(
+        job,
+        execution_binding=execution_binding,
+    )
+    event_bus = FakeJobEventBus()
+    service = SessionInterruptService(
+        job_service=job_service,
+        job_event_bus=event_bus,
+        message_service=message_service,
+        message_stream_store=message_stream_store,
+    )
+
+    result = await service.interrupt(session_id=session_id)
+
+    assert result.job_id == job_id
+    assert result.status == JobStatus.cancelling.value
+    message_stream_store.open.assert_not_awaited()
+    assert [request.action for request in job_service.control_requests] == [
+        ControlAction.cancel
+    ]
+    assert SessionInterruptState.get(session_id).interrupt_request_id
+    assert event_bus.events[-1]["event_type"] == "session_interrupted"
+    SessionInterruptState.clear(session_id)

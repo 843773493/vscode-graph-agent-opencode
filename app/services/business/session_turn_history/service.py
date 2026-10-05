@@ -50,6 +50,7 @@ class SessionTurnHistoryService:
             )
         latest, older_cursor, projection_epoch = self._checkpointer.bootstrap_history(
             session_id,
+            thread_id,
             policy=history_loading,
         )
         pending = await self._job_service.list_pending_summaries(
@@ -104,6 +105,7 @@ class SessionTurnHistoryService:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         page = self._checkpointer.load_history(
             session_id,
+            thread_id,
             request,
             policy=history_loading,
         )

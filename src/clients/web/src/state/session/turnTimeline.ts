@@ -6,6 +6,7 @@ import type {
   TurnJobSummary,
   TurnPage,
   TurnSummary,
+  InternalExecutionHistory,
 } from "../../types/backend";
 
 export type TurnRecord = TurnSummary | TurnDetail;
@@ -23,6 +24,8 @@ export interface SessionTurnTimeline {
   turnsById: Record<string, TurnRecord>;
   /** 后端原样返回的摘要投影，用于淘汰已展开详情，禁止前端自行重建摘要。 */
   summaryTurnsById: Record<string, TurnSummary>;
+  /** Turn 之外的 internal execution 展示记录；仅由独立 history DTO 提供。 */
+  internalExecutions: InternalExecutionHistory[];
   detailAccessOrder: string[];
   activeJobs: TurnJobSummary[];
   beforeCursor: string | null;
@@ -40,6 +43,22 @@ export interface SessionTurnTimeline {
   error: string | null;
 }
 
+function internalPartOrder(part: InternalExecutionHistory["response_parts"][number]): [number, number] {
+  const logicalItemOrdinal = part.source.logical_item_ordinal;
+  const partOrdinal = part.source.part_ordinal;
+  if (
+    typeof logicalItemOrdinal !== "number"
+    || !Number.isSafeInteger(logicalItemOrdinal)
+    || logicalItemOrdinal < 0
+    || typeof partOrdinal !== "number"
+    || !Number.isSafeInteger(partOrdinal)
+    || partOrdinal < 0
+  ) {
+    throw new Error("internal execution response part 缺少 canonical order");
+  }
+  return [logicalItemOrdinal, partOrdinal];
+}
+
 const TURN_TIMELINE_CACHE_LIMIT = 64;
 const TURN_DETAIL_CACHE_LIMIT = 8;
 const TURN_DETAIL_CACHE_MAX_UNITS = 1_000_000;
@@ -55,6 +74,7 @@ export function createSessionTurnTimeline(
     orderedTurnIds: [],
     turnsById: {},
     summaryTurnsById: {},
+    internalExecutions: [],
     detailAccessOrder: [],
     activeJobs: [],
     beforeCursor: null,
@@ -537,7 +557,9 @@ export function applyTurnBootstrap(
     return timeline;
   }
   let next = replaceProjection(timeline, bootstrap.projection_epoch);
-  const preserveCachedWindow = next === timeline && timeline.orderedTurnIds.length > 0;
+  const preserveCachedWindow = next === timeline && (
+    timeline.orderedTurnIds.length > 0 || timeline.internalExecutions.length > 0
+  );
   const preserveBeforeWindow = preserveCachedWindow
     && (next.beforeCursor !== null || bootstrap.older_cursor === null);
   const projectionState = bootstrap.projection_state ?? "ready";
@@ -645,9 +667,90 @@ export function applyTurnHistoryPage(
   requireMatchingEpoch(timeline, page.projection_epoch);
   const withSummaries = upsertTurns(timeline, page.summaries ?? []);
   const next = upsertTurns(withSummaries, page.items);
+  const internalExecutions = new Map(
+    next.internalExecutions.map((execution) => [execution.execution_id, execution]),
+  );
+  const displayItemExecutions = new Map<string, string>();
+  for (const execution of next.internalExecutions) {
+    for (const part of execution.display_parts) {
+      const owner = displayItemExecutions.get(part.item_id);
+      if (owner !== undefined && owner !== execution.execution_id) {
+        throw new Error(
+          `history projection integrity: display item ${part.item_id} 属于多个 execution`,
+        );
+      }
+      displayItemExecutions.set(part.item_id, execution.execution_id);
+    }
+  }
+  for (const execution of page.internal_executions ?? []) {
+    const previous = internalExecutions.get(execution.execution_id);
+    const displayParts = new Map(
+      (previous?.display_parts ?? []).map((part) => [part.item_id, part]),
+    );
+    for (const part of execution.display_parts) {
+      const owner = displayItemExecutions.get(part.item_id);
+      if (owner !== undefined && owner !== execution.execution_id) {
+        throw new Error(
+          `history projection integrity: display item ${part.item_id} 属于多个 execution`,
+        );
+      }
+      displayItemExecutions.set(part.item_id, execution.execution_id);
+      const previousPart = displayParts.get(part.item_id);
+      if (
+        previousPart !== undefined
+        && (
+          previousPart.item_sequence !== part.item_sequence
+          || previousPart.logical_item_ordinal !== part.logical_item_ordinal
+        )
+      ) {
+        throw new Error(
+          `history projection integrity: 同一 display item 的 item_sequence 或 membership ordinal 冲突: ${part.item_id}`,
+        );
+      }
+      displayParts.set(part.item_id, part);
+    }
+    const responseParts = new Map(
+      (previous?.response_parts ?? []).map((part) => [part.part_id, part]),
+    );
+    for (const part of execution.response_parts) {
+      const previousPart = responseParts.get(part.part_id);
+      if (
+        previousPart !== undefined
+        && (
+          previousPart.source.item_id !== part.source.item_id
+          || previousPart.source.item_sequence !== part.source.item_sequence
+          || previousPart.source.logical_item_ordinal
+            !== part.source.logical_item_ordinal
+          || previousPart.source.part_ordinal !== part.source.part_ordinal
+        )
+      ) {
+        throw new Error(
+          `history projection integrity: 同一 response part 的 canonical 坐标冲突: ${part.part_id}`,
+        );
+      }
+      responseParts.set(part.part_id, part);
+    }
+    const orderedResponseParts = [...responseParts.values()];
+    orderedResponseParts.sort((left, right) => {
+      const [leftSequence, leftOrdinal] = internalPartOrder(left);
+      const [rightSequence, rightOrdinal] = internalPartOrder(right);
+      return leftSequence - rightSequence
+        || leftOrdinal - rightOrdinal
+        || left.part_id.localeCompare(right.part_id);
+    });
+    internalExecutions.set(execution.execution_id, {
+      ...execution,
+      display_parts: [...displayParts.values()].sort((left, right) =>
+        left.logical_item_ordinal - right.logical_item_ordinal,
+      ),
+      response_parts: orderedResponseParts,
+    });
+  }
+  const nextInternalExecutions = [...internalExecutions.values()];
   if (direction === "around") {
     return {
       ...next,
+      internalExecutions: nextInternalExecutions,
       phase: "ready",
       beforeCursor: page.before_cursor ?? null,
       afterCursor: page.after_cursor ?? null,
@@ -669,6 +772,7 @@ export function applyTurnHistoryPage(
     : page.has_after ?? page.has_more ?? Boolean(cursor);
   return {
     ...next,
+    internalExecutions: nextInternalExecutions,
     phase: "ready",
     beforeCursor: isBefore ? cursor : timeline.beforeCursor,
     afterCursor: isBefore ? timeline.afterCursor : cursor,

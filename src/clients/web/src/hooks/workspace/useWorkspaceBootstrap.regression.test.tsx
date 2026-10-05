@@ -37,8 +37,10 @@ function defaultUiSettings() {
 function gatewayWorkspaceList(items: Array<{ workspace_id: string; name: string; status: string }>) {
   return {
     active_workspace_id: items[0]?.workspace_id ?? null,
-    items: items.map((item) => ({
+    items: items.map((item, index) => ({
       ...item,
+      backend_workspace_id: `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
+      connection_kind: "local",
       root_path: `/tmp/${item.workspace_id}`,
       system_default: false,
     })),

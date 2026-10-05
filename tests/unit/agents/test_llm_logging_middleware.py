@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,20 +17,58 @@ from app.agents.upstream_request_trace import (
     record_upstream_request,
     record_upstream_response,
 )
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+
+
+@pytest.fixture
+def log_session(session_bundle_factory):
+    """日志测试显式绑定同一 SessionThread 的已准入身份。"""
+    with ExitStack() as stack:
+
+        def create(sessions_root: Path, session_id: str) -> Path:
+            directory = session_bundle_factory(sessions_root, session_id)
+            thread_id = get_session_path_resolver(sessions_root).main_thread_id(
+                session_id
+            )
+            admission = ExecutionAdmission(
+                session_id=session_id,
+                thread_id=thread_id,
+                execution_id="execution-log",
+                job_id="job-log",
+                admission_idempotency_key="admission-log",
+                execution_origin="user_turn",
+                turn_id="turn-log",
+            )
+            stack.enter_context(
+                session_thread_owner_scope(
+                    MutationIntentOwner(session_id, thread_id),
+                    langgraph_thread_id=thread_id,
+                )
+            )
+            stack.enter_context(
+                execution_admission_scope(admission, langgraph_thread_id=thread_id)
+            )
+            return directory
+
+        yield create
 
 
 def test_llm_log_persists_request_and_tool_stats_without_prompt_replay(
     tmp_path: Path,
-    session_bundle_factory,
+    log_session,
 ) -> None:
     session_id = "ses_019c205391bb7a4b81b6728df70f63e6"
-    session_dir = session_bundle_factory(tmp_path, session_id)
+    session_dir = log_session(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
         )
     )
     request = ModelRequest(
@@ -77,25 +116,23 @@ def test_llm_logging_does_not_capture_prompt_replacement_side_channel(
     # 触发权限错误，也违反测试工作区隔离）；改用测试专属临时目录。
     middleware = LLMLoggingMiddleware(sessions_dir=tmp_path)
 
-    replaced_request = request.override(
-        system_message=SystemMessage(content="after")
-    )
+    replaced_request = request.override(system_message=SystemMessage(content="after"))
     assert replaced_request.system_message.text == "after"
     assert not hasattr(middleware, "_build_request_replay")
 
 
 def test_llm_log_merges_redacted_upstream_request_and_response(
     tmp_path: Path,
-    session_bundle_factory,
+    log_session,
 ) -> None:
     session_id = "ses_019bfd6198be7272a4dfb986435f5ce9"
-    session_dir = session_bundle_factory(tmp_path, session_id)
+    session_dir = log_session(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
         )
     )
     request = ModelRequest(
@@ -153,16 +190,16 @@ def test_llm_log_merges_redacted_upstream_request_and_response(
 
 def test_llm_log_bounds_large_payload_and_keeps_valid_json(
     tmp_path: Path,
-    session_bundle_factory,
+    log_session,
 ) -> None:
     session_id = "ses_019c3e9e888d763686f44635367d4dd9"
-    session_dir = session_bundle_factory(tmp_path, session_id)
+    session_dir = log_session(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
         )
     )
     request = ModelRequest(
@@ -193,7 +230,12 @@ def test_llm_log_pruning_enforces_file_count_and_total_bytes(
     log_dir.mkdir(parents=True)
     monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_FILES", 3)
     monkeypatch.setattr(llm_logging_middleware, "LLM_LOG_MAX_TOTAL_BYTES", 10)
-    for name, size in (("001.json", 6), ("002.json", 5), ("003.json", 4), ("004.json", 3)):
+    for name, size in (
+        ("001.json", 6),
+        ("002.json", 5),
+        ("003.json", 4),
+        ("004.json", 3),
+    ):
         (log_dir / name).write_bytes(b"x" * size)
 
     LLMLoggingMiddleware._prune_session_logs(log_dir)
@@ -207,16 +249,16 @@ def test_llm_log_pruning_enforces_file_count_and_total_bytes(
 
 def test_llm_log_persists_failed_upstream_attempt(
     tmp_path: Path,
-    session_bundle_factory,
+    log_session,
 ) -> None:
     session_id = "ses_019c47af8f1a75e08243db221ad02820"
-    session_dir = session_bundle_factory(tmp_path, session_id)
+    session_dir = log_session(tmp_path, session_id)
     runtime = Runtime(
         execution_info=ExecutionInfo(
             checkpoint_id="checkpoint",
             checkpoint_ns="",
             task_id="task",
-            thread_id=session_id,
+            thread_id=get_session_path_resolver(tmp_path).main_thread_id(session_id),
         )
     )
     request = ModelRequest(

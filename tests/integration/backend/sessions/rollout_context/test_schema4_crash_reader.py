@@ -51,6 +51,8 @@ def reader_case(
         session,
         accepted_ingress_id="reader-ingress",
         acceptance_idempotency_key="reader-acceptance",
+        job_id="reader-job",
+        admission_idempotency_key="reader-admission",
         payload="保留合法读连接",
     )
     return ReaderCase(
@@ -113,7 +115,11 @@ def test_opening_connection_preserves_idle_readers_kernel_lock(
     before = _evidence(case)
     assert before["db_locks"], "已执行 SELECT 的 WAL 连接必须持有 database SHARED lock"
     if opener == "storage":
-        extra = case.saver._storage._connect(case.session, read_only=read_only)
+        extra = case.saver._storage._connect(
+            case.saver._storage.main_thread_id(case.session),
+            read_only=read_only,
+            session_id=case.session,
+        )
     else:
         extra = (
             sqlite3.connect(f"{case.index.as_uri()}?mode=ro", uri=True)
@@ -264,7 +270,11 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
             seal_idempotency_key="reader-seal",
             seal_input_hash=input_hash,
         )
-        with restarted._storage._connect(case.session, read_only=True) as final:
+        with restarted._storage._connect(
+            restarted._storage.main_thread_id(case.session),
+            read_only=True,
+            session_id=case.session,
+        ) as final:
             assert final.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
             assert final.execute(
                 "SELECT count(*) FROM storage_commits WHERE commit_kind='assembly_sealed'"

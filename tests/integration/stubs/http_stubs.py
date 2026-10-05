@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -50,6 +51,7 @@ def generation_target_stub(
     port: int,
     *,
     output_workspace_id: str,
+    backend_workspace_id: str | None = None,
     catalog_items: list[dict[str, object]] | None = None,
     catalog_revision: str = "rev_e2e_generation_stub",
 ) -> Iterator[HTTPStubState]:
@@ -60,11 +62,36 @@ def generation_target_stub(
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
+        def has_expected_backend_identity(self) -> bool:
+            if (
+                backend_workspace_id is None
+                or self.headers.get("X-BoxTeam-Workspace-Id") == backend_workspace_id
+            ):
+                return True
+            _json_response(
+                self,
+                {"detail": "backend workspace identity mismatch"},
+                status=400,
+            )
+            return False
+
         def do_GET(self) -> None:
             state.requests.append(
                 {"method": "GET", "path": self.path, "json": None}
             )
+            if not self.has_expected_backend_identity():
+                return
             if self.path == "/api/v1/health":
+                if backend_workspace_id is not None:
+                    _json_response(
+                        self,
+                        {
+                            "status": "ok",
+                            "workspace_id": backend_workspace_id,
+                            "process_id": os.getpid(),
+                        },
+                    )
+                    return
                 _json_response(
                     self,
                     {
@@ -184,6 +211,8 @@ def generation_target_stub(
         def do_POST(self) -> None:
             if self.path != "/api/v1/session-generations/execute":
                 _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
+                return
+            if not self.has_expected_backend_identity():
                 return
             payload = _request_json(self)
             state.requests.append(

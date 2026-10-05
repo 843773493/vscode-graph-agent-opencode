@@ -29,7 +29,9 @@ class ForkOverlayCopyMixin:
         target_connection: sqlite3.Connection,
         *,
         source_session_id: str,
+        source_thread_id: str,
         target_session_id: str,
+        target_thread_id: str,
         fork_id: str,
         checkpoint_ns: str,
         timestamp: str,
@@ -44,7 +46,11 @@ class ForkOverlayCopyMixin:
         source revision/epoch/lineage 和 target-local ref。正文缺失时，后续
         projector 会返回 capability loss，而不会偷偷读取 source session。
         """
-        source_root = self.root(source_session_id, checkpoint_ns)
+        source_root = self.root(
+            source_session_id,
+            checkpoint_ns,
+            thread_id=source_thread_id,
+        )
         source_lock = _RolloutFileLock(
             source_root.parent / ".rollout.write.lock",
             exclusive=False,
@@ -52,12 +58,15 @@ class ForkOverlayCopyMixin:
         source_lock.acquire()
         try:
             with self._connect(
-                source_session_id,
+                source_thread_id,
                 checkpoint_ns,
+                session_id=source_session_id,
                 read_only=True,
             ) as source_connection:
                 overlay_columns = (
                     "overlay_id",
+                    "session_id",
+                    "thread_id",
                     "source_kind",
                     "source_revision",
                     "source_overlay_epoch",
@@ -80,20 +89,43 @@ class ForkOverlayCopyMixin:
                     "idempotency_key",
                     "created_at",
                 )
+                copied_columns = (
+                    "overlay_id",
+                    "source_kind",
+                    "source_revision",
+                    "source_overlay_epoch",
+                    "base_ref",
+                    "delta_ref",
+                    "base_source_revision",
+                    "base_content_length",
+                    "base_content_hash",
+                    "base_redacted_stable_digest",
+                    "delta_source_revision",
+                    "delta_content_length",
+                    "delta_content_hash",
+                    "delta_redacted_stable_digest",
+                    "delta_from_revision",
+                    "delta_to_revision",
+                    "delta_diff_hash",
+                    "supersedes_overlay_id",
+                    "materializes_overlay_id",
+                    "status",
+                    "idempotency_key",
+                )
                 raw_rows = source_connection.execute(
-                    "SELECT overlay_id, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND checkpoint_ns = ? ORDER BY source_overlay_epoch, created_at, overlay_id",
-                    (source_session_id, checkpoint_ns),
+                    "SELECT overlay_id, session_id, thread_id, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? ORDER BY source_overlay_epoch, created_at, overlay_id",
+                    (source_session_id, source_thread_id, checkpoint_ns),
                 ).fetchall()
-                rows = tuple(
-                    tuple(row[:21])
-                    for row in raw_rows
-                    if _validate_source_overlay_row(
-                        dict(zip(overlay_columns, row, strict=True)),
+                rows = []
+                for raw_row in raw_rows:
+                    row = dict(zip(overlay_columns, raw_row, strict=True))
+                    _validate_source_overlay_row(
+                        row,
                         session_id=source_session_id,
+                        thread_id=source_thread_id,
                         checkpoint_ns=checkpoint_ns,
                     )
-                    is None
-                )
+                    rows.append(tuple(row[column] for column in copied_columns))
         finally:
             source_lock.release()
         if not rows:
@@ -160,10 +192,11 @@ class ForkOverlayCopyMixin:
         ) in rows:
             target_overlay_id = overlay_map[source_overlay_id]
             result = target_connection.execute(
-                "INSERT INTO source_overlays(overlay_id, session_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     target_overlay_id,
                     target_session_id,
+                    target_thread_id,
                     checkpoint_ns,
                     source_kind,
                     source_revision,
@@ -196,6 +229,7 @@ class ForkOverlayCopyMixin:
                 "identity_mode": "remapped_target_local",
                 "source": {
                     "session_id": source_session_id,
+                    "thread_id": source_thread_id,
                     "overlay_id": source_overlay_id,
                     "source_overlay_epoch": source_epoch,
                     "base_ref": base_ref,
@@ -203,6 +237,7 @@ class ForkOverlayCopyMixin:
                 },
                 "target": {
                     "session_id": target_session_id,
+                    "thread_id": target_thread_id,
                     "overlay_id": target_overlay_id,
                     "source_overlay_epoch": epoch_map[source_epoch],
                     "base_ref": remap_ref(base_ref),

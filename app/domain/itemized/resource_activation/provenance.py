@@ -5,20 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import require_manifest_token
-
 from app.domain.itemized.resource_activation.common import (
+    _AVAILABILITIES,
+    _BOUNDARIES,
+    _CODE_HASH_MISMATCH,
+    _CODE_ORDINAL_CONFLICT,
     PROVENANCE_FIELD_ALIASES,
     RESOURCE_PROVENANCE_FIELDS,
     ResourceActivationBoundary,
     ResourceActivationContractError,
     SourceLineageRef,
-    _AVAILABILITIES,
-    _BOUNDARIES,
-    _CODE_HASH_MISMATCH,
-    _CODE_ORDINAL_CONFLICT,
     _display_uri,
     _non_empty_string,
     _non_negative_int,

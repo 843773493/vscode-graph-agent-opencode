@@ -8,7 +8,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.schemas.event import JobStartedEvent
+from app.core.path_utils import get_session_path_resolver
+from app.schemas.event import JobStartedEvent, JobStartedPayload
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -28,7 +29,7 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
     gateway_port = e2e_port_block_for_file(Path(request.node.fspath)).port(20)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
-        default_backend_url="managed-by-gateway",
+        default_backend_url=None,
         port=gateway_port,
     )
 
@@ -46,6 +47,7 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
             assert create_response.status_code == 200, create_response.text
             session_id = create_response.json()["data"]["session_id"]
 
+            thread_id = get_session_path_resolver(workspace_root / ".boxteam" / "sessions").main_thread_id(session_id)
             event_id = "evt_gateway_sse_cursor"
             trace_store = TraceEventStore(
                 sessions_dir=workspace_root / ".boxteam" / "sessions"
@@ -58,6 +60,7 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
                         job_id="job_gateway_sse_cursor",
                         agent_id="default",
                         timestamp=datetime.now(UTC),
+                        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
                     ),
                 )
             await trace_store.append(
@@ -67,6 +70,7 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
                     job_id="job_gateway_sse_cursor",
                     agent_id="default",
                     timestamp=datetime.now(UTC),
+                    payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
                 ),
             )
 

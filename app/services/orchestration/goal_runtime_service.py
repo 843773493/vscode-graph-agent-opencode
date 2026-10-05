@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from app.abstractions.internal_message import PreparedInternalMessage
@@ -31,8 +32,54 @@ class GoalRuntimeService:
         self._tasks: set[asyncio.Task[None]] = set()
         self._job_goal_ids: dict[str, str] = {}
         self._job_goal_capture_tasks: dict[str, asyncio.Task[None]] = {}
+        self._accepting_continuations = True
+        self._active_continuations = 0
+        self._continuations_drained = asyncio.Event()
+        self._continuations_drained.set()
+        self._closed = False
+        self._task_error: BaseException | None = None
+
+    @asynccontextmanager
+    async def _continuation_admission(self) -> AsyncIterator[bool]:
+        if not self._accepting_continuations:
+            yield False
+            return
+        self._active_continuations += 1
+        self._continuations_drained.clear()
+        try:
+            yield True
+        finally:
+            self._active_continuations -= 1
+            if not self._active_continuations:
+                self._continuations_drained.set()
+
+    async def close_admission(self) -> None:
+        """阻止新续跑，并让已经准入的派发在 Job 关闭准入前完成。"""
+        self._accepting_continuations = False
+        await self._continuations_drained.wait()
+
+    async def shutdown(self) -> None:
+        """排空终态状态转换，不取消写入或假装后台失败已完成。"""
+        await self.close_admission()
+        self._closed = True
+        while self._tasks:
+            await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+        if self._task_error is not None:
+            raise BaseExceptionGroup(
+                "Goal 后台状态转换失败", [self._task_error]
+            )
 
     async def on_event(self, event: Event) -> None:
+        if event.type not in {
+            EventType.JOB_STARTED,
+            EventType.JOB_FAILED,
+            EventType.JOB_CANCELLED,
+            EventType.JOB_COMPLETED,
+            EventType.AGENT_END,
+        }:
+            return
+        if self._closed:
+            raise RuntimeError("Goal runtime 已关闭，不能再接收 Job 生命周期事件")
         if event.type == EventType.JOB_STARTED:
             # JOB_STARTED 在 JobEventBus 的同步持久化事务中发布。Goal 续跑派发
             # 此时仍持有同一个 session 的 Goal 锁；若在监听器内同步读取 Goal，
@@ -79,10 +126,10 @@ class GoalRuntimeService:
         self._tasks.discard(task)
         try:
             task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.exception("Goal 后台状态转换失败")
+        except BaseException as error:
+            if self._task_error is None:
+                self._task_error = error
+            logger.error("Goal 后台状态转换失败", exc_info=error)
 
     async def _capture_started_job(self, job_id: str) -> None:
         job = await self._job_service.get(job_id)
@@ -119,18 +166,20 @@ class GoalRuntimeService:
             return
 
         if goal.status == GoalStatus.budget_limited:
-            await self._session_orchestrator.create_and_run_internal(
-                job.session_id,
-                self._budget_limited_message(
-                    goal,
-                    metadata={
-                        "goal_continuation": True,
-                        "goal_id": goal.goal_id,
-                        "goal_objective": goal.objective,
-                        "goal_budget_limited": True,
-                    },
-                ),
-            )
+            async with self._continuation_admission() as admitted:
+                if admitted:
+                    await self._session_orchestrator.create_and_run_internal(
+                        job.session_id,
+                        self._budget_limited_message(
+                            goal,
+                            metadata={
+                                "goal_continuation": True,
+                                "goal_id": goal.goal_id,
+                                "goal_objective": goal.objective,
+                                "goal_budget_limited": True,
+                            },
+                        ),
+                    )
             return
 
         async def dispatch(current: SessionGoalDTO) -> None:
@@ -146,9 +195,11 @@ class GoalRuntimeService:
                 ),
             )
 
-        await self._goal_service.dispatch_continuation_if_active(
-            job.session_id, job_id, dispatch
-        )
+        async with self._continuation_admission() as admitted:
+            if admitted:
+                await self._goal_service.dispatch_continuation_if_active(
+                    job.session_id, job_id, dispatch
+                )
 
     async def _ensure_after_job_completed(self, job_id: str) -> None:
         job = await self._job_service.get(job_id)
@@ -177,81 +228,86 @@ class GoalRuntimeService:
             await self.ensure_active_goal_running(goal.session_id)
 
     async def ensure_active_goal_running(self, session_id: str) -> None:
-        goal = await self._goal_service.get(session_id)
-        if goal is None or goal.status != GoalStatus.active:
-            return
-        jobs = await self._job_service.list(session_id=session_id)
-        if any(item.status.value in {"queued", "running", "accepted"} for item in jobs):
-            return
+        async with self._continuation_admission() as admitted:
+            if not admitted:
+                return
+            goal = await self._goal_service.get(session_id)
+            if goal is None or goal.status != GoalStatus.active:
+                return
+            jobs = await self._job_service.list(session_id=session_id)
+            if any(item.status.value in {"queued", "running", "accepted"} for item in jobs):
+                return
 
-        async def dispatch(goal: SessionGoalDTO) -> None:
-            await self._session_orchestrator.create_and_run_internal(
-                session_id,
-                self._continuation_message(
-                    goal,
-                    metadata={
-                        "goal_continuation": True,
-                        "goal_id": goal.goal_id,
-                        "goal_objective": goal.objective,
-                    },
-                ),
+            async def dispatch(goal: SessionGoalDTO) -> None:
+                await self._session_orchestrator.create_and_run_internal(
+                    session_id,
+                    self._continuation_message(
+                        goal,
+                        metadata={
+                            "goal_continuation": True,
+                            "goal_id": goal.goal_id,
+                            "goal_objective": goal.objective,
+                        },
+                    ),
+                )
+
+            await self._goal_service.dispatch_continuation_if_active(
+                session_id, f"idle:{goal.goal_id}:{goal.revision}", dispatch
             )
-
-        await self._goal_service.dispatch_continuation_if_active(
-            session_id, f"idle:{goal.goal_id}:{goal.revision}", dispatch
-        )
 
     async def apply_objective_update(self, goal: SessionGoalDTO) -> None:
         """让排队或正在执行的同一 Goal 尽快看到外部编辑后的目标。"""
-        prompt = self._objective_updated_prompt(goal)
-        pending = await self._job_service.list_pending(goal.session_id)
-        for request in pending.requests:
-            if request.message_metadata.get("goal_id") != goal.goal_id:
-                continue
-            await self._job_service.update_pending(
-                goal.session_id,
-                request.message_id,
-                content=prompt,
-                attachments=request.attachments,
-            )
+        async with self._continuation_admission() as admitted:
+            if not admitted:
+                return
+            prompt = self._objective_updated_prompt(goal)
+            pending = await self._job_service.list_pending(goal.session_id)
+            for request in pending.requests:
+                if request.message_metadata.get("goal_id") != goal.goal_id:
+                    continue
+                await self._job_service.update_pending(
+                    goal.session_id,
+                    request.message_id,
+                    content=prompt,
+                    attachments=request.attachments,
+                )
 
-        running_job_ids = [
-            job.job_id
-            for job in await self._job_service.list(session_id=goal.session_id)
-            if job.status.value in {"accepted", "running", "streaming"}
-            and self._job_goal_ids.get(job.job_id) == goal.goal_id
-        ]
-        if not running_job_ids:
-            return
+            running_job_ids = [
+                job.job_id
+                for job in await self._job_service.list(session_id=goal.session_id)
+                if job.status.value in {"accepted", "running", "streaming"}
+                and self._job_goal_ids.get(job.job_id) == goal.goal_id
+            ]
+            if not running_job_ids:
+                return
 
-        for job_id in running_job_ids:
-            self._job_goal_ids.pop(job_id, None)
+            async def dispatch(current: SessionGoalDTO) -> None:
+                await self._session_orchestrator.create_and_run_internal(
+                    goal.session_id,
+                    self._objective_updated_message(
+                        current,
+                        metadata={
+                            "goal_continuation": True,
+                            "goal_id": current.goal_id,
+                            "goal_objective": current.objective,
+                            "goal_objective_updated": True,
+                        },
+                    ),
+                    delivery_policy="after_turn",
+                )
 
-        async def dispatch(current: SessionGoalDTO) -> None:
-            await self._session_orchestrator.create_and_run_internal(
-                goal.session_id,
-                self._objective_updated_message(
-                    current,
-                    metadata={
-                        "goal_continuation": True,
-                        "goal_id": current.goal_id,
-                        "goal_objective": current.objective,
-                        "goal_objective_updated": True,
-                    },
-                ),
-                delivery_policy="after_turn",
-            )
-
-        try:
-            await self._goal_service.dispatch_continuation_if_active(
-                goal.session_id,
-                f"objective:{goal.goal_id}:{goal.revision}",
-                dispatch,
-            )
-        except BaseException:
             for job_id in running_job_ids:
-                self._job_goal_ids[job_id] = goal.goal_id
-            raise
+                self._job_goal_ids.pop(job_id, None)
+            try:
+                await self._goal_service.dispatch_continuation_if_active(
+                    goal.session_id,
+                    f"objective:{goal.goal_id}:{goal.revision}",
+                    dispatch,
+                )
+            except BaseException:
+                for job_id in running_job_ids:
+                    self._job_goal_ids[job_id] = goal.goal_id
+                raise
 
     async def settle_active_progress(self, session_id: str) -> None:
         """外部暂停/清除前冻结当前 Job 的 Goal 计时时间点。"""

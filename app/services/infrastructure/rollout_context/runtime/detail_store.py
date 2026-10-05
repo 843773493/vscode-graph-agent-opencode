@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_keys import (
     ContextDetailKeyStore,
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     )
     from app.services.infrastructure.rollout_context.runtime.detail_fork import (
         ForkDetailCapability,
+        ForkDetailSourceSnapshot,
     )
     from app.services.infrastructure.rollout_context.runtime.protected_upgrade import (
         ProtectedDetailUpgrade,
@@ -71,13 +72,21 @@ class ContextPlanDetailStore:
     def supports_protected_details(self) -> bool:
         return self._protected_backend is not None
 
-    def fork_detail_capability(self) -> ForkDetailCapability:
+    def fork_detail_capability(
+        self,
+        *,
+        source_snapshots: tuple[ForkDetailSourceSnapshot, ...] | None = None,
+    ) -> ForkDetailCapability:
         """显式跨 owner 复制能力；不把 cipher、明文或原 session key 交给 fork。"""
         from app.services.infrastructure.rollout_context.runtime.detail_fork import (
             ForkDetailCapability,
         )
 
-        return ForkDetailCapability(self, self._protected_backend)
+        return ForkDetailCapability(
+            self,
+            self._protected_backend,
+            source_snapshots=source_snapshots,
+        )
 
     def schema_v3_detail_capability(self) -> SchemaV3DetailCapability:
         """仅由 Saver 的显式 upgrade 注入 storage；不加载 migration parser。"""
@@ -130,6 +139,7 @@ class ContextPlanDetailStore:
         self,
         *,
         session_id: str,
+        thread_id: str,
         assembly_id: str,
         detail_kind: str,
         retention_class: str,
@@ -142,7 +152,9 @@ class ContextPlanDetailStore:
         checkpoint_ns: str = "",
         source_revision: str | None = None,
     ) -> DetailRecord:
-        ref = DetailRef(session_id, assembly_id, "detail-" + secrets.token_hex(16))
+        ref = DetailRef(
+            session_id, thread_id, assembly_id, "detail-" + secrets.token_hex(16)
+        )
         _manifest_bool(required, field="required")
         _manifest_bool(sensitive, field="sensitive")
         _manifest_non_negative_int(retention_days, field="retention_days")
@@ -189,7 +201,9 @@ class ContextPlanDetailStore:
         if sensitive:
             stored_detail, redaction_digest = redacted_detail_payload(
                 detail,
-                session_key=self._detail_key_store.get(session_id, create=True),
+                session_key=self._detail_key_store.get(
+                    session_id, thread_id, create=True
+                ),
                 detail_kind=detail_kind,
             )
         raw, record = build_detail_payload(
@@ -238,10 +252,11 @@ class ContextPlanDetailStore:
         self,
         *,
         session_id: str,
+        thread_id: str,
         record: DetailRecord,
         include_sensitive: bool = False,
     ) -> dict[str, object]:
-        record.detail_ref.require_owner(session_id)
+        record.detail_ref.require_owner(session_id, thread_id)
         _manifest_bool(include_sensitive, field="include_sensitive")
         if record.status != "available" or record.availability != "available":
             raise DetailUnavailableError(f"assembly detail 不可用: {record.detail_ref}")
@@ -286,7 +301,9 @@ class ContextPlanDetailStore:
             raise DetailUnavailableError("protected assembly detail manifest 不匹配")
         marker, expected_digest = redacted_detail_payload(
             body,
-            session_key=self._detail_key_store.get(session_id, create=False),
+            session_key=self._detail_key_store.get(
+                record.session_id, record.thread_id, create=False
+            ),
             detail_kind=record.detail_kind,
         )
         if expected_digest != record.redacted_stable_digest:
@@ -299,19 +316,25 @@ class ContextPlanDetailStore:
             )
         return {**value, "detail": body, "detail_content_hash": body_hash}
 
-    def remove(self, *, session_id: str, record: DetailRecord) -> None:
+    def remove(
+        self, *, session_id: str, thread_id: str, record: DetailRecord
+    ) -> None:
         """只负责正文清理；registry tombstone 必须由调用 owner 先提交。"""
-        self._removal.remove(session_id=session_id, record=record)
+        self._removal.remove(
+            session_id=session_id, thread_id=thread_id, record=record
+        )
 
     def gc(
         self,
         *,
         session_id: str,
+        thread_id: str,
         expired_before: datetime,
         allowed_refs: Iterable[DetailRef],
     ) -> tuple[DetailRef, ...]:
         return self._removal.gc(
             session_id=session_id,
+            thread_id=thread_id,
             expired_before=expired_before,
             allowed_refs=allowed_refs,
         )

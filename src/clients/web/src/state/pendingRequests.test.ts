@@ -16,6 +16,9 @@ describe("待处理消息状态", () => {
         {
           job_id: "job_queued",
           message_id: "msg_queued",
+          thread_id: "thr_018f0000000070008000000000000001",
+          turn_id: "turn_queued",
+          execution_binding: { job_id: "job_queued", turn_id: "turn_queued", admission_idempotency_key: "admission_queued" },
           session_id: "ses_pending",
           content: "后发送但排第二",
           delivery_policy: "after_turn",
@@ -31,6 +34,9 @@ describe("待处理消息状态", () => {
         {
           job_id: "job_interrupt",
           message_id: "msg_interrupt",
+          thread_id: "thr_018f0000000070008000000000000001",
+          turn_id: "turn_interrupt",
+          execution_binding: { job_id: "job_interrupt", turn_id: "turn_interrupt", admission_idempotency_key: "admission_interrupt" },
           session_id: "ses_pending",
           content: "消息排第一",
           delivery_policy: "after_interrupt",

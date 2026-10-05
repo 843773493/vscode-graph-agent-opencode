@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_gateway_root
-from app.core.trace_middleware import get_request_id
+from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import (
     USER_ACCESS_COOKIE_NAME,
@@ -37,10 +37,12 @@ from app.gateway.registry import (
 router = APIRouter()
 
 HISTORY_LOADING_HEADER = "x-boxteam-history-loading"
+BACKEND_WORKSPACE_ID_HEADER = "x-boxteam-backend-workspace-id"
 # 工作区 API 代理在逐跳头部之外还要剥离会话加载策略与浏览器 Cookie；Gateway 凭据
 # 与目标选择头部共用代理的同一份集合。
 PROXY_ONLY_DROPPED_HEADERS = GATEWAY_PROXY_DROPPED_HEADERS | {
     HISTORY_LOADING_HEADER,
+    BACKEND_WORKSPACE_ID_HEADER,
     "cookie",
 }
 MESSAGE_STREAM_AVAILABILITY_RETRY_DELAYS_SECONDS = (0.05,)
@@ -115,11 +117,38 @@ def verify_user_access_for_proxy(
     return context
 
 
+def _navigation_actor(
+    auth: GatewayAuthContext | None,
+    user_access: UserAccessContext | None,
+) -> str | None:
+    """从本跳已验证身份构造导航幂等 actor；公开读取路由不附加主体。"""
+    if auth is None:
+        return None
+    if auth.kind == "federation":
+        peer_gateway_id = auth.peer_gateway_id
+        if not isinstance(peer_gateway_id, str) or not peer_gateway_id:
+            raise RuntimeError("Gateway federation 凭据缺少已验证的 peer_gateway_id")
+        return f"federation:{peer_gateway_id}"
+    if auth.kind != "local":
+        raise RuntimeError(f"Gateway 认证类型不受支持: {auth.kind!r}")
+    if user_access is None:
+        raise RuntimeError("本地 Gateway API 代理缺少已验证的 UserAccess")
+    if user_access.kind == "user":
+        if not isinstance(user_access.user_id, str) or not user_access.user_id:
+            raise RuntimeError("Gateway 已验证的 UserAccess 缺少 user_id")
+        return f"user:{user_access.user_id}"
+    if user_access.kind == "guest":
+        return "guest"
+    raise RuntimeError(f"Gateway UserAccess 类型不受支持: {user_access.kind!r}")
+
+
 def _proxy_headers(
     request: Request,
     target: WorkspaceTarget | None = None,
     *,
     include_credentials: bool = True,
+    auth: GatewayAuthContext | None = None,
+    user_access: UserAccessContext | None = None,
 ) -> dict[str, str]:
     headers = filter_hop_by_hop_headers(
         (key, value)
@@ -130,6 +159,9 @@ def _proxy_headers(
     # 按请求注入 Gateway 自身稳定身份；客户端同名头部已在上面的剥离集合里剔除，
     # 故这里写入的永远是本机 Gateway 的权威 gateway_id。
     headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
+    actor = _navigation_actor(auth, user_access)
+    if actor is not None:
+        headers[NAVIGATION_ACTOR_HEADER] = actor
     application = request.scope.get("app")
     gateway_config = getattr(getattr(application, "state", None), "gateway_config", None)
     history_loading = getattr(gateway_config, "history_loading", None)
@@ -147,6 +179,16 @@ def _proxy_headers(
                 storage_path=get_gateway_root() / "credentials" / "federation.json"
             ).get(connection_id)
             headers["X-BoxTeam-Federation-Token"] = credential.token
+    elif target is not None:
+        backend_workspace_id = target.backend_workspace_id
+        if backend_workspace_id is None:
+            raise RuntimeError(
+                "本地 Gateway target 缺少 backend UUID，拒绝代理: "
+                f"workspace_id={target.workspace_id}"
+            )
+        headers["X-BoxTeam-Workspace-Id"] = backend_workspace_id
+        if include_credentials:
+            headers["X-Local-Token"] = LOCAL_TOKEN
     elif include_credentials:
         headers["X-Local-Token"] = LOCAL_TOKEN
     return headers
@@ -317,6 +359,21 @@ async def _proxy_workspace_request(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    requested_backend_workspace_id = request.headers.get(
+        BACKEND_WORKSPACE_ID_HEADER
+    )
+    if requested_backend_workspace_id is not None and (
+        target.connection_kind != "local"
+        or requested_backend_workspace_id != target.backend_workspace_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Gateway target 与 backend_workspace_id 不一致: "
+                f"workspace_id={target.workspace_id}, "
+                f"backend_workspace_id={requested_backend_workspace_id!r}"
+            ),
+        )
     proxy_target_to_proto(
         workspace_id=target.workspace_id,
         service="workspace_api",
@@ -445,6 +502,8 @@ async def _proxy_workspace_request(
                     request,
                     target,
                     include_credentials=include_credentials,
+                    auth=auth,
+                    user_access=user_access,
                 ),
             )
             try:

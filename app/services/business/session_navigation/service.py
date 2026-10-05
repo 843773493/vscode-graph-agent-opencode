@@ -4,6 +4,8 @@ import asyncio
 import base64
 import hashlib
 import json
+from dataclasses import dataclass
+from typing import Literal
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.background_task_registry import BackgroundTaskRegistry
@@ -23,10 +25,9 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogPageDTO,
     SessionCatalogSearchResultDTO,
     SessionCatalogSearchResultsDTO,
-    SessionFolderCreateRequest,
-    SessionFolderUpdateRequest,
 )
 from app.schemas.internal_v2.session_navigation.operations import (
+    AutoSessionTitleCommand,
     NavigationEventsPageDTO,
     NavigationMutationEnqueueRequest,
     NavigationMutationEnqueueResultDTO,
@@ -78,6 +79,24 @@ def _raise_for_rejected(record: NavigationMutationRecord) -> None:
     raise RuntimeError(detail)
 
 
+class SessionCatalogRevisionChangedError(RuntimeError):
+    """目录行快照加载异步元数据期间已被并发写入推进。"""
+
+
+@dataclass(frozen=True)
+class _SessionCatalogReadSnapshot:
+    catalog_revision: int
+    revision: str
+    nodes: list[SessionCatalogNodeDTO]
+    nodes_by_id: dict[str, SessionCatalogNodeDTO]
+
+
+@dataclass(frozen=True, slots=True)
+class AutoSessionTitleMutationResult:
+    outcome: Literal["applied", "not_applicable"]
+    session: SessionDTO
+
+
 class SessionCatalogService:
     """把权威会话索引投影为可分页、可搜索的目录 API。"""
 
@@ -95,9 +114,7 @@ class SessionCatalogService:
         self._background_task_registry = background_task_registry
         # 未显式注入时按容器装配的同一 resolver/store 构造导航 operation 栈。
         self._operations_service = operations_service or self._build_operations()
-        self._cached_nodes: list[SessionCatalogNodeDTO] | None = None
-        self._cached_revision: str | None = None
-        self._cached_physical_revision: int | None = None
+        self._cached_snapshot: _SessionCatalogReadSnapshot | None = None
         self._session_service.register_change_listener(self._on_session_changed)
 
     def _build_operations(self) -> SessionCatalogOperationsService | None:
@@ -141,7 +158,10 @@ class SessionCatalogService:
         与删除前既有行为一致：先取得本次操作的 session 集合，在 JobService 删除
         admission 下做后台任务预检，再执行共享删除流（含运行时 drain 回调）。
         """
-        frozen_session_ids = self._path_resolver.descendant_session_ids(root_node_id)
+        frozen_session_ids = self._path_resolver.descendant_session_ids(
+            root_node_id,
+            include_self=True,
+        )
 
         if self._background_task_registry is not None:
             target_ids = set(frozen_session_ids)
@@ -174,9 +194,12 @@ class SessionCatalogService:
         )
 
     def invalidate(self) -> None:
-        self._cached_nodes = None
-        self._cached_revision = None
-        self._cached_physical_revision = None
+        self._cached_snapshot = None
+
+    def bind_job_service(self, job_service: JobServiceProtocol) -> None:
+        if self._job_service is not None:
+            raise RuntimeError("SessionCatalogService 已绑定 JobService")
+        self._job_service = job_service
 
     @property
     def path_resolver(self) -> SessionCatalogPathResolver:
@@ -192,8 +215,8 @@ class SessionCatalogService:
 
     async def refresh(self) -> SessionCatalogPageDTO:
         self.invalidate()
-        nodes, revision = await self._snapshot(force=True)
-        roots = self._sorted_children(nodes, None)
+        snapshot = await self._snapshot(force=True)
+        roots = self._sorted_children(snapshot.nodes, None)
         # 刷新语义是「重载根页并校验索引」：没有 limit/cursor 入参，必须返回
         # 完整根页且 cursor 为空，否则超过上限的根节点会既不在 items 里、也没
         # 有可继续分页的 cursor，被静默吞掉。分页由 list_children 承担。
@@ -202,7 +225,8 @@ class SessionCatalogService:
             parent_node_id=None,
             offset=0,
             limit=None,
-            revision=revision,
+            revision=snapshot.revision,
+            catalog_revision=snapshot.catalog_revision,
             cursor_scope=None,
         )
 
@@ -213,22 +237,29 @@ class SessionCatalogService:
         limit: int,
         cursor: str | None,
     ) -> SessionCatalogPageDTO:
-        nodes, revision = await self._snapshot()
+        snapshot = await self._snapshot()
         if parent_node_id is not None and not any(
-            node.node_id == parent_node_id for node in nodes
+            node.node_id == parent_node_id for node in snapshot.nodes
         ):
             raise KeyError(f"会话目录节点不存在: {parent_node_id}")
-        children = self._sorted_children(nodes, parent_node_id)
+        children = self._sorted_children(snapshot.nodes, parent_node_id)
         # cursor 绑定发牌时的分页作用域（父节点）：同一个 revision 下把某个父节点的
         # cursor 拿去翻另一个父节点的页，会让 offset 落到错误切片的中间，静默跳项。
         scope = parent_node_id
-        offset = self._decode_cursor(cursor, revision, scope)
+        offset = self._decode_cursor(
+            cursor,
+            snapshot.revision,
+            snapshot.catalog_revision,
+            scope,
+            collection_size=len(children),
+        )
         return self._build_page(
             children,
             parent_node_id=parent_node_id,
             offset=offset,
             limit=limit,
-            revision=revision,
+            revision=snapshot.revision,
+            catalog_revision=snapshot.catalog_revision,
             cursor_scope=scope,
         )
 
@@ -240,6 +271,7 @@ class SessionCatalogService:
         offset: int,
         limit: int | None,
         revision: str,
+        catalog_revision: int,
         cursor_scope: str | None,
     ) -> SessionCatalogPageDTO:
         """构造目录分页页；limit 为 None 表示返回 offset 之后的全部节点。"""
@@ -247,10 +279,13 @@ class SessionCatalogService:
         next_offset = offset + len(page)
         return SessionCatalogPageDTO(
             revision=revision,
+            catalog_revision=catalog_revision,
             parent_node_id=parent_node_id,
             items=page,
             cursor=(
-                self._encode_cursor(next_offset, revision, cursor_scope)
+                self._encode_cursor(
+                    next_offset, revision, catalog_revision, cursor_scope
+                )
                 if next_offset < len(children)
                 else None
             ),
@@ -258,28 +293,14 @@ class SessionCatalogService:
         )
 
     async def breadcrumb(self, node_id: str) -> SessionCatalogBreadcrumbDTO:
-        nodes, revision = await self._snapshot()
-        nodes_by_id = {node.node_id: node for node in nodes}
-        node = nodes_by_id.get(node_id)
+        snapshot = await self._snapshot()
+        node = snapshot.nodes_by_id.get(node_id)
         if node is None:
-            # 目标可能正处于 deleting（枚举已按 §9 语义隐藏）：这里用 catalog
-            # 父子链补齐并标 pending，使正在被删除的子树的 breadcrumb 仍可解析、
-            # 前端能区分 pending 与 committed，而不是整条读路径失败。
-            try:
-                chain = self._path_resolver.breadcrumb(node_id)
-            except KeyError:
-                raise KeyError(f"会话目录节点不存在: {node_id}") from None
-            return SessionCatalogBreadcrumbDTO(
-                revision=revision,
-                items=[
-                    nodes_by_id.get(item.node_id)
-                    or self._to_pending_catalog_node(item, nodes_by_id)
-                    for item in chain
-                ],
-            )
+            raise KeyError(f"会话目录节点不存在: {node_id}")
         return SessionCatalogBreadcrumbDTO(
-            revision=revision,
-            items=self._breadcrumb_items(node, nodes_by_id),
+            revision=snapshot.revision,
+            catalog_revision=snapshot.catalog_revision,
+            items=self._breadcrumb_items(node, snapshot.nodes_by_id),
         )
 
     async def search(
@@ -292,14 +313,12 @@ class SessionCatalogService:
         normalized_query = query.strip().casefold()
         if not normalized_query:
             raise ValueError("会话目录搜索词不能为空")
-        nodes, revision = await self._snapshot()
+        snapshot = await self._snapshot()
         # 搜索的 cursor 作用域是查询词：把目录分页或其它查询词的 cursor 拿来翻本
         # 次搜索，会让 offset 落到错误匹配集的中间，静默跳项。
         scope = f"search\n{normalized_query}"
-        offset = self._decode_cursor(cursor, revision, scope)
-        nodes_by_id = {node.node_id: node for node in nodes}
         matches: list[SessionCatalogNodeDTO] = []
-        for node in nodes:
+        for node in snapshot.nodes:
             physical_path = node.storage_relative_path or ""
             if (
                 normalized_query not in node.name.casefold()
@@ -315,10 +334,17 @@ class SessionCatalogService:
                 item.node_id,
             )
         )
+        offset = self._decode_cursor(
+            cursor,
+            snapshot.revision,
+            snapshot.catalog_revision,
+            scope,
+            collection_size=len(matches),
+        )
         page_nodes = matches[offset : offset + limit]
         results: list[SessionCatalogSearchResultDTO] = []
         for node in page_nodes:
-            breadcrumb = self._breadcrumb_items(node, nodes_by_id)
+            breadcrumb = self._breadcrumb_items(node, snapshot.nodes_by_id)
             display_path = "/".join(item.name for item in breadcrumb)
             results.append(
                 SessionCatalogSearchResultDTO(
@@ -329,10 +355,16 @@ class SessionCatalogService:
             )
         next_offset = offset + len(results)
         return SessionCatalogSearchResultsDTO(
-            revision=revision,
+            revision=snapshot.revision,
+            catalog_revision=snapshot.catalog_revision,
             items=results,
             cursor=(
-                self._encode_cursor(next_offset, revision, scope)
+                self._encode_cursor(
+                    next_offset,
+                    snapshot.revision,
+                    snapshot.catalog_revision,
+                    scope,
+                )
                 if next_offset < len(matches)
                 else None
             ),
@@ -340,31 +372,12 @@ class SessionCatalogService:
         )
 
     async def export_index(self) -> SessionCatalogExportDTO:
-        nodes, revision = await self._snapshot()
-        return SessionCatalogExportDTO(revision=revision, items=nodes)
-
-    async def create_folder(
-        self,
-        payload: SessionFolderCreateRequest,
-    ) -> SessionCatalogBreadcrumbDTO:
-        # 与 delete_folder/assign_session/move_node 走**同一条** _submit_batch 归口：
-        # 被拒记录由 _raise_for_rejected 按既有分类重抛（未知节点 KeyError→404、
-        # 形态/语义冲突 ValueError/RuntimeError→400/409）。不得再走只返回原始
-        # record 的单条入口，否则被拒 operation 会以裸 RuntimeError 冒泡成 500。
-        records = await self._submit_batch(
-            [
-                NavigationMutationIntentDTO(
-                    client_operation_id=create_prefixed_id("op"),
-                    client_sequence=1,
-                    kind="create_folder",
-                    base_catalog_revision=self._catalog_revision(),
-                    name=payload.name,
-                    parent_node_id=payload.parent_folder_id,
-                )
-            ]
+        snapshot = await self._snapshot()
+        return SessionCatalogExportDTO(
+            revision=snapshot.revision,
+            catalog_revision=snapshot.catalog_revision,
+            items=snapshot.nodes,
         )
-        self.invalidate()
-        return await self.breadcrumb(_committed_node_id(records[-1]))
 
     async def recover_pending_subtree_deletes(self) -> list[SubtreeDeleteResult]:
         """启动恢复入口：按 SQLite 权威 record 幂等续跑未终结的子树删除。
@@ -378,47 +391,6 @@ class SessionCatalogService:
         if results:
             self.invalidate()
         return results
-
-    async def update_folder(
-        self,
-        folder_id: str,
-        payload: SessionFolderUpdateRequest,
-    ) -> SessionCatalogBreadcrumbDTO:
-        if self._operations_service.node_kind(folder_id) != "folder":
-            raise KeyError(f"会话文件夹不存在: {folder_id}")
-        intents = self._folder_update_intents(folder_id, payload)
-        if not intents:
-            self.invalidate()
-            return await self.breadcrumb(folder_id)
-        await self._submit_batch(intents)
-        self.invalidate()
-        return await self.breadcrumb(folder_id)
-
-    async def assign_session(
-        self,
-        session_id: str,
-        folder_id: str | None,
-    ) -> SessionCatalogBreadcrumbDTO:
-        """把会话分配进文件夹；目标必须是 folder（保持该端点的既有契约）。"""
-        if folder_id is not None and self.operations.node_kind(folder_id) != "folder":
-            raise ValueError(f"目标节点不是会话文件夹: {folder_id}")
-        await self._submit_batch(
-            [self._move_intent(session_id, folder_id, sequence=1)]
-        )
-        self.invalidate()
-        return await self.breadcrumb(session_id)
-
-    async def move_node(
-        self,
-        node_id: str,
-        parent_node_id: str | None,
-    ) -> SessionCatalogBreadcrumbDTO:
-        """按目标节点类型移动会话或会话文件夹。"""
-        await self._submit_batch(
-            [self._move_intent(node_id, parent_node_id, sequence=1)]
-        )
-        self.invalidate()
-        return await self.breadcrumb(node_id)
 
     async def ensure_folder_path(
         self,
@@ -464,6 +436,46 @@ class SessionCatalogService:
             parent_node_id = _committed_node_id(records[-1])
         self.invalidate()
         return parent_node_id or None
+
+    async def auto_title_session(
+        self,
+        session_id: str,
+        *,
+        expected_title: str,
+        title: str,
+    ) -> AutoSessionTitleMutationResult:
+        """提交内部默认来源 + 原标题 + revision CAS，并读取终态后的权威 Session。"""
+        if expected_title not in SessionService.DEFAULT_SESSION_TITLES:
+            raise ValueError(
+                f"自动标题只能替换默认标题: session_id={session_id}, "
+                f"expected_title={expected_title!r}"
+            )
+        if self.operations.node_kind(session_id) != "session":
+            raise KeyError(f"会话不存在: {session_id}")
+        command = AutoSessionTitleCommand(
+            client_operation_id=create_prefixed_id("op"),
+            base_catalog_revision=self._catalog_revision(),
+            expected_revision=self.operations.node_revision(session_id),
+            target_node_id=session_id,
+            expected_title=expected_title,
+            name=title,
+        )
+        scope = self._scope()
+        await self.operations.enqueue_auto_session_title(command, scope)
+        receipt = await self.operations.await_terminal(
+            command.client_operation_id,
+            scope,
+        )
+        session = await self._session_service.get(session_id)
+        if receipt.state == "committed":
+            self.invalidate()
+            if session.title == title and session.title_source == "auto":
+                return AutoSessionTitleMutationResult("applied", session)
+            return AutoSessionTitleMutationResult("not_applicable", session)
+        if receipt.error_code == "session_title_not_applicable":
+            return AutoSessionTitleMutationResult("not_applicable", session)
+        _raise_for_rejected(receipt)
+        raise RuntimeError("自动标题队列返回了未知终态")
 
     def _existing_child_folders(
         self,
@@ -560,120 +572,79 @@ class SessionCatalogService:
         """
         return local_navigation_scope(self._path_resolver.workspace_id)
 
-    def _move_intent(
-        self,
-        node_id: str,
-        parent_node_id: str | None,
-        *,
-        sequence: int,
-    ) -> NavigationMutationIntentDTO:
-        return NavigationMutationIntentDTO(
-            client_operation_id=create_prefixed_id("op"),
-            client_sequence=sequence,
-            kind="move_node",
-            base_catalog_revision=self._catalog_revision(),
-            expected_revision=self.operations.node_revision(node_id),
-            target_node_id=node_id,
-            parent_node_id=parent_node_id,
-        )
-
-    def _folder_update_intents(
-        self,
-        folder_id: str,
-        payload: SessionFolderUpdateRequest,
-    ) -> list[NavigationMutationIntentDTO]:
-        """把 folder 更新拆成 typed intent 序列（改名 + 移动可同批提交）。
-
-        同 node 连续编辑通过 ``depends_on`` 建立依赖：执行时以后序 intent 引用
-        前序已提交结果 revision 作 CAS 前置，因此不会因自身前一条命令推进了
-        revision 而误判冲突。
-        """
-        intents: list[NavigationMutationIntentDTO] = []
-        previous_id: str | None = None
-        if payload.name is not None:
-            rename_id = create_prefixed_id("op")
-            intents.append(
-                NavigationMutationIntentDTO(
-                    client_operation_id=rename_id,
-                    client_sequence=1,
-                    kind="rename_node",
-                    base_catalog_revision=self._catalog_revision(),
-                    expected_revision=self.operations.node_revision(folder_id),
-                    target_node_id=folder_id,
-                    name=payload.name,
-                )
-            )
-            previous_id = rename_id
-        if "parent_folder_id" in payload.model_fields_set:
-            move_id = create_prefixed_id("op")
-            intents.append(
-                NavigationMutationIntentDTO(
-                    client_operation_id=move_id,
-                    client_sequence=len(intents) + 1,
-                    kind="move_node",
-                    base_catalog_revision=self._catalog_revision(),
-                    expected_revision=self.operations.node_revision(folder_id),
-                    target_node_id=folder_id,
-                    parent_node_id=payload.parent_folder_id,
-                    depends_on=[previous_id] if previous_id else [],
-                )
-            )
-        return intents
-
-    async def delete_folder(
-        self,
-        folder_id: str,
-        *,
-        recursive: bool = False,
-    ) -> None:
-        """删除 folder：空目录删除和递归子树删除都经唯一 operation queue。"""
-        await self._submit_batch(
-            [
-                NavigationMutationIntentDTO(
-                    client_operation_id=create_prefixed_id("op"),
-                    client_sequence=1,
-                    kind="delete_folder",
-                    base_catalog_revision=self._catalog_revision(),
-                    target_node_id=folder_id,
-                    recursive=recursive,
-                )
-            ]
-        )
-        self.invalidate()
-
     async def _snapshot(
         self,
         *,
         force: bool = False,
-    ) -> tuple[list[SessionCatalogNodeDTO], str]:
-        physical_revision = self._path_resolver.revision
+    ) -> _SessionCatalogReadSnapshot:
+        current_revision = self._path_resolver.revision
         if (
             not force
-            and self._cached_nodes is not None
-            and self._cached_revision is not None
-            and self._cached_physical_revision == physical_revision
+            and self._cached_snapshot is not None
+            and self._cached_snapshot.catalog_revision == current_revision
         ):
-            return self._cached_nodes, self._cached_revision
-        physical_nodes = self._path_resolver.list_nodes()
-        # list_nodes() 读同一 catalog；其间若有并发写提交，其 generation 变化
-        # 由下一次 _snapshot 的缓存判据（非 force）重读 revision 捕获。
+            return self._cached_snapshot
+
+        catalog_revision, all_physical_nodes = self._path_resolver.catalog_snapshot()
+        physical_nodes = self._visible_catalog_nodes(all_physical_nodes)
         child_parent_ids = {
-            node.parent_node_id
-            for node in physical_nodes
-            if node.parent_node_id is not None
+            node.parent_node_id for node in physical_nodes if node.parent_node_id is not None
         }
         session_metadata = await self._load_session_metadata(physical_nodes)
+        current_revision = self._path_resolver.revision
+        if current_revision != catalog_revision:
+            raise SessionCatalogRevisionChangedError(
+                "revision_changed: 会话目录在异步加载节点元数据期间已更新，"
+                f"snapshot={catalog_revision}, current={current_revision}"
+            )
+
         nodes = [
             self._to_catalog_node(node, child_parent_ids, session_metadata)
             for node in physical_nodes
         ]
         nodes_by_id = {node.node_id: node for node in nodes}
-        self._validate_parent_graph(nodes, nodes_by_id)
+        all_nodes_by_id = dict(nodes_by_id)
+        all_nodes_by_id.update(
+            {
+                physical_node.node_id: self._to_pending_catalog_node(
+                    physical_node, nodes_by_id
+                )
+                for physical_node in all_physical_nodes
+                if physical_node.node_id not in nodes_by_id
+            }
+        )
+        self._validate_parent_graph(
+            list(all_nodes_by_id.values()), all_nodes_by_id
+        )
         revision = self._revision(nodes)
-        self._cached_nodes = nodes
-        self._cached_revision = revision
-        self._cached_physical_revision = physical_revision
-        return nodes, revision
+        snapshot = _SessionCatalogReadSnapshot(
+            catalog_revision=catalog_revision,
+            revision=revision,
+            nodes=nodes,
+            nodes_by_id=all_nodes_by_id,
+        )
+        self._cached_snapshot = snapshot
+        return snapshot
+
+    @staticmethod
+    def _visible_catalog_nodes(
+        nodes: list[SessionCatalogNodeProjection],
+    ) -> list[SessionCatalogNodeProjection]:
+        """沿 active 父链枚举节点，隐藏 deleting 节点及其子树。"""
+        children_by_parent: dict[str | None, list[SessionCatalogNodeProjection]] = {}
+        for node in nodes:
+            children_by_parent.setdefault(node.parent_node_id, []).append(node)
+
+        visible: list[SessionCatalogNodeProjection] = []
+        frontier: list[str | None] = [None]
+        while frontier:
+            parent_node_id = frontier.pop()
+            for node in children_by_parent.get(parent_node_id, []):
+                if node.state != "active":
+                    continue
+                visible.append(node)
+                frontier.append(node.node_id)
+        return sorted(visible, key=lambda node: node.node_id)
 
     async def _load_session_metadata(
         self,
@@ -725,6 +696,7 @@ class SessionCatalogService:
             session_id=node.node_id if node.kind == "session" else None,
             folder_id=node.node_id if node.kind == "folder" else None,
             has_children=node.node_id in child_parent_ids,
+            node_revision=node.node_revision,
             state=node.state,
             storage_relative_path=(
                 session_projection.storage_relative_path
@@ -745,12 +717,11 @@ class SessionCatalogService:
         node: SessionCatalogNodeProjection,
         nodes_by_id: dict[str, SessionCatalogNodeDTO],
     ) -> SessionCatalogNodeDTO:
-        """把一个未进入快照的 *deleting* 节点投影成 pending DTO。
+        """把未进入 active 树的节点投影成可解析 breadcrumb 节点。
 
-        仅用于 breadcrumb：目标节点已被 §9 语义从目录枚举隐藏，但仍处于
-        逻辑删除中（catalog 权威 state=deleting），其 session 元数据不可按
-        正常路径读取（物理目录可能已隔离）。因此这里只给出节点身份 + pending
-        标记，不伪造 session 元数据或 storage_relative_path。
+        目标可能处于 deleting，也可能位于 deleting 祖先之下。它们从普通目录
+        枚举隐藏，且 session 元数据不可按正常路径读取，因此这里只给出节点身份
+        与权威 node revision，不伪造 session 元数据或 storage_relative_path。
         """
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
@@ -765,6 +736,7 @@ class SessionCatalogService:
             has_children=any(
                 item.parent_node_id == node.node_id for item in nodes_by_id.values()
             ),
+            node_revision=node.node_revision,
             state=node.state,
             storage_relative_path=(
                 session_projection.storage_relative_path
@@ -859,20 +831,38 @@ class SessionCatalogService:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
-    def _encode_cursor(offset: int, revision: str, scope: str | None) -> str:
-        """签发分页 cursor：绑定 revision 与分页作用域，拒绝跨列表复用。
+    def _encode_cursor(
+        offset: int,
+        revision: str,
+        catalog_revision: int,
+        scope: str | None,
+    ) -> str:
+        """签发 cursor：绑定 hash、navigation revision 与分页作用域。
 
         ``scope`` 是发牌时的分页上下文（list_children 为 ``parent_node_id``、
         search 为查询词）：同一 revision 下把 A 列表的 cursor 交给 B 列表，offset
-        会落在 B 自身切片的中间，静默跳项且不报错。绑定后跨列表复用显式报错。
+        会落在 B 自身切片的中间，静默跳项且不报错。navigation revision 使其它节点变更
+        也能使旧 cursor 失效；字符串 revision 仅是内容 hash，不充当 CAS 值。
         """
         payload = json.dumps(
-            {"offset": offset, "revision": revision, "scope": scope}
+            {
+                "offset": offset,
+                "revision": revision,
+                "catalog_revision": catalog_revision,
+                "scope": scope,
+            }
         ).encode("utf-8")
         return base64.urlsafe_b64encode(payload).decode("ascii")
 
     @staticmethod
-    def _decode_cursor(cursor: str | None, revision: str, scope: str | None) -> int:
+    def _decode_cursor(
+        cursor: str | None,
+        revision: str,
+        catalog_revision: int,
+        scope: str | None,
+        *,
+        collection_size: int,
+    ) -> int:
         if cursor is None:
             return 0
         try:
@@ -885,9 +875,13 @@ class SessionCatalogService:
             raise TypeError("会话目录 cursor 格式无效")
         if payload.get("revision") != revision:
             raise ValueError("会话目录已更新，请从第一页重新加载")
+        if payload.get("catalog_revision") != catalog_revision:
+            raise ValueError("会话目录已更新，请从第一页重新加载")
         if payload.get("scope") != scope:
             raise ValueError("会话目录 cursor 与当前列表不匹配，请从第一页重新加载")
         offset = payload.get("offset")
-        if not isinstance(offset, int) or offset < 0:
+        if type(offset) is not int or offset < 0:
             raise ValueError("会话目录 cursor offset 无效")
+        if offset >= collection_size:
+            raise ValueError("会话目录 cursor offset 超出当前列表范围")
         return offset

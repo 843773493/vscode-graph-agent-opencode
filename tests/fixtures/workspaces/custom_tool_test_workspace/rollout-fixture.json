@@ -1,11 +1,7 @@
 {
   "fixture_version": 5,
-  "description": "由 tests/fixtures/model_stream/handwritten 重建的 rollout 历史 fixture",
-  "source": "handwritten_sse",
-  "source_assets": [
-    "openai_chat/reasoning-stream.json",
-    "openai_chat/reasoning-tool.json"
-  ],
+  "description": "由测试准备器在隔离工作区重建的 canonical rollout 历史 fixture",
+  "source": "canonical_rollout_generation",
   "history_semantics": [
     "user_message",
     "reasoning_content",
@@ -34,44 +30,44 @@
     {
       "session_id": "ses_019c642bc2ec78718d0a296b3319d6df",
       "turn_count": 128,
-      "title": "自定义工具工作区：128 Turn 历史压测（handwritten SSE）",
-      "kind": "handwritten_sse_snapshot"
+      "title": "自定义工具工作区：128 Turn 历史压测（mock）",
+      "kind": "deterministic_mock"
     },
     {
       "session_id": "ses_019c27f816b17ee394a67f9312bb669e",
       "turn_count": 128,
-      "title": "手写 SSE 128 Turn block carrier 压测",
-      "kind": "handwritten_sse_snapshot"
+      "title": "Provider reasoning carrier 128 Turn 压测",
+      "kind": "canonical_provider_history"
     },
     {
       "session_id": "ses_019be55bdf8d715d8efbb8419fbc7cd7",
       "turn_count": 128,
-      "title": "大型工具调用：128 Turn 历史投影压测（handwritten SSE）",
-      "kind": "handwritten_sse_snapshot"
+      "title": "大型工具调用：128 Turn 历史投影压测（mock）",
+      "kind": "deterministic_mock"
     },
     {
       "session_id": "ses_019c3afc2c2674a58a36a8a7b1ad0f8b",
       "turn_count": 24,
-      "title": "上下文压缩与摘要示例（handwritten SSE）",
-      "kind": "handwritten_sse_snapshot"
+      "title": "上下文压缩与摘要示例",
+      "kind": "deterministic_mock"
     },
     {
       "session_id": "ses_019c46b09524769f8e70304bc6f23f31",
       "turn_count": 12,
-      "title": "多工具调用和大输出示例（handwritten SSE）",
-      "kind": "handwritten_sse_snapshot"
+      "title": "多工具调用和大输出示例",
+      "kind": "deterministic_mock"
     },
     {
       "session_id": "ses_019c29b9cf2e7c08858d95552eeb02e8",
       "turn_count": 7,
-      "title": "独立历史分支示例（handwritten SSE）",
-      "kind": "handwritten_sse_snapshot"
+      "title": "独立历史分支示例",
+      "kind": "deterministic_mock"
     },
     {
       "session_id": "ses_019bf985d867717182fe710be0f6adae",
       "turn_count": 1,
       "title": "边界：同一 AI 消息中的 text + tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "text_tool",
       "terminal_status": "completed"
     },
@@ -79,7 +75,7 @@
       "session_id": "ses_019bed0e9f8f7b27a213abe862c0b31a",
       "turn_count": 1,
       "title": "边界：中断的半截 tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "partial_tool_call",
       "terminal_status": "cancelled"
     },
@@ -87,7 +83,7 @@
       "session_id": "ses_019bc1148cec71b78b1aaa3b19b60363",
       "turn_count": 1,
       "title": "边界：ToolExecution 结果未知",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "unknown_tool_outcome",
       "terminal_status": "failed"
     },
@@ -95,7 +91,7 @@
       "session_id": "ses_019c5123cafb789e8fdf8704f6464f74",
       "turn_count": 1,
       "title": "边界：中断的 partial text block",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "partial_text",
       "terminal_status": "cancelled"
     },
@@ -103,7 +99,7 @@
       "session_id": "ses_019bdcfcb97f7dab8f30a959418a1658",
       "turn_count": 1,
       "title": "边界：工具标记作为普通文本",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "tool_markup_text",
       "terminal_status": "completed"
     },
@@ -111,7 +107,7 @@
       "session_id": "ses_019b7a50d46c7e7f86c9148c7069cf97",
       "turn_count": 1,
       "title": "边界：同一 AI 消息中的并行 tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "parallel_tool_calls",
       "terminal_status": "completed"
     }
@@ -121,7 +117,7 @@
       "session_id": "ses_019bf985d867717182fe710be0f6adae",
       "turn_count": 1,
       "title": "边界：同一 AI 消息中的 text + tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "text_tool",
       "terminal_status": "completed"
     },
@@ -129,7 +125,7 @@
       "session_id": "ses_019bed0e9f8f7b27a213abe862c0b31a",
       "turn_count": 1,
       "title": "边界：中断的半截 tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "partial_tool_call",
       "terminal_status": "cancelled"
     },
@@ -137,7 +133,7 @@
       "session_id": "ses_019bc1148cec71b78b1aaa3b19b60363",
       "turn_count": 1,
       "title": "边界：ToolExecution 结果未知",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "unknown_tool_outcome",
       "terminal_status": "failed"
     },
@@ -145,7 +141,7 @@
       "session_id": "ses_019c5123cafb789e8fdf8704f6464f74",
       "turn_count": 1,
       "title": "边界：中断的 partial text block",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "partial_text",
       "terminal_status": "cancelled"
     },
@@ -153,7 +149,7 @@
       "session_id": "ses_019bdcfcb97f7dab8f30a959418a1658",
       "turn_count": 1,
       "title": "边界：工具标记作为普通文本",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "tool_markup_text",
       "terminal_status": "completed"
     },
@@ -161,7 +157,7 @@
       "session_id": "ses_019b7a50d46c7e7f86c9148c7069cf97",
       "turn_count": 1,
       "title": "边界：同一 AI 消息中的并行 tool_call",
-      "kind": "handwritten_boundary",
+      "kind": "canonical_boundary",
       "boundary_case": "parallel_tool_calls",
       "terminal_status": "completed"
     }

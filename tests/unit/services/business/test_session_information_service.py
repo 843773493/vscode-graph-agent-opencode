@@ -12,6 +12,10 @@ from app.schemas.internal_v2.session_resource import (
 )
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.workspace import WorkspaceDTO
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.business.session_information_service import SessionInformationService
 
 
@@ -29,6 +33,9 @@ class _Sessions:
         self.session = SessionDTO(
             session_id="ses_information",
             workspace_id=workspace_id,
+            resource_identity=session_resource_identity(workspace_id, "ses_information"),
+            vrn=session_resource_vrn(workspace_id, "ses_information"),
+            scope="workspace",
             title=title,
             current_agent_id="default",
             created_at=now,

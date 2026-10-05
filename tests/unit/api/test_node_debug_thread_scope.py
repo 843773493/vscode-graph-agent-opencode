@@ -1,7 +1,7 @@
 """Node 调试 API 的 Session/Thread 语义单元测试。
 
 覆盖 Node 调试 API 的显式 SessionThread owner 契约：
-- main thread 必须显式传入 ``thread_id="main"``；
+- Session-only 入口经 catalog 解析并返回 main thread canonical ID；
 - 显式 thread_id 定位 child thread；
 - API mutation 经 NodeDebugService 的 Session 生命周期准入，Session 缺失或
   已删除时返回 404，不会落到磁盘上凭空创建调试数据。
@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -26,6 +28,11 @@ from app.api.node_debug import (
 from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_lifecycle_gate import (
+    NavigationTopologyGate,
+    SessionDeletionPendingError,
+    SessionLifecycleGate,
+)
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugSetBreakpointActionRequest,
@@ -44,10 +51,16 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.catalog_session_bundle import (
+    fixture_main_thread_id,
+    seed_catalog_session_bundle,
+)
 
 _SESSION_ID = "ses_00000000400070008000000000000001"
-_CHILD_THREAD_ID = "ses_00000000400070008000000000000002"
+_MAIN_THREAD_ID = fixture_main_thread_id(_SESSION_ID)
+_CHILD_THREAD_ID = "thr_00000000700070008000000000000002"
+_CHILD_SESSION_ID = "ses_00000000400070008000000000000002"
+_MISSING_SESSION_ID = "ses_00000000400070008000000000000003"
 
 
 def _create_session(
@@ -60,14 +73,37 @@ def _create_session(
         resolver.sessions_root,
         session_id,
         parent_node_id=parent_session_id,
+        main_thread_id=fixture_main_thread_id(session_id),
     ).directory
 
 
 class _ResolverSessionLifecycle:
-    """以权威目录索引模拟 SessionService.get 的“存在且未删除”语义。"""
+    """以权威目录索引和正式 gate 模拟 Session 写准入。"""
 
     def __init__(self, resolver: SessionCatalogPathResolver) -> None:
         self._resolver = resolver
+        self._topology_gate = NavigationTopologyGate(resolver.sessions_root)
+        self._lifecycle_gate = SessionLifecycleGate(resolver.sessions_root)
+
+    @asynccontextmanager
+    async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:
+        async with AsyncExitStack() as session_gate:
+            async with self._topology_gate.shared():
+                await session_gate.enter_async_context(
+                    self._lifecycle_gate.exclusive(session_id)
+                )
+                try:
+                    node = self._resolver.get_node(session_id)
+                except KeyError as error:
+                    raise NotFoundError(f"Session {session_id} not found") from error
+                if node.kind != "session":
+                    raise NotFoundError(f"Session {session_id} not found")
+                if node.state != "active":
+                    raise SessionDeletionPendingError(
+                        "session_deletion_pending: catalog owner 正在删除，"
+                        f"拒绝新业务准入: session_id={session_id!r}, state={node.state!r}"
+                    )
+            yield
 
     async def get(self, session_id: str) -> object:
         try:
@@ -97,7 +133,7 @@ def node_debug_service() -> MagicMock:
     service.create_configuration = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             status="idle",
         )
     )
@@ -110,26 +146,73 @@ async def test_explicit_main_thread_reads_main_owner(
 ) -> None:
     response = await get_node_debug_state(
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
         _="local-token",
         request_id="req_state_main",
         node_debug_service=node_debug_service,
     )
 
     assert response.request_id == "req_state_main"
-    node_debug_service.get_state.assert_awaited_once_with(_SESSION_ID, "main")
+    node_debug_service.get_state.assert_awaited_once_with(_SESSION_ID, _MAIN_THREAD_ID)
 
     listed = await list_node_debug_configurations(
         session_id=_SESSION_ID,
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
         _="local-token",
         request_id="req_configurations_main",
         node_debug_service=node_debug_service,
     )
     assert listed.data == []
     node_debug_service.list_configurations.assert_called_once_with(
-        _SESSION_ID, "main"
+        _SESSION_ID, _MAIN_THREAD_ID
     )
+
+
+@pytest.mark.asyncio
+async def test_session_only_api_resolves_catalog_main_thread(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "entry.mjs").write_text(
+        "console.log('entry');\n", encoding="utf-8"
+    )
+    resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
+    _create_session(resolver, _SESSION_ID)
+    service = NodeDebugService(
+        workspace_root=workspace_root,
+        config_service=ConfigService(workspace_root=workspace_root),
+        session_store=NodeDebugSessionStore(resolver),
+        session_admission=NodeDebugSessionAdmission(
+            session_service=_ResolverSessionLifecycle(resolver),
+            path_resolver=resolver,
+        ),
+        external_resource_leases=ExternalResourceLeaseLedger(),
+    )
+
+    state = await get_node_debug_state(
+        session_id=_SESSION_ID,
+        _="local-token",
+        request_id="req_state_session_only",
+        node_debug_service=service,
+    )
+    assert state.data is not None
+    assert state.data.thread_id == _MAIN_THREAD_ID
+
+    created = await create_node_debug_configuration(
+        payload=NodeDebugConfigurationCreateRequest(
+            session_id=_SESSION_ID,
+            name="Session-only 方案",
+            script_path="entry.mjs",
+        ),
+        _="local-token",
+        request_id="req_create_session_only",
+        node_debug_service=service,
+    )
+    assert created.data is not None
+    assert created.data.thread_id == _MAIN_THREAD_ID
+    assert created.data.active_configuration_name == "Session-only 方案"
+    assert resolver.resolve_thread_node(_SESSION_ID, _MAIN_THREAD_ID).is_dir()
 
 
 @pytest.mark.asyncio
@@ -145,9 +228,7 @@ async def test_explicit_thread_parameter_locates_child_thread(
     )
     assert state.data is not None
     assert state.data.thread_id == _CHILD_THREAD_ID
-    node_debug_service.get_state.assert_awaited_once_with(
-        _SESSION_ID, _CHILD_THREAD_ID
-    )
+    node_debug_service.get_state.assert_awaited_once_with(_SESSION_ID, _CHILD_THREAD_ID)
 
     payload = NodeDebugStartRequest(
         session_id=_SESSION_ID,
@@ -190,7 +271,7 @@ async def test_mutation_requires_existing_session(
     admitted = await create_node_debug_configuration(
         payload=NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             name="API 准入方案",
             script_path="entry.mjs",
         ),
@@ -200,13 +281,16 @@ async def test_mutation_requires_existing_session(
     )
     assert admitted.data is not None
     assert admitted.data.active_configuration_name == "API 准入方案"
-    assert (resolver.resolve_session_node(_SESSION_ID) / "debug" / "node").is_dir()
+    main_thread_node = resolver.resolve_thread_node(
+        _SESSION_ID, resolver.main_thread_id(_SESSION_ID)
+    )
+    assert (main_thread_node / "debug" / "node").is_dir()
 
     with pytest.raises(HTTPException) as missing:
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(
-                session_id="ses_api_missing",
-                thread_id="main",
+                session_id=_MISSING_SESSION_ID,
+                thread_id=_MAIN_THREAD_ID,
                 name="缺失方案",
                 script_path="entry.mjs",
             ),
@@ -221,7 +305,7 @@ async def test_mutation_requires_existing_session(
         await create_node_debug_configuration(
             payload=NodeDebugConfigurationCreateRequest(
                 session_id=_SESSION_ID,
-                thread_id="main",
+                thread_id=_MAIN_THREAD_ID,
                 name="已删除方案",
                 script_path="entry.mjs",
             ),
@@ -234,7 +318,7 @@ async def test_mutation_requires_existing_session(
     with pytest.raises(HTTPException) as deleted_state:
         await get_node_debug_state(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             _="local-token",
             request_id="req_state_deleted",
             node_debug_service=service,
@@ -245,7 +329,7 @@ async def test_mutation_requires_existing_session(
         await apply_node_debug_action(
             payload=NodeDebugSetBreakpointActionRequest(
                 session_id=_SESSION_ID,
-                thread_id="main",
+                thread_id=_MAIN_THREAD_ID,
                 action="set_breakpoint",
                 params=NodeDebugSetBreakpointParams(path="entry.mjs", line=1),
             ),
@@ -257,10 +341,10 @@ async def test_mutation_requires_existing_session(
 
 
 @pytest.mark.asyncio
-async def test_child_thread_address_folds_to_child_session_main_owner(
+async def test_session_only_addresses_resolve_distinct_session_owners(
     tmp_path: Path,
 ) -> None:
-    """API 两个地址（parent+child / 裸 child）命中同一 owner，返回一致状态。"""
+    """父、子 Session 的 Session-only 地址各自解析 catalog main owner。"""
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     (workspace_root / "child.mjs").write_text(
@@ -268,7 +352,7 @@ async def test_child_thread_address_folds_to_child_session_main_owner(
     )
     resolver = get_session_path_resolver(tmp_path / ".boxteam" / "sessions")
     _create_session(resolver, _SESSION_ID)
-    _create_session(resolver, _CHILD_THREAD_ID, parent_session_id=_SESSION_ID)
+    _create_session(resolver, _CHILD_SESSION_ID, parent_session_id=_SESSION_ID)
     service = NodeDebugService(
         workspace_root=workspace_root,
         config_service=ConfigService(workspace_root=workspace_root),
@@ -280,38 +364,49 @@ async def test_child_thread_address_folds_to_child_session_main_owner(
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
 
-    created = await create_node_debug_configuration(
+    parent_created = await create_node_debug_configuration(
         payload=NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
-            thread_id=_CHILD_THREAD_ID,
-            name="子线程方案",
+            name="父 Session 方案",
             script_path="child.mjs",
         ),
         _="local-token",
-        request_id="req_create_child_thread",
+        request_id="req_create_parent_session",
         node_debug_service=service,
     )
-    assert created.data is not None
-    assert created.data.session_id == _CHILD_THREAD_ID
-    assert created.data.thread_id == "main"
+    child_thread_id = resolver.main_thread_id(_CHILD_SESSION_ID)
+    child_created = await create_node_debug_configuration(
+        payload=NodeDebugConfigurationCreateRequest(
+            session_id=_CHILD_SESSION_ID,
+            name="子 Session 方案",
+            script_path="child.mjs",
+        ),
+        _="local-token",
+        request_id="req_create_child_session",
+        node_debug_service=service,
+    )
+    assert parent_created.data is not None
+    assert child_created.data is not None
+    assert parent_created.data.session_id == _SESSION_ID
+    assert parent_created.data.thread_id == _MAIN_THREAD_ID
+    assert child_created.data.session_id == _CHILD_SESSION_ID
+    assert child_created.data.thread_id == child_thread_id
+    assert child_thread_id != _MAIN_THREAD_ID
 
-    via_child_thread = await get_node_debug_state(
+    parent_state = await get_node_debug_state(
         session_id=_SESSION_ID,
-        thread_id=_CHILD_THREAD_ID,
         _="local-token",
-        request_id="req_state_via_parent",
+        request_id="req_state_parent_session",
         node_debug_service=service,
     )
-    via_child_session = await get_node_debug_state(
-        session_id=_CHILD_THREAD_ID,
-        thread_id="main",
+    child_state = await get_node_debug_state(
+        session_id=_CHILD_SESSION_ID,
         _="local-token",
-        request_id="req_state_via_child",
+        request_id="req_state_child_session",
         node_debug_service=service,
     )
-    assert via_child_thread.data == via_child_session.data
-    assert via_child_session.data is not None
-    assert via_child_session.data.active_configuration_id == (
-        created.data.active_configuration_id
-    )
-    assert via_child_session.data.active_configuration_name == "子线程方案"
+    assert parent_state.data is not None
+    assert child_state.data is not None
+    assert parent_state.data.thread_id == _MAIN_THREAD_ID
+    assert child_state.data.thread_id == child_thread_id
+    assert child_state.data.active_configuration_name == "子 Session 方案"

@@ -8,6 +8,8 @@ interface FakeChannelInstance {
 }
 
 const originalBroadcastChannel = globalThis.BroadcastChannel;
+const mainThreadId = "thr_00000000700070008000000000000001";
+const childThreadId = "thr_00000000700070008000000000000002";
 
 afterEach(() => {
   globalThis.BroadcastChannel = originalBroadcastChannel;
@@ -35,7 +37,7 @@ describe("跨窗口调试状态同步", () => {
     }
     globalThis.BroadcastChannel = FakeBroadcastChannel as unknown as typeof BroadcastChannel;
     let refreshCount = 0;
-    const sync = createNodeDebugSyncChannel("workspace-a", "session-a", "main", () => {
+    const sync = createNodeDebugSyncChannel("workspace-a", "session-a", mainThreadId, () => {
       refreshCount += 1;
     });
 
@@ -43,17 +45,17 @@ describe("跨窗口调试状态同步", () => {
     expect(instances[0].posted).toEqual([{
       workspaceId: "workspace-a",
       sessionId: "session-a",
-      threadId: "main",
+      threadId: mainThreadId,
     }]);
     instances[0].onmessage?.({
-      data: { workspaceId: "workspace-a", sessionId: "session-b", threadId: "main" },
+      data: { workspaceId: "workspace-a", sessionId: "session-b", threadId: mainThreadId },
     } as MessageEvent);
     // 同一 session 的其它调试 owner 不能触发当前窗口刷新。
     instances[0].onmessage?.({
-      data: { workspaceId: "workspace-a", sessionId: "session-a", threadId: "child-1" },
+      data: { workspaceId: "workspace-a", sessionId: "session-a", threadId: childThreadId },
     } as MessageEvent);
     instances[0].onmessage?.({
-      data: { workspaceId: "workspace-a", sessionId: "session-a", threadId: "main" },
+      data: { workspaceId: "workspace-a", sessionId: "session-a", threadId: mainThreadId },
     } as MessageEvent);
     expect(refreshCount).toBe(1);
 

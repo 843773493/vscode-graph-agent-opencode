@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
     DetailUnavailableError,
@@ -110,6 +110,7 @@ def parse_detail_payload(
         raise DetailUnavailableError("assembly detail created_at 非法")
     record = DetailRecord(
         session_id=ref.session_id,
+        thread_id=ref.thread_id,
         assembly_id=ref.assembly_id,
         detail_id=ref.detail_id,
         detail_kind=value["detail_kind"],

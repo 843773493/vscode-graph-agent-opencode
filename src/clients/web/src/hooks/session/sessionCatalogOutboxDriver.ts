@@ -1,4 +1,5 @@
 import { HttpRequestError } from "../../api/http";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import {
   enqueueSessionCatalogOperations,
   isNavigationBackpressureStatus,
@@ -56,19 +57,23 @@ import { errorMessage } from "../../utils/errorMessage";
 export interface SessionCatalogOperationsAdapter {
   enqueue(
     port: number,
-    workspaceId: string,
+    workspaceTarget: GatewayWorkspaceRequestTarget,
     intents: ReturnType<typeof catalogOutboxBatchToIntents>,
+    signal?: AbortSignal,
   ): Promise<SessionCatalogEnqueueResult>;
   queryStatus(
     port: number,
-    workspaceId: string,
+    workspaceTarget: GatewayWorkspaceRequestTarget,
     operationIds: readonly string[],
+    signal?: AbortSignal,
   ): Promise<SessionCatalogOperationStatusPage>;
 }
 
 const defaultAdapter: SessionCatalogOperationsAdapter = {
-  enqueue: enqueueSessionCatalogOperations,
-  queryStatus: querySessionCatalogOperationStatus,
+  enqueue: (port, workspaceId, intents, signal) =>
+    enqueueSessionCatalogOperations(port, workspaceId, intents, { signal }),
+  queryStatus: (port, workspaceId, operationIds, signal) =>
+    querySessionCatalogOperationStatus(port, workspaceId, operationIds, { signal }),
 };
 
 export type CatalogOutboxDispatchOutcome =
@@ -87,6 +92,7 @@ export interface CatalogOutboxDriverInput {
   port: number;
   /** Gateway 注册表中的路由 ID；与 partition.workspaceId 的后端身份分离。 */
   gatewayWorkspaceId: string;
+  workspaceTarget: GatewayWorkspaceRequestTarget;
   partition: CatalogOutboxPartition;
   persistence: CatalogOutboxPersistencePort;
   adapter?: SessionCatalogOperationsAdapter;
@@ -117,8 +123,13 @@ export interface CatalogOutboxDriver {
   ): Promise<CatalogOutboxDispatchOutcome>;
   /** 对未终态命令按精确 ID 查询服务端状态并对账。 */
   reconcile(): Promise<CatalogOutbox>;
+  /** 身份切换时 fence 当前请求并禁止后续请求。 */
+  deactivate(): void;
   /** 按已确认的 catalog revision 清理已完成对账的终态条目。 */
-  prune(reconciledCatalogRevision: number): Promise<CatalogOutbox>;
+  prune(
+    reconciledCatalogRevision: number,
+    operationIds?: readonly string[],
+  ): Promise<CatalogOutbox>;
 }
 
 const DEFAULT_MAX_BATCH_SIZE = 50;
@@ -156,6 +167,32 @@ export function createSessionCatalogOutboxDriver(
   const retryableOperationIds = new Set<string>();
   // 同一分区同一时刻只允许一个 flush：并发 flush 会把同一批命令重复入队。
   let flushInFlight: Promise<CatalogOutboxFlushResult> | null = null;
+  let active = true;
+  const activeRequests = new Set<AbortController>();
+
+  const assertActive = (): void => {
+    if (!active) {
+      throw new Error(`会话目录 outbox principal 已失效，停止派发: ${partitionKey}`);
+    }
+  };
+
+  const withRequestSignal = async <T>(
+    request: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    assertActive();
+    const controller = new AbortController();
+    activeRequests.add(controller);
+    try {
+      const result = await request(controller.signal);
+      assertActive();
+      return result;
+    } catch (error: unknown) {
+      assertActive();
+      throw error;
+    } finally {
+      activeRequests.delete(controller);
+    }
+  };
 
   const publish = (next: CatalogOutbox, broadcast: boolean): CatalogOutbox => {
     outbox = next;
@@ -176,6 +213,7 @@ export function createSessionCatalogOutboxDriver(
     let outcome: CatalogOutboxDispatchOutcome = "idle";
     const operationOutcomes = new Map<string, CatalogOutboxDispatchOutcome>();
     for (;;) {
+      assertActive();
       const batch = planCatalogOutboxBatch(requireOutbox(), {
         maxBatchSize,
         retryableOperationIds: [...retryableOperationIds],
@@ -183,11 +221,12 @@ export function createSessionCatalogOutboxDriver(
       if (batch.length === 0) return { outcome, operationOutcomes };
       const batchIds = batch.map((operation) => operation.client_operation_id);
       try {
-        const result = await adapter.enqueue(
+        const result = await withRequestSignal((signal) => adapter.enqueue(
           input.port,
-          input.gatewayWorkspaceId,
+          input.workspaceTarget,
           catalogOutboxBatchToIntents(batch),
-        );
+          signal,
+        ));
         for (const operationId of batchIds) retryableOperationIds.delete(operationId);
         publish(applyCatalogOutboxReceipts(requireOutbox(), result.receipts), true);
         for (const operationId of batchIds) {
@@ -195,6 +234,7 @@ export function createSessionCatalogOutboxDriver(
         }
         outcome = "accepted";
       } catch (error: unknown) {
+        assertActive();
         if (isDefinitiveRejection(error)) {
           const operationIdsBeforeReconcile = requireOutbox().operations.map(
             (operation) => operation.client_operation_id,
@@ -242,15 +282,19 @@ export function createSessionCatalogOutboxDriver(
 
   /** 未终态命令按精确 ID 查询；未知 ID 保持 pending，终态则对账清理。 */
   const reconcileInternal = async (): Promise<CatalogOutbox> => {
+    assertActive();
     const tracked = unsettledCatalogOutboxOperations(requireOutbox()).filter(
       (operation) => operation.state !== "pending_local",
     );
     if (tracked.length > 0) {
-      const page = await adapter.queryStatus(
+      assertActive();
+      const page = await withRequestSignal((signal) => adapter.queryStatus(
         input.port,
-        input.gatewayWorkspaceId,
+        input.workspaceTarget,
         tracked.map((operation) => operation.client_operation_id),
-      );
+        signal,
+      ));
+      assertActive();
       // 服务端明确「不认识该 ID」→ 允许按同一 ID 重试；其余 unknown 继续等待。
       for (const operationId of page.unknown_operation_ids) {
         retryableOperationIds.add(operationId);
@@ -316,12 +360,16 @@ export function createSessionCatalogOutboxDriver(
 
   return {
     async restore() {
+      assertActive();
       const restored = await loadCatalogOutbox(input.persistence, input.partition);
+      assertActive();
       return publish(restored, false);
     },
     async reload() {
+      assertActive();
       const beforeLoad = requireOutbox();
       const restored = await loadCatalogOutbox(input.persistence, input.partition);
+      assertActive();
       const current = requireOutbox();
       if (current === beforeLoad) return publish(restored, false);
 
@@ -355,6 +403,7 @@ export function createSessionCatalogOutboxDriver(
     },
     current: requireOutbox,
     async applyIntent(clientOperationId, intent, options) {
+      assertActive();
       // 1. 同步建立 pending 并立即投影：交互绝不等待本地写入或后台入队。
       const withPending = addCatalogOutboxIntent(
         requireOutbox(),
@@ -370,11 +419,13 @@ export function createSessionCatalogOutboxDriver(
           (operation) => operation.client_operation_id === clientOperationId,
         );
         if (!pending) throw new Error(`pending operation 丢失: ${clientOperationId}`);
+        assertActive();
         const stored = await persistCatalogOutboxPendingOperation(
           input.persistence,
           input.partition,
           pending,
         );
+        assertActive();
         insertedOperationId = stored.operation.client_operation_id;
         if (stored.operation.client_operation_id !== clientOperationId
           || stored.partition_key !== partitionKey) {
@@ -395,6 +446,7 @@ export function createSessionCatalogOutboxDriver(
           true,
         );
       } catch (error: unknown) {
+        if (!active) throw error;
         const beforeRollback = requireOutbox();
         const rollback = rollbackCatalogOutboxIntents(beforeRollback, [clientOperationId]);
         const removedOperationIds = new Set(rollback.removed_operation_ids);
@@ -432,13 +484,25 @@ export function createSessionCatalogOutboxDriver(
       return await flushOperation(clientOperationId);
     },
     async reconcile() {
+      assertActive();
       await reconcileInternal();
+      assertActive();
       await flush();
+      assertActive();
       return requireOutbox();
     },
-    async prune(reconciledCatalogRevision) {
+    deactivate() {
+      active = false;
+      for (const controller of activeRequests) controller.abort();
+    },
+    async prune(reconciledCatalogRevision, operationIds) {
+      assertActive();
       const before = requireOutbox();
-      const next = pruneReconciledCatalogOutbox(before, reconciledCatalogRevision);
+      const next = pruneReconciledCatalogOutbox(
+        before,
+        reconciledCatalogRevision,
+        operationIds,
+      );
       const prunedOperationIds = before.operations
         .filter((operation) => !next.operations.some(
           (kept) => kept.client_operation_id === operation.client_operation_id,
@@ -451,6 +515,7 @@ export function createSessionCatalogOutboxDriver(
           prunedOperationIds,
         );
       }
+      assertActive();
       const prunedIds = new Set(prunedOperationIds);
       const current = requireOutbox();
       return publish({
@@ -458,7 +523,7 @@ export function createSessionCatalogOutboxDriver(
         operations: current.operations.filter(
           (operation) => !prunedIds.has(operation.client_operation_id),
         ),
-      }, false);
+      }, prunedOperationIds.length > 0);
     },
   };
 }
@@ -474,7 +539,11 @@ export const CATALOG_OUTBOX_BROADCAST_CHANNEL = "boxteam-session-catalog-outbox"
 /** 基于 BroadcastChannel 的生产广播实现；环境不支持时由调用方跳过。 */
 export function createCatalogOutboxBroadcaster(
   channelName: string = CATALOG_OUTBOX_BROADCAST_CHANNEL,
-): { broadcaster: CatalogOutboxBroadcaster; subscribe: (handler: (key: string) => void) => () => void } {
+): {
+  broadcaster: CatalogOutboxBroadcaster;
+  subscribe: (handler: (key: string) => void) => () => void;
+  close: () => void;
+} {
   if (typeof BroadcastChannel === "undefined") {
     throw new Error("当前运行环境没有 BroadcastChannel，无法建立跨 tab 的目录 outbox 通知");
   }
@@ -489,5 +558,6 @@ export function createCatalogOutboxBroadcaster(
       channel.addEventListener("message", listener);
       return () => channel.removeEventListener("message", listener);
     },
+    close: () => channel.close(),
   };
 }

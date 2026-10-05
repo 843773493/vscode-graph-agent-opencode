@@ -12,9 +12,9 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
 
 _ERROR_CODES = {

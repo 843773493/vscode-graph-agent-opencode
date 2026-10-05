@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from boxteam.terminal.v1 import terminal_pb2 as boxteam_dot_terminal_dot_v1_dot_terminal__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(boxteam/terminal/v1/terminal_input.proto\x12\x13\x62oxteam.terminal.v1\x1a\"boxteam/terminal/v1/terminal.proto\"\xb4\x01\n\x0eTerminalAttach\x12\x1f\n\x0bterminal_id\x18\x01 \x01(\tR\nterminalId\x12\x17\n\x04\x63ols\x18\x02 \x01(\rH\x00R\x04\x63ols\x88\x01\x01\x12\x17\n\x04rows\x18\x03 \x01(\rH\x01R\x04rows\x88\x01\x01\x12*\n\x0e\x61\x66ter_sequence\x18\x04 \x01(\rH\x02R\rafterSequence\x88\x01\x01\x42\x07\n\x05_colsB\x07\n\x05_rowsB\x11\n\x0f_after_sequence\"F\n\x0eTerminalDetach\x12$\n\x0bterminal_id\x18\x01 \x01(\tH\x00R\nterminalId\x88\x01\x01\x42\x0e\n\x0c_terminal_id\";\n\rTerminalInput\x12\x12\n\x04\x64\x61ta\x18\x01 \x01(\tR\x04\x64\x61ta\x12\x16\n\x06source\x18\x02 \x01(\tR\x06source\"8\n\x0eTerminalResize\x12\x12\n\x04\x63ols\x18\x01 \x01(\rR\x04\x63ols\x12\x12\n\x04rows\x18\x02 \x01(\rR\x04rows\"1\n\x13TerminalAcknowledge\x12\x1a\n\x08sequence\x18\x01 \x01(\rR\x08sequence\"\xf0\x03\n\x15TerminalClientMessage\x12=\n\x06\x61ttach\x18\x01 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalAttachH\x00R\x06\x61ttach\x12=\n\x06\x64\x65tach\x18\x02 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalDetachH\x00R\x06\x64\x65tach\x12:\n\x05input\x18\x03 \x01(\x0b\x32\".boxteam.terminal.v1.TerminalInputH\x00R\x05input\x12\x45\n\x0b\x61gent_input\x18\x04 \x01(\x0b\x32\".boxteam.terminal.v1.TerminalInputH\x00R\nagentInput\x12=\n\x06resize\x18\x05 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalResizeH\x00R\x06resize\x12L\n\x0b\x61\x63knowledge\x18\x06 \x01(\x0b\x32(.boxteam.terminal.v1.TerminalAcknowledgeH\x00R\x0b\x61\x63knowledge\x12>\n\x04json\x18\x07 \x01(\x0b\x32(.boxteam.terminal.v1.TerminalJsonMessageH\x00R\x04jsonB\t\n\x07payloadb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n(boxteam/terminal/v1/terminal_input.proto\x12\x13\x62oxteam.terminal.v1\x1a\"boxteam/terminal/v1/terminal.proto\"\xd5\x01\n\x0eTerminalAttach\x12\x1f\n\x0bterminal_id\x18\x01 \x01(\tR\nterminalId\x12\x17\n\x04\x63ols\x18\x02 \x01(\rH\x00R\x04\x63ols\x88\x01\x01\x12\x17\n\x04rows\x18\x03 \x01(\rH\x01R\x04rows\x88\x01\x01\x12*\n\x0e\x61\x66ter_sequence\x18\x04 \x01(\rH\x02R\rafterSequence\x88\x01\x01\x12\x1f\n\x0bgrant_token\x18\x05 \x01(\tR\ngrantTokenB\x07\n\x05_colsB\x07\n\x05_rowsB\x11\n\x0f_after_sequence\"F\n\x0eTerminalDetach\x12$\n\x0bterminal_id\x18\x01 \x01(\tH\x00R\nterminalId\x88\x01\x01\x42\x0e\n\x0c_terminal_id\";\n\rTerminalInput\x12\x12\n\x04\x64\x61ta\x18\x01 \x01(\tR\x04\x64\x61ta\x12\x16\n\x06source\x18\x02 \x01(\tR\x06source\"8\n\x0eTerminalResize\x12\x12\n\x04\x63ols\x18\x01 \x01(\rR\x04\x63ols\x12\x12\n\x04rows\x18\x02 \x01(\rR\x04rows\"1\n\x13TerminalAcknowledge\x12\x1a\n\x08sequence\x18\x01 \x01(\rR\x08sequence\"\xf0\x03\n\x15TerminalClientMessage\x12=\n\x06\x61ttach\x18\x01 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalAttachH\x00R\x06\x61ttach\x12=\n\x06\x64\x65tach\x18\x02 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalDetachH\x00R\x06\x64\x65tach\x12:\n\x05input\x18\x03 \x01(\x0b\x32\".boxteam.terminal.v1.TerminalInputH\x00R\x05input\x12\x45\n\x0b\x61gent_input\x18\x04 \x01(\x0b\x32\".boxteam.terminal.v1.TerminalInputH\x00R\nagentInput\x12=\n\x06resize\x18\x05 \x01(\x0b\x32#.boxteam.terminal.v1.TerminalResizeH\x00R\x06resize\x12L\n\x0b\x61\x63knowledge\x18\x06 \x01(\x0b\x32(.boxteam.terminal.v1.TerminalAcknowledgeH\x00R\x0b\x61\x63knowledge\x12>\n\x04json\x18\x07 \x01(\x0b\x32(.boxteam.terminal.v1.TerminalJsonMessageH\x00R\x04jsonB\t\n\x07payloadb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,15 +33,15 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.terminal.v1.termina
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_TERMINALATTACH']._serialized_start=102
-  _globals['_TERMINALATTACH']._serialized_end=282
-  _globals['_TERMINALDETACH']._serialized_start=284
-  _globals['_TERMINALDETACH']._serialized_end=354
-  _globals['_TERMINALINPUT']._serialized_start=356
-  _globals['_TERMINALINPUT']._serialized_end=415
-  _globals['_TERMINALRESIZE']._serialized_start=417
-  _globals['_TERMINALRESIZE']._serialized_end=473
-  _globals['_TERMINALACKNOWLEDGE']._serialized_start=475
-  _globals['_TERMINALACKNOWLEDGE']._serialized_end=524
-  _globals['_TERMINALCLIENTMESSAGE']._serialized_start=527
-  _globals['_TERMINALCLIENTMESSAGE']._serialized_end=1023
+  _globals['_TERMINALATTACH']._serialized_end=315
+  _globals['_TERMINALDETACH']._serialized_start=317
+  _globals['_TERMINALDETACH']._serialized_end=387
+  _globals['_TERMINALINPUT']._serialized_start=389
+  _globals['_TERMINALINPUT']._serialized_end=448
+  _globals['_TERMINALRESIZE']._serialized_start=450
+  _globals['_TERMINALRESIZE']._serialized_end=506
+  _globals['_TERMINALACKNOWLEDGE']._serialized_start=508
+  _globals['_TERMINALACKNOWLEDGE']._serialized_end=557
+  _globals['_TERMINALCLIENTMESSAGE']._serialized_start=560
+  _globals['_TERMINALCLIENTMESSAGE']._serialized_end=1056
 # @@protoc_insertion_point(module_scope)

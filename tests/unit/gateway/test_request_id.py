@@ -28,6 +28,7 @@ class _GatewayRegistryStub:
 @pytest.fixture
 def gateway_client() -> Iterator[TestClient]:
     app.dependency_overrides[get_registry] = lambda: _GatewayRegistryStub()
+    app.state.gateway_id = "gateway_test_id"
     app.state.session_generator_scheduler = MagicMock(
         spec=SessionGeneratorScheduler
     )
@@ -36,6 +37,7 @@ def gateway_client() -> Iterator[TestClient]:
     finally:
         app.dependency_overrides.clear()
         del app.state.session_generator_scheduler
+        del app.state.gateway_id
 
 
 def test_gateway_endpoint_returns_middleware_request_id(
@@ -49,6 +51,7 @@ def test_gateway_endpoint_returns_middleware_request_id(
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] == "req_gateway_test"
     assert response.json()["request_id"] == "req_gateway_test"
+    assert response.json()["data"]["gateway_id"] == "gateway_test_id"
     assert response.json()["data"]["process_id"] == os.getpid()
     assert response.json()["data"]["development_restart_available"] is False
 

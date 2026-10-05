@@ -22,8 +22,10 @@ class DetailRemoval:
     def __init__(self, files: DetailFiles) -> None:
         self._files = files
 
-    def remove(self, *, session_id: str, record: DetailRecord) -> None:
-        record.detail_ref.require_owner(session_id)
+    def remove(
+        self, *, session_id: str, thread_id: str, record: DetailRecord
+    ) -> None:
+        record.detail_ref.require_owner(session_id, thread_id)
         self._remove_ref(record.detail_ref)
 
     def _remove_ref(self, ref: DetailRef) -> bool:
@@ -37,6 +39,7 @@ class DetailRemoval:
         self,
         *,
         session_id: str,
+        thread_id: str,
         expired_before: datetime,
         allowed_refs: Iterable[DetailRef],
     ) -> tuple[DetailRef, ...]:
@@ -53,7 +56,7 @@ class DetailRemoval:
         for ref in refs:
             if not isinstance(ref, DetailRef):
                 raise TypeError("GC allowed_refs 必须只包含 typed DetailRef")
-            ref.require_owner(session_id)
+            ref.require_owner(session_id, thread_id)
         removed: list[DetailRef] = []
         for ref in sorted(
             set(refs), key=lambda item: (item.assembly_id, item.detail_id)

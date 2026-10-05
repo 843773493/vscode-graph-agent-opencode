@@ -38,7 +38,7 @@ class DetailFiles:
             if protected
             else detail_relative_path(ref)
         )
-        root = self._resolver.resolve_session_node_for_runtime(ref.session_id)
+        root = self._resolver.resolve_thread_node(ref.session_id, ref.thread_id)
         root_info = self._info(root)
         if root_info is None or not stat.S_ISDIR(root_info.st_mode):
             raise DetailUnavailableError("session node 不是安全普通目录")

@@ -82,7 +82,9 @@ export interface ConversationView {
   /** 展示历史中的权威 Turn 身份；待处理消息和旧诊断路径没有该字段。 */
   turnId?: string;
   turnRevision?: number;
+  turnOrdinal?: number;
   turnItemsView?: "summary" | "full";
+  rootLogicalItemOrdinal?: number;
   /** 后端 Turn 原始状态；status 是前端为展示折叠后的状态。 */
   turnStatus?: JobStatus;
   activityStats?: {

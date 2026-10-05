@@ -181,6 +181,44 @@ async def test_reactor_release_stops_delivery_after_scope_close(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_failed_unsubscribe_stays_owned_and_fenced_until_scope_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, registry, watch_service, reactor, scope = _reactor_fixture(tmp_path)
+    unsubscribe = registry.unsubscribe_observation
+    attempts = 0
+
+    def fail_once(subscription):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("真实订阅首次释放失败")
+        return unsubscribe(subscription)
+
+    monkeypatch.setattr(registry, "unsubscribe_observation", fail_once)
+    try:
+        reactor.sync_sources()
+        subscription = reactor._subscription
+        assert subscription is not None
+        initial_pending = manager.pending_observation_count()
+        with pytest.raises(ExceptionGroup, match="LifetimeScope close"):
+            await scope.close()
+        assert scope.state == "close_failed" and reactor.released
+        assert reactor._subscription is subscription
+        assert registry.observation_channel.subscriber_ids
+        assert reactor.ingest_notifications() == 0
+        assert manager.pending_observation_count() == initial_pending
+        await scope.close()
+        assert attempts == 2 and scope.state == "closed"
+        assert reactor._subscription is None
+        assert registry.observation_channel.subscriber_ids == ()
+    finally:
+        await scope.close()
+        await watch_service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_watcher_event_reaches_csm_pending_observation(tmp_path: Path) -> None:
     """真实 watchfiles 事件 → registry 快照更新 → CSM pending observation。"""
     manager, registry, watch_service, reactor, lifetime_scope = _reactor_fixture(tmp_path)

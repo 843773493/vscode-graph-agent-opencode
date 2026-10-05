@@ -25,15 +25,12 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 class ForkMetadataMixin:
     """fork identity mapping、lineage 和 source retention owner。"""
 
-    def _catalog_store(self) -> SessionCatalogStore | None:
-        """返回共享 workspace catalog store（pinned claim 的唯一权威载体）。
-
-        crawler 侧通过 path resolver 取得 store；resolver 缺失（低层存储单元
-        测试无 catalog 装配）时返回 None，claim 生命周期整体跳过。
-        """
-        resolver = getattr(self, "_path_resolver", None)
-        store = getattr(resolver, "catalog_store", None)
-        return store if isinstance(store, SessionCatalogStore) else None
+    def _catalog_store(self) -> SessionCatalogStore:
+        """pinned claim 必须由当前 workspace 的唯一 catalog 承载。"""
+        store = self._path_resolver.catalog_store
+        if not isinstance(store, SessionCatalogStore):
+            raise TypeError("fork retention 缺少权威 workspace catalog store")
+        return store
 
     def begin_pinned_fork_retention_claim(
         self,
@@ -42,16 +39,13 @@ class ForkMetadataMixin:
         source_session_id: str,
         target_session_id: str,
         source_lifecycle_generation: int,
-    ) -> ForkRetentionClaim | None:
+    ) -> ForkRetentionClaim:
         """在 source capture 前建立 ``preparing`` pinned claim（8.1-D）。
 
         准入侧与整树删除在同一 workspace catalog 的 ``BEGIN IMMEDIATE`` 事务
-        序列上竞争：source 已 deleting 时本调用零副作用失败。返回 None 表示
-        当前装配无 catalog（claim 生命周期不适用）。
+        序列上竞争：source 已 deleting 时本调用零副作用失败。
         """
         store = self._catalog_store()
-        if store is None:
-            return None
         return store.create_or_get_fork_retention_claim(
             claim_id=claim_id,
             workspace_id=self._workspace_id(),
@@ -65,14 +59,12 @@ class ForkMetadataMixin:
         claim_id: str,
         *,
         expected_generation: int,
-    ) -> ForkRetentionClaim | None:
+    ) -> ForkRetentionClaim:
         """target ``target_committed`` 后把同一 claim CAS 为 ``active``（8.1-D）。
 
         只激活既有 claim，不首次补写；claim 缺失即 KeyError（fail closed）。
         """
         store = self._catalog_store()
-        if store is None:
-            return None
         return store.activate_fork_retention_claim(
             claim_id, expected_generation=expected_generation
         )
@@ -83,30 +75,30 @@ class ForkMetadataMixin:
         workspace_id = getattr(resolver, "workspace_id", None)
         if not isinstance(workspace_id, str) or not workspace_id:
             raise RuntimeError(
-                "共享 path resolver 缺少 workspace_id，无法建立 pinned "
-                "retention claim"
+                "共享 path resolver 缺少 workspace_id，无法建立 pinned retention claim"
             )
         return workspace_id
 
     def list_fork_identity_mappings(
         self,
-        target_thread_id: str,
+        target_session_id: str,
         *,
         fork_id: str | None = None,
         entity_type: str | None = None,
         checkpoint_ns: str = "",
     ) -> list[dict[str, object]]:
         """读取跨 session fork 的复合 identity mapping 审计记录。"""
-        target_thread_id = required_text(
-            target_thread_id, field="identity_mappings.target_session_id"
+        target_session_id = required_text(
+            target_session_id, field="identity_mappings.target_session_id"
         )
         fork_id = optional_text(fork_id, field="identity_mappings.fork_id")
         entity_type = optional_text(entity_type, field="identity_mappings.entity_type")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("identity_mappings.checkpoint_ns 必须是字符串")
-        self.initialize(target_thread_id, checkpoint_ns)
+        self.initialize(target_session_id, checkpoint_ns)
+        target_owner_thread_id = self.main_thread_id(target_session_id)
         query = "SELECT mapping_id, fork_id, source_session_id, target_session_id, entity_type, source_local_id, target_local_id, source_offset, target_offset, lineage_json, created_at FROM fork_identity_mappings WHERE target_session_id = ?"
-        params: list[object] = [target_thread_id]
+        params: list[object] = [target_session_id]
         if fork_id is not None:
             query += " AND fork_id = ?"
             params.append(fork_id)
@@ -115,7 +107,10 @@ class ForkMetadataMixin:
             params.append(entity_type)
         query += " ORDER BY created_at, mapping_id"
         with self._connect(
-            target_thread_id, checkpoint_ns, read_only=True
+            target_owner_thread_id,
+            checkpoint_ns,
+            session_id=target_session_id,
+            read_only=True,
         ) as connection:
             self._require_v2_runtime(connection)
             rows = connection.execute(query, tuple(params)).fetchall()
@@ -174,7 +169,7 @@ class ForkMetadataMixin:
 
     def fork_target_identity(
         self,
-        target_thread_id: str,
+        target_session_id: str,
         *,
         fork_id: str,
         source_session_id: str,
@@ -183,8 +178,8 @@ class ForkMetadataMixin:
         checkpoint_ns: str = "",
     ) -> str | None:
         """解析一次 fork 的 target-local identity，不扫描 source rollout。"""
-        target_thread_id = required_text(
-            target_thread_id, field="fork_target_identity.target_session_id"
+        target_session_id = required_text(
+            target_session_id, field="fork_target_identity.target_session_id"
         )
         fork_id = required_text(fork_id, field="fork_target_identity.fork_id")
         source_session_id = required_text(
@@ -198,9 +193,13 @@ class ForkMetadataMixin:
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork_target_identity.checkpoint_ns 必须是字符串")
-        self.initialize(target_thread_id, checkpoint_ns)
+        self.initialize(target_session_id, checkpoint_ns)
+        target_owner_thread_id = self.main_thread_id(target_session_id)
         with self._connect(
-            target_thread_id, checkpoint_ns, read_only=True
+            target_owner_thread_id,
+            checkpoint_ns,
+            session_id=target_session_id,
+            read_only=True,
         ) as connection:
             self._require_v2_runtime(connection)
             row = connection.execute(
@@ -216,7 +215,7 @@ class ForkMetadataMixin:
     def record_fork_origin(
         self,
         *,
-        target_thread_id: str,
+        target_session_id: str,
         source_session_id: str,
         source_checkpoint_id: str | None,
         source_view_id: str | None,
@@ -224,8 +223,8 @@ class ForkMetadataMixin:
         relationship: str = "detached",
         checkpoint_ns: str = "",
     ) -> str:
-        target_thread_id = required_text(
-            target_thread_id, field="fork_origin.target_session_id"
+        target_session_id = required_text(
+            target_session_id, field="fork_origin.target_session_id"
         )
         source_session_id = required_text(
             source_session_id, field="fork_origin.source_session_id"
@@ -246,6 +245,7 @@ class ForkMetadataMixin:
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork_origin.checkpoint_ns 必须是字符串")
+        target_owner_thread_id = self.main_thread_id(target_session_id)
         if source_view_id is None:
             source_view_id = self._fork_source_view_id(
                 source_session_id,
@@ -253,15 +253,23 @@ class ForkMetadataMixin:
                 checkpoint_ns,
             )
         fork_id = uuid4().hex
-        with self._lock(target_thread_id, checkpoint_ns):
-            self.initialize(target_thread_id, checkpoint_ns)
-            with self._connect(target_thread_id, checkpoint_ns) as connection:
+        with self._lock(
+            target_owner_thread_id,
+            checkpoint_ns,
+            session_id=target_session_id,
+        ):
+            self.initialize(target_session_id, checkpoint_ns)
+            with self._connect(
+                target_owner_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
                 cursor = connection.execute(
                     "INSERT INTO fork_origins(fork_id, child_session_id, source_session_id, source_checkpoint_id, source_view_id, fork_mode, relationship, copied_message_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COUNT(*) FROM messages), ?)",
                     (
                         fork_id,
-                        target_thread_id,
+                        target_session_id,
                         source_session_id,
                         source_checkpoint_id,
                         source_view_id,
@@ -278,7 +286,7 @@ class ForkMetadataMixin:
                 source_checkpoint_id=source_checkpoint_id,
                 source_view_id=source_view_id,
                 fork_id=fork_id,
-                owner_session_id=target_thread_id,
+                owner_session_id=target_session_id,
                 checkpoint_ns=checkpoint_ns,
             )
         return fork_id
@@ -307,8 +315,13 @@ class ForkMetadataMixin:
             exclusive=False,
         )
         source_lock.acquire()
+        source_owner_thread_id = self.main_thread_id(source_session_id)
         try:
-            with self._connect(source_session_id, checkpoint_ns) as connection:
+            with self._connect(
+                source_owner_thread_id,
+                checkpoint_ns,
+                session_id=source_session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
                 row = (
                     connection.execute(
@@ -352,23 +365,31 @@ class ForkMetadataMixin:
             raise TypeError("fork retention checkpoint_ns 必须是字符串")
         if source_view_id is None and source_checkpoint_id is None:
             return
-        # 8.1-D：pinned fork 的 durable retention admit 同时写 workspace catalog
-        # claim（与整树删除竞争同一 DB 写事务序列）。create-or-get 幂等，崩溃
-        # 重入不重复建 claim；source 已 deleting 时此处零副作用失败。
-        if self._catalog_store() is not None:
-            fence = self._source_lifecycle_generation(source_session_id)
-            self.begin_pinned_fork_retention_claim(
-                claim_id=fork_id,
-                source_session_id=source_session_id,
-                target_session_id=owner_session_id,
-                source_lifecycle_generation=fence,
-            )
-            self.activate_pinned_fork_retention_claim(
-                fork_id, expected_generation=fence
-            )
-        with self._lock(source_session_id, checkpoint_ns):
+        if self._fork_source_snapshot_for_session(source_session_id) is not None:
+            raise RuntimeError("fork retention 不能写入冻结 source snapshot")
+        # 只消费 capture 前已建立的同一 claim；完成/恢复均禁止首次补写。
+        claim = self._catalog_store().get_fork_retention_claim(fork_id)
+        if (claim.workspace_id, claim.source_session_id, claim.target_session_id) != (
+            self._workspace_id(), source_session_id, owner_session_id,
+        ):
+            raise RuntimeError("fork retention claim 与 source/target scope 不一致")
+        if self._source_lifecycle_generation(source_session_id) != claim.source_lifecycle_generation:
+            raise RuntimeError("fork retention source lifecycle generation 已漂移")
+        self.activate_pinned_fork_retention_claim(
+            fork_id, expected_generation=claim.source_lifecycle_generation,
+        )
+        source_owner_thread_id = self.main_thread_id(source_session_id)
+        with self._lock(
+            source_owner_thread_id,
+            checkpoint_ns,
+            session_id=source_session_id,
+        ):
             self.initialize(source_session_id, checkpoint_ns)
-            with self._connect(source_session_id, checkpoint_ns) as connection:
+            with self._connect(
+                source_owner_thread_id,
+                checkpoint_ns,
+                session_id=source_session_id,
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
                     "SELECT 1 FROM retention_refs WHERE reference_kind = 'fork' AND reference_id = ? AND owner_session_id = ? AND status = 'active' LIMIT 1",
@@ -398,7 +419,7 @@ class ForkMetadataMixin:
         """
         from app.core.session_control_store import SessionControlStore
 
-        session_dir = self.root(session_id).parent
+        session_dir = self._path_resolver.resolve_session_node(session_id)
         control_path = session_dir / "session-control.sqlite"
         if not control_path.is_file():
             raise RuntimeError(
@@ -418,22 +439,24 @@ class ForkMetadataMixin:
             _RolloutFileLock,
         )
 
+        child_session_id = required_text(child_session_id, field="child_session_id")
+        child_thread_id = self.main_thread_id(child_session_id)
+
         # 8.1-D：pinned claim 住在 workspace catalog（nodes 同库），与 rollout
         # 的 retention_refs 是**同一** retention 事实的两种投影：catalog 侧
         # claim 承担删除准入 blocker，rollout retention_refs 承担 checkpoint
         # pruning 保护。两者必须一起释放，否则删除准入会永久卡住。
         catalog_store = self._catalog_store()
-        if catalog_store is not None:
-            catalog_store.release_fork_retention_claims_for_target(
-                child_session_id, "target session 删除"
-            )
-
-        child_session_id = required_text(child_session_id, field="child_session_id")
-        child_root = self.root(child_session_id)
+        catalog_store.release_fork_retention_claims_for_target(
+            child_session_id, "target session 删除或 fork 中止"
+        )
+        child_root = self.root(child_session_id, thread_id=child_thread_id)
         if (
             not child_root.is_dir()
             or self._is_removed_rollout_layout(child_root)
-            or not self.index_path(child_session_id).is_file()
+            or not self.index_path(
+                child_session_id, thread_id=child_thread_id
+            ).is_file()
         ):
             # 删除旧 rollout 时没有可读取的 pinned provenance；整个会话目录
             # 会由 SessionService 随后删除，不能在此处初始化旧布局。
@@ -444,7 +467,9 @@ class ForkMetadataMixin:
         )
         child_lock.acquire()
         try:
-            with self._connect(child_session_id) as connection:
+            with self._connect(
+                child_thread_id, session_id=child_session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 origins = connection.execute(
                     "SELECT fork_id, source_session_id FROM fork_origins WHERE child_session_id = ? AND relationship = 'pinned'",
@@ -457,16 +482,21 @@ class ForkMetadataMixin:
             source_session_id = required_text(
                 raw_source_session_id, field="fork_origins.source_session_id"
             )
-            source_root = self.root(source_session_id)
+            source_thread_id = self.main_thread_id(source_session_id)
+            source_root = self.root(source_session_id, thread_id=source_thread_id)
             if (
                 not source_root.is_dir()
                 or self._is_removed_rollout_layout(source_root)
-                or not self.index_path(source_session_id).is_file()
+                or not self.index_path(
+                    source_session_id, thread_id=source_thread_id
+                ).is_file()
             ):
                 continue
             with (
-                self._lock(source_session_id, ""),
-                self._connect(source_session_id) as connection,
+                self._lock(source_thread_id, "", session_id=source_session_id),
+                self._connect(
+                    source_thread_id, session_id=source_session_id
+                ) as connection,
             ):
                 self._require_v2_runtime(connection)
                 cursor = connection.execute(
@@ -477,18 +507,25 @@ class ForkMetadataMixin:
                     raise RuntimeError("fork retention 释放影响行数非法")
 
     def pinned_fork_children(
-        self, source_thread_id: str, checkpoint_ns: str = ""
+        self, source_session_id: str, checkpoint_ns: str = ""
     ) -> tuple[str, ...]:
-        source_thread_id = required_text(source_thread_id, field="source_thread_id")
+        source_session_id = required_text(source_session_id, field="source_session_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("pinned_fork_children.checkpoint_ns 必须是字符串")
-        root = self.root(source_thread_id, checkpoint_ns)
+        source_owner_thread_id = self.main_thread_id(source_session_id)
+        root = self.root(
+            source_session_id, checkpoint_ns, thread_id=source_owner_thread_id
+        )
         if self._is_removed_rollout_layout(root):
             # 旧 rollout 没有新 schema 的 retention_refs，删除整棵会话目录时
             # 不应触发 initialize()，否则用户无法清理原型阶段遗留的会话。
             return ()
-        self.initialize(source_thread_id, checkpoint_ns)
-        with self._connect(source_thread_id, checkpoint_ns) as connection:
+        self.initialize(source_session_id, checkpoint_ns)
+        with self._connect(
+            source_owner_thread_id,
+            checkpoint_ns,
+            session_id=source_session_id,
+        ) as connection:
             self._require_v2_runtime(connection)
             rows = connection.execute(
                 "SELECT DISTINCT owner_session_id FROM retention_refs WHERE reference_kind = 'fork' AND status = 'active' AND owner_session_id IS NOT NULL ORDER BY owner_session_id"

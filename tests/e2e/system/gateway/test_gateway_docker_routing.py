@@ -92,7 +92,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
-            default_backend_url="managed-by-gateway",
+            default_backend_url=None,
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
             extra_env={
@@ -254,7 +254,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         )
         gateway = start_gateway_process(
             workspace_root=local_workspace,
-            default_backend_url="managed-by-gateway",
+            default_backend_url=None,
             port=gateway_port,
             ssh_tunnel_port_range=tunnel_port_range,
             extra_env={

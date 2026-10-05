@@ -79,6 +79,11 @@ export declare type Job = Message<"boxteam.workspace.v2.Job"> & {
    * @generated from field: optional google.protobuf.Timestamp ended_at = 13;
    */
   endedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string thread_id = 14;
+   */
+  threadId: string;
 };
 
 /**

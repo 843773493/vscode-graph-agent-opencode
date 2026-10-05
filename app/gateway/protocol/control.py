@@ -7,11 +7,9 @@ from app.schemas.gateway import GatewayHealthDTO
 
 def gateway_health_to_proto(
     value: GatewayHealthDTO,
-    *,
-    gateway_id: str,
 ) -> health_pb2.GatewayHealth:
     status = health_pb2.GatewayHealth(
-        gateway_id=gateway_id,
+        gateway_id=value.gateway_id,
         status=service_lifecycle_pb2.SERVICE_STATUS_READY
         if value.status == "ok"
         else service_lifecycle_pb2.SERVICE_STATUS_UNSPECIFIED,
@@ -21,4 +19,3 @@ def gateway_health_to_proto(
     if value.active_workspace_id is not None:
         status.active_workspace_id = value.active_workspace_id
     return status
-

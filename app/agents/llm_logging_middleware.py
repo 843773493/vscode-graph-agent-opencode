@@ -20,8 +20,9 @@ from app.agents.upstream_request_trace import (
     record_upstream_error,
 )
 from app.core.bounded_json import bound_json_value
-from app.core.job_context import get_current_job_id
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
+from app.domain.itemized.execution_admission import ExecutionAdmission
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
 LLM_LOG_MAX_PAYLOAD_BYTES = 256 * 1024
@@ -132,44 +133,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             self._sessions_dir or get_sessions_dir()
         )
 
-    def _get_session_id(self, runtime: Runtime[Any]) -> str:
-        configurable = getattr(runtime, "configurable", None)
-        if isinstance(configurable, dict):
-            session_id = configurable.get("session_id")
-            if isinstance(session_id, str) and session_id:
-                return session_id
-
+    @staticmethod
+    def _execution_admission(runtime: Runtime[Any]) -> ExecutionAdmission:
         execution_info = getattr(runtime, "execution_info", None)
-        if execution_info is not None:
-            thread_id = getattr(execution_info, "thread_id", None)
-            if isinstance(thread_id, str) and thread_id:
-                return thread_id
-
-        raise RuntimeError("模型调用 runtime 缺少 session_id/thread_id，无法保存 LLM 日志")
-
-    def _get_job_id(self, runtime: Runtime[Any]) -> str | None:
-        context_job_id = get_current_job_id()
-        if context_job_id:
-            return context_job_id
-
-        configurable = getattr(runtime, "configurable", None)
-        if isinstance(configurable, dict):
-            job_id = configurable.get("job_id")
-            if isinstance(job_id, str) and job_id:
-                return job_id
-
-        execution_info = getattr(runtime, "execution_info", None)
-        if execution_info is not None:
-            configurable = getattr(execution_info, "configurable", None)
-            if isinstance(configurable, dict):
-                job_id = configurable.get("job_id")
-                if isinstance(job_id, str) and job_id:
-                    return job_id
-            job_id = getattr(execution_info, "job_id", None)
-            if isinstance(job_id, str) and job_id:
-                return job_id
-
-        return None
+        thread_id = getattr(execution_info, "thread_id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("模型调用 runtime 缺少真实 thread_id，无法保存 LLM 日志")
+        return require_current_execution_admission(langgraph_thread_id=thread_id)
 
     def _session_log_dir(self, session_id: str) -> Path:
         logs_dir = (
@@ -200,7 +170,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
         request_log = _LLMRequestLog(
             timestamp=timestamp,
             session_id=session_id,
-            job_id=self._get_job_id(request.runtime),
+            job_id=self._execution_admission(request.runtime).job_id,
             model_name=(
                 getattr(request.model, "model_name", None)
                 or getattr(request.model, "model", None)
@@ -283,7 +253,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
-        session_id = self._get_session_id(request.runtime)
+        session_id = self._execution_admission(request.runtime).session_id
         capture_token = begin_upstream_capture()
         try:
             response = handler(request)
@@ -314,7 +284,7 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         if request.runtime is None:
             raise RuntimeError("模型请求缺少 runtime，无法确定日志会话")
-        session_id = self._get_session_id(request.runtime)
+        session_id = self._execution_admission(request.runtime).session_id
         capture_token = begin_upstream_capture()
         try:
             response = await handler(request)

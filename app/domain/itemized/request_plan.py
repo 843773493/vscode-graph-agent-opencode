@@ -9,24 +9,24 @@ from app.domain.itemized.enums import (
     BaseDeltaRole,
     DetailProtection,
     ReplacementPolicy,
-    SelectionRole,
     SelectionKind,
+    SelectionRole,
 )
+from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.hashing import (
     _ensure_json_value,
     canonical_json_bytes,
     contribution_content_hash,
     validate_hash_token,
 )
-from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     selection_ref_identity,
     unique_ref_identities,
 )
-from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
 from app.domain.itemized.validation import _non_empty_string
@@ -271,6 +271,7 @@ def validate_included_overlay_chain(
 @dataclass(frozen=True, slots=True)
 class ContextRequestPlan:
     session_id: str
+    thread_id: str
     plan_id: str
     refs: tuple[ContextRef, ...]
     contributions: tuple[ContextContribution, ...] = ()
@@ -289,6 +290,7 @@ class ContextRequestPlan:
 
     def __post_init__(self) -> None:
         _non_empty_string(self.session_id, "ContextRequestPlan.session_id")
+        _non_empty_string(self.thread_id, "ContextRequestPlan.thread_id")
         _non_empty_string(self.plan_id, "plan_id")
         if type(self.format_version) is not int or self.format_version != 2:
             raise ItemSchemaError("ContextRequestPlan.format_version 必须为 2")
@@ -328,7 +330,18 @@ class ContextRequestPlan:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 session")
             if ref.ref_type == "request_only" and ref.plan_id != self.plan_id:
                 raise ItemSchemaError("source-mismatch: ContextRef 不属于当前 plan")
+            if ref.ref_type == "request_only" and ref.thread_id != self.thread_id:
+                raise ItemSchemaError("source-mismatch: request-only ContextRef 不属于当前 thread")
         unique_ref_identities(self.refs)
+        for tool_ref in self.tool_set_refs:
+            if not isinstance(tool_ref, ToolSetRef):
+                raise ItemSchemaError("ContextRequestPlan.tool_set_refs 元素非法")
+            if (tool_ref.session_id, tool_ref.thread_id, tool_ref.plan_id) != (
+                self.session_id,
+                self.thread_id,
+                self.plan_id,
+            ):
+                raise ItemSchemaError("source-mismatch: ToolSetRef 不属于当前 session/thread/plan")
         # registry 查找统一按 thread-qualified identity，禁止退回
         # (ref_type, ref_id) 二元组，否则 sibling thread 的同名 ref 会互相覆盖。
         ref_ids = {selection_ref_identity(ref) for ref in self.refs}
@@ -569,6 +582,7 @@ class ContextRequestPlan:
         bound_tool_refs = tuple(
             ToolSetRef(
                 session_id=tool_ref.session_id,
+                thread_id=tool_ref.thread_id,
                 ref_id=tool_ref.ref_id,
                 plan_id=tool_ref.plan_id,
                 source_revision=tool_ref.source_revision,
@@ -631,6 +645,7 @@ class ContextRequestPlan:
         )
         return ContextRequestPlan(
             session_id=self.session_id,
+            thread_id=self.thread_id,
             plan_id=self.plan_id,
             refs=self.refs,
             contributions=bound_contributions,
@@ -654,6 +669,7 @@ class ContextRequestPlan:
     def to_dict(self) -> dict[str, object]:
         return {
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "format_version": self.format_version,
             "plan_id": self.plan_id,
             "plan_state": self.plan_state,

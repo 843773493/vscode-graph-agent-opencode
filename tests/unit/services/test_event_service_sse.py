@@ -32,7 +32,7 @@ async def test_job_sse_replays_after_cursor_with_transport_id(
         {"session_id": SESSION_ID, "message": "start", "agent_id": "default"},
     )
     second = await event_bus.publish(
-        "job-replay", "job_started", {"session_id": SESSION_ID}
+        "job-replay", "job_started", {"session_id": SESSION_ID, "thread_id": "thr_sse_replay"}
     )
     await event_service.ensure_cursor("job-replay", first.event_id)
 

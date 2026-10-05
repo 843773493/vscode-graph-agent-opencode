@@ -50,12 +50,14 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
 
     def register_context_contribution(
         self,
+        session_id: str,
         thread_id: str,
         contribution: object,
         *,
         checkpoint_ns: str = "",
     ) -> None:
         """保存 request-only source 的 compact provenance，不保存其正文。"""
+        session_id = strict_text(session_id, field="context_contribution.session_id")
         thread_id = strict_text(thread_id, field="context_contribution.thread_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("context_contribution.checkpoint_ns 必须是字符串")
@@ -178,9 +180,11 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             field="context_contribution.replacement_policy",
         )
         metadata_json = _json(dict(values["metadata"]))
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
                     "SELECT source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, metadata_json FROM context_contributions WHERE contribution_id = ?",
@@ -291,22 +295,28 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
 
     def list_context_contributions(
         self,
+        session_id: str,
         thread_id: str,
         *,
         checkpoint_ns: str = "",
         snapshot: RolloutReadSnapshot | None = None,
     ) -> tuple[dict[str, object], ...]:
+        session_id = strict_text(session_id, field="list_context_contributions.session_id")
         thread_id = strict_text(thread_id, field="list_context_contributions.thread_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("list_context_contributions.checkpoint_ns 必须是字符串")
         if snapshot is not None and (
-            snapshot.thread_id != thread_id or snapshot.checkpoint_ns != checkpoint_ns
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.checkpoint_ns != checkpoint_ns
         ):
             raise ValueError("context contribution snapshot 与目标 rollout 不一致")
         owned_connection = None
         if snapshot is None:
-            self.initialize(thread_id, checkpoint_ns)
-            owned_connection = self._connect(thread_id, checkpoint_ns, read_only=True)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            owned_connection = self._connect(
+                thread_id, checkpoint_ns, session_id=session_id, read_only=True
+            )
         connection = (
             self._snapshot_connection(snapshot)
             if snapshot is not None

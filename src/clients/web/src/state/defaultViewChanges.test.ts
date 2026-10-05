@@ -33,6 +33,35 @@ describe("主聊天空历史的变更提示加载条件", () => {
         ...timeline,
         phase: "ready",
         projectionState: "ready",
+        internalExecutions: [{
+          execution_id: "execution-1",
+          job_id: "job-1",
+          session_id: "session",
+          thread_id: "thread-1",
+          status: "completed",
+          created_at: "2026-07-28T00:00:00Z",
+          updated_at: "2026-07-28T00:00:00Z",
+          display_parts: [{
+            kind: "generated_session_result",
+            text: "子会话结果",
+            item_id: "item-1",
+            item_sequence: 1,
+            logical_item_ordinal: 0,
+            created_at: "2026-07-28T00:00:00Z",
+            provenance: {},
+          }],
+          response_parts: [],
+        }],
+      },
+      conversationCount: 0,
+    })).toBe(false);
+    expect(shouldLoadDefaultViewChangesHint({
+      contentView: "default",
+      sessionId: "session",
+      timeline: {
+        ...timeline,
+        phase: "ready",
+        projectionState: "ready",
       },
       conversationCount: 1,
     })).toBe(false);

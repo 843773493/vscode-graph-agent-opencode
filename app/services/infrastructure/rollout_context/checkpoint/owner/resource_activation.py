@@ -101,9 +101,12 @@ class ResourceActivationOwnerMixin:
 
         store = self._activation_store()
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
+        thread_id = self._storage.main_thread_id(session_id)
         with self._storage._lock(
-            session_id, checkpoint_ns
-        ), self._storage._connect(session_id, checkpoint_ns) as connection:
+            thread_id, checkpoint_ns, session_id=session_id
+        ), self._storage._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._storage._require_v2_runtime(connection)
             connection.execute("BEGIN IMMEDIATE")
             store.bootstrap_schema(connection)
@@ -161,10 +164,11 @@ class ResourceActivationOwnerMixin:
         )
 
     def read_assembly_activation_binding(
-        self, session_id: str, *, assembly_id: str, checkpoint_ns: str = ""
+        self, session_id: str, *, thread_id: str, assembly_id: str, checkpoint_ns: str = ""
     ):
         return self._activation_store().read_assembly_binding(
             session_id,
+            thread_id=thread_id,
             assembly_id=assembly_id,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
@@ -173,6 +177,7 @@ class ResourceActivationOwnerMixin:
         self,
         session_id: str,
         *,
+        thread_id: str,
         assembly_id: str,
         plan_hash: str,
         request_hash: str,
@@ -190,6 +195,7 @@ class ResourceActivationOwnerMixin:
         store = self._activation_store()
         binding = store.find_assembly_binding(
             session_id,
+            thread_id=thread_id,
             assembly_id=assembly_id,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
@@ -209,7 +215,7 @@ class ResourceActivationOwnerMixin:
                 "load_sealed_resource_activation 需要 domain "
                 "ResourceActivationSnapshotRef"
             )
-        expected_owner = (session_id, binding["thread_id"])
+        expected_owner = (session_id, thread_id)
         if (snapshot.owner_session_id, snapshot.owner_thread_id) != expected_owner:
             raise RuntimeError(
                 "resource-activation-snapshot-conflict: sealed activation owner "
@@ -221,6 +227,7 @@ class ResourceActivationOwnerMixin:
         self,
         session_id: str,
         *,
+        thread_id: str,
         assembly_id: str,
         plan_hash: str,
         request_hash: str,
@@ -236,6 +243,7 @@ class ResourceActivationOwnerMixin:
             return None
         return self.load_sealed_resource_activation(
             session_id,
+            thread_id=thread_id,
             assembly_id=assembly_id,
             plan_hash=plan_hash,
             request_hash=request_hash,
@@ -254,7 +262,10 @@ class ResourceActivationOwnerMixin:
 
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         with self._storage._connect(
-            session_id, checkpoint_ns, read_only=True
+            activation_snapshot.owner_thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
         ) as connection:
             self._storage._require_v2_runtime(connection)
             self._activation_store().require_schema(connection)

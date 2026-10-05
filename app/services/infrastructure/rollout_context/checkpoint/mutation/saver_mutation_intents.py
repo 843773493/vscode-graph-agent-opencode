@@ -22,7 +22,6 @@ from app.domain.itemized.mutation_intents import (
     SwitchToolSetIntent,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.node_debug.session.thread_owner import MAIN_THREAD_ID
 from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     MutationIntentOwnerMismatch,
     MutationIntentPortError,
@@ -124,37 +123,54 @@ class RolloutMutationIntentPortMixin:
                 f"item_id={intent.item_id!r}, "
                 f"batch=({batch.owner.session_id},{batch.owner.thread_id})"
             )
+        if intent.execution_id != batch.execution_id:
+            raise MutationIntentOwnerMismatch(
+                "mutation-intent-owner-mismatch: append intent execution 与当前批不一致: "
+                f"intent={intent.execution_id!r}, batch={batch.execution_id!r}"
+            )
         if batch.commit_ids is None:
             batch.commit_ids = self._storage.append_items(
                 intent.owner.session_id,
+                intent.owner.thread_id,
                 batch.records,
+                execution_id=batch.execution_id,
                 checkpoint_ns=batch.checkpoint_ns,
             )
 
     def _consume_switch_tool_set_intent(self, intent: SwitchToolSetIntent) -> None:
-        """toolset 分支：把 desired ToolSet 状态应用到 main thread owner binding。
+        """toolset 分支：把 desired/applied 状态应用到精确 SessionThread owner。
 
         TODO(OpenSpec 5.4)：outstanding tool call 收敛与 toolset_changed
         epoch bump 属后续切片；本分支只推进 durable desired/applied 状态。
         """
-        if intent.owner.thread_id != MAIN_THREAD_ID:
-            raise MutationIntentOwnerMismatch(
-                "mutation-intent-owner-mismatch: ToolSet 切换当前只接 main "
-                f"thread owner: expected=(*,{MAIN_THREAD_ID}) actual=("
-                f"{intent.owner.session_id},{intent.owner.thread_id})"
-            )
-        control_path, main_thread_id = self._resolve_main_thread_control(
+        control_path, _main_thread_id = self._resolve_main_thread_control(
             intent.owner.session_id
+        )
+        thread_id = self._storage._resolve_thread_identity(
+            intent.owner.session_id,
+            intent.owner.thread_id,
+        )
+        self._storage.root(
+            intent.owner.session_id,
+            thread_id=thread_id,
         )
         store = SessionControlStore(control_path)
         try:
-            binding = store.ensure_thread_owner_binding(thread_id=main_thread_id)
+            relative_locator = (
+                ""
+                if thread_id == _main_thread_id
+                else store.get_published_child_thread_locator(thread_id)
+            )
+            binding = store.ensure_thread_owner_binding(
+                thread_id=thread_id,
+                final_relative_locator=relative_locator,
+            )
             if binding.toolset_compatibility_key == intent.desired_revision:
                 # 跨进程同 identity 重放：applied 历史不可覆盖，不产生新 revision。
                 return
             next_revision = (binding.applied_toolset_revision or 0) + 1
             store.update_thread_owner_binding(
-                main_thread_id,
+                thread_id,
                 desired_toolset_revision=next_revision,
                 applied_toolset_revision=next_revision,
                 toolset_compatibility_key=intent.desired_revision,
@@ -175,6 +191,7 @@ class RolloutMutationIntentPortMixin:
     def _switch_tool_set_if_needed(
         self,
         session_id: str,
+        thread_id: str,
         *,
         tool_snapshot: Sequence[Mapping[str, object]],
     ) -> None:
@@ -186,9 +203,9 @@ class RolloutMutationIntentPortMixin:
         desired_revision = sha256_jcs(
             {"tools": [dict(tool) for tool in tool_snapshot]}
         )
-        if self._applied_toolset_key(session_id) == desired_revision:
+        if self._applied_toolset_key(session_id, thread_id) == desired_revision:
             return
-        owner = MutationIntentOwner(session_id=session_id, thread_id=MAIN_THREAD_ID)
+        owner = MutationIntentOwner(session_id=session_id, thread_id=thread_id)
         intent = SwitchToolSetIntent(
             owner=owner,
             desired_revision=desired_revision,
@@ -197,12 +214,17 @@ class RolloutMutationIntentPortMixin:
         with self._lock:
             self._mutation_intent_facade(owner).consume(intent)
 
-    def _applied_toolset_key(self, session_id: str) -> str | None:
-        """只读读取 main thread 当前 applied ToolSet compatibility key。"""
-        control_path, main_thread_id = self._resolve_main_thread_control(session_id)
+    def _applied_toolset_key(self, session_id: str, thread_id: str) -> str | None:
+        """只读读取当前 thread 的 applied ToolSet compatibility key。"""
+        resolved_thread_id = self._storage._resolve_thread_identity(
+            session_id,
+            thread_id,
+        )
+        self._storage.root(session_id, thread_id=resolved_thread_id)
+        control_path, _main_thread_id = self._resolve_main_thread_control(session_id)
         store = SessionControlStore(control_path)
         try:
-            binding = store.get_thread_owner_binding(main_thread_id)
+            binding = store.get_thread_owner_binding(resolved_thread_id)
         except KeyError:
             # owner binding 行尚未建立：等价于从未 applied。
             return None

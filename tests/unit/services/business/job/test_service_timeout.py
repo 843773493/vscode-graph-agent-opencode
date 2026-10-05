@@ -4,10 +4,27 @@ import asyncio
 
 import pytest
 
+from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.domain.itemized.execution_admission import (
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.prompting import internal_message_factory
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobService, JobState
+
+
+def _binding(job_id: str, message_id: str, metadata: dict[str, object]):
+    if metadata.get("internal") is True:
+        return InternalExecutionIntent(
+            message_id=message_id, execution_id=create_prefixed_id("exe"),
+            admission_idempotency_key=create_prefixed_id("adm"),
+        )
+    return UserExecutionIdentity(
+        job_id=job_id, turn_id=create_prefixed_id("turn"),
+        admission_idempotency_key=create_prefixed_id("adm"),
+    )
 
 
 class _RecordingBus:
@@ -177,17 +194,19 @@ class _RecordingTurnStatusWriter:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
-    def mark_turn_terminal_status(
+    def mark_job_terminal_status(
         self,
         *,
         session_id: str,
-        turn_id: str,
+        thread_id: str,
+        job_id: str,
         status: str,
     ) -> bool:
         self.calls.append(
             {
                 "session_id": session_id,
-                "turn_id": turn_id,
+                "thread_id": thread_id,
+                "job_id": job_id,
                 "status": status,
             }
         )
@@ -216,6 +235,8 @@ async def test_job_timeout_marks_job_terminal_and_releases_session(
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_timeout", "msg_timeout", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -241,7 +262,8 @@ async def test_job_timeout_marks_job_terminal_and_releases_session(
     assert writer.calls == [
         {
             "session_id": session_id,
-            "turn_id": job.job_id,
+            "thread_id": job.thread_id,
+            "job_id": job.job_id,
             "status": "timed_out",
         }
     ]
@@ -269,6 +291,8 @@ async def test_job_timeout_provider_is_read_for_each_new_job(
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_dynamic_timeout", "msg_dynamic_timeout", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(job.session_id, job.job_id, "after_turn")
@@ -305,6 +329,8 @@ async def test_job_timeout_does_not_wait_for_uncooperative_executor(
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_uncooperative_timeout", "msg_uncooperative_timeout", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(job.session_id, job.job_id, "after_turn")
@@ -340,6 +366,8 @@ async def test_job_startup_timeout_closes_job_without_agent_start(
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_startup_timeout", "msg_startup_timeout", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -358,7 +386,8 @@ async def test_job_startup_timeout_closes_job_without_agent_start(
     assert writer.calls == [
         {
             "session_id": session_id,
-            "turn_id": job.job_id,
+            "thread_id": job.thread_id,
+            "job_id": job.job_id,
             "status": "timed_out",
         }
     ]
@@ -386,6 +415,8 @@ async def test_agent_start_does_not_mask_first_model_or_tool_startup_timeout(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_agent_start_without_progress", "msg_agent_start_without_progress", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -421,6 +452,8 @@ async def test_job_failure_event_preserves_executor_error_code(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_coded_failure", "msg_coded_failure", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -461,6 +494,8 @@ async def test_agent_loop_ready_uses_event_watchdog_not_startup_watchdog(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_agent_loop_ready", "msg_agent_loop_ready", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -503,6 +538,8 @@ async def test_two_short_messages_start_and_converge_after_previous_turn(
             message_created_at="2026-09-01T00:00:00+00:00",
             agent_id="default",
             status=JobStatus.queued,
+            thread_id="thr_job_test",
+            execution_binding=_binding(f"job_short_message_{index}", f"msg_short_message_{index}", {}),
         )
         jobs.append(job)
         service._jobs[job.job_id] = job
@@ -543,6 +580,8 @@ async def test_running_job_exposes_progress_and_current_step_before_executor_eve
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_progress", "msg_progress", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -587,6 +626,8 @@ async def test_tool_progress_refreshes_job_and_timeout_has_distinct_cancel_reaso
         message_created_at="2026-08-31T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_tool_progress", "msg_tool_progress", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -631,6 +672,8 @@ async def test_model_finalization_grace_preserves_response_after_total_budget(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_model_finalization_grace", "msg_model_finalization_grace", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -672,6 +715,8 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_tool_finalization_grace", "msg_tool_finalization_grace", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -714,6 +759,8 @@ async def test_finalization_grace_does_not_require_fresh_step_projection(
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_stale_step_finalization", "msg_stale_step_finalization", {}),
     )
     service._jobs[job.job_id] = job
     service._pending_queue.append(session_id, job.job_id, "after_turn")
@@ -755,6 +802,8 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
         status=JobStatus.failed,
         delivery_policy="after_turn",
         delivery_boundary="idle",
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_parent_failed", "msg_parent_failed", {}),
     )
     internal_message = internal_message_factory.build(
         kind="terminal_execution_completed",
@@ -771,6 +820,8 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
         status=JobStatus.queued,
         message_metadata=internal_message.metadata,
         delivery_policy="after_tool_result",
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_terminal_followup", "msg_terminal_followup", internal_message.metadata),
     )
     user_job = JobState(
         job_id="job_user_retry",
@@ -781,6 +832,8 @@ async def test_failed_job_discards_queued_terminal_followup_without_new_stream(
         agent_id="default",
         status=JobStatus.queued,
         delivery_policy="after_turn",
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_user_retry", "msg_user_retry", {}),
     )
     service._jobs.update(
         {
@@ -838,6 +891,8 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
         message_created_at="2026-09-01T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.failed,
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_failed_race_parent", "msg_failed_race_parent", {}),
     )
     internal_message = internal_message_factory.build(
         kind="terminal_execution_completed",
@@ -854,6 +909,8 @@ async def test_pending_dispatch_race_cannot_start_terminal_followup_after_failur
         status=JobStatus.queued,
         message_metadata=internal_message.metadata,
         delivery_policy="after_tool_result",
+        thread_id="thr_job_test",
+        execution_binding=_binding("job_failed_race_followup", "msg_failed_race_followup", internal_message.metadata),
     )
     service._jobs.update({parent.job_id: parent, followup.job_id: followup})
     service._session_current_job[session_id] = parent.job_id

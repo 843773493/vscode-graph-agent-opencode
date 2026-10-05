@@ -47,13 +47,17 @@ def _local_target(workspace_id: str, backend_url: str, root: Path) -> WorkspaceT
         root_path=str(root),
         backend_url=backend_url,
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
 
 def _catalog_ids(service: FederationRpcService) -> dict[str, str]:
     port = service.catalog
     assert isinstance(port, WorkspaceCatalogPort)
-    return dict(port._backend_urls)
+    return {
+        workspace_id: backend_url
+        for workspace_id, (backend_url, _) in port._backend_endpoints.items()
+    }
 
 
 def _session_main_ids(service: FederationRpcService) -> dict[str, str]:

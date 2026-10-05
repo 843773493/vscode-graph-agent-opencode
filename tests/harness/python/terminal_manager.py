@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import (
     kill_process_on_port,
     terminate_process,
@@ -29,7 +30,9 @@ def start_terminal_frontend_process(
     node_bin = shutil.which("node")
     if node_bin is None:
         raise RuntimeError("未找到 node，无法启动终端 attach 前端")
+    workspace_id = load_or_create_workspace_id(workspace_root)
     env = os.environ.copy()
+    env["BOXTEAM_WORKSPACE_ID"] = workspace_id
     env["WORKSPACE_ROOT"] = str(workspace_root)
     process = subprocess.Popen(
         [

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import NotRequired, Protocol, TypedDict, runtime_checkable
 
 from app.core.background_task_registry import BackgroundTaskHandle
@@ -10,19 +9,6 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceDTO,
     SessionResourceKind,
 )
-
-
-@runtime_checkable
-class TerminalManagerClientProtocol(Protocol):
-    async def list_terminals(
-        self,
-        *,
-        session_id: str | None = None,
-    ) -> list[dict[str, object]]: ...
-
-    async def kill_terminal(self, terminal_id: str) -> dict[str, object]: ...
-
-    async def delete_terminal(self, terminal_id: str) -> dict[str, object]: ...
 
 
 class BrowserViewport(TypedDict, total=False):
@@ -193,17 +179,6 @@ class BrowserManagerClientProtocol(Protocol):
 
 
 @runtime_checkable
-class HistoricalTerminalRecordReaderProtocol(Protocol):
-    def read_records(
-        self,
-        *,
-        session_id: str,
-        active_terminals: Sequence[Mapping[str, object]],
-        agent_state_records: Sequence[Mapping[str, object]],
-    ) -> list[dict[str, object]]: ...
-
-
-@runtime_checkable
 class BackgroundTaskRegistryProtocol(Protocol):
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]: ...
 
@@ -257,6 +232,7 @@ class SessionResourceProviderProtocol(Protocol):
         session_id: str,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO: ...
 
     async def cleanup_session(self, session_id: str) -> int: ...

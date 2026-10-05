@@ -5,9 +5,14 @@ const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
 const workspaceId = params.get("workspaceId");
 const gatewayMode = Boolean(workspaceId);
+const nativeWorkspaceId = window.BOXTEAM_WORKSPACE_ID;
 const backendBaseUrl = workspaceId
   ? `${window.location.origin}/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/terminal-manager`
   : window.BOXTEAM_TERMINAL_BACKEND_URL || "http://127.0.0.1:8012";
+const ownerApiBase = gatewayMode ? window.location.origin : window.BOXTEAM_WORKSPACE_BACKEND_URL;
+let ownerResource = null;
+let grantLoading = false;
+let lastActionError = null;
 let gatewayToken = null;
 let backendRequestHeaders = {};
 document.documentElement.classList.toggle("embedded-terminal", params.get("embedded") === "1");
@@ -100,12 +105,24 @@ function backendWsUrl() {
   const url = new URL(backendBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/$/, "")}/terminal`;
-  url.search = gatewayMode ? `?token=${encodeURIComponent(gatewayToken)}` : "";
+  url.search = gatewayMode
+    ? `?token=${encodeURIComponent(gatewayToken)}`
+    : `?workspace_id=${encodeURIComponent(nativeWorkspaceId)}`;
   return url.toString();
 }
 
 async function initializeGatewayAuth() {
   if (!gatewayMode) {
+    if (typeof nativeWorkspaceId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(nativeWorkspaceId)) {
+      throw new Error("终端前端缺少受控工作区 UUID");
+    }
+    if (typeof ownerApiBase !== "string" || !ownerApiBase || !window.BOXTEAM_WORKSPACE_API_TOKEN) {
+      throw new Error("独立终端必须显式配置工作区 owner API 地址与凭据，或从 Gateway 打开终端");
+    }
+    backendRequestHeaders = {
+      "X-BoxTeam-Workspace-Id": nativeWorkspaceId,
+      "X-Local-Token": window.BOXTEAM_WORKSPACE_API_TOKEN,
+    };
     return;
   }
   const response = await fetch(`${window.location.origin}/api/gateway/auth/local-credential`);
@@ -118,7 +135,7 @@ async function initializeGatewayAuth() {
     throw new Error("Gateway 本地凭据响应缺少 token");
   }
   gatewayToken = token;
-  backendRequestHeaders = { "X-Local-Token": token };
+  backendRequestHeaders = { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId };
 }
 
 function setStatus(message, error = false) {
@@ -290,61 +307,44 @@ function resizeRemote() {
   });
 }
 
-async function loadSnapshot() {
-  if (!terminalId) {
-    setStatus("URL 缺少 terminalId 参数", true);
-    return;
-  }
-  const response = await fetch(
-    `${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}?missing_as_deleted=1`,
-    { headers: backendRequestHeaders },
-  );
-  if (response.status === 404) {
-    markDeleted("终端已删除或不存在");
-    return;
-  }
-  if (!response.ok) {
-    throw new Error(`读取终端状态失败: ${response.status}`);
-  }
+async function ownerRequest(suffix = "", body = undefined) {
+  const response = await fetch(`${ownerApiBase}/api/v1/resources/${encodeURIComponent(terminalId)}${suffix}`, {
+    method: body === undefined ? "GET" : "POST",
+    cache: "no-store",
+    headers: { ...backendRequestHeaders, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   const payload = await response.json();
-  const snapshot = payload.data;
-  if (snapshot.status === "deleted") {
-    markDeleted("终端已删除", snapshot);
-    return;
+  if (!response.ok) throw new Error(`终端 owner 请求失败 ${response.status}: ${JSON.stringify(payload.detail ?? payload.error ?? payload)}`);
+  if (!payload.data) throw new Error("终端 owner 响应缺少完整 data");
+  return payload.data;
+}
+
+function acceptOwnerResource(resource) {
+  if (resource.resource_id !== terminalId || !resource.source_thread || !Number.isInteger(resource.owner_revision)) {
+    throw new Error("Terminal owner 完整投影格式错误");
   }
+  ownerResource = resource;
+  const snapshot = { ...resource.metadata, ...resource, terminal_id: resource.resource_id };
   currentTerminalStatus = snapshot.status;
-  rememberSequence(snapshot.sequence || 0);
   updateTerminalTitle(snapshot);
-  setStatus(describeSnapshot(snapshot));
-  renderSnapshot(snapshotDisplayBuffer(snapshot));
   updateControls();
+  if (resource.status === "deleted") markDeleted("终端已删除", snapshot);
+  return snapshot;
+}
+
+async function loadSnapshot() {
+  if (!terminalId) throw new Error("URL 缺少 terminalId 参数");
+  const snapshot = acceptOwnerResource(await ownerRequest());
+  rememberSequence(snapshot.sequence || 0);
+  renderSnapshot(snapshotDisplayBuffer(snapshot));
+  if (!lastActionError) setStatus(describeSnapshot(snapshot));
   return snapshot;
 }
 
 async function syncTerminalState() {
-  if (!terminalId || deleted) {
-    return;
-  }
-  const response = await fetch(
-    `${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}?missing_as_deleted=1`,
-    { cache: "no-store", headers: backendRequestHeaders },
-  );
-  if (response.status === 404) {
-    markDeleted("终端已删除或不存在");
-    return;
-  }
-  if (!response.ok) {
-    throw new Error(`同步终端状态失败: ${response.status}`);
-  }
-  const payload = await response.json();
-  const snapshot = payload.data;
-  if (snapshot.status === "deleted") {
-    markDeleted("终端已删除", snapshot);
-    return;
-  }
-
-  currentTerminalStatus = snapshot.status;
-  updateTerminalTitle(snapshot);
+  if (!terminalId || deleted) return;
+  const snapshot = acceptOwnerResource(await ownerRequest());
   if (snapshot.status !== "running") {
     desiredAttached = false;
     attached = false;
@@ -352,11 +352,24 @@ async function syncTerminalState() {
     socket = null;
     setAttachButtonMode("detached");
     renderSnapshot(snapshotDisplayBuffer(snapshot));
-    setStatus(describeSnapshot(snapshot));
-  } else if (!attached) {
-    setStatus(describeSnapshot(snapshot));
   }
-  updateControls();
+  if (!lastActionError && !attached) setStatus(describeSnapshot(snapshot));
+}
+
+async function ownerCommand(action) {
+  try {
+    const resource = await ownerRequest(`/${action}`, { expected_revision: ownerResource.owner_revision });
+    lastActionError = null;
+    const snapshot = acceptOwnerResource(resource);
+    renderSnapshot(snapshotDisplayBuffer(snapshot));
+    setStatus(describeSnapshot(snapshot));
+  } catch (error) {
+    let message = error instanceof Error ? error.message : String(error);
+    try { acceptOwnerResource(await ownerRequest()); }
+    catch (refreshError) { message += `；刷新失败: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`; }
+    lastActionError = message;
+    setStatus(message, true);
+  }
 }
 
 function startStatusPolling() {
@@ -389,7 +402,7 @@ function detach() {
   updateControls();
 }
 
-function attach() {
+async function attach() {
   if (!terminalId) {
     setStatus("URL 缺少 terminalId 参数", true);
     return;
@@ -401,7 +414,31 @@ function attach() {
     setStatus("正在连接终端...");
     return;
   }
+  if (grantLoading) return;
   desiredAttached = true;
+  grantLoading = true;
+  let grant;
+  try {
+    await loadSnapshot();
+    const querySession = params.get("sessionId");
+    const queryThread = params.get("threadId");
+    if (Boolean(querySession) !== Boolean(queryThread)) throw new Error("Terminal 传输 Thread 参数不完整");
+    if (ownerResource.retention_scope === "thread" && !queryThread) {
+      throw new Error("临时终端连接缺少明确的 Thread；请从会话资源或工作区终端面板打开");
+    }
+    const thread = querySession ? { session_id: querySession, thread_id: queryThread } : undefined;
+    grant = await ownerRequest("/transport-grant", { expected_revision: ownerResource.owner_revision, thread });
+    acceptOwnerResource(grant.resource);
+    lastActionError = null;
+  } catch (error) {
+    lastActionError = error instanceof Error ? error.message : String(error);
+    try { acceptOwnerResource(await ownerRequest()); } catch (refreshError) { lastActionError += `；刷新失败: ${refreshError.message}`; }
+    setStatus(lastActionError, true);
+    setAttachButtonMode("detached");
+    desiredAttached = false;
+    return;
+  } finally { grantLoading = false; }
+  if (!desiredAttached) return;
   const currentSocket = new WebSocket(backendWsUrl());
   socket = currentSocket;
   setAttachButtonMode("attaching");
@@ -412,6 +449,7 @@ function attach() {
     send({
       type: "attach",
       terminalId,
+      grantToken: grant.grant_token,
       cols: terminal.cols,
       rows: terminal.rows,
       afterSequence: lastSequence,
@@ -483,7 +521,7 @@ function attach() {
     }
   });
 
-  currentSocket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", (event) => {
     if (socket !== currentSocket) {
       return;
     }
@@ -492,6 +530,12 @@ function attach() {
     lastSentCols = null;
     lastSentRows = null;
     setAttachButtonMode("detached");
+    if (event.code === 4009) {
+      desiredAttached = false;
+      lastActionError = "终端资源关联或版本已变化，请刷新后重新连接";
+      setStatus(lastActionError, true);
+      void syncTerminalState().catch((error) => setStatus(error.message, true));
+    }
     if (desiredAttached && !deleted && currentTerminalStatus === "running") {
       reconnectAttempts += 1;
       const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), 5000);
@@ -572,19 +616,7 @@ terminateButton.addEventListener("click", async () => {
     setStatus("URL 缺少 terminalId 参数", true);
     return;
   }
-  const response = await fetch(`${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}/kill`, {
-    method: "POST",
-    headers: backendRequestHeaders,
-  });
-  if (!response.ok) {
-    setStatus(`终止失败: ${response.status}`, true);
-    return;
-  }
-  const payload = await response.json();
-  const snapshot = payload.data?.terminal;
-  currentTerminalStatus = snapshot?.status || "terminated";
-  setStatus(snapshot ? `已终止 · ${describeSnapshot(snapshot)}` : "已终止");
-  await loadSnapshot();
+  await ownerCommand("stop");
 });
 
 deleteButton.addEventListener("click", async () => {
@@ -596,17 +628,7 @@ deleteButton.addEventListener("click", async () => {
     return;
   }
   detach();
-  const response = await fetch(`${backendBaseUrl}/api/terminals/${encodeURIComponent(terminalId)}`, {
-    method: "DELETE",
-    headers: backendRequestHeaders,
-  });
-  if (!response.ok) {
-    setStatus(`删除失败: ${response.status}`, true);
-    return;
-  }
-  deleted = true;
-  const payload = await response.json();
-  markDeleted("终端已删除", payload.data?.terminal ?? null);
+  await ownerCommand("delete");
 });
 
 void initializeGatewayAuth()

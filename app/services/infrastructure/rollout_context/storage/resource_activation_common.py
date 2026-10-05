@@ -108,6 +108,7 @@ class ResourceActivationLineageBodyStore(Protocol):
         self,
         *,
         owner_session_id: str,
+        owner_thread_id: str,
         activation_snapshot_id: str,
         checkpoint_ns: str,
         manifest: Mapping[str, object],

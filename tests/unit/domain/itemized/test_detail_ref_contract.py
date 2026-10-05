@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
-from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -53,6 +53,7 @@ def typed_detail_plan(typed_detail_vectors) -> ContextRequestPlan:
     )
     return ContextRequestPlan(
         session_id=scenario["session_id"],
+        thread_id="thread-1",
         plan_id=scenario["plan_id"],
         refs=(ref,),
     ).seal_for_assembly(scenario["assembly_id"], selection=(selection,))
@@ -65,6 +66,7 @@ def typed_detail_snapshot(typed_detail_plan, typed_detail_vectors):
     return ContextAssemblySnapshot(
         assembly_id=plan.assembly_id,
         session_id=plan.session_id,
+        thread_id=plan.thread_id,
         turn_id="turn-detail",
         execution_id="execution-detail",
         plan_id=plan.plan_id,
@@ -96,7 +98,9 @@ def test_detail_ref_exact_immutable_roundtrip(typed_detail_vectors):
     assert ref.detail_id == expected["detail_id"]
 
 
-@pytest.mark.parametrize("field", ["session_id", "assembly_id", "detail_id"])
+@pytest.mark.parametrize(
+    "field", ["session_id", "thread_id", "assembly_id", "detail_id"]
+)
 @pytest.mark.parametrize("invalid", [None, "", True, 3, "embedded\x00nul"])
 def test_detail_ref_rejects_invalid_owner_identity(
     typed_detail_vectors, field, invalid
@@ -104,6 +108,14 @@ def test_detail_ref_rejects_invalid_owner_identity(
     raw = {**typed_detail_vectors["scenario"]["detail_ref"], field: invalid}
     with pytest.raises(ItemSchemaError, match=field):
         DetailRef(**raw)
+
+
+def test_detail_ref_serializes_thread_qualified_owner(typed_detail_vectors):
+    ref = DetailRef(**typed_detail_vectors["scenario"]["detail_ref"])
+    assert ref.thread_id == "thread-1"
+    assert tuple(ref.to_dict()) == (
+        "session_id", "thread_id", "assembly_id", "detail_id"
+    )
 
 
 @pytest.mark.parametrize("field", ["assembly_id", "detail_id"])
@@ -114,7 +126,9 @@ def test_detail_ref_rejects_path_segments(typed_detail_vectors, field, invalid):
         DetailRef.from_dict(raw)
 
 
-@pytest.mark.parametrize("field", ["session_id", "assembly_id", "detail_id"])
+@pytest.mark.parametrize(
+    "field", ["session_id", "thread_id", "assembly_id", "detail_id"]
+)
 def test_detail_ref_restore_does_not_fill_missing_owner(typed_detail_vectors, field):
     raw = dict(typed_detail_vectors["scenario"]["detail_ref"])
     raw.pop(field)
@@ -135,17 +149,19 @@ def test_detail_ref_restore_rejects_extra_path(typed_detail_vectors):
 
 
 @pytest.mark.parametrize(
-    "session,assembly",
+    "session,thread,assembly",
     [
-        ("other-session", None),
-        ("other-session", "assembly-final"),
-        ("session-detail", "other-assembly"),
+        ("other-session", "thread-1", None),
+        ("session-detail", "foreign-thread", "assembly-final"),
+        ("session-detail", "thread-1", "other-assembly"),
     ],
 )
-def test_detail_ref_rejects_foreign_owner(typed_detail_vectors, session, assembly):
+def test_detail_ref_rejects_foreign_owner(
+    typed_detail_vectors, session, thread, assembly
+):
     ref = DetailRef(**typed_detail_vectors["scenario"]["detail_ref"])
     with pytest.raises(ItemSchemaError, match="source-mismatch"):
-        ref.require_owner(session, assembly)
+        ref.require_owner(session, thread, assembly)
 
 
 def test_draft_source_and_sealed_final_have_distinct_bindings(typed_detail_plan):
@@ -154,15 +170,16 @@ def test_draft_source_and_sealed_final_have_distinct_bindings(typed_detail_plan)
     source = ref.source_ref
     final = plan.selection[0].detail_ref
     assert isinstance(source, DetailRef) and isinstance(final, DetailRef)
-    source.require_owner(plan.session_id)
-    final.require_owner(plan.session_id, plan.assembly_id)
+    source.require_owner(plan.session_id, plan.thread_id)
+    final.require_owner(plan.session_id, plan.thread_id, plan.assembly_id)
     assert source.assembly_id == "assembly-source"
     assert final.assembly_id == "assembly-final"
     assert source != final
     assert not hasattr(ref, "detail_ref")
     assert "detail_ref" not in ref.to_dict()
     draft = ContextRequestPlan(
-        session_id=plan.session_id, plan_id=plan.plan_id, refs=(ref,)
+        session_id=plan.session_id, thread_id=plan.thread_id,
+        plan_id=plan.plan_id, refs=(ref,)
     )
     assert draft.assembly_id is None and draft.selection == ()
     assert draft.refs[0].source_ref == source
@@ -173,12 +190,18 @@ def test_typed_source_may_use_another_assembly_but_not_another_session(
 ):
     ref = typed_detail_plan.refs[0]
     changed = replace(
-        ref, source_ref=DetailRef(ref.session_id, "previous-assembly", "source")
+        ref,
+        source_ref=DetailRef(
+            ref.session_id, ref.thread_id, "previous-assembly", "source"
+        ),
     )
     assert changed.source_ref.assembly_id == "previous-assembly"
     with pytest.raises(ItemSchemaError, match="source-mismatch"):
         replace(
-            ref, source_ref=DetailRef("foreign-session", "previous-assembly", "source")
+            ref,
+            source_ref=DetailRef(
+                "foreign-session", ref.thread_id, "previous-assembly", "source"
+            ),
         )
 
 
@@ -187,7 +210,7 @@ def test_typed_source_may_use_another_assembly_but_not_another_session(
     [
         None,
         "detail-final",
-        DetailRef("session-detail", "assembly-final", "detail-final"),
+        DetailRef("session-detail", "thread-1", "assembly-final", "detail-final"),
     ],
 )
 def test_context_ref_constructor_rejects_final_detail_field(typed_detail_plan, final):
@@ -211,6 +234,7 @@ def test_context_ref_constructor_rejects_final_detail_field(typed_detail_plan, f
         "detail-final",
         {
             "session_id": "session-detail",
+            "thread_id": "thread-1",
             "assembly_id": "assembly-final",
             "detail_id": "detail-final",
         },
@@ -221,7 +245,7 @@ def test_final_selection_constructor_requires_typed_object(typed_detail_plan, in
         replace(typed_detail_plan.selection[0], detail_ref=invalid)
 
 
-@pytest.mark.parametrize("field", ["session_id", "assembly_id"])
+@pytest.mark.parametrize("field", ["session_id", "thread_id", "assembly_id"])
 def test_final_selection_rejects_cross_owner(typed_detail_plan, field):
     entry = typed_detail_plan.selection[0]
     foreign = replace(entry.detail_ref, **{field: "foreign-owner"})
@@ -255,7 +279,9 @@ def test_snapshot_roundtrip_preserves_both_typed_owners(typed_detail_snapshot):
 
 
 @pytest.mark.parametrize("location", ["source", "selected_source", "final"])
-@pytest.mark.parametrize("field", ["session_id", "assembly_id", "detail_id"])
+@pytest.mark.parametrize(
+    "field", ["session_id", "thread_id", "assembly_id", "detail_id"]
+)
 def test_snapshot_restore_rejects_incomplete_typed_detail(
     typed_detail_snapshot, location, field
 ):

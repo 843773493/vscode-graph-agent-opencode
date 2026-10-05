@@ -15,21 +15,154 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution
+from app.prompting.factory import PromptSection, internal_message_factory
+from app.services.business.message_display import project_message_for_display
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    CONFLICT_CODE,
+    ToolProtocolBoundaryConflict,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
-    CONFLICT_CODE,
-    ToolProtocolBoundaryConflict,
-)
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from app.services.mapping.itemized.provider_request import (
+    project_runtime_notice_content,
+)
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
+
+
+def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separate() -> None:
+    prompt = internal_message_factory.build(
+        kind="generated_session_result",
+        control="内部禁止跨会话通信的控制正文。",
+        sections=(
+            PromptSection("control_context", {"generated_session_id": "branch-session"}),
+            PromptSection("generated_session_result", "分支私有结果正文。"),
+        ),
+        metadata={
+            "internal_display_provenance": {
+                "source_session_id": "branch-session",
+            }
+        },
+        display_content="生成分支已结束，主会话正在处理返回结果。",
+    )
+    message = HumanMessage(
+        id="internal-report-back",
+        content=prompt.content,
+        response_metadata=prompt.metadata,
+    )
+    codec = LangChainMessageCodec()
+    (item,) = codec.items_for_message(
+        message,
+        item_sequence=1,
+        message_id="internal-report-back",
+        turn_id=None,
+        execution_id="execution-report-back",
+        timestamp="2026-10-03T00:00:00+00:00",
+    )
+
+    assert item.semantic_kind == SemanticKind.RUNTIME_NOTICE
+    assert item.turn_id is None
+    assert item.turn_scope == "pending_next_turn"
+    assert item.payload_kind == "structured_content"
+    assert item.producer_ref["invocation_id"] == "execution-report-back"
+    assert item.payload == {
+        "prompt": prompt.content,
+        "display_part": {
+            "kind": "generated_session_result",
+            "text": "生成分支已结束，主会话正在处理返回结果。",
+            "provenance": {"source_session_id": "branch-session"},
+        },
+    }
+
+    restored = codec.from_dict(codec.project_message((item,)))
+    assert isinstance(restored, HumanMessage)
+    assert restored.content == prompt.content
+    assert restored.response_metadata["display_content"] == (
+        "生成分支已结束，主会话正在处理返回结果。"
+    )
+    assert "turn_id" not in restored.response_metadata
+    assert "job_id" not in restored.response_metadata
+    display = project_message_for_display(
+        restored.content,
+        restored.response_metadata,
+    )
+    assert display.content == "生成分支已结束，主会话正在处理返回结果。"
+    assert "source_session_id" not in display.metadata
+
+    provider_content = project_runtime_notice_content(item.payload)
+    assert provider_content == prompt.content
+    assert "分支私有结果正文。" in provider_content
+    assert "生成分支已结束，主会话正在处理返回结果。" not in provider_content
+
+
+@pytest.mark.parametrize(
+    ("message", "message_id", "semantic_kind"),
+    [
+        (
+            AIMessage(id="internal-assistant-output", content="内部模型回复"),
+            "internal-assistant-output",
+            "assistant_output",
+        ),
+        (
+            AIMessage(
+                id="internal-tool-call",
+                content="",
+                tool_calls=[
+                    {"id": "call-internal", "name": "read_file", "args": {}}
+                ],
+            ),
+            "internal-tool-call",
+            "tool_call",
+        ),
+        (
+            ToolMessage(
+                id="internal-tool-result",
+                content="工具结果",
+                tool_call_id="call-internal",
+                name="read_file",
+            ),
+            "internal-tool-result",
+            "tool_result",
+        ),
+    ],
+)
+def test_standalone_execution_outputs_keep_semantic_kind_without_turn(
+    message: object,
+    message_id: str,
+    semantic_kind: str,
+) -> None:
+    (item,) = LangChainMessageCodec().items_for_message(
+        message,
+        item_sequence=1,
+        message_id=message_id,
+        turn_id=None,
+        execution_id="execution-standalone",
+        timestamp="2026-10-03T00:00:00+00:00",
+    )
+
+    assert item.semantic_kind == semantic_kind
+    assert item.turn_id is None
+    assert item.turn_scope is None
+    assert item.producer_ref["invocation_id"] == "execution-standalone"
+
+
+def test_turnless_message_requires_explicit_execution_id() -> None:
+    with pytest.raises(ValueError, match="Turn-less canonical message"):
+        LangChainMessageCodec().items_for_message(
+            AIMessage(id="unbound-assistant", content="未绑定消息"),
+            item_sequence=1,
+            message_id="unbound-assistant",
+            turn_id=None,
+            timestamp="2026-10-03T00:00:00+00:00",
+        )
 
 
 def _checkpoint(

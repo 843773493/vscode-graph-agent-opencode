@@ -3,13 +3,13 @@
 覆盖 R5b（OpenSpec ``add-context-injection-lifecycle`` 任务 2.8 与
 ``add-itemized-rollout-context`` 任务 8.8/8.8-A 的 residency 切片 + R3b 复核残留项）：
 
-- fake clock 29:59 仍 resident / 30:00 无 blocker → cold-eligible（触发 unload 回调）；
+- fake clock 29:59 仍 resident / 30:00 无 blocker → cold-eligible（关闭真实 generation scope）；
   产品阈值常量 1800 秒不缩短；
 - blocker 活跃期间跨阈值仍 resident（idle 不累计），解除后从解除时刻重新起算；
 - ``record_activity`` 重置累计；
 - 重启恢复：全新 tracker + 磁盘上的活跃 durable claim → 不 cold-eligible（pull 源）；
 - snapshot 字段齐全且 blocker 脱敏（无 PID/端口/路径正文）；
-- unload 回调缝：generation 令牌、无 generation 不卸载、失败 fail-loud 且可重试；
+- scope 关闭边界：generation 令牌、无 generation 不卸载、失败 fail-loud 且可重试；
 - NodeDebug 接线：start 推送 blocker、核实终态解除、reconcile_required 保持阻断；
 - R3b 残留收口：spawn 前 closing 守卫、stop/restart 的 per-owner 临界区
   （stop 落在 spawn 窗口不产生"exited + 进程存活"假终态）、并发 start 串行化、
@@ -28,12 +28,14 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import websockets
 
+from app.core.lifecycle import LifetimeScope, ReleaseCallback
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugControlActionRequest,
@@ -44,6 +46,9 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from app.services.infrastructure.node_debug.process import (
     process_identity as node_debug_process_identity,
+)
+from app.services.infrastructure.node_debug.process.claim_runtime import (
+    NodeDebugClaimRuntime,
 )
 from app.services.infrastructure.node_debug.process.launch_claim import (
     claim_marked,
@@ -61,12 +66,12 @@ from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.thread_residency import (
     THREAD_IDLE_UNLOAD_SECONDS,
     ResidencyBlocker,
     ThreadResidencyTracker,
-    ThreadUnloadRequest,
+    ThreadRuntimeLease,
+    ThreadUnloadBlocked,
 )
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.node_debug_dependencies import (
@@ -74,7 +79,7 @@ from tests.support.node_debug_dependencies import (
 )
 
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
-_THREAD_ID = "main"
+_THREAD_ID = "thr_00000000400070008000000000000002"
 _OWNER = (_PARENT_SESSION_ID, _THREAD_ID)
 _CONFIGURATION_ID = "dbgcfg_33333333333333333333333333333333"
 
@@ -114,6 +119,7 @@ def _create_session(sessions_root: Path, session_id: str) -> Path:
         sessions_root,
         session_id,
         title=title,
+        main_thread_id=_THREAD_ID if session_id == _PARENT_SESSION_ID else None,
     ).directory
 
 
@@ -135,59 +141,82 @@ def _make_tracker(
     clock: _FakeMonotonicClock,
     *,
     wall_clock: _FixedWallClock | None = None,
-    unload_callback=None,
 ) -> ThreadResidencyTracker:
     return ThreadResidencyTracker(
-        clock=clock,
-        wall_clock=wall_clock or _FixedWallClock(),
-        unload_callback=unload_callback,
+        clock=clock, wall_clock=wall_clock or _FixedWallClock()
     )
+
+
+def _unit_admission() -> ExecutionAdmission:
+    return ExecutionAdmission(
+        session_id=_OWNER[0],
+        thread_id=_OWNER[1],
+        execution_id="execution_unit",
+        job_id="job_unit",
+        admission_idempotency_key="admission_unit",
+        execution_origin="user_turn",
+        turn_id="turn_unit",
+    )
+
+
+async def _resident_runtime(
+    tracker: ThreadResidencyTracker,
+    *,
+    release: ReleaseCallback | None = None,
+    generation_key: str = "config-v1",
+) -> ThreadRuntimeLease[object]:
+    def build(session_id: str, thread_id: str, scope: LifetimeScope) -> object:
+        if release is not None:
+            scope.register(release, label="测试资源")
+        return object()
+
+    lease = await tracker.acquire(
+        MutationIntentOwner(*_OWNER),
+        _unit_admission(),
+        generation_key,
+        build,
+    )
+    lease.release()
+    return lease
 
 
 @pytest.mark.asyncio
 async def test_fake_clock_29_59_resident_and_30_00_cold_eligible_fires_unload() -> None:
-    """29:59 仍 resident；30:00 无 blocker → cold-eligible 并触发 unload 回调。"""
-    assert THREAD_IDLE_UNLOAD_SECONDS == 1800.0  # 产品阈值不缩短
+    """产品阈值不缩短；scope 只在 30:00 后真正关闭。"""
+    assert THREAD_IDLE_UNLOAD_SECONDS == 1800.0
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-
-    async def unload(request: ThreadUnloadRequest) -> None:
-        fired.append(request)
-
-    tracker = _make_tracker(clock, unload_callback=unload)
-    generation = tracker.register_generation(*_OWNER)
+    fired: list[str] = []
+    tracker = _make_tracker(clock)
+    generation = await _resident_runtime(
+        tracker, release=lambda: fired.append("closed")
+    )
     assert generation.generation == 1
     tracker.record_activity(*_OWNER)
-
-    clock.advance(1799)  # 29:59
+    clock.advance(1799)
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.residency == "resident"
     assert snapshot.cold_eligible is False
     assert snapshot.idle_seconds == pytest.approx(1799.0)
     assert fired == []
-
-    clock.advance(1)  # 30:00
-    snapshot = tracker.snapshot(*_OWNER)
-    assert snapshot.cold_eligible is True
-    assert snapshot.residency == "resident"  # 尚未执行卸载
+    clock.advance(1)
+    assert tracker.snapshot(*_OWNER).cold_eligible is True
     unloaded = await tracker.sweep()
     assert len(unloaded) == 1
-    assert len(fired) == 1
-    assert (fired[0].session_id, fired[0].thread_id) == _OWNER
-    assert fired[0].generation == 1
-    assert fired[0].idle_seconds == pytest.approx(1800.0)
+    assert (unloaded[0].session_id, unloaded[0].thread_id) == _OWNER
+    assert unloaded[0].generation == 1
+    assert unloaded[0].idle_seconds == pytest.approx(1800.0)
+    assert fired == ["closed"]
     after = tracker.snapshot(*_OWNER)
     assert after.residency == "cold"
-    assert after.cold_eligible is False  # 已卸载，不再处于"待卸载"
+    assert after.cold_eligible is False
 
 
 @pytest.mark.asyncio
 async def test_active_blocker_keeps_thread_resident_across_threshold() -> None:
-    """blocker 活跃期间跨过 30 分钟仍 resident：idle 不累计、无 deadline。"""
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    tracker = _make_tracker(clock, unload_callback=fired.append)
-    tracker.register_generation(*_OWNER)
+    fired: list[str] = []
+    tracker = _make_tracker(clock)
+    await _resident_runtime(tracker, release=lambda: fired.append("closed"))
     tracker.register_blocker(
         *_OWNER,
         blocker_key="node_debug_claim:proc-1",
@@ -195,12 +224,11 @@ async def test_active_blocker_keeps_thread_resident_across_threshold() -> None:
         reason="Node 调试进程运行中",
     )
     tracker.record_activity(*_OWNER)
-
-    clock.advance(7200)  # 远超 30 分钟
+    clock.advance(7200)
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.residency == "resident"
     assert snapshot.cold_eligible is False
-    assert snapshot.idle_seconds is None  # 阻断期间不累计 idle
+    assert snapshot.idle_seconds is None
     assert snapshot.idle_deadline is None
     assert snapshot.execution_state == "node_debug_process"
     assert await tracker.sweep() == ()
@@ -209,299 +237,207 @@ async def test_active_blocker_keeps_thread_resident_across_threshold() -> None:
 
 @pytest.mark.asyncio
 async def test_blocker_release_restarts_idle_counting_from_release_moment() -> None:
-    """blocker 解除后从解除时刻重新起算：解除前阻断的时长不计入 idle。"""
     clock = _FakeMonotonicClock()
     tracker = _make_tracker(clock)
-    tracker.register_generation(*_OWNER)
+    await _resident_runtime(tracker)
     tracker.register_blocker(
         *_OWNER,
         blocker_key="node_debug_claim:proc-1",
         kind="node_debug_process",
         reason="Node 调试进程运行中",
     )
-    clock.advance(1000)  # 阻断 1000 秒（不累计）
+    clock.advance(1000)
     tracker.release_blocker(*_OWNER, blocker_key="node_debug_claim:proc-1")
-
-    clock.advance(1799)  # 解除后 29:59
+    clock.advance(1799)
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.residency == "resident"
     assert snapshot.cold_eligible is False
-    assert snapshot.idle_seconds == pytest.approx(1799.0)  # 不是 2799
-
-    clock.advance(1)  # 解除后 30:00
+    assert snapshot.idle_seconds == pytest.approx(1799.0)
+    clock.advance(1)
     assert tracker.snapshot(*_OWNER).cold_eligible is True
 
 
 @pytest.mark.asyncio
 async def test_record_activity_resets_idle_accumulation() -> None:
-    """record_activity 重置 idle 累计。"""
     clock = _FakeMonotonicClock()
     tracker = _make_tracker(clock)
-    tracker.register_generation(*_OWNER)
-    tracker.record_activity(*_OWNER)
-
+    await _resident_runtime(tracker)
     clock.advance(1000)
-    tracker.record_activity(*_OWNER)  # 重置
+    tracker.record_activity(*_OWNER)
     clock.advance(1799)
-    snapshot = tracker.snapshot(*_OWNER)
-    assert snapshot.residency == "resident"
-    assert snapshot.idle_seconds == pytest.approx(1799.0)
-
+    assert tracker.snapshot(*_OWNER).idle_seconds == pytest.approx(1799.0)
+    assert tracker.snapshot(*_OWNER).residency == "resident"
     clock.advance(1)
     assert tracker.snapshot(*_OWNER).cold_eligible is True
 
 
 @pytest.mark.asyncio
 async def test_record_activity_during_block_does_not_predate_release_restart() -> None:
-    """阻断期间的活动不能让解除后的起算点早于解除时刻（pull 解除路径）。"""
     clock = _FakeMonotonicClock()
     tracker = _make_tracker(clock)
-    tracker.register_generation(*_OWNER)
+    await _resident_runtime(tracker)
 
     class _StaticSource:
-        """pull 源替身：模拟重启恢复期间磁盘 claim 的 blocker 出现与消失。"""
+        blockers = (
+            ResidencyBlocker(kind="node_debug_process", reason="Node 调试进程运行中"),
+        )
 
-        def __init__(self) -> None:
-            self.blockers: tuple[ResidencyBlocker, ...] = (
-                ResidencyBlocker(
-                    kind="node_debug_process",
-                    reason="Node 调试进程运行中",
-                ),
-            )
-
-        def residency_blockers(
-            self, session_id: str, thread_id: str
-        ) -> tuple[ResidencyBlocker, ...]:
+        def residency_blockers(self, session_id: str, thread_id: str):
             return self.blockers
 
     source = _StaticSource()
     tracker.add_blocker_source(source)
-
-    blocked = tracker.snapshot(*_OWNER)  # 首次观察即被阻断：锚点保持 None
-    assert blocked.blockers
+    assert tracker.snapshot(*_OWNER).blockers
     clock.advance(600)
-    tracker.record_activity(*_OWNER)  # 阻断期间的活动：不得预置起算锚点
+    tracker.record_activity(*_OWNER)
     clock.advance(600)
-    source.blockers = ()  # pull 式解除（owner 结清 claim 后 pull 源不再上报）
-    released = tracker.snapshot(*_OWNER)  # 首次"无 blocker"观察：此刻重新起算
-    assert released.blockers == ()
-
+    source.blockers = ()
+    assert tracker.snapshot(*_OWNER).blockers == ()
     clock.advance(1799)
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.residency == "resident"
-    assert snapshot.idle_seconds == pytest.approx(1799.0)  # 从解除观察时刻起算
+    assert snapshot.idle_seconds == pytest.approx(1799.0)
 
 
 @pytest.mark.asyncio
-async def test_sweep_without_registered_generation_never_fires_unload() -> None:
-    """generation 0（owner 未登记任何 resident runtime）无从卸载：不触发回调。"""
+async def test_sweep_without_runtime_never_fires_unload() -> None:
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    tracker = _make_tracker(clock, unload_callback=fired.append)
+    tracker = _make_tracker(clock)
     tracker.record_activity(*_OWNER)
     clock.advance(3600)
     snapshot = tracker.snapshot(*_OWNER)
     assert snapshot.generation == 0
+    assert snapshot.residency == "cold"
     assert snapshot.cold_eligible is False
     assert await tracker.sweep() == ()
-    assert fired == []
 
 
 @pytest.mark.asyncio
 async def test_unload_failure_propagates_and_thread_stays_eligible_for_retry() -> None:
-    """unload 回调失败必须显式抛出；thread 保持 cold-eligible 供下次 sweep 重试。"""
     clock = _FakeMonotonicClock()
-    calls: list[ThreadUnloadRequest] = []
+    tracker = _make_tracker(clock)
+    calls = 0
 
-    async def failing_unload(request: ThreadUnloadRequest) -> None:
-        calls.append(request)
-        raise RuntimeError("释放该 generation 的 LifetimeScope 失败")
+    def release() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("释放该 generation 的 LifetimeScope 失败")
 
-    tracker = _make_tracker(clock, unload_callback=failing_unload)
-    tracker.register_generation(*_OWNER)
-    tracker.record_activity(*_OWNER)
+    await _resident_runtime(tracker, release=release)
     clock.advance(1800)
-
-    with pytest.raises(RuntimeError, match="LifetimeScope"):
+    with pytest.raises(ExceptionGroup, match="LifetimeScope"):
         await tracker.sweep()
-    # 未标记卸载：下次 sweep 重试，绝不虚报已卸载。
-    assert tracker.snapshot(*_OWNER).cold_eligible is True
-
-    async def good_unload(request: ThreadUnloadRequest) -> None:
-        calls.append(request)
-
-    tracker._unload_callback = good_unload  # 测试缝：修复后的 owner 回调
-    fired = await tracker.sweep()
-    assert len(fired) == 1
+    snapshot = tracker.snapshot(*_OWNER)
+    assert snapshot.cold_eligible is True
+    assert snapshot.residency == "unloading"
+    assert len(await tracker.sweep()) == 1
     assert tracker.snapshot(*_OWNER).residency == "cold"
-    assert len(calls) == 2
+    assert calls == 2
 
 
 @pytest.mark.asyncio
 async def test_new_generation_enables_unload_again_and_old_one_stays_unloaded() -> None:
-    """同一 generation 不重复卸载；owner 登记新一代后可再次卸载（generation 令牌）。"""
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-
-    async def unload(request: ThreadUnloadRequest) -> None:
-        fired.append(request)
-
-    tracker = _make_tracker(clock, unload_callback=unload)
-    tracker.register_generation(*_OWNER)
-    tracker.record_activity(*_OWNER)
+    tracker = _make_tracker(clock)
+    closed: list[int] = []
+    await _resident_runtime(tracker, release=lambda: closed.append(1))
     clock.advance(1800)
     await tracker.sweep()
-    assert [request.generation for request in fired] == [1]
-
-    # 旧 generation 已卸载：继续 idle 不会重复触发。
+    assert closed == [1]
     clock.advance(1800)
     assert tracker.snapshot(*_OWNER).cold_eligible is False
     assert await tracker.sweep() == ()
-    assert len(fired) == 1
-
-    # owner 登记新一代（重建 runtime）：新一代越过阈值可再次卸载。
-    second = tracker.register_generation(*_OWNER)
+    second = await _resident_runtime(tracker, release=lambda: closed.append(2))
     assert second.generation == 2
-    tracker.record_activity(*_OWNER)
     clock.advance(1800)
-    assert tracker.snapshot(*_OWNER).cold_eligible is True
     await tracker.sweep()
-    assert [request.generation for request in fired] == [1, 2]
+    assert closed == [1, 2]
 
 
 @pytest.mark.asyncio
-async def test_sweep_marks_snapshot_generation_and_never_colds_new_generation() -> None:
-    """sweep 按回调前快照代 CAS 标记卸载：await 窗口内登记的新一代不被错标 cold。"""
+async def test_sweep_and_admission_serialize_generation_scope_close() -> None:
+    """真实 scope 尚在关闭时，新代不能绕过旧代或被旧代错标 cold。"""
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    started = asyncio.Event()
-    release = asyncio.Event()
-    tracker_box: dict[str, ThreadResidencyTracker] = {}
-    second_box: dict[str, int] = {}
+    tracker = _make_tracker(clock)
+    started, release = asyncio.Event(), asyncio.Event()
 
-    async def unload(request: ThreadUnloadRequest) -> None:
-        fired.append(request)
+    async def held_close() -> None:
         started.set()
         await release.wait()
-        # 回调 await 窗口内 owner 登记新一代（模拟 backend 重启后为同 thread
-        # 重建 runtime）；这必须不影响本次卸载对快照代的收敛。
-        second_box["id"] = tracker_box["tracker"].register_generation(*_OWNER).generation
 
-    tracker = _make_tracker(clock, unload_callback=unload)
-    tracker_box["tracker"] = tracker
-    tracker.register_generation(*_OWNER)
-    tracker.record_activity(*_OWNER)
+    first = await _resident_runtime(tracker, release=held_close)
     clock.advance(1800)
-
-    sweep_task = asyncio.create_task(tracker.sweep())
+    sweep = asyncio.create_task(tracker.sweep())
     await asyncio.wait_for(started.wait(), timeout=5)
+    second_task = asyncio.create_task(
+        _resident_runtime(tracker, generation_key="config-v2")
+    )
+    await asyncio.sleep(0)
+    assert not second_task.done()
+    assert not tracker.is_current_generation(*_OWNER, first.generation)
     release.set()
-    unloaded = await asyncio.wait_for(sweep_task, timeout=5)
-
-    assert [request.generation for request in fired] == [1]  # 卸载的是快照代 1
-    assert second_box["id"] == 2
-    snapshot = tracker.snapshot(*_OWNER)
-    assert snapshot.generation == 2  # 新一代是当前代
-    # 关键：新一代绝不被错标为 cold；snapshot 始终如实反映当前代（不撒谎）。
-    assert snapshot.residency == "resident"
-    assert snapshot.cold_eligible is True  # 新一代已 idle 越阈、可再次卸载
-    assert tracker.is_current_generation(*_OWNER, 2) is True
+    unloaded, second = await asyncio.wait_for(
+        asyncio.gather(sweep, second_task), timeout=5
+    )
     assert len(unloaded) == 1
-    # fired 快照是回调返回时刻的当前态：此时当前代已是新一代，故如实报 resident，
-    # 绝不虚报新一代为 cold。卸载的是快照代 1（回调入参已断言）。
-    assert unloaded[0].generation == 2
-    assert unloaded[0].residency == "resident"
+    assert second.generation == 2
+    snapshot = tracker.snapshot(*_OWNER)
+    assert snapshot.generation == 2
+    assert snapshot.residency == "resident"
+    assert snapshot.cold_eligible is False
+    assert tracker.is_current_generation(*_OWNER, 2)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_sweeps_fire_inflight_generation_callback_at_most_once() -> None:
-    """并发 sweep：同一代的 unload 回调至多触发一次（在飞去重）。"""
+async def test_concurrent_sweeps_close_inflight_generation_scope_at_most_once() -> None:
     clock = _FakeMonotonicClock()
-    calls: list[ThreadUnloadRequest] = []
-    entered = asyncio.Event()
-    release = asyncio.Event()
+    tracker = _make_tracker(clock)
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
 
-    async def unload(request: ThreadUnloadRequest) -> None:
-        calls.append(request)
+    async def held_close() -> None:
+        nonlocal calls
+        calls += 1
         entered.set()
         await release.wait()
 
-    tracker = _make_tracker(clock, unload_callback=unload)
-    tracker.register_generation(*_OWNER)
-    tracker.record_activity(*_OWNER)
+    await _resident_runtime(tracker, release=held_close)
     clock.advance(1800)
-
     first = asyncio.create_task(tracker.sweep())
     await asyncio.wait_for(entered.wait(), timeout=5)
-    # 第一个 sweep 已进入回调 await；此时第二个 sweep 必须跳过同一代。
     second = asyncio.create_task(tracker.sweep())
+    await asyncio.sleep(0)
     release.set()
     first_result, second_result = await asyncio.wait_for(
         asyncio.gather(first, second), timeout=5
     )
-
-    assert len(calls) == 1
-    assert calls[0].generation == 1
+    assert calls == 1
     assert len(first_result) == 1
-    assert second_result == ()  # 后来者跳过，不重复触发
+    assert second_result == ()
     assert tracker.snapshot(*_OWNER).residency == "cold"
 
 
 @pytest.mark.asyncio
-async def test_late_old_generation_callback_does_not_clobber_new_mark() -> None:
-    """迟到的旧代回调 MUST NOT 清掉新一代的卸载标记（跨代提交守卫）。
+async def test_late_old_generation_callback_is_fenced_after_rebuild() -> None:
+    tracker = _make_tracker(_FakeMonotonicClock())
+    first = await _resident_runtime(tracker)
+    assert tracker.is_current_generation(*_OWNER, first.generation)
+    second = await _resident_runtime(tracker, generation_key="config-v2")
+    writes: list[str] = []
 
-    复刻复核方 `case_cross_generation_clobber` 的时序：sweep A 卸载 gen1 已进入回调
-    await；owner 登记 gen2，且并发 sweep B 完整卸载 gen2；此后 A 的 gen1 回调才返回。
-    若无守卫，A 会用快照代 1 无条件覆盖 `unloaded_generation`（2 -> 1），清掉 gen2
-    的已卸载标记，导致 gen2 被二次卸载。
-    """
-    clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    started = asyncio.Event()
-    release = asyncio.Event()
+    def old_callback() -> None:
+        if tracker.is_current_generation(*_OWNER, first.generation):
+            writes.append("stale write")
 
-    async def unload(request: ThreadUnloadRequest) -> None:
-        fired.append(request)
-        if request.generation == 1:
-            started.set()
-            await release.wait()
-
-    tracker = _make_tracker(clock, unload_callback=unload)
-    tracker.register_generation(*_OWNER)  # gen1
-    tracker.record_activity(*_OWNER)
-    clock.advance(1800)
-
-    sweep_a = asyncio.create_task(tracker.sweep())
-    await asyncio.wait_for(started.wait(), timeout=5)  # A 已进入 gen1 回调 await
-
-    # owner 登记 gen2，并由并发 sweep B 完整卸载 gen2。
-    tracker.register_generation(*_OWNER)  # gen2
-    tracker.record_activity(*_OWNER)
-    clock.advance(1800)
-    sweep_b_result = await asyncio.wait_for(tracker.sweep(), timeout=5)
-    assert [request.generation for request in fired] == [1, 2]
-    assert [item.generation for item in sweep_b_result] == [2]
-    snapshot_b = tracker.snapshot(*_OWNER)
-    assert snapshot_b.generation == 2 and snapshot_b.residency == "cold"
-
-    # 放行 A 的迟到 gen1 回调。
-    release.set()
-    await asyncio.wait_for(sweep_a, timeout=5)
-
-    # 关键断言：旧代回调 MUST NOT 覆盖新一代的已卸载标记（gen2 仍 cold、不可再卸载）。
-    snapshot_after = tracker.snapshot(*_OWNER)
-    assert snapshot_after.generation == 2
-    assert snapshot_after.residency == "cold"
-    assert snapshot_after.cold_eligible is False
-
-    # 再次 sweep MUST NOT 重复卸载 gen2。
-    assert await tracker.sweep() == ()
-    assert [request.generation for request in fired] == [1, 2]
+    old_callback()
+    assert writes == []
+    assert tracker.is_current_generation(*_OWNER, second.generation)
+    assert not tracker.is_current_generation("ses_unknown", "main", 1)
+    assert not tracker.is_current_generation(*_OWNER, 0)
 
 
 def test_tracker_configuration_fails_loud() -> None:
-    """非法配置显式失败：阈值必须为正、blocker 源必须有查询方法。"""
     clock = _FakeMonotonicClock()
     with pytest.raises(ValueError, match="idle 阈值"):
         ThreadResidencyTracker(clock=clock, idle_timeout_seconds=0)
@@ -535,8 +471,8 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     store.write_launch_claim(_launch_pending_claim())  # spawn 前崩溃留下的活跃登记
 
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    tracker = _make_tracker(clock, unload_callback=fired.append)
+    fired: list[str] = []
+    tracker = _make_tracker(clock)
     service = NodeDebugService(
         workspace_root=tmp_path / "workspace",
         config_service=_DebugConfigStub(),
@@ -548,13 +484,15 @@ async def test_restart_recovery_active_durable_claim_is_not_cold_eligible(
     tracker.add_blocker_source(service)  # 生产接线形态（app/container.py）
     # owner 在重启后重建 resident runtime 并登记新一代：此后该 thread 的可卸载性
     # 完全取决于 blocker，而不是"从未登记"的保守默认。
-    tracker.register_generation(*_OWNER)
+    await _resident_runtime(tracker)
     tracker.record_activity(*_OWNER)
 
     clock.advance(7200)  # 远超 30 分钟
     snapshot = tracker.snapshot(*_OWNER)
     assert [blocker.kind for blocker in snapshot.blockers] == ["node_debug_process"]
-    assert snapshot.blockers[0].reason == "Node 调试进程已登记启动，等待 spawn 与握手核实"
+    assert (
+        snapshot.blockers[0].reason == "Node 调试进程已登记启动，等待 spawn 与握手核实"
+    )
     assert snapshot.cold_eligible is False  # blocker 活跃：idle 不累计、不得虚报可卸载
     assert snapshot.residency == "resident"
     assert await tracker.sweep() == ()
@@ -608,7 +546,7 @@ async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
         residency_tracker=tracker,
     )
     tracker.add_blocker_source(service)
-    tracker.register_generation(*_OWNER)
+    await _resident_runtime(tracker)
     tracker.record_activity(*_OWNER)
 
     clock.advance(7200)
@@ -616,9 +554,7 @@ async def test_all_active_debug_phases_remain_resident_past_thirty_minutes(
     assert snapshot.residency == "resident", runtime_status
     assert snapshot.cold_eligible is False, runtime_status
     assert snapshot.idle_seconds is None, runtime_status
-    assert [blocker.kind for blocker in snapshot.blockers] == [
-        "node_debug_process"
-    ]
+    assert [blocker.kind for blocker in snapshot.blockers] == ["node_debug_process"]
     assert await tracker.sweep() == ()
 
 
@@ -673,7 +609,7 @@ async def test_restart_recovery_settled_claim_restarts_idle_counting(
         assert settled.cold_eligible is False  # generation 0：无在册 runtime 可卸载
 
         # owner 重新登记 resident runtime 代后，idle 从解除后起算，越阈值才可卸载。
-        tracker.register_generation(*_OWNER)
+        await _resident_runtime(tracker)
         tracker.record_activity(*_OWNER)
         clock.advance(1800)
         assert tracker.snapshot(*_OWNER).cold_eligible is True
@@ -801,8 +737,8 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
 ) -> None:
     """P1-B push：running → blocker 登记；核实终态（settled）→ 解除并重新起算。"""
     clock = _FakeMonotonicClock()
-    fired: list[ThreadUnloadRequest] = []
-    tracker = _make_tracker(clock, unload_callback=fired.append)
+    fired: list[str] = []
+    tracker = _make_tracker(clock)
     service = _make_wired_service(tmp_path, session_tree, tracker)
     child = _sleeper_child()
 
@@ -815,7 +751,7 @@ async def test_start_pushes_blocker_and_verified_stop_releases_it(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(websockets, "connect", fake_connect)
     try:
-        tracker.register_generation(*_OWNER)  # owner 侧 resident runtime 代
+        await _resident_runtime(tracker)  # owner 侧 resident runtime 代
         tracker.record_activity(*_OWNER)
         await service.start(
             session_id=_PARENT_SESSION_ID,
@@ -913,23 +849,24 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     assert snapshot.residency == "cold"
     assert snapshot.cold_eligible is False
     assert snapshot.execution_state == "node_debug_process"
-    assert snapshot.last_activity_at is not None
+    assert snapshot.last_activity_at is None  # pull 冷观察没有真实 runtime 活动。
     assert snapshot.idle_seconds is None  # 阻断期间不累计 idle
     assert snapshot.generation == 0
     assert len(snapshot.blockers) == 1
     # 阻断期间 idle 不累计：没有可展示的 deadline。
     assert snapshot.idle_deadline is None
 
-    # 未阻断 thread 的展示字段：deadline 与 idle 正常展示。
+    # 冷 Thread 的只读观察没有 runtime idle deadline，且不保留记账槽。
     # pull 源按权威目录索引解析 thread，第二个 thread 用真实会话节点。
     other_session = "ses_00000000400070008000000000000007"
     _create_session(session_tree.sessions_root, other_session)
-    tracker.record_activity(other_session, "main")
-    unblocked = tracker.snapshot(other_session, "main")
+    other_thread = session_tree.main_thread_id(other_session)
+    tracker.record_activity(other_session, other_thread)
+    unblocked = tracker.snapshot(other_session, other_thread)
     assert unblocked.blockers == ()
     assert unblocked.execution_state == "idle"
-    assert unblocked.idle_deadline is not None
-    assert unblocked.idle_seconds == pytest.approx(0.0)
+    assert unblocked.idle_deadline is None
+    assert unblocked.idle_seconds is None
 
     blocker = snapshot.blockers[0]
     assert isinstance(blocker, ResidencyBlocker)
@@ -940,6 +877,91 @@ async def test_snapshot_fields_complete_and_blocker_reasons_sanitized(
     assert "/" not in blocker.reason and "\\" not in blocker.reason
     assert claim.process_instance_id not in blocker.reason
     assert claim.nonce not in blocker.reason
+
+
+@pytest.mark.asyncio
+async def test_cold_queries_and_successful_unloads_reclaim_states_without_reusing_generation() -> None:
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    for index in range(1000):
+        snapshot = tracker.snapshot(f"session-query-{index}", f"thread-query-{index}")
+        assert snapshot.residency == "cold"
+        assert snapshot.last_activity_at is None
+    assert tracker._states == {}
+    generations: list[int] = []
+    for _ in range(100):
+        lease = await _resident_runtime(tracker)
+        generations.append(lease.generation)
+        clock.advance(1800)
+        await tracker.sweep()
+        assert tracker._states == {}
+        assert not tracker.is_current_generation(*_OWNER, lease.generation)
+    assert generations == sorted(set(generations))
+
+
+@pytest.mark.asyncio
+async def test_unload_listener_failure_keeps_owner_and_only_current_unloading_fence() -> None:
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    fail = True
+    calls: list[int] = []
+
+    async def listener(session_id: str, thread_id: str, generation: int) -> None:
+        assert tracker.is_unloading_generation(session_id, thread_id, generation)
+        calls.append(generation)
+        if fail:
+            raise ConnectionError("Terminal 回执丢失")
+
+    tracker.add_unload_listener(listener)
+    first = await _resident_runtime(tracker)
+    clock.advance(1800)
+    with pytest.raises(ConnectionError, match="回执丢失"):
+        await tracker.sweep()
+    assert tracker._states[_OWNER].runtime is not None
+    assert not tracker.is_unloading_generation(*_OWNER, first.generation)
+    fail = False
+    await tracker.sweep()
+    assert tracker._states == {}
+    second = await _resident_runtime(tracker)
+    assert second.generation > first.generation
+    assert not tracker.is_unloading_generation(*_OWNER, first.generation)
+    assert calls == [first.generation, first.generation]
+    await tracker.close()
+
+
+@pytest.mark.asyncio
+async def test_real_claim_writer_rejects_new_blocker_before_persist_during_unload_listener(
+    session_tree: object,
+) -> None:
+    clock = _FakeMonotonicClock()
+    tracker = _make_tracker(clock)
+    store = NodeDebugSessionStore(session_tree)
+    claims = NodeDebugClaimRuntime(
+        session_store=store, external_resource_leases=ExternalResourceLeaseLedger(),
+        runtimes={}, residency_tracker=tracker, state_events=None,
+    )
+    entered = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def listener(*_identity: object) -> None:
+        entered.set()
+        await resume.wait()
+
+    tracker.add_unload_listener(listener)
+    await _resident_runtime(tracker)
+    clock.advance(1800)
+    sweep = asyncio.create_task(tracker.sweep())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        claim = _launch_pending_claim()
+        with pytest.raises(ThreadUnloadBlocked, match="拒绝新增"):
+            claims.write_launch_claim(claim)
+        assert store.read_launch_claim(*_OWNER) is None
+        assert tracker.snapshot(*_OWNER).blockers == ()
+    finally:
+        resume.set()
+        await sweep
+    assert tracker._states == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1247,7 +1269,9 @@ def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
     """P2.4：/proc 条目在探测两步之间消失 → 按已核实终结收口（None），其余错误显式抛出。"""
 
     class _VanishingStatPath:
-        def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+        def read_text(
+            self, encoding: str | None = None, errors: str | None = None
+        ) -> str:
             raise FileNotFoundError(2, "No such file or directory")
 
     class _VanishingPidDir:
@@ -1259,7 +1283,9 @@ def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
             return _VanishingPidDir()
 
     class _DeniedStatPath:
-        def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+        def read_text(
+            self, encoding: str | None = None, errors: str | None = None
+        ) -> str:
             raise PermissionError(13, "Permission denied")
 
     class _DeniedPidDir:
@@ -1270,9 +1296,7 @@ def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
         def __truediv__(self, name: str) -> _DeniedPidDir:
             return _DeniedPidDir()
 
-    monkeypatch.setattr(
-        node_debug_process_identity, "_PROC_ROOT", _VanishingProcRoot()
-    )
+    monkeypatch.setattr(node_debug_process_identity, "_PROC_ROOT", _VanishingProcRoot())
     # 进程在 is_file 与 read_text 之间消失：与"条目不存在"同一事实 ⇒ 已核实终结。
     assert _probe_linux_proc_identity(4242) is None
 
@@ -1280,130 +1304,3 @@ def test_linux_proc_identity_handles_vanishing_entry_between_probe_steps(
     # 非消失类读取错误仍然显式抛出，绝不默默吞掉。
     with pytest.raises(PermissionError):
         _probe_linux_proc_identity(4242)
-
-
-# ---------------------------------------------------------------------------
-# Part 4：generation fence 与 runtime owner 接线（OpenSpec 2.8）
-# ---------------------------------------------------------------------------
-
-
-def _make_wired_execution_service(
-    tracker: ThreadResidencyTracker | None,
-) -> AgentExecutionService:
-    """最小依赖构造 AgentExecutionService：只验证 residency 接线面。"""
-    return AgentExecutionService(
-        config_service=MagicMock(),
-        background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
-        job_event_bus=MagicMock(),
-        dependency_provider=MagicMock(),
-        session_changes_service=MagicMock(),
-        tool_selection_store=MagicMock(),
-        message_stream_store=MagicMock(),
-        workspace_root=Path("."),
-        residency_tracker=tracker,
-    )
-
-
-def test_generation_fence_rejects_stale_unknown_and_illegal_generations() -> None:
-    """fence：当前代放行；过期代、未知 thread、非法代一律 fail closed。"""
-    tracker = _make_tracker(_FakeMonotonicClock())
-    first = tracker.register_generation(*_OWNER)
-    assert tracker.is_current_generation(*_OWNER, first.generation) is True
-    second = tracker.register_generation(*_OWNER)
-    assert tracker.is_current_generation(*_OWNER, first.generation) is False
-    assert tracker.is_current_generation(*_OWNER, second.generation) is True
-    assert tracker.is_current_generation("ses_unknown", "main", 1) is False
-    assert tracker.is_current_generation(*_OWNER, 0) is False
-
-
-@pytest.mark.asyncio
-async def test_runtime_owner_unload_honors_generation_fence_without_touching_blueprint_cache() -> None:
-    """unload 回调：当前代触达卸载，过期代 fail closed，且都不动工具面 blueprint 缓存。
-
-    OpenSpec 8.4：真实执行路径按 invocation 构建，agent 与 context source
-    reactor 都是 step 级资源，本服务不再按 session 复用捕获会话闭包的对象；
-    因此 unload 没有 per-invocation 会话缓存可淘汰，只保留 generation fence
-    语义与「不误伤不含 session/thread 的 blueprint 缓存」这一红线。
-    """
-    clock = _FakeMonotonicClock()
-    tracker = _make_tracker(clock)
-    service = _make_wired_execution_service(tracker)
-    tracker.set_unload_callback(service.unload_thread_runtime)
-
-    blueprint_key = ("agent_a", "rev-1", (), (), False, "sha256:" + "0" * 64, 1)
-    blueprint_value = [{"id": "read_file"}]
-    service._tool_face_cache[blueprint_key] = blueprint_value
-
-    generation = tracker.register_generation(*_OWNER)
-    service._record_thread_residency_activity(_PARENT_SESSION_ID)
-    clock.advance(1800)
-    unloaded = await tracker.sweep()
-    assert len(unloaded) == 1
-    # blueprint 缓存不含 session/thread，不随 thread 卸载被淘汰。
-    assert service._tool_face_cache[blueprint_key] is blueprint_value
-
-    # 迟到 callback：同 generation 再次到达 → fence 拒绝，blueprint 缓存仍不变。
-    stale_request = ThreadUnloadRequest(
-        session_id=_PARENT_SESSION_ID,
-        thread_id=_THREAD_ID,
-        generation=generation.generation,
-        idle_seconds=1800.0,
-    )
-    await service.unload_thread_runtime(stale_request)
-    assert service._tool_face_cache[blueprint_key] is blueprint_value
-
-
-@pytest.mark.asyncio
-async def test_runtime_owner_unload_requires_tracker() -> None:
-    """未装配 tracker 时调用 unload 回调必须显式失败（fail loud）。"""
-    service = _make_wired_execution_service(None)
-    request = ThreadUnloadRequest(
-        session_id=_PARENT_SESSION_ID,
-        thread_id=_THREAD_ID,
-        generation=1,
-        idle_seconds=1800.0,
-    )
-    with pytest.raises(RuntimeError, match="residency tracker"):
-        await service.unload_thread_runtime(request)
-
-
-@pytest.mark.asyncio
-async def test_run_step_records_activity_and_rehydrates_generation_after_cold() -> None:
-    """run_step 调用点：首次活动注册新一代；cold 后再次 step 重建新代（rehydration）。"""
-    clock = _FakeMonotonicClock()
-    tracker = _make_tracker(clock)
-    service = _make_wired_execution_service(tracker)
-    tracker.set_unload_callback(service.unload_thread_runtime)
-
-    class _StubStepRunner:
-        async def run_step(self, *args: object, **kwargs: object) -> str:
-            return "done"
-
-    service._step_runner = _StubStepRunner()
-
-    await service.run_step(
-        _PARENT_SESSION_ID,
-        "你好",
-        job_id="job_residency_1",
-        message_id="msg_residency_1",
-        message_created_at="2026-09-19T00:00:00Z",
-    )
-    snapshot = tracker.snapshot(*_OWNER)
-    assert snapshot.generation == 1  # 重启后首次活动：rehydration 注册新一代
-    assert snapshot.residency == "resident"
-
-    clock.advance(1800)
-    await tracker.sweep()  # idle 卸载：回调通过 generation fence 收敛该 thread
-    assert tracker.snapshot(*_OWNER).residency == "cold"
-
-    await service.run_step(
-        _PARENT_SESSION_ID,
-        "继续",
-        job_id="job_residency_2",
-        message_id="msg_residency_2",
-        message_created_at="2026-09-19T00:30:00Z",
-    )
-    snapshot = tracker.snapshot(*_OWNER)
-    assert snapshot.generation == 2  # cold 后重建：注册新一代，恢复可卸载性
-    assert snapshot.residency == "resident"

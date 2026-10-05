@@ -3,9 +3,6 @@ from __future__ import annotations
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
     BrowserManagerClientProtocol,
-    HistoricalTerminalRecordReaderProtocol,
-    SessionResourceMessageProtocol,
-    TerminalManagerClientProtocol,
 )
 from app.core.background_task_registry import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
@@ -17,8 +14,9 @@ from app.schemas.internal_v2.session_resource import (
 from app.services.business.session_resource_actions import (
     background_task_available_actions,
     browser_available_actions,
-    terminal_available_actions,
 )
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
+from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 
 _ACTIVE_TERMINAL_STATUSES = frozenset({"created", "running"})
@@ -60,6 +58,7 @@ class BackgroundTaskResourceProvider:
         session_id: str,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO:
         if action == "cancel":
             existing_handle = self._task_registry.get_handle(session_id, resource_id)
@@ -101,108 +100,42 @@ class BackgroundTaskResourceProvider:
 class TerminalResourceProvider:
     kind: SessionResourceKind = "terminal"
 
-    def __init__(
-        self,
-        *,
-        terminal_manager: TerminalManagerClientProtocol,
-        historical_reader: HistoricalTerminalRecordReaderProtocol,
-        message_service: SessionResourceMessageProtocol,
-        resource_mapper: SessionResourceMapper,
-    ) -> None:
-        self._terminal_manager = terminal_manager
-        self._historical_reader = historical_reader
-        self._message_service = message_service
+    def __init__(self, *, terminal_owner: TerminalResourceOwner, resource_mapper: SessionResourceMapper) -> None:
+        self._owner = terminal_owner
         self._resource_mapper = resource_mapper
 
-    async def list_resources(
-        self,
-        session_id: str,
-        *,
-        include_history: bool = True,
-    ) -> list[SessionResourceDTO]:
-        active_terminals = await self._terminal_manager.list_terminals(
-            session_id=session_id
-        )
-        if not include_history:
-            return [
-                self._to_resource(terminal)
-                for terminal in active_terminals
-                if terminal.get("status") in _ACTIVE_TERMINAL_STATUSES
-            ]
-        records = await self._message_service.list_agent_state_records(session_id)
-        historical_terminals = self._historical_reader.read_records(
-            session_id=session_id,
-            active_terminals=active_terminals,
-            agent_state_records=records,
-        )
+    async def list_resources(self, session_id: str, *, include_history: bool = True) -> list[SessionResourceDTO]:
+        terminals = await self._owner.list_resources(session_id=session_id)
         return [
-            *[self._to_resource(terminal) for terminal in active_terminals],
-            *[self._to_resource(terminal) for terminal in historical_terminals],
+            self._to_resource(item, session_id) for item in terminals
+            if any(ref["session_id"] == session_id for ref in item["thread_associations"])
+            and (include_history or item["status"] in _ACTIVE_TERMINAL_STATUSES)
         ]
 
-    async def control(
-        self,
-        *,
-        session_id: str,
-        resource_id: str,
-        action: SessionResourceAction,
-    ) -> SessionResourceControlResultDTO:
-        terminal = await self._get_record(session_id, resource_id)
+    async def control(self, *, session_id: str, resource_id: str, action: SessionResourceAction, operation_id: str) -> SessionResourceControlResultDTO:
+        terminal = await self._owner.get_resource(resource_id)
+        if not any(item["session_id"] == session_id for item in terminal["thread_associations"]):
+            raise ValueError(f"Terminal 不属于当前 Session 的 Thread 关联: {resource_id}")
         if action == "cancel":
-            result = await self._terminal_manager.kill_terminal(resource_id)
-            resource = self._to_resource(result["terminal"])
-            return SessionResourceControlResultDTO(
-                session_id=session_id,
-                resource_id=resource_id,
-                kind=self.kind,
-                action=action,
-                status=resource.status,
-                resource=resource,
+            result = await self._owner.command(
+                resource_id, action="stop", expected_revision=terminal["owner_revision"],
+                holder_id=f"request:{operation_id}", operation_id=operation_id,
             )
-        if action == "delete":
-            result = await self._terminal_manager.delete_terminal(resource_id)
-            deleted_terminal = result.get("terminal") if isinstance(result, dict) else None
-            resource = self._to_resource(
-                deleted_terminal
-                if isinstance(deleted_terminal, dict)
-                else {**terminal, "status": "deleted"}
-            )
-            return SessionResourceControlResultDTO(
-                session_id=session_id,
-                resource_id=resource_id,
-                kind=self.kind,
-                action=action,
-                status="deleted",
-                resource=resource,
-            )
-        raise ValueError(f"terminal 资源不支持操作: {action}")
+        elif action == "delete":
+            raise ResourceConflict("Terminal 仍有 Thread 关联；请在工作区 Terminal 面板解除关联后删除")
+        else:
+            raise ValueError(f"Terminal 不支持操作: {action}")
+        resource = self._to_resource(result, session_id)
+        return SessionResourceControlResultDTO(session_id=session_id, resource_id=resource_id, kind=self.kind, action=action, status=resource.status, resource=resource)
 
     async def cleanup_session(self, session_id: str) -> int:
-        terminals = await self._terminal_manager.list_terminals(session_id=session_id)
-        for terminal in terminals:
-            terminal_id = terminal.get("terminal_id")
-            if not isinstance(terminal_id, str) or not terminal_id:
-                raise RuntimeError(f"终端记录缺少 terminal_id: session_id={session_id}")
-            await self._terminal_manager.delete_terminal(terminal_id)
-        return len(terminals)
+        return await self._owner.cleanup_session(session_id)
 
-    async def _get_record(
-        self,
-        session_id: str,
-        terminal_id: str,
-    ) -> dict[str, object]:
-        for terminal in await self._terminal_manager.list_terminals(
-            session_id=session_id
-        ):
-            if terminal.get("terminal_id") == terminal_id:
-                return terminal
-        raise ValueError(f"terminal 不存在或不属于当前 session: {terminal_id}")
-
-    def _to_resource(self, terminal: dict[str, object]) -> SessionResourceDTO:
-        status = str(terminal.get("status") or "unknown")
+    def _to_resource(self, terminal: dict[str, object], session_id: str) -> SessionResourceDTO:
         return self._resource_mapper.terminal_to_resource(
-            terminal,
-            available_actions=terminal_available_actions(status),
+            {**terminal, "session_id": session_id},
+            available_actions=["cancel"] if terminal["status"] == "running"
+            and terminal["reconciliation_status"] == "verified" else [],
         )
 
 
@@ -243,6 +176,7 @@ class BrowserResourceProvider:
         session_id: str,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO:
         browser = self._get_record(session_id, resource_id)
         if action == "cancel":

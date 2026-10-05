@@ -30,11 +30,13 @@ import {
 } from "./sessionRefresh";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 export function useSessionEventStream({
   apiPort,
   sessionId,
   workspaceId,
+  workspaceRequestTarget,
   sessionCacheKey,
   activeJobId,
   timelineReady,
@@ -46,6 +48,7 @@ export function useSessionEventStream({
   apiPort: number | null;
   sessionId: string | null;
   workspaceId: string | null;
+  workspaceRequestTarget: GatewayWorkspaceRequestTarget | null;
   sessionCacheKey: string | null;
   activeJobId: string | null;
   timelineReady: boolean;
@@ -99,6 +102,7 @@ export function useSessionEventStream({
     const refreshWorkspaceSessionsForStream = (force: boolean = false) => {
       if (
         !targetWorkspaceId
+        || !workspaceRequestTarget
         || sessionListRefreshInFlight
         || (!force && document.visibilityState === "hidden")
       ) {
@@ -107,7 +111,7 @@ export function useSessionEventStream({
       sessionListRefreshInFlight = true;
       void refreshWorkspaceSessionList(
         apiPort,
-        targetWorkspaceId,
+        workspaceRequestTarget,
         setState,
       ).catch((error: unknown) => {
         const message = errorMessage(error);
@@ -300,6 +304,7 @@ export function useSessionEventStream({
     setState,
     timelineReady,
     workspaceId,
+    workspaceRequestTarget,
   ]);
 
   useEffect(() => {

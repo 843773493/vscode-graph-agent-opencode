@@ -9,6 +9,7 @@ from app.domain.itemized.enums import (
     DetailProtection,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     _ensure_json_value,
 )
@@ -17,7 +18,6 @@ from app.domain.itemized.identity.refs import (
     ToolSetRef,
     selection_ref_identity,
 )
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -36,7 +36,8 @@ from app.domain.itemized.validation import _non_empty_string
 class ContextAssemblySnapshot:
     assembly_id: str
     session_id: str
-    turn_id: str
+    thread_id: str
+    turn_id: str | None
     execution_id: str
     plan_id: str
     plan_hash: str
@@ -66,7 +67,7 @@ class ContextAssemblySnapshot:
         for name in (
             "assembly_id",
             "session_id",
-            "turn_id",
+            "thread_id",
             "execution_id",
             "plan_id",
             "plan_hash",
@@ -75,6 +76,8 @@ class ContextAssemblySnapshot:
             "provider_version",
         ):
             _non_empty_string(getattr(self, name), f"ContextAssemblySnapshot.{name}")
+        if self.turn_id is not None:
+            _non_empty_string(self.turn_id, "ContextAssemblySnapshot.turn_id")
         if self.active_view_id is not None:
             _non_empty_string(
                 self.active_view_id, "ContextAssemblySnapshot.active_view_id"
@@ -149,6 +152,8 @@ class ContextAssemblySnapshot:
                 ref.ref_type == "request_only" and ref.plan_id != self.plan_id
             ):
                 raise ItemSchemaError("source-mismatch: ContextRef 与 assembly owner 不一致")
+            if ref.ref_type == "request_only" and ref.thread_id != self.thread_id:
+                raise ItemSchemaError("source-mismatch: request-only ContextRef 与 assembly thread 不一致")
         for contribution in self.contributions:
             if not isinstance(contribution, ContextContribution):
                 raise ItemSchemaError("ContextAssemblySnapshot.contributions 元素非法")
@@ -173,6 +178,7 @@ class ContextAssemblySnapshot:
             if (
                 tool_ref.plan_id != self.plan_id
                 or tool_ref.session_id != self.session_id
+                or tool_ref.thread_id != self.thread_id
                 or tool_ref.assembly_id != self.assembly_id
             ):
                 raise ItemSchemaError("ToolSetRef 与 assembly/plan 不一致")
@@ -185,6 +191,10 @@ class ContextAssemblySnapshot:
                 raise ItemSchemaError("ContextAssemblySnapshot.selection 元素非法")
             if entry.assembly_id != self.assembly_id:
                 raise ItemSchemaError("selection entry 不属于当前 assembly")
+            if entry.detail_ref is not None:
+                entry.detail_ref.require_owner(
+                    self.session_id, self.thread_id, self.assembly_id
+                )
         ordinals = [entry.plan_ordinal for entry in self.selection]
         if ordinals != list(range(len(ordinals))):
             raise ItemSchemaError("assembly selection.plan_ordinal 必须连续")
@@ -201,6 +211,7 @@ class ContextAssemblySnapshot:
             if isinstance(entry.ref, ToolSetRef):
                 if (
                     entry.ref.session_id != self.session_id
+                    or entry.ref.thread_id != self.thread_id
                     or entry.ref.plan_id != self.plan_id
                     or entry.ref.assembly_id != self.assembly_id
                 ):
@@ -295,6 +306,7 @@ class ContextAssemblySnapshot:
         return ContextAssemblySnapshot(
             assembly_id=self.assembly_id,
             session_id=self.session_id,
+            thread_id=self.thread_id,
             turn_id=self.turn_id,
             execution_id=self.execution_id,
             plan_id=self.plan_id,
@@ -326,6 +338,7 @@ class ContextAssemblySnapshot:
         """将 sealed snapshot 还原为同一份不可变请求计划。"""
         return ContextRequestPlan(
             session_id=self.session_id,
+            thread_id=self.thread_id,
             plan_id=self.plan_id,
             refs=self.refs,
             contributions=self.contributions,
@@ -394,6 +407,7 @@ class ContextAssemblySnapshot:
             "format_version": 2,
             "assembly_id": self.assembly_id,
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "turn_id": self.turn_id,
             "execution_id": self.execution_id,
             "plan_id": self.plan_id,

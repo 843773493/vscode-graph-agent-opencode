@@ -25,7 +25,9 @@ class FullCopyRemapState:
         service: object,
         connection: sqlite3.Connection,
         source_session_id: str,
+        source_thread_id: str,
         target_session_id: str,
+        target_thread_id: str,
         fork_id: str,
         checkpoint_ns: str,
         timestamp: str,
@@ -47,7 +49,9 @@ class FullCopyRemapState:
         self.service = service
         self.connection = connection
         self.source_session_id = source_session_id
+        self.source_thread_id = source_thread_id
         self.target_session_id = target_session_id
+        self.target_thread_id = target_thread_id
         self.fork_id = fork_id
         self.checkpoint_ns = checkpoint_ns
         self.timestamp = timestamp

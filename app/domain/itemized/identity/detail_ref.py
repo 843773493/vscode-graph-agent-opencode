@@ -11,11 +11,12 @@ from app.domain.itemized.errors import ItemSchemaError
 @dataclass(frozen=True, slots=True)
 class DetailRef:
     session_id: str
+    thread_id: str
     assembly_id: str
     detail_id: str
 
     def __post_init__(self) -> None:
-        for name in ("session_id", "assembly_id", "detail_id"):
+        for name in ("session_id", "thread_id", "assembly_id", "detail_id"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value or "\x00" in value:
                 raise ItemSchemaError(f"DetailRef.{name} 必须是非空 identity")
@@ -27,6 +28,7 @@ class DetailRef:
     def to_dict(self) -> dict[str, str]:
         return {
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "assembly_id": self.assembly_id,
             "detail_id": self.detail_id,
         }
@@ -34,20 +36,28 @@ class DetailRef:
     @classmethod
     def from_dict(cls, value: object) -> DetailRef:
         if not isinstance(value, Mapping) or set(value) != {
-            "session_id", "assembly_id", "detail_id",
+            "session_id", "thread_id", "assembly_id", "detail_id",
         }:
             raise ItemSchemaError("detail_ref 必须是完整且无额外字段的 typed owner reference")
         return cls(
             session_id=value["session_id"],
+            thread_id=value["thread_id"],
             assembly_id=value["assembly_id"],
             detail_id=value["detail_id"],
         )
 
-    def require_owner(self, session_id: str, assembly_id: str | None = None) -> None:
-        if self.session_id != session_id or (
-            assembly_id is not None and self.assembly_id != assembly_id
+    def require_owner(
+        self,
+        session_id: str,
+        thread_id: str,
+        assembly_id: str | None = None,
+    ) -> None:
+        if (
+            self.session_id != session_id
+            or self.thread_id != thread_id
+            or (assembly_id is not None and self.assembly_id != assembly_id)
         ):
-            raise ItemSchemaError("source-mismatch: detail_ref 不属于请求的 session/assembly")
+            raise ItemSchemaError("source-mismatch: detail_ref 不属于请求的 session/thread/assembly")
 
 
 __all__ = ["DetailRef"]

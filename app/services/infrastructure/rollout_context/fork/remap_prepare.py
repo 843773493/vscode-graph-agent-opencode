@@ -6,8 +6,8 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import content_hash as item_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
@@ -56,6 +56,8 @@ def prepare_full_copy_remap(
     self = service
     source_session_id = required_text(source_session_id, field="source_session_id")
     target_session_id = required_text(target_session_id, field="target_session_id")
+    source_thread_id = self._resolve_thread_identity(source_session_id, None)
+    target_thread_id = self._resolve_thread_identity(target_session_id, None)
     fork_id = required_text(fork_id, field="fork_id")
     if source_session_id == target_session_id:
         raise ValueError("full_rollout_copy source/target session 不能相同")
@@ -65,13 +67,24 @@ def prepare_full_copy_remap(
         raise RuntimeError("full_rollout_copy timestamp 必须是非空字符串")
     if self._rollout_format(connection) != storage_version.ROLLOUT_FORMAT_VERSION:
         return
+    overlay_owner = connection.execute(
+        "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+    ).fetchone()
+    if overlay_owner != (target_session_id, target_thread_id):
+        raise RuntimeError(
+            "full_rollout_copy target database owner 不匹配: "
+            f"expected={(target_session_id, target_thread_id)!r}, actual={overlay_owner!r}"
+        )
 
     maps: dict[str, dict[str, str]] = {}
-    # acceptance identity 已在 full-copy 的早期事务中按 target session
-    # 重写；snapshot/commit metadata 仍可能保存 source key。把 mapping
-    # 表作为唯一的 source->target 来源读回，避免用 target key 再猜 source
-    # 或把跨会话 copy 当成同一 acceptance。
-    for entity_type in ("accepted_ingress", "acceptance_idempotency_key"):
+    # acceptance 与 execution admission identity 已在 full-copy 的早期
+    # 事务中按 target SessionThread 重写；把 mapping 表作为唯一的
+    # source->target 来源，避免用 target key 再猜 source。
+    for entity_type in (
+        "accepted_ingress",
+        "acceptance_idempotency_key",
+        "admission_idempotency_key",
+    ):
         for source_id, target_id in connection.execute(
             """
             SELECT source_local_id, target_local_id
@@ -105,11 +118,9 @@ def prepare_full_copy_remap(
                 value, field=f"full_rollout_copy.{entity_type}.source_id"
             )
             if source_id not in mapping:
-                mapping[source_id] = self._full_copy_identity(
-                    fork_id,
-                    target_session_id,
-                    entity_type,
-                    source_id,
+                message_id = maps.get("message", {}).get(source_id) if entity_type == "tool_result" else None
+                mapping[source_id] = message_id or self._full_copy_identity(
+                    fork_id, target_session_id, entity_type, source_id,
                 )
 
     def rows(column: str, table: str) -> tuple[object, ...]:
@@ -162,7 +173,9 @@ def prepare_full_copy_remap(
         {
             non_negative_int(row[0], field="source_overlays.source_overlay_epoch")
             for row in connection.execute(
-                "SELECT source_overlay_epoch FROM source_overlays"
+                "SELECT source_overlay_epoch FROM source_overlays "
+                "WHERE session_id = ? AND thread_id = ?",
+                (target_session_id, target_thread_id),
             ).fetchall()
         }
     )
@@ -174,6 +187,9 @@ def prepare_full_copy_remap(
     collect("turn", rows("turn_id", "turn_records"))
     collect("turn", rows("turn_id", "turns"))
     collect("execution", rows("execution_id", "executions"))
+    source_execution_by_item = dict(connection.execute(
+        "SELECT item_id, execution_id FROM item_catalog"
+    ).fetchall())
     collect("model_call", rows("model_call_id", "model_calls"))
     collect("assembly", rows("assembly_id", "context_assemblies"))
     collect("view", rows("view_id", "context_views"))
@@ -183,7 +199,17 @@ def prepare_full_copy_remap(
     collect("relation", rows("relation_id", "item_relations"))
     collect("context_contribution", rows("contribution_id", "context_contributions"))
     collect("tool_set", rows("tool_set_snapshot_id", "tool_set_snapshots"))
-    collect("source_overlay", rows("overlay_id", "source_overlays"))
+    collect(
+        "source_overlay",
+        (
+            row[0]
+            for row in connection.execute(
+                "SELECT overlay_id FROM source_overlays "
+                "WHERE session_id = ? AND thread_id = ? ORDER BY overlay_id",
+                (target_session_id, target_thread_id),
+            ).fetchall()
+        ),
+    )
     collect("assembly", rows("assembly_id", "context_plan_details"))
     # activation 行的 owner/catalog identity 也必须 target-local；activation
     # snapshot 是 lineage detail 的 assembly 段，因此必须先收集，再并入 detail
@@ -204,7 +230,9 @@ def prepare_full_copy_remap(
     maps["detail"] = collect_detail_mappings(
         connection,
         source_session_id=source_session_id,
+        source_thread_id=source_thread_id,
         target_session_id=target_session_id,
+        target_thread_id=target_thread_id,
         assembly_map=detail_assembly_map,
         allocate=lambda key: self._full_copy_identity(
             fork_id, target_session_id, "detail", key
@@ -214,7 +242,12 @@ def prepare_full_copy_remap(
     collect("tool_call", rows("tool_call_id", "tool_calls"))
     collect("control", rows("control_id", "control_events"))
     collect("plan", rows("plan_id", "context_assemblies"))
-    collect_plan_identities(connection, collect)
+    collect_plan_identities(
+        connection,
+        source_session_id=source_session_id,
+        source_thread_id=source_thread_id,
+        collect=collect,
+    )
     collect(
         "tool_set",
         (
@@ -238,7 +271,9 @@ def prepare_full_copy_remap(
         (
             value
             for row in connection.execute(
-                "SELECT base_ref, delta_ref FROM source_overlays"
+                "SELECT base_ref, delta_ref FROM source_overlays "
+                "WHERE session_id = ? AND thread_id = ?",
+                (target_session_id, target_thread_id),
             ).fetchall()
             for value in row
             if value
@@ -290,7 +325,9 @@ def prepare_full_copy_remap(
                 mapped_detail_ref(
                     detail_ref_from_key(text),
                     source_session_id=source_session_id,
+                    source_thread_id=source_thread_id,
                     target_session_id=target_session_id,
+                    target_thread_id=target_thread_id,
                     detail_map=maps["detail"],
                 )
             )
@@ -352,6 +389,8 @@ def prepare_full_copy_remap(
                     continue
                 if key_text == "session_id" and child == source_session_id:
                     child = target_session_id
+                elif key_text == "thread_id" and child == source_thread_id:
+                    child = target_thread_id
                 elif key_text == "plan_id":
                     child = mapped("plan", child)
                 elif key_text == "ref_id":
@@ -361,7 +400,7 @@ def prepare_full_copy_remap(
                         child = mapped("tool_set", child)
                     else:
                         child = mapped("request_ref", child)
-                elif key_text in {"item_id", "root_input_item_id", "final_item_id"}:
+                elif key_text in {"item_id", "root_input_item_id", "final_item_id", "notice_item_id"}:
                     child = mapped("item", child)
                 elif key_text in {"turn_id", "replay_of_turn_id"}:
                     child = mapped("turn", child)
@@ -395,6 +434,8 @@ def prepare_full_copy_remap(
                     child = mapped("accepted_ingress", child)
                 elif key_text == "acceptance_idempotency_key":
                     child = mapped("acceptance_idempotency_key", child)
+                elif key_text == "admission_idempotency_key":
+                    child = mapped("admission_idempotency_key", child)
                 elif key_text in {"detail_ref", "target_detail_ref"} or (
                     key_text == "source_ref" and isinstance(child, Mapping)
                 ):
@@ -402,7 +443,9 @@ def prepare_full_copy_remap(
                         mapped_detail_ref(
                             DetailRef.from_dict(child),
                             source_session_id=source_session_id,
+                            source_thread_id=source_thread_id,
                             target_session_id=target_session_id,
+                            target_thread_id=target_thread_id,
                             detail_map=maps["detail"],
                         ).to_dict()
                         if child is not None
@@ -640,6 +683,12 @@ def prepare_full_copy_remap(
                 f"full_rollout_copy item metadata remap 非 object: {old_item_id}"
             )
         metadata = dict(remapped_metadata)
+        source_execution_id = required_text(
+            source_execution_by_item[old_item_id], field=f"source.item.execution_id:{old_item_id}",
+        )
+        if source_execution_id not in maps["execution"]:
+            raise RuntimeError("full copy canonical item 引用了缺失的 source execution")
+        metadata["execution_id"] = mapped("execution", source_execution_id)
         for key, entity_type in (
             ("projection_message_id", "message"),
             ("message_group_id", "group"),
@@ -657,8 +706,10 @@ def prepare_full_copy_remap(
         producer_kind = required_text(
             producer.get("producer_kind"), field="item.producer_ref.producer_kind"
         )
-        if producer_kind == "user":
-            producer["producer_id"] = mapped("message", producer.get("producer_id"))
+        if producer.get("producer_id") in maps.get("accepted_ingress", {}):
+            producer["producer_id"] = mapped("accepted_ingress", producer["producer_id"])
+        elif producer.get("producer_id") in maps.get("message", {}):
+            producer["producer_id"] = mapped("message", producer["producer_id"])
         elif producer_kind == "provider":
             producer["producer_id"] = mapped("model_call", producer.get("producer_id"))
         elif producer_kind == "tool":
@@ -711,7 +762,9 @@ def prepare_full_copy_remap(
         service=service,
         connection=connection,
         source_session_id=source_session_id,
+        source_thread_id=source_thread_id,
         target_session_id=target_session_id,
+        target_thread_id=target_thread_id,
         fork_id=fork_id,
         checkpoint_ns=checkpoint_ns,
         timestamp=timestamp,

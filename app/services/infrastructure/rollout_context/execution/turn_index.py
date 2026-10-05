@@ -1,11 +1,13 @@
-"""v2 Turn 的 message projection 与 checkpoint-origin root reconciliation。"""
+"""v2 Turn 的 message projection 与 accepted-root reconciliation。"""
 
 from __future__ import annotations
 
 import sqlite3
 
+from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
+
 from app.domain.itemized.enums import SemanticKind, TurnScope
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.hashing import validate_hash_token
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -121,101 +123,170 @@ class RolloutTurnIndexMixin:
         self,
         connection: sqlite3.Connection,
         *,
+        session_id: str,
         thread_id: str,
         item: CanonicalItemRecord,
         branch_id: str,
         timestamp: str,
     ) -> None:
-        """为显式 checkpoint root 补齐 v2 acceptance/execution lineage。"""
-        thread_id = strict_text(thread_id, field="turn_records.session_id")
-        branch_id = strict_text(branch_id, field="turn_records.source_branch_id")
-        timestamp = strict_text(timestamp, field="turn_records.created_at")
+        """校验 checkpoint root 已由真实 Turn admission 建立。"""
+        session_id = strict_text(session_id, field="turn_records.session_id")
+        thread_id = strict_text(thread_id, field="turn_records.thread_id")
+        strict_text(branch_id, field="turn_records.source_branch_id")
+        strict_text(timestamp, field="turn_records.created_at")
         if (
             item.semantic_kind != SemanticKind.USER_INPUT.value
             or item.turn_scope != TurnScope.TURN_ROOT.value
             or item.turn_id is None
         ):
             return
-        existing = connection.execute(
-            "SELECT turn_id, root_input_item_id FROM turn_records WHERE turn_id = ?",
+        turn = connection.execute(
+            "SELECT session_id, thread_id, root_input_item_id, "
+            "root_input_item_sequence, accepted_ingress_id, "
+            "acceptance_idempotency_key, initial_execution_id, last_execution_id "
+            "FROM turn_records WHERE turn_id = ?",
             (item.turn_id,),
         ).fetchone()
-        if existing is not None:
-            existing_root_id = strict_text(
-                existing[1], field=f"turn_records.root_input_item_id: {item.turn_id}"
-            )
-            if existing_root_id != item.item_id:
-                raise RuntimeError(f"v2 Turn root identity 冲突: turn_id={item.turn_id}")
-            return
-        identity_seed = sha256_jcs(
-            {
-                "session_id": thread_id,
-                "turn_id": item.turn_id,
-                "root_item_id": item.item_id,
-                "root_content_hash": item.content_hash,
-            }
-        )
-        accepted_ingress_id = f"checkpoint-ingress:{identity_seed}"
-        acceptance_key = f"checkpoint-acceptance:{identity_seed}"
-        execution_id = f"checkpoint-execution:{identity_seed}"
-        conflict = connection.execute(
-            "SELECT accepted_ingress_id, acceptance_idempotency_key, payload_hash "
-            "FROM turn_acceptances WHERE accepted_ingress_id = ? "
-            "OR acceptance_idempotency_key = ?",
-            (accepted_ingress_id, acceptance_key),
-        ).fetchall()
-        if conflict:
+        if turn is None:
             raise RuntimeError(
-                "checkpoint root acceptance identity 已被不同 lineage 占用"
+                "checkpoint user root 缺少 acceptance-time Turn admission: "
+                f"session_id={session_id} thread_id={thread_id} turn_id={item.turn_id}"
             )
-        ordinal = strict_non_negative_int(
-            connection.execute(
-                "SELECT COALESCE(MAX(turn_ordinal), 0) + 1 FROM turn_records"
-            ).fetchone()[0],
-            field="turn_records.turn_ordinal",
+        turn_owner = (
+            strict_text(turn[0], field="turn_records.session_id"),
+            strict_text(turn[1], field="turn_records.thread_id"),
         )
-        if ordinal == 0:
-            raise RuntimeError("turn_records.turn_ordinal 必须为正数")
-        connection.execute(
-            "INSERT INTO turn_acceptances(accepted_ingress_id, acceptance_idempotency_key, session_id, turn_id, payload_hash, identity_origin, created_at) VALUES (?, ?, ?, ?, ?, 'checkpoint_origin', ?)",
-            (
-                accepted_ingress_id,
-                acceptance_key,
-                thread_id,
-                item.turn_id,
-                item.content_hash,
-                timestamp,
-            ),
+        root_item_id = strict_text(
+            turn[2], field=f"turn_records.root_input_item_id: {item.turn_id}"
         )
-        connection.execute(
-            "INSERT INTO turn_records(turn_id, turn_ordinal, source_branch_id, root_input_item_id, root_input_item_sequence, accepted_ingress_id, acceptance_idempotency_key, initial_execution_id, last_execution_id, status, final_item_id, replay_of_turn_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, ?)",
-            (
-                item.turn_id,
-                ordinal,
-                branch_id,
-                item.item_id,
-                item.item_sequence,
-                accepted_ingress_id,
-                acceptance_key,
-                execution_id,
-                execution_id,
-                timestamp,
-                timestamp,
-            ),
+        root_item_sequence = strict_optional_non_negative_int(
+            turn[3], field=f"turn_records.root_input_item_sequence: {item.turn_id}"
         )
-        connection.execute(
-            "INSERT INTO executions(execution_id, turn_id, attempt, execution_ordinal, accepted_ingress_id, outcome, created_at) VALUES (?, ?, 1, 1, ?, 'unknown', ?)",
-            (execution_id, item.turn_id, accepted_ingress_id, timestamp),
+        accepted_ingress_id = strict_text(
+            turn[4], field=f"turn_records.accepted_ingress_id: {item.turn_id}"
         )
-        connection.execute(
-            "INSERT INTO turn_execution_links(turn_id, execution_id, execution_role, execution_ordinal, link_idempotency_key, created_at) VALUES (?, ?, 'initial', 1, ?, ?)",
-            (
-                item.turn_id,
-                execution_id,
-                f"{item.turn_id}:initial:{execution_id}",
-                timestamp,
-            ),
+        acceptance_key = strict_text(
+            turn[5], field=f"turn_records.acceptance_idempotency_key: {item.turn_id}"
         )
+        execution_id = strict_text(
+            turn[6], field=f"turn_records.initial_execution_id: {item.turn_id}"
+        )
+        last_execution_id = strict_text(
+            turn[7], field=f"turn_records.last_execution_id: {item.turn_id}"
+        )
+        if turn_owner != (session_id, thread_id):
+            raise RuntimeError(
+                "checkpoint root Turn owner 不匹配: "
+                f"turn_id={item.turn_id} stored={turn_owner!r} "
+                f"expected={(session_id, thread_id)!r}"
+            )
+        if root_item_id != item.item_id or root_item_sequence != item.item_sequence:
+            raise RuntimeError(f"v2 Turn root identity 冲突: turn_id={item.turn_id}")
+
+        acceptance = connection.execute(
+            "SELECT session_id, thread_id, turn_id, accepted_ingress_id, "
+            "acceptance_idempotency_key, payload_hash FROM turn_acceptances "
+            "WHERE accepted_ingress_id = ? AND acceptance_idempotency_key = ?",
+            (accepted_ingress_id, acceptance_key),
+        ).fetchone()
+        if acceptance is None:
+            raise RuntimeError(
+                f"checkpoint root 缺少已接受的 owner acceptance: turn_id={item.turn_id}"
+            )
+        acceptance_owner = (
+            strict_text(acceptance[0], field="turn_acceptances.session_id"),
+            strict_text(acceptance[1], field="turn_acceptances.thread_id"),
+        )
+        acceptance_turn_id = strict_text(
+            acceptance[2], field="turn_acceptances.turn_id"
+        )
+        acceptance_ingress_id = strict_text(
+            acceptance[3], field="turn_acceptances.accepted_ingress_id"
+        )
+        stored_acceptance_key = strict_text(
+            acceptance[4], field="turn_acceptances.acceptance_idempotency_key"
+        )
+        payload_hash = validate_hash_token(
+            acceptance[5], "turn_acceptances.payload_hash"
+        )
+        if (
+            acceptance_owner != (session_id, thread_id)
+            or acceptance_turn_id != item.turn_id
+            or acceptance_ingress_id != accepted_ingress_id
+            or stored_acceptance_key != acceptance_key
+            or payload_hash != item.content_hash
+        ):
+            raise RuntimeError(
+                f"checkpoint root acceptance identity 冲突: turn_id={item.turn_id}"
+            )
+
+        execution = connection.execute(
+            "SELECT session_id, thread_id, turn_id, execution_origin, job_id, "
+            "admission_idempotency_key, admission_payload_hash, accepted_ingress_id "
+            "FROM executions WHERE execution_id = ?",
+            (execution_id,),
+        ).fetchone()
+        if execution is None:
+            raise RuntimeError(
+                f"checkpoint root 缺少初始 execution admission: turn_id={item.turn_id}"
+            )
+        execution_owner = (
+            strict_text(execution[0], field="executions.session_id"),
+            strict_text(execution[1], field="executions.thread_id"),
+        )
+        execution_turn_id = strict_text(execution[2], field="executions.turn_id")
+        execution_origin = strict_text(
+            execution[3], field="executions.execution_origin"
+        )
+        job_id = strict_text(execution[4], field="executions.job_id")
+        admission_key = strict_text(
+            execution[5], field="executions.admission_idempotency_key"
+        )
+        admission_hash = validate_hash_token(
+            execution[6], "executions.admission_payload_hash"
+        )
+        execution_ingress_id = strict_optional_text(
+            execution[7], field="executions.accepted_ingress_id"
+        )
+        expected_admission_hash = user_turn_admission_payload_hash(
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_id=item.turn_id,
+            execution_id=execution_id,
+            job_id=job_id,
+            accepted_ingress_id=accepted_ingress_id,
+            admission_idempotency_key=admission_key,
+            payload_hash=payload_hash,
+        )
+        if (
+            execution_owner != (session_id, thread_id)
+            or execution_turn_id != item.turn_id
+            or execution_origin != "user_turn"
+            or execution_ingress_id != accepted_ingress_id
+            or admission_hash != expected_admission_hash
+        ):
+            raise RuntimeError(
+                f"checkpoint root execution admission 与 acceptance 不匹配: turn_id={item.turn_id}"
+            )
+        link = connection.execute(
+            "SELECT 1 FROM turn_execution_links WHERE session_id = ? "
+            "AND thread_id = ? AND turn_id = ? AND execution_id = ? "
+            "AND execution_role = 'initial' AND execution_ordinal = 1",
+            (session_id, thread_id, item.turn_id, execution_id),
+        ).fetchone()
+        if link is None:
+            raise RuntimeError(
+                f"checkpoint root 缺少 initial execution link: turn_id={item.turn_id}"
+            )
+        last_execution = connection.execute(
+            "SELECT 1 FROM executions WHERE session_id = ? AND thread_id = ? "
+            "AND turn_id = ? AND execution_id = ?",
+            (session_id, thread_id, item.turn_id, last_execution_id),
+        ).fetchone()
+        if last_execution is None:
+            raise RuntimeError(
+                f"checkpoint root last execution owner 不匹配: turn_id={item.turn_id}"
+            )
 
 
 __all__ = ["RolloutTurnIndexMixin"]

@@ -64,7 +64,10 @@ class StreamBlockAssemblyMixin:
         # 映射按 ModelCall 隔离，既能承载乱序前置段，也不会跨调用复用 index。
         if (
             self._canonical_item_sink is not None
-            and self._canonical_turn_id is not None
+            and (
+                registered_execution_id is not None
+                or self._canonical_turn_id is not None
+            )
         ):
             accumulator = self._canonical_block_accumulators.get(model_call_id)
             if accumulator is None:
@@ -83,15 +86,16 @@ class StreamBlockAssemblyMixin:
             self._pending_canonical_blocks.clear()
         else:
             self._canonical_block_accumulator = None
-        await self.writer.commit(
-            "model.started",
-            {
-                "model_call_id": model_call_id,
-                "attempt": self.current_attempt,
-                "model": model,
-            },
-            model_call_id=model_call_id,
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "model.started",
+                {
+                    "model_call_id": model_call_id,
+                    "attempt": self.current_attempt,
+                    "model": model,
+                },
+                model_call_id=model_call_id,
+            )
 
     async def accept_message_chunk(
         self,
@@ -261,12 +265,13 @@ class StreamBlockAssemblyMixin:
                     "carrier_type": carrier_type,
                     "projection": "streaming",
                 }
-                await self.writer.commit(
-                    "block.started",
-                    payload,
-                    model_call_id=model_call_id or self.current_model_call_id,
-                    block_id=block_id,
-                )
+                if self.writer is not None:
+                    await self.writer.commit(
+                        "block.started",
+                        payload,
+                        model_call_id=model_call_id or self.current_model_call_id,
+                        block_id=block_id,
+                    )
                 await self._observe("block.started", payload)
 
         if carrier_type == "reasoning_items":
@@ -282,12 +287,13 @@ class StreamBlockAssemblyMixin:
                             "operation": "item_upsert",
                             "item": dict(item),
                         }
-                        await self.writer.commit(
-                            "block.delta",
-                            payload,
-                            model_call_id=self.current_model_call_id,
-                            block_id=block_id,
-                        )
+                        if self.writer is not None:
+                            await self.writer.commit(
+                                "block.delta",
+                                payload,
+                                model_call_id=self.current_model_call_id,
+                                block_id=block_id,
+                            )
                         await self._observe("block.delta", payload)
                         self._accept_canonical_block(
                             payload,
@@ -303,12 +309,13 @@ class StreamBlockAssemblyMixin:
                 "operation": "redacted",
                 "redacted": True,
             }
-            await self.writer.commit(
-                "block.delta",
-                payload,
-                model_call_id=model_call_id or self.current_model_call_id,
-                block_id=block_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "block.delta",
+                    payload,
+                    model_call_id=model_call_id or self.current_model_call_id,
+                    block_id=block_id,
+                )
             await self._observe("block.delta", payload)
             self._accept_canonical_block(payload, model_call_id=model_call_id)
             return
@@ -333,12 +340,13 @@ class StreamBlockAssemblyMixin:
                 "operation": "append",
                 "text": text,
             }
-            await self.writer.commit(
-                "block.delta",
-                payload,
-                model_call_id=model_call_id or self.current_model_call_id,
-                block_id=block_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "block.delta",
+                    payload,
+                    model_call_id=model_call_id or self.current_model_call_id,
+                    block_id=block_id,
+                )
             await self._observe("block.delta", payload)
             self._accept_canonical_block(payload, model_call_id=model_call_id)
             if carrier_type in {"text", "output_text", "refusal"}:
@@ -477,22 +485,23 @@ class StreamBlockAssemblyMixin:
                 partial=False,
                 model_call_id=model_call_id,
             )
-        await self.writer.commit(
-            "tool_call.delta",
-            {
-                "tool_call_id": tool_call_id,
-                "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
-                "arguments": arguments,
-                "status": "accumulating",
-                "arguments_complete": self._tool_call_arguments_complete[tool_call_id],
-            },
-            model_call_id=model_call_id or self.current_model_call_id,
-            tool_call_id=tool_call_id,
-            tool_invocation_id=self._tool_invocation_id_for(
-                tool_call_id,
-                model_call_id=effective_model_call_id,
-            ),
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "tool_call.delta",
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
+                    "arguments": arguments,
+                    "status": "accumulating",
+                    "arguments_complete": self._tool_call_arguments_complete[tool_call_id],
+                },
+                model_call_id=model_call_id or self.current_model_call_id,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=self._tool_invocation_id_for(
+                    tool_call_id,
+                    model_call_id=effective_model_call_id,
+                ),
+            )
         self._accept_canonical_block(
             {
                 "block_id": tool_call_id,
@@ -550,7 +559,7 @@ class StreamBlockAssemblyMixin:
         *,
         model_call_id: str | None = None,
     ) -> None:
-        if self._canonical_item_sink is None or self._canonical_turn_id is None:
+        if self._canonical_item_sink is None:
             return
         effective_model_call_id = model_call_id or self.current_model_call_id
         if effective_model_call_id is None:
@@ -648,12 +657,13 @@ class StreamBlockAssemblyMixin:
             "partial": partial,
         }
         try:
-            await self.writer.commit(
-                "block.completed",
-                payload,
-                model_call_id=model_call_id or self.current_model_call_id,
-                block_id=block_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "block.completed",
+                    payload,
+                    model_call_id=model_call_id or self.current_model_call_id,
+                    block_id=block_id,
+                )
             await self._observe("block.completed", payload)
         finally:
             self._active_blocks.discard(block_id)

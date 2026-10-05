@@ -6,7 +6,8 @@ interface NodeDebugWorkbenchProps {
   apiPort: number;
   workspaceId: string | null;
   sessionId: string | null;
-  threadId: string;
+  threadId: string | null;
+  mainThreadId: string | null;
   activeFilePath: string | null;
   nodeDebugController: NodeDebugController;
   sessions: Session[];
@@ -22,6 +23,7 @@ export default function NodeDebugWorkbench({
   workspaceId,
   sessionId,
   threadId,
+  mainThreadId,
   activeFilePath,
   nodeDebugController,
   sessions,
@@ -36,13 +38,13 @@ export default function NodeDebugWorkbench({
       <header className="debug-workbench-header">
         <div>
           <strong>{compact ? "调试" : "目标程序调试"}</strong>
-          <span>{sessionId ? `调试 owner: ${threadId}` : "未选择会话"}</span>
+          <span>{sessionId ? (threadId ? `调试 owner: ${threadId}` : "正在解析会话主线程") : "未选择会话"}</span>
         </div>
-        {sessionId && threadId !== "main" ? (
-          <button type="button" onClick={() => onSelectThread("main")}>切回主线程</button>
+        {sessionId && threadId && mainThreadId && threadId !== mainThreadId ? (
+          <button type="button" onClick={() => onSelectThread(mainThreadId)}>切回主线程</button>
         ) : null}
       </header>
-      <NodeDebugPanel
+      {threadId ? <NodeDebugPanel
         apiPort={apiPort}
         workspaceId={workspaceId}
         sessionId={sessionId}
@@ -54,7 +56,7 @@ export default function NodeDebugWorkbench({
         onOpenExtensionWindow={onOpenExtensionWindow}
         onOpenWorkspacePath={onOpenWorkspacePath}
         onStatusChange={onStatusChange}
-      />
+      /> : null}
     </aside>
   );
 }

@@ -13,6 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
@@ -44,18 +48,11 @@ def store(tmp_path: Path) -> SessionControlStore:
 
 def prepare_published_intent(store: SessionControlStore):
     """published record + pending intent（identity 由 admission key 派生）。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
-    store.initialize_fence("active", 1)
-    graph_binding = json.dumps(
-        {
-            "graph_id": "deep-agent",
-            "graph_revision": "rev-1",
-            "graph_schema_hash": "sha256:aa",
-            "capability_profile_hash": "sha256:bb",
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
     )
+    store.initialize_fence("active", 1)
+    graph_binding = TEST_THREAD_GRAPH_BINDING_JSON
     capability_profile = json.dumps(
         {"tools": ["read_file"]}, sort_keys=True, separators=(",", ":")
     )
@@ -209,9 +206,7 @@ def test_two_workers_produce_single_binding(
                     [worker_a, worker_b],
                 )
             )
-        outcomes = [
-            attempt.outcome for attempts in results for attempt in attempts
-        ]
+        outcomes = [attempt.outcome for attempts in results for attempt in attempts]
         # 恰好一次 bound；输家按并发契约显式分类，不产生第二次绑定。
         assert outcomes.count("bound") == 1
         assert set(outcomes) <= {

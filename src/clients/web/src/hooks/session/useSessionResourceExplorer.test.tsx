@@ -5,18 +5,144 @@ import type { WorkspaceNavigationTree } from "../../types/backend";
 import {
   apiResponse,
   catalogChildrenResponse,
+  createTestSessionCatalogOutboxRuntime,
   errorResponse,
   flushEffects,
   installGatewayFetch,
   liveExplorerHarness,
   mountResourceExplorer,
   restoreSessionHookGlobals,
+  testGatewayUserAccess,
+  TEST_WORKSPACE_REQUEST_TARGET,
   withCatalogDefaults,
 } from "./sessionHookTestFixtures";
 
 afterEach(restoreSessionHookGlobals);
 
+function waitForReportedCatalogError(
+  runtime: ReturnType<typeof createTestSessionCatalogOutboxRuntime>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (runtime.errors.length > 0) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > 3_000) {
+        reject(new Error("会话目录 outbox 未上报终态错误"));
+        return;
+      }
+      globalThis.setTimeout(check, 10);
+    };
+    check();
+  });
+}
+
+function waitForCatalogPrune(
+  runtime: ReturnType<typeof createTestSessionCatalogOutboxRuntime>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const check = () => {
+      if (runtime.pruneCalls.length > 0) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > 3_000) {
+        reject(new Error("已刷新的会话目录分支未触发 outbox prune"));
+        return;
+      }
+      globalThis.setTimeout(check, 10);
+    };
+    check();
+  });
+}
+
 describe("useSessionResourceExplorer 自动同步", () => {
+  test("恢复的已提交操作在分支刷新失败后保留 outbox 并显示错误", async () => {
+    const runtime = createTestSessionCatalogOutboxRuntime();
+    await runtime.runtime.submit(
+      TEST_WORKSPACE_REQUEST_TARGET,
+      testGatewayUserAccess(),
+      { kind: "create_folder", name: "恢复后的文件夹" },
+      { baseCatalogRevision: 3 },
+    );
+    installGatewayFetch(withCatalogDefaults(({ path }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
+        return errorResponse(500, "终态分支刷新故障");
+      }
+      return undefined;
+    }));
+
+    const { explorer, unmount } = await mountResourceExplorer({
+      props: {
+        apiPort: 49_413,
+        sessionCatalogOutboxRuntime: runtime.runtime,
+        sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
+        gatewayUserAccess: testGatewayUserAccess(),
+      },
+    });
+    await act(async () => {
+      await waitForReportedCatalogError(runtime);
+      await flushEffects();
+    });
+
+    expect(explorer().branches.get("ws-test:root")?.error).toContain("终态分支刷新故障");
+    expect(runtime.errors[0]).toContain("终态分支刷新故障");
+    expect(runtime.pruneCalls).toHaveLength(0);
+    const restoredOutbox = runtime.runtime.getSnapshot().get("ws-test\u0000guest")?.outbox;
+    expect(restoredOutbox?.operations).toHaveLength(1);
+    expect(restoredOutbox?.operations[0].state).toBe("committed");
+    unmount();
+  });
+
+  test("恢复的已提交操作仅在分支 revision 追上回执后 prune", async () => {
+    const runtime = createTestSessionCatalogOutboxRuntime();
+    await runtime.runtime.submit(
+      TEST_WORKSPACE_REQUEST_TARGET,
+      testGatewayUserAccess(),
+      { kind: "create_folder", name: "等待分支确认的文件夹" },
+      { baseCatalogRevision: 3 },
+    );
+    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
+      if (path.includes("/api/v1/session-catalog/children")) {
+        return apiResponse({
+          revision: "catalog-4",
+          catalog_revision: 4,
+          parent_node_id: new URL(url).searchParams.get("parent_node_id"),
+          items: [],
+          cursor: null,
+          total: 0,
+          consistency_warning: null,
+        });
+      }
+      return undefined;
+    }));
+
+    const { explorer, unmount } = await mountResourceExplorer({
+      props: {
+        apiPort: 49_414,
+        sessionCatalogOutboxRuntime: runtime.runtime,
+        sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
+        gatewayUserAccess: testGatewayUserAccess(),
+      },
+    });
+    await act(async () => {
+      await waitForCatalogPrune(runtime);
+      await flushEffects();
+    });
+
+    expect(explorer().branches.get("ws-test:root")?.catalog_revision).toBe(4);
+    expect(runtime.pruneCalls).toEqual([{
+      catalogRevision: 4,
+      operationIds: ["test_catalog_operation_1"],
+    }]);
+    expect(runtime.runtime.getSnapshot().get("ws-test\u0000guest")?.outbox.operations)
+      .toHaveLength(0);
+    unmount();
+  });
+
   test("初始目录同步与激活工作区加载根分支共享同一个请求", async () => {
     let releaseCatalog!: (response: Response) => void;
     let rootCatalogRequests = 0;
@@ -120,36 +246,50 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("目录移动失败时只重读旧父/新父分支并保留树状态", async () => {
     const catalogRequests: string[] = [];
-    installGatewayFetch(withCatalogDefaults(({ path, init, url }) => {
+    const runtime = createTestSessionCatalogOutboxRuntime({
+      result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
+    });
+    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
-        catalogRequests.push(new URL(url).search);
+        const query = new URL(url).searchParams;
+        catalogRequests.push(query.toString());
         return catalogChildrenResponse(
           "catalog",
-          [],
-          new URL(url).searchParams.get("parent_node_id"),
+          query.has("parent_node_id")
+            ? []
+            : [{
+                node_id: "ses_move",
+                kind: "session",
+                name: "待移动会话",
+                parent_node_id: null,
+                session_id: "ses_move",
+                has_children: false,
+                node_revision: 7,
+                state: "active",
+              }],
+          query.get("parent_node_id"),
         );
-      }
-      if (
-        path === "/api/v1/session-catalog/nodes/ses_move/parent"
-        && init?.method === "PATCH"
-      ) {
-        return errorResponse(409, "目录移动被拒绝");
       }
       return undefined;
     }));
 
     const { explorer, unmount } = await mountResourceExplorer({
-      props: { apiPort: 49_404 },
-      liveGeneratorResources: true,
+      props: {
+        apiPort: 49_404,
+        sessionCatalogOutboxRuntime: runtime.runtime,
+        sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
+        gatewayUserAccess: testGatewayUserAccess(),
+      },
     });
 
-    await expect(
-      explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old"),
-    ).rejects.toThrow("目录移动被拒绝");
-    expect(catalogRequests).toEqual(expect.arrayContaining([
-      "?limit=100&parent_node_id=fld_old",
-      "?limit=100&parent_node_id=fld_new",
-    ]));
+    await act(async () => {
+      await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
+      await waitForReportedCatalogError(runtime);
+      await flushEffects();
+    });
+    expect(catalogRequests).toContain("limit=100&parent_node_id=fld_old");
+    expect(catalogRequests).toContain("limit=100&parent_node_id=fld_new");
+    expect(runtime.errors[0]).toContain("目录移动被拒绝");
     unmount();
   });
 
@@ -286,35 +426,48 @@ describe("useSessionResourceExplorer 自动同步", () => {
   });
 
   test("目录移动失败且补偿重读也失败时抛出错误必须同时含两条文案", async () => {
-    installGatewayFetch(withCatalogDefaults(({ path, init }) => {
-      if (
-        path === "/api/v1/session-catalog/nodes/ses_move/parent"
-        && init?.method === "PATCH"
-      ) {
-        return errorResponse(409, "目录移动被拒绝");
-      }
+    const runtime = createTestSessionCatalogOutboxRuntime({
+      result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
+    });
+    installGatewayFetch(withCatalogDefaults(({ path, url }) => {
       if (path.includes("/api/v1/session-catalog/children")) {
+        if (!new URL(url).searchParams.has("parent_node_id")) {
+          return catalogChildrenResponse("catalog", [{
+            node_id: "ses_move",
+            kind: "session",
+            name: "待移动会话",
+            parent_node_id: null,
+            session_id: "ses_move",
+            has_children: false,
+            node_revision: 7,
+            state: "active",
+          }], null);
+        }
         return errorResponse(503, "目录重读崩了");
       }
       return undefined;
     }));
 
     const { explorer, unmount } = await mountResourceExplorer({
-      props: { apiPort: 49_407 },
+      props: {
+        apiPort: 49_407,
+        sessionCatalogOutboxRuntime: runtime.runtime,
+        sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
+        gatewayUserAccess: testGatewayUserAccess(),
+      },
       flushes: 3,
     });
 
-    let failure: Error | undefined;
     await act(async () => {
-      failure = await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old")
-        .then(() => undefined, (error: Error) => error);
+      await explorer().moveCatalogNode("ws-test", "ses_move", "fld_new", "fld_old");
+      await waitForReportedCatalogError(runtime);
       await flushEffects();
     });
 
-    // 移动失败与补偿重读失败是两条独立事实，用户必须同时看到，不能只报其中一条。
-    expect(failure?.message).toContain("目录移动被拒绝");
-    expect(failure?.message).toContain("重新读取会话目录失败");
-    expect(failure?.message).toContain("目录重读崩了");
+    // 移动终态拒绝与补偿分支重读失败是两条独立事实，必须同时进入可见错误。
+    expect(runtime.errors[0]).toContain("目录移动被拒绝");
+    expect(runtime.errors[0]).toContain("重新读取会话目录失败");
+    expect(runtime.errors[0]).toContain("目录重读崩了");
     unmount();
   });
 

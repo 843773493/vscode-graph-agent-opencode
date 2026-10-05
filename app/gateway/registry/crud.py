@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.workspace_ids import (
@@ -117,6 +117,26 @@ class RegistryCrudMixin:
         ):
             raise ValueError(
                 "remote_projection target 必须包含 connection_id 和 remote_workspace_id"
+            )
+        if target.backend_workspace_id is not None:
+            try:
+                parsed_backend_workspace_id = UUID(target.backend_workspace_id)
+            except ValueError as error:
+                raise ValueError(
+                    "Gateway registry backend_workspace_id 必须是标准 UUID: "
+                    f"workspace_id={target.workspace_id}, "
+                    f"backend_workspace_id={target.backend_workspace_id!r}"
+                ) from error
+            if str(parsed_backend_workspace_id) != target.backend_workspace_id:
+                raise ValueError(
+                    "Gateway registry backend_workspace_id 必须使用标准 UUID 文本: "
+                    f"workspace_id={target.workspace_id}, "
+                    f"backend_workspace_id={target.backend_workspace_id!r}"
+                )
+        if target.connection_kind == "remote_gateway" and target.backend_workspace_id is not None:
+            raise ValueError(
+                "远程 Gateway target 不得把 Gateway workspace_id 存作本地 backend UUID: "
+                f"workspace_id={target.workspace_id}"
             )
         if target.active_request_count < 0 or target.active_stream_count < 0:
             raise ValueError("Gateway registry 活动引用计数不能为负数")

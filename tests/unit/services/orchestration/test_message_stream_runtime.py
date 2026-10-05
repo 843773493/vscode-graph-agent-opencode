@@ -79,6 +79,85 @@ async def test_provider_fallback_marks_previous_model_attempt_failed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_internal_provider_stream_persists_turnless_items_without_writer() -> None:
+    canonical_sink = AsyncMock()
+    registrar = AsyncMock(return_value="execution-internal-stream")
+    outcome_sink = AsyncMock()
+    observer = AsyncMock()
+    runtime = MessageStreamRuntime(
+        None,
+        normalized_block_observer=observer,
+        canonical_item_sink=canonical_sink,
+        canonical_turn_id=None,
+        model_call_registrar=registrar,
+        model_call_outcome_sink=outcome_sink,
+    )
+
+    await runtime.start_model("model_internal", "provider")
+    await runtime.accept_message_chunk(AIMessageChunk(content="internal output"))
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "index": 0,
+                    "id": "call_internal",
+                    "name": "read_file",
+                    "args": "{}",
+                }
+            ],
+        )
+    )
+    await runtime.finish_model()
+    tool_call_id = runtime.claim_tool_call_id("read_file", {})
+    assert tool_call_id == "model_internal:tool-call:call_internal"
+    await runtime.start_tool(
+        tool_execution_id="run_internal",
+        tool_call_id=tool_call_id,
+        tool_name="read_file",
+    )
+    await runtime.complete_tool(
+        tool_execution_id="run_internal",
+        tool_call_id=tool_call_id,
+        tool_name="read_file",
+        status="succeeded",
+        result="internal file contents",
+    )
+    await runtime.complete_model(outcome="accepted")
+
+    registrar.assert_awaited_once_with("model_internal", 1, "provider")
+    outcome_sink.assert_awaited_once_with("model_internal", "completed")
+    assert canonical_sink.await_count == 2
+    (model_items,) = canonical_sink.await_args_list[0].args
+    assert {item.semantic_kind for item in model_items} == {
+        "assistant_output",
+        "tool_call",
+    }
+    for item in model_items:
+        assert item.turn_id is None
+        assert item.turn_scope is None
+        assert item.metadata["execution_id"] == "execution-internal-stream"
+    (assistant_item,) = [
+        item for item in model_items if item.semantic_kind == "assistant_output"
+    ]
+    (tool_call_item,) = [
+        item for item in model_items if item.semantic_kind == "tool_call"
+    ]
+    assert assistant_item.payload == "internal output"
+    assert tool_call_item.payload["tool_call_id"] == tool_call_id
+    assert tool_call_item.payload["name"] == "read_file"
+    (tool_result,) = canonical_sink.await_args_list[1].args[0]
+    assert tool_result.semantic_kind == "tool_result"
+    assert tool_result.turn_id is None
+    assert tool_result.turn_scope is None
+    assert tool_result.payload["tool_call_id"] == tool_call_item.payload["tool_call_id"]
+    assert tool_result.payload["content"] == "internal file contents"
+    assert runtime.writer is None
+    assert runtime.activities is None
+    observer.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_execution() -> None:
     writer = MagicMock()
     writer.commit = AsyncMock()
@@ -638,3 +717,23 @@ async def test_interruption_finalizes_partial_blocks_calls_and_unknown_tool_resu
     ]
     assert partial_completed[0]["partial"] is True
     assert partial_completed[0]["completion_reason"] == "user_interrupt"
+
+@pytest.mark.asyncio
+async def test_writerless_internal_failure_marks_model_call_failed() -> None:
+    canonical_sink = AsyncMock()
+    outcome_sink = AsyncMock()
+    runtime = MessageStreamRuntime(
+        None,
+        canonical_item_sink=canonical_sink,
+        model_call_registrar=AsyncMock(return_value="execution-internal-failed"),
+        model_call_outcome_sink=outcome_sink,
+    )
+    await runtime.start_model("model_internal_failed", "provider")
+    await runtime.accept_message_chunk(AIMessageChunk(content="partial"))
+    await runtime.fail_model(code="job_timeout", message="deadline")
+
+    outcome_sink.assert_awaited_once_with("model_internal_failed", "failed")
+    canonical_sink.assert_awaited_once()
+    (items,) = canonical_sink.await_args.args
+    assert items[0].status == "failed"
+    assert items[0].turn_id is None

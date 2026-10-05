@@ -1,4 +1,5 @@
 import type { APIResponse, CursorPage } from "../types/backend";
+import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import { JsonResponseBodyError, parseJsonResponse } from "../runtime/jsonResponseParser";
 import { abortReason, awaitWithAbort } from "../utils/abortable";
 
@@ -214,6 +215,22 @@ function createRequestAbortState(
 
 export function workspaceHeader(workspaceId?: string | null): Record<string, string> {
   return workspaceId ? { "X-BoxTeam-Workspace-Id": workspaceId } : {};
+}
+
+export function gatewayWorkspaceRequestHeaders(
+  target: GatewayWorkspaceRequestTarget,
+): Record<string, string> {
+  const headers = workspaceHeader(target.workspace_id);
+  if (target.connection_kind === "local") {
+    const backendWorkspaceId = target.backend_workspace_id;
+    if (!backendWorkspaceId) {
+      throw new Error(
+        `Gateway workspace target 缺少 backend_workspace_id: ${target.workspace_id}`,
+      );
+    }
+    headers["X-BoxTeam-Backend-Workspace-Id"] = backendWorkspaceId;
+  }
+  return headers;
 }
 
 export function getApiBaseUrl(port: number): string {

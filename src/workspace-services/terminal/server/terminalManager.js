@@ -1,28 +1,48 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { readProcessStat } from "./terminalProcessUtils.js";
 import {
-  readProcessStat,
-  terminateTerminalProcessTree,
-} from "./terminalProcessUtils.js";
-import {
-  deriveLegacyCwdRelative,
   nowIso,
   resolveShell,
   resolveTerminalCwd,
   shellArgs,
   TerminalSession,
+  validateTerminalRecord,
 } from "./terminalSession.js";
 import { TerminalStateStore } from "./terminalStateStore.js";
 
 export const MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE = 64;
 export const MAX_RETAINED_TERMINAL_HISTORY = 256;
-const PROTECTED_RECENT_EXECUTIONS = 8;
+const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function terminalId() {
-  // 非 canonical 身份：terminal 后端由 Node 启动（BOXTEAM_NODE_BIN），实测
-  // Node 22 无 crypto.randomUUIDv7；本进程生成的 term_/* 本地 id 允许继续
-  // 使用 v4，它们不是 session/thread 身份，不进入 canonical 校验器命名空间。
-  return `term_${randomUUID().replaceAll("-", "")}`;
+export function validateWorkspaceId(workspaceId) {
+  if (typeof workspaceId !== "string" || !WORKSPACE_ID_PATTERN.test(workspaceId)) {
+    throw new Error("TerminalManager 必须显式提供标准 UUID workspace_id");
+  }
+  return workspaceId;
+}
+
+export async function verifyWorkspaceIdentity(workspaceRoot, workspaceId) {
+  const identityPath = path.join(workspaceRoot, ".boxteam", "workspace-identity.json");
+  const identity = JSON.parse(await readFile(identityPath, "utf8"));
+  const actual = validateWorkspaceId(identity.workspace_id);
+  if (actual !== workspaceId) {
+    throw new Error(`Terminal 工作区 UUID 与权威身份文件不一致: expected=${workspaceId}, actual=${actual}, identity=${identityPath}`);
+  }
+}
+
+export function matchesTerminalProcessIdentity(record, stat) {
+  return Boolean(
+    stat
+    && Number(record.os_pid) === stat.pid
+    && record.process_group_id !== null
+    && record.process_group_id === stat.processGroupId
+    && record.process_session_id !== null
+    && record.process_session_id === stat.processSessionId
+    && record.process_start_time !== null
+    && record.process_start_time === stat.processStartTime,
+  );
 }
 
 export function resolveWorkspaceRoot() {
@@ -42,27 +62,24 @@ export class TerminalManager {
   constructor({
     workspaceRoot = resolveWorkspaceRoot(),
     workspaceId,
-    terminalFrontendBaseUrl = "http://127.0.0.1:8013",
   } = {}) {
-    if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
-      throw new Error("TerminalManager 启动必须显式提供 workspace_id");
-    }
     this.workspaceRoot = path.resolve(workspaceRoot);
-    this.workspaceId = workspaceId;
+    this.workspaceId = validateWorkspaceId(workspaceId);
     this.stateStore = new TerminalStateStore({
       workspaceRoot: this.workspaceRoot,
       workspaceId: this.workspaceId,
     });
     this.stateDir = this.stateStore.stateDir;
     this.stateFile = this.stateStore.stateFile;
-    this.terminalFrontendBaseUrl = terminalFrontendBaseUrl.replace(/\/$/, "");
     this.sessions = new Map();
     this.capacityLock = Promise.resolve();
     this.persistRequested = false;
     this.persistPromise = null;
+    this.transportGrants = new Map();
   }
 
   async init() {
+    await verifyWorkspaceIdentity(this.workspaceRoot, this.workspaceId);
     const records = await this.stateStore.readRecords();
     if (records === null) {
       await this.persist();
@@ -70,11 +87,12 @@ export class TerminalManager {
     }
 
     for (const record of records) {
+      validateTerminalRecord(record, this.workspaceId);
       if (record.steering_dispatching) {
         // TODO: 兼容上次后端在 steering claim 后异常退出的恢复场景。
         record.steering_dispatching = false;
       }
-      const restored = await this.restoreRecord(this.migrateRecord(record));
+      const restored = await this.restoreRecord(record);
       const session = new TerminalSession({ record: restored, manager: this });
       this.sessions.set(session.id, session);
     }
@@ -82,71 +100,31 @@ export class TerminalManager {
     await this.persist();
   }
 
-  // 一次性迁移旧持久记录：旧记录只落盘绝对 `cwd`，新记录只承载工作区内相对路径
-  // `cwd_relative`。迁移在 load 时由工作区根在调用栈内推导相对路径，推导失败即
-  // fail-closed（含 terminal_id 与原因），绝不静默丢弃终端、绝不回退进程 cwd；
-  // 迁移结果随后由 persist() 物理写回，落盘不再含绝对路径，杜绝双读。
-  migrateRecord(record) {
-    if (typeof record.cwd_relative === "string") {
-      if (!("cwd" in record)) {
-        return record;
-      }
-      const normalized = { ...record };
-      delete normalized.cwd;
-      return normalized;
-    }
-    const migrated = { ...record };
-    migrated.cwd_relative = deriveLegacyCwdRelative(
-      this.workspaceRoot,
-      migrated.cwd,
-      migrated.terminal_id,
-    );
-    delete migrated.cwd;
-    return migrated;
-  }
-
   async restoreRecord(record) {
     if (record.status !== "running") {
       return record;
     }
-
-    const restoredAt = nowIso();
     const pid = Number(record.os_pid);
-    const stat = await readProcessStat(pid);
-    const processSessionId = record.process_session_id ?? stat?.processSessionId ?? null;
-    const processStartTime = record.process_start_time ?? stat?.processStartTime ?? null;
-    const cleanupResult = await terminateTerminalProcessTree({
-      pid,
-      processSessionId,
-      processStartTime,
-    });
-
-    if (cleanupResult === "still_running") {
-      throw new Error(
-        `终端管理器启动清理失败: terminal_id=${record.terminal_id}, pid=${pid}`,
+    let stat = null;
+    try {
+      stat = await readProcessStat(pid);
+    } catch (error) {
+      console.error(
+        `[terminal-manager] 启动时核实进程身份失败: terminal_id=${record.terminal_id}, pid=${pid}`,
+        error,
       );
     }
-
-    const restored = {
-      ...record,
-      status: "terminated",
-      updated_at: restoredAt,
-      ended_at: record.ended_at || restoredAt,
-      signal: cleanupResult === "force_killed" ? "SIGKILL" : "SIGTERM",
-      process_group_id: record.process_group_id ?? stat?.processGroupId ?? null,
-      process_session_id: processSessionId,
-      process_start_time: processStartTime,
-      release_reason: "terminal_manager_startup_cleanup",
-    };
-    if (restored.last_command_status === "running") {
-      restored.last_command_status = "terminated";
-      restored.last_command_completed_at = restored.ended_at;
+    const reconciliationStatus = matchesTerminalProcessIdentity(record, stat)
+      ? "reconcile_required"
+      : "unknown";
+    if (record.reconciliation_status === reconciliationStatus) {
+      return record;
     }
-    return restored;
-  }
-
-  attachUrl(id) {
-    return `${this.terminalFrontendBaseUrl}/?terminalId=${encodeURIComponent(id)}`;
+    return {
+      ...record,
+      reconciliation_status: reconciliationStatus,
+      updated_at: nowIso(),
+    };
   }
 
   async persist() {
@@ -162,7 +140,6 @@ export class TerminalManager {
       while (this.persistRequested) {
         this.persistRequested = false;
         await this.stateStore.write({
-          workspace_id: this.workspaceId,
           updated_at: nowIso(),
           terminals: [...this.sessions.values()].map((session) => session.toRecord()),
         });
@@ -172,9 +149,8 @@ export class TerminalManager {
     }
   }
 
-  list({ sessionId = null } = {}) {
+  list() {
     return [...this.sessions.values()]
-      .filter((session) => !sessionId || session.sessionId === sessionId)
       .map((session) => session.snapshot())
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   }
@@ -189,7 +165,8 @@ export class TerminalManager {
 
   async create({
     workspaceId,
-    sessionId,
+    terminalId,
+    ownerRevision,
     agentId,
     title = "Persistent Terminal",
     cwd = this.workspaceRoot,
@@ -207,7 +184,8 @@ export class TerminalManager {
     try {
       return await this.createWithCapacity({
         workspaceId,
-        sessionId,
+        terminalId,
+        ownerRevision,
         agentId,
         title,
         cwd,
@@ -223,7 +201,8 @@ export class TerminalManager {
 
   async createWithCapacity({
     workspaceId,
-    sessionId,
+    terminalId,
+    ownerRevision,
     agentId,
     title,
     cwd,
@@ -232,26 +211,30 @@ export class TerminalManager {
     command,
     args,
   }) {
-    if (workspaceId != null && workspaceId !== this.workspaceId) {
+    if (workspaceId !== this.workspaceId) {
       throw new Error(
         `终端工作区身份不匹配: expected=${this.workspaceId}, actual=${workspaceId}`,
       );
     }
-    if (!sessionId) {
-      throw new Error("session_id 不能为空");
+    if (typeof terminalId !== "string" || !/^term_[a-f0-9]{32}$/.test(terminalId)) {
+      throw new Error("Terminal 必须由 Python owner 提供 resource_id");
+    }
+    if (!Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.sessions.has(terminalId)) {
+      throw new Error(`Terminal owner revision 或身份冲突: ${terminalId}`);
     }
     await this.pruneTerminalHistory();
     await this.ensureExecutionCapacity();
     // 只把工作区内相对路径写入持久记录；绝对路径仅在本次调用栈内解析（裁定 D-A2）。
     const resolvedCwd = resolveTerminalCwd(this.workspaceRoot, cwd);
     const cwdRelative = path.relative(this.workspaceRoot, resolvedCwd);
-    const id = terminalId();
+    const id = terminalId;
     const session = new TerminalSession({
       manager: this,
       record: {
         terminal_id: id,
         workspace_id: this.workspaceId,
-        session_id: sessionId,
+        transport_owner_revision: ownerRevision,
+        reconciliation_status: "verified",
         owner_agent_id: agentId || null,
         title,
         command,
@@ -284,6 +267,47 @@ export class TerminalManager {
     return session.snapshot();
   }
 
+  async syncOwnerRevision(id, revision) {
+    this.get(id).syncOwnerRevision(revision);
+    for (const [token, grant] of this.transportGrants) {
+      if (grant.terminalId === id && grant.revision !== revision) {
+        this.transportGrants.delete(token);
+      }
+    }
+    await this.persist();
+  }
+
+  issueTransportGrant(id, { ownerRevision, association }) {
+    const terminal = this.get(id);
+    terminal.assertPtyConnected("transport-grant");
+    if (terminal.transportOwnerRevision !== ownerRevision) {
+      throw new Error(`Terminal transport revision 冲突: ${id}`);
+    }
+    // 只保存短期传输授权，Thread 关联的合法性已由 Python owner 核实。
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = Date.now() + 30_000;
+    for (const [existing, grant] of this.transportGrants) {
+      if (grant.expiresAt <= Date.now()) this.transportGrants.delete(existing);
+    }
+    this.transportGrants.set(token, {
+      terminalId: id, revision: ownerRevision, association, expiresAt,
+    });
+    return {
+      resource_id: id, owner_revision: ownerRevision,
+      grant_token: token, expires_at: new Date(expiresAt).toISOString(),
+    };
+  }
+
+  consumeTransportGrant(id, token) {
+    const grant = this.transportGrants.get(token);
+    this.transportGrants.delete(token);
+    if (!grant || grant.terminalId !== id || grant.expiresAt <= Date.now()
+      || this.get(id).transportOwnerRevision !== grant.revision) {
+      throw new Error("Terminal 一次传输授权无效、过期或已消费");
+    }
+    return grant;
+  }
+
   async read(id) {
     return await this.get(id).readModelOutput();
   }
@@ -314,32 +338,21 @@ export class TerminalManager {
   async ensureExecutionCapacity() {
     const active = [...this.sessions.values()]
       .filter(
-        (session) => session.status === "running"
-          && session.lastCommandStatus !== "completed",
-      )
-      .sort((left, right) => right.lastUsedAt.localeCompare(left.lastUsedAt));
+        (session) => session.status === "running" || session.status === "created",
+      );
     if (active.length < MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE) {
       return;
     }
 
-    const candidates = active.slice(PROTECTED_RECENT_EXECUTIONS).reverse();
-    const victim = candidates[0];
-    if (!victim) {
-      throw new Error(
-        `工作区终端执行已达到上限且没有可淘汰项: workspace_id=${this.workspaceId}, limit=${MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE}`,
-      );
-    }
-    await victim.terminateForRelease({
-      status: "terminated",
-      commandStatus: "terminated",
-      reason: "workspace_lru_eviction",
-    });
-    await this.persist();
+    // PTY 进程上限只阻断创建；停止/删除由 Python owner 核对关联与 lease 后决定。
+    throw new Error(
+      `工作区终端进程已达到上限: workspace_id=${this.workspaceId}, limit=${MAX_ACTIVE_EXECUTIONS_PER_WORKSPACE}；请通过工作区 Terminal owner 停止资源`,
+    );
   }
 
   async pruneTerminalHistory() {
     const historical = [...this.sessions.values()]
-      .filter((session) => session.status !== "created" && session.status !== "running")
+      .filter((session) => session.status === "deleted")
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const removed = historical.slice(MAX_RETAINED_TERMINAL_HISTORY);
     for (const session of removed) {
@@ -378,11 +391,9 @@ export class TerminalManager {
   async shutdown(reason = "terminal_manager_shutdown") {
     await Promise.all([...this.sessions.values()].map(async (session) => {
       if (session.status === "running") {
-        await session.terminateForRelease({
-          status: "terminated",
-          commandStatus: "terminated",
-          reason,
-        });
+        session.markReconciliationStatus("reconcile_required");
+        session.releaseReason = reason;
+        await session.dispose({ terminatePty: false });
         return;
       }
       await session.dispose();

@@ -7,8 +7,10 @@ provider locator 只存在于实际 owner 私有侧，绝不进入本模块任�
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, NewType
+from uuid import UUID, uuid5
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
     parse_vrn,
@@ -27,6 +29,10 @@ ALL_OPERATIONS: Final = frozenset(
 # 内的 config/session 是纯寻址 kind（无 payload 描述符），不得登记进本闭集。
 _DESCRIPTOR_KINDS: Final = frozenset({"agent-spec", "skills"})
 _IDENTITY_FORBIDDEN: Final = ("/", "\\", "@", "%")
+_RESOURCE_IDENTITY_NAMESPACE: Final = UUID("75e37b63-cb5f-5b6f-8c0d-c5d61d280ed3")
+SESSION_RESOURCE_IDENTITY_NAMESPACE: Final = "session-resource-v1"
+CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE: Final = "context-assembly-v1"
+ResourceIdentity = NewType("ResourceIdentity", str)
 
 
 def _require_identity(field_name: str, value: str) -> None:
@@ -38,6 +44,24 @@ def _require_identity(field_name: str, value: str) -> None:
         )
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
         raise ValueError(f"VRN {field_name} 不得携带控制字符: {value!r}")
+
+
+def validate_resource_identity(value: str) -> ResourceIdentity:
+    """校验不透明资源身份并返回其唯一的 nominal 类型。"""
+    _require_identity("resource_identity", value)
+    return ResourceIdentity(value)
+
+
+def derive_resource_identity(namespace: str, *stable_parts: str) -> ResourceIdentity:
+    """从 owner 已持久化的稳定 ID 派生跨进程一致的 opaque UUID。"""
+    if not namespace or not stable_parts or any(not part for part in stable_parts):
+        raise ValueError("ResourceIdentity 派生参数必须是非空 namespace 和 ID")
+    seed = json.dumps(
+        [namespace, *stable_parts],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return validate_resource_identity(str(uuid5(_RESOURCE_IDENTITY_NAMESPACE, seed)))
 
 
 def _require_revision(field_name: str, value: str) -> None:

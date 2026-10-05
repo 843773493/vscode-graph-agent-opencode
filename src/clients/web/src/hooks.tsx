@@ -1,9 +1,11 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { DEFAULT_BACKEND_PORT } from "./api";
 import type { AppState } from "./types/frontend";
@@ -39,6 +41,8 @@ import {
   useTerminalTurnLoader,
 } from "./hooks/session/useSessionTurnTimeline";
 import { errorMessage } from "./utils/errorMessage";
+import { createSessionCatalogOutboxRuntime } from "./hooks/session/sessionCatalogOutboxRuntime";
+import { requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
 // AppContext / ComposerContext 的契约与消费者已下沉到 hooks/app/appContext.tsx；
 // 此处保持同名再导出，调用方（main.tsx、App.tsx、各组件与测试）不需要改动导入路径。
 export {
@@ -65,6 +69,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const currentSessionGatewayWorkspaceId = currentSessionId
     ? state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId
     : state.activeGatewayWorkspaceId;
+  const currentSessionWorkspaceRequestTarget = currentSessionGatewayWorkspaceId
+    ? requireGatewayWorkspaceRequestTarget(
+        state.gatewayWorkspaces,
+        currentSessionGatewayWorkspaceId,
+      )
+    : null;
+  const activeWorkspaceRequestTarget = state.activeGatewayWorkspaceId
+    ? requireGatewayWorkspaceRequestTarget(
+        state.gatewayWorkspaces,
+        state.activeGatewayWorkspaceId,
+      )
+    : null;
   const currentSessionCacheKey =
     currentSessionId && currentSessionGatewayWorkspaceId
       ? sessionScopeKey(currentSessionGatewayWorkspaceId, currentSessionId)
@@ -142,6 +158,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apiPort: state.apiPort,
     sessionId: currentSessionId,
     workspaceId: currentSessionGatewayWorkspaceId,
+    workspaceRequestTarget: currentSessionWorkspaceRequestTarget,
     sessionCacheKey: currentSessionCacheKey,
     activeJobId: currentActiveJobId,
     timelineReady:
@@ -168,7 +185,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
   useWorkspaceSessionActivity({
     apiPort: state.apiPort,
-    workspaceId: state.activeGatewayWorkspaceId,
+    workspaceTarget: activeWorkspaceRequestTarget,
     currentSessionCacheKey,
     setState,
   });
@@ -193,6 +210,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setStatus = useCallback((text: string) => {
     setState((prev) => ({ ...prev, status: text }));
   }, []);
+  const sessionCatalogOutboxRuntime = useMemo(
+    () => createSessionCatalogOutboxRuntime({
+      apiPort: state.apiPort ?? DEFAULT_BACKEND_PORT,
+      onError: setStatus,
+    }),
+    [setStatus, state.apiPort],
+  );
+  useLayoutEffect(() => {
+    sessionCatalogOutboxRuntime.activatePrincipal(state.gatewayUserAccess ?? null);
+  }, [sessionCatalogOutboxRuntime, state.gatewayUserAccess]);
+  const sessionCatalogOutboxSnapshot = useSyncExternalStore(
+    sessionCatalogOutboxRuntime.subscribe,
+    sessionCatalogOutboxRuntime.getSnapshot,
+    sessionCatalogOutboxRuntime.getSnapshot,
+  );
 
   const updateUiSettings = useUiSettingsController({
     apiPort: state.apiPort,
@@ -236,6 +268,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     currentSession: state.currentSession,
     activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
     currentSessionGatewayWorkspaceId,
+    workspaceRequestTargets: state.gatewayWorkspaces,
     currentSessionCacheKey,
     defaultGatewayWorkspaceId,
     contentView: state.contentView,
@@ -243,6 +276,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     abortCurrentStream,
     invalidateAgentState,
     refreshAgentStateSnapshot,
+    sessionCatalogOutboxRuntime,
+    gatewayUserAccess: state.gatewayUserAccess,
   });
 
   const { loadSessionViewState, saveSessionViewState, toggleExpandDetails } = useSessionViewState({
@@ -298,6 +333,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     resetWorkspaceScopedState,
   } = useWorkspaceRefreshOrchestration({
     apiPort: state.apiPort,
+    gatewayWorkspaces: state.gatewayWorkspaces,
     setState,
     refreshSessions,
     abortCurrentStream,
@@ -368,6 +404,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       state,
+      sessionCatalogOutboxRuntime,
+      sessionCatalogOutboxSnapshot,
       setStatus,
       sendMessage,
       replayTurn,
@@ -432,6 +470,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       state,
+      sessionCatalogOutboxRuntime,
+      sessionCatalogOutboxSnapshot,
       setStatus,
       sendMessage,
       replayTurn,

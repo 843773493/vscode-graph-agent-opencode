@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AddManagedGatewayWorkspaceRequest,
+  GatewayUserAccess,
   GatewayWorkspace,
   Session,
   WebUiSessionSidebarSettings,
@@ -24,6 +25,10 @@ import WorkspaceAddDialog from '../../workspace/WorkspaceAddDialog';
 import AnchoredOverlay from '../../overlays/AnchoredOverlay';
 import WarmActionDialog from '../../overlays/WarmActionDialog';
 import type { SessionGeneratorResourcesController } from '../../../hooks/sessionResourceExplorer/useSessionGeneratorResources';
+import type {
+  SessionCatalogOutboxRuntime,
+  SessionCatalogOutboxSnapshot,
+} from '../../../hooks/session/sessionCatalogOutboxRuntime';
 import {
   WORKSPACE_SECTION_RECENT_LIMIT,
   buildTimeSections,
@@ -99,6 +104,9 @@ interface AgentSessionsPanelProps {
   onInvalidateSessionCatalog: (workspaceId: string) => void;
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
+  sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
+  gatewayUserAccess?: GatewayUserAccess | null;
   flexRatio: number;
   preferences: AgentSessionsPreferences;
   onPreferencesChange: (
@@ -150,6 +158,9 @@ export default function AgentSessionsPanel({
   onInvalidateSessionCatalog,
   catalogSyncKeys,
   catalogRefreshVersions,
+  sessionCatalogOutboxRuntime,
+  sessionCatalogOutboxSnapshot,
+  gatewayUserAccess,
   flexRatio,
   preferences,
   onPreferencesChange,
@@ -488,6 +499,9 @@ export default function AgentSessionsPanel({
               onSessionFolderDeleted={onSessionFolderDeleted}
               catalogSyncKeys={catalogSyncKeys}
               catalogRefreshVersions={catalogRefreshVersions}
+              sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
+              sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
+              gatewayUserAccess={gatewayUserAccess}
               onSelectSession={onSelectWorkspaceSession}
               onStatusChange={onStatusChange}
               onOpenWorkspaceMenu={openWorkspaceMenu}

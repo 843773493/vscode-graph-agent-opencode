@@ -17,6 +17,7 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import e2e_port_block_for_file
+from tests.support.session_navigation_http import submit_navigation_operation
 
 
 @pytest.mark.asyncio
@@ -56,7 +57,7 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(20)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
-        default_backend_url="http://127.0.0.1:9",
+        default_backend_url="managed-by-gateway",
         port=port,
         extra_env={"BOXTEAM_WEB_ASSETS": str(project_root / "src" / "clients" / "web" / "dist")},
     )
@@ -72,10 +73,9 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             parent_workspace_id = workspaces_response.json()["data"][
                 "active_workspace_id"
             ]
-            parent_workspace = next(
-                item
+            assert any(
+                item["workspace_id"] == parent_workspace_id
                 for item in workspaces_response.json()["data"]["items"]
-                if item["workspace_id"] == parent_workspace_id
             )
             secondary_workspace = workspace_root / "secondary-workspace"
             secondary_workspace.mkdir(parents=True, exist_ok=True)
@@ -84,15 +84,16 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 json={
                     "root_path": str(secondary_workspace),
                     "name": "拖放子工作区",
-                    "backend_url": parent_workspace["backend_url"],
                 },
             )
             assert add_workspace_response.status_code == 200, add_workspace_response.text
-            child_workspace_id = next(
-                item["workspace_id"]
+            child_workspace = next(
+                item
                 for item in add_workspace_response.json()["data"]["items"]
                 if Path(item["root_path"]).resolve() == secondary_workspace
             )
+            assert child_workspace["managed"] is True
+            child_workspace_id = child_workspace["workspace_id"]
             parent_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "物理父会话"},
@@ -101,17 +102,18 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
                 "/api/v1/sessions",
                 json={"title": "待绑定子会话"},
             )
-            folder_response = await client.post(
-                "/api/v1/session-catalog/folders",
-                json={"name": "归档文件夹"},
+            folder_receipt = await submit_navigation_operation(
+                client,
+                "create_folder",
+                name="归档文件夹",
             )
             assert parent_response.status_code == 200, parent_response.text
             assert child_response.status_code == 200, child_response.text
-            assert folder_response.status_code == 200, folder_response.text
+            assert folder_receipt["state"] == "committed"
             fixture = {
                 "parentSessionId": parent_response.json()["data"]["session_id"],
                 "childSessionId": child_response.json()["data"]["session_id"],
-                "folderId": folder_response.json()["data"]["items"][-1]["node_id"],
+                "folderId": str(folder_receipt["created_node_id"]),
                 "parentWorkspaceId": parent_workspace_id,
                 "childWorkspaceId": child_workspace_id,
             }

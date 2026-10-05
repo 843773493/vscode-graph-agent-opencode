@@ -46,6 +46,29 @@ def test_partial_text_fragments_remain_partial_until_saver_commits_them() -> Non
     assert items[0].payload == "前半后半"
 
 
+def test_internal_provider_item_keeps_execution_attribution_without_turn_scope() -> None:
+    accumulator = CanonicalBlockAccumulator(
+        turn_id=None,
+        execution_id="execution-internal-stream",
+        producer_id="model-call-internal-stream",
+        model_call_id="model-call-internal-stream",
+    )
+    accumulator.accept(
+        {
+            "block_id": "internal-text-1",
+            "carrier_type": "text",
+            "block_index": 0,
+            "text": "Turn-less output",
+        }
+    )
+
+    item = accumulator.finalize(first_item_sequence=1)[0]
+
+    assert item.turn_id is None
+    assert item.turn_scope is None
+    assert item.metadata["execution_id"] == "execution-internal-stream"
+
+
 def test_message_group_is_scoped_to_model_call_within_one_execution() -> None:
     first = CanonicalBlockAccumulator(
         turn_id="turn-stream-contract",

@@ -8,6 +8,7 @@ import {
   WORKSPACE_ID,
   appState,
   bootstrap,
+  emptyHistoryPageResponse,
   installWindow,
   originalFetch,
   restoreTurnHistoryTestGlobals,
@@ -76,6 +77,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
               active_job_count: 1,
             },
           });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return emptyHistoryPageResponse("req_history_replay");
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/pending-requests`) {
           return Response.json({
@@ -153,6 +157,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
               active_job_count: 1,
             },
           });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return emptyHistoryPageResponse("req_history_queued");
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/pending-requests`) {
           return Response.json({
@@ -245,6 +252,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
             request_id: "req_bootstrap_empty_pending",
             data: { ...bootstrap("ready", 1), latest_turn: null },
           });
+        }
+        if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          return emptyHistoryPageResponse("req_history_empty_pending");
         }
         throw new Error(`测试收到未预期请求: ${path}`);
       },

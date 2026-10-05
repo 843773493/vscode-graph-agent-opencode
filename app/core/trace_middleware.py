@@ -14,11 +14,16 @@ logger = logging.getLogger(__name__)
 # requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」）。
 # 与 ``X-Request-ID`` 共用 TraceMiddleware 这一套请求级上下文，不新建第二套机制。
 GATEWAY_ID_HEADER = "X-BoxTeam-Gateway-Id"
+NAVIGATION_ACTOR_HEADER = "X-BoxTeam-Navigation-Actor"
 
 # 当前请求绑定的 gateway_id；请求未携带时保持 None，由消费方 fail-closed。
 # 与 request_id 一样，生命周期完全由 TraceMiddleware.dispatch 承担（请求作用域内）。
 _CURRENT_GATEWAY_ID: ContextVar[str | None] = ContextVar(
     "boxteam_current_gateway_id",
+    default=None,
+)
+_CURRENT_NAVIGATION_ACTOR: ContextVar[str | None] = ContextVar(
+    "boxteam_current_navigation_actor",
     default=None,
 )
 
@@ -103,6 +108,32 @@ def require_current_gateway_id(consumer: str) -> str:
     return gateway_id
 
 
+def set_current_navigation_actor(actor: str | None) -> Token[str | None]:
+    """在当前请求作用域绑定 Gateway 认证后的 navigation actor。"""
+    return _CURRENT_NAVIGATION_ACTOR.set(actor)
+
+
+def reset_current_navigation_actor(token: Token[str | None]) -> None:
+    """恢复先前的 navigation actor 绑定。"""
+    _CURRENT_NAVIGATION_ACTOR.reset(token)
+
+
+def get_current_navigation_actor() -> str | None:
+    """读取当前请求作用域中的 navigation actor；未绑定时返回 None。"""
+    return _CURRENT_NAVIGATION_ACTOR.get()
+
+
+def require_current_navigation_actor(consumer: str) -> str:
+    """读取 Gateway 已认证的 navigation actor，缺失时显式失败。"""
+    actor = _CURRENT_NAVIGATION_ACTOR.get()
+    if not isinstance(actor, str) or not actor:
+        raise RuntimeError(
+            f"{consumer} 需要 Gateway 已认证的 navigation actor，但当前作用域未绑定："
+            f"请求未携带 {NAVIGATION_ACTOR_HEADER} 头，且创建方未显式传递身份"
+        )
+    return actor
+
+
 class TraceMiddleware(BaseHTTPMiddleware):
     """
     Middleware for request tracing and performance logging.
@@ -125,6 +156,12 @@ class TraceMiddleware(BaseHTTPMiddleware):
 
         incoming_gateway_id = request.headers.get(GATEWAY_ID_HEADER, "").strip()
         gateway_id_token = set_current_gateway_id(incoming_gateway_id or None)
+        incoming_navigation_actor = request.headers.get(
+            NAVIGATION_ACTOR_HEADER, ""
+        ).strip()
+        navigation_actor_token = set_current_navigation_actor(
+            incoming_navigation_actor or None
+        )
 
         # Attach trace info to request state
         request.state.request_id = request_id
@@ -157,6 +194,7 @@ class TraceMiddleware(BaseHTTPMiddleware):
             )
         finally:
             reset_current_request_id(request_id_token)
+            reset_current_navigation_actor(navigation_actor_token)
             reset_current_gateway_id(gateway_id_token)
         response.headers["X-Request-ID"] = request_id
         

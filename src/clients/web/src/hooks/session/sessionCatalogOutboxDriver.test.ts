@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { HttpRequestError } from "../../api/http";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import type {
   SessionCatalogEnqueueResult,
   SessionCatalogOperationReceipt,
@@ -31,6 +32,11 @@ const PARTITION = {
 };
 const PARTITION_KEY = `${PARTITION.gatewayId}\u0000${PARTITION.workspaceId}\u0000${PARTITION.principal}`;
 const GATEWAY_WORKSPACE_ID = "gateway-route-42";
+const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = {
+  workspace_id: GATEWAY_WORKSPACE_ID,
+  backend_workspace_id: BACKEND_WORKSPACE_ID,
+  connection_kind: "local",
+};
 const PORT = 48_901;
 type StoredCatalogOutboxOperation = CatalogOutboxStoredOperation["operation"];
 
@@ -125,12 +131,12 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
   test("同步 pending 立即可见，随后落盘并批量入队", async () => {
     const events: string[] = [];
     const enqueued: string[][] = [];
-    const routedWorkspaceIds: string[] = [];
-    const queriedWorkspaceIds: string[] = [];
+    const enqueuedTargets: GatewayWorkspaceRequestTarget[] = [];
+    const queriedTargets: GatewayWorkspaceRequestTarget[] = [];
     const persistence = recordingPort();
     const adapter: SessionCatalogOperationsAdapter = {
-      async enqueue(_port, workspaceId, intents) {
-        routedWorkspaceIds.push(workspaceId);
+      async enqueue(_port, workspaceTarget, intents) {
+        enqueuedTargets.push(workspaceTarget);
         events.push("enqueue");
         enqueued.push(intents.map((intent) => intent.client_operation_id));
         return {
@@ -140,8 +146,8 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
           created_node_ids: {},
         } satisfies SessionCatalogEnqueueResult;
       },
-      async queryStatus(_port, workspaceId, operationIds) {
-        queriedWorkspaceIds.push(workspaceId);
+      async queryStatus(_port, workspaceTarget, operationIds) {
+        queriedTargets.push(workspaceTarget);
         return {
           workspace_id: BACKEND_WORKSPACE_ID,
           catalog_revision: 7,
@@ -153,6 +159,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -179,7 +186,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     ]);
     expect(persistence.writes.map((operation) => operation.state)).toEqual(["pending_local"]);
     expect(enqueued).toEqual([[opId("a")]]);
-    expect(routedWorkspaceIds).toEqual([GATEWAY_WORKSPACE_ID]);
+    expect(enqueuedTargets).toEqual([WORKSPACE_TARGET]);
     expect((await persistence.load(PARTITION_KEY))
       .map((record) => record.operation.client_operation_id)).toEqual([opId("a")]);
     expect(await persistence.load(
@@ -188,7 +195,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     expect(driver.current().operations[0].state).toBe("accepted");
 
     await driver.reconcile();
-    expect(queriedWorkspaceIds).toEqual([GATEWAY_WORKSPACE_ID]);
+    expect(queriedTargets).toEqual([WORKSPACE_TARGET]);
   });
 
   test("本地持久化失败时撤销 pending、显示错误且绝不派发入队", async () => {
@@ -203,6 +210,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter: {
@@ -276,6 +284,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -298,6 +307,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const resumed = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -311,6 +321,40 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
       expectedRevision: 3,
     });
     expect(enqueued.slice(before)).not.toContain(opId("b"));
+  });
+
+  test("本地 insert 失败且回滚也失败时，错误必须同时含写入与回滚两条原因", async () => {
+    const persistence: CatalogOutboxPersistencePort = {
+      load: async () => [],
+      insert: async () => {
+        // IndexedDB 事务可能在本地提交后才报告失败，必须按稳定 ID 清理残留。
+        throw new Error("QuotaExceededError: 本地存储已满");
+      },
+      delete: async () => {
+        throw new Error("删除已落盘条目也失败");
+      },
+    };
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION,
+      persistence,
+      adapter: {
+        async enqueue() { throw new Error("持久化失败时不得派发入队"); },
+        async queryStatus() { throw new Error("本用例不应查询状态"); },
+      },
+    });
+    await driver.restore();
+
+    const failure = await driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    }).then(() => null, (error: Error) => error);
+
+    expect(failure?.message).toContain("回滚也失败");
+    expect(failure?.message).toContain("QuotaExceededError");
+    expect(failure?.message).toContain("删除已落盘条目也失败");
   });
 
   test("刷新恢复 outbox 后未对账命令仍保留并可继续入队", async () => {
@@ -333,6 +377,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const first = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -349,6 +394,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const resumed = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -389,6 +435,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -398,6 +445,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const otherTab = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -429,6 +477,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence: recordingPort(),
       adapter: {
@@ -507,6 +556,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -529,6 +579,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     return createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence: recordingPort(),
       adapter,
@@ -633,6 +684,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter: {
@@ -710,6 +762,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const restored = await createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter: {
@@ -773,6 +826,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence: port,
       adapter: {
@@ -791,7 +845,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
             items: [receipt(opId("a"), {
               state: "committed",
               committed_catalog_revision: 12,
-              receipt_revision: 12,
+              receipt_revision: 42,
             })],
             unknown_operation_ids: [],
           } satisfies SessionCatalogOperationStatusPage;
@@ -824,6 +878,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter: {
@@ -842,7 +897,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
             items: [receipt(operationIds[0], {
               state: "committed",
               committed_catalog_revision: 12,
-              receipt_revision: 12,
+              receipt_revision: 42,
             })],
             unknown_operation_ids: [],
           };
@@ -869,6 +924,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const restored = await createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter: {
@@ -942,6 +998,7 @@ describe("会话目录 outbox 驱动：分区广播", () => {
     const driver = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -957,6 +1014,7 @@ describe("会话目录 outbox 驱动：分区广播", () => {
     const otherTab = createSessionCatalogOutboxDriver({
       port: PORT,
       gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
       adapter,
@@ -977,6 +1035,55 @@ describe("会话目录 outbox 驱动：分区广播", () => {
     } finally {
       if (original) Object.defineProperty(globalThis, "BroadcastChannel", original);
     }
+  });
+});
+
+describe("会话目录 outbox 驱动：身份切换 fence", () => {
+  test("deactivate 中止在途请求并拒绝迟到回包与后续操作", async () => {
+    const enqueueStarted = deferred<void>();
+    const enqueueResult = deferred<SessionCatalogEnqueueResult>();
+    let requestSignal: AbortSignal | undefined;
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT,
+      gatewayWorkspaceId: GATEWAY_WORKSPACE_ID,
+      workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION,
+      persistence: recordingPort(),
+      adapter: {
+        enqueue(_port, _workspaceId, _intents, signal) {
+          requestSignal = signal;
+          enqueueStarted.resolve();
+          return enqueueResult.promise;
+        },
+        async queryStatus() {
+          throw new Error("失效 driver 不得查询状态");
+        },
+      },
+    });
+    await driver.restore();
+
+    const pendingApply = driver.applyIntent(opId("a"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    });
+    await enqueueStarted.promise;
+    const beforeDeactivation = driver.current();
+    driver.deactivate();
+
+    expect(requestSignal?.aborted).toBe(true);
+    enqueueResult.resolve({
+      workspace_id: BACKEND_WORKSPACE_ID,
+      accepted_count: 1,
+      receipts: [receipt(opId("a"))],
+      created_node_ids: {},
+    });
+    await expect(pendingApply).rejects.toThrow("principal 已失效");
+    expect(driver.current()).toBe(beforeDeactivation);
+    await expect(driver.applyIntent(opId("b"), renameIntent(), {
+      baseCatalogRevision: 7,
+      expectedRevision: 3,
+    })).rejects.toThrow("principal 已失效");
+    await expect(driver.reconcile()).rejects.toThrow("principal 已失效");
   });
 });
 

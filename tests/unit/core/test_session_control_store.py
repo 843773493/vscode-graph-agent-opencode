@@ -14,6 +14,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 from app.core.session_control_store import (
     SessionControlStore,
@@ -53,7 +57,9 @@ def store(tmp_path: Path) -> SessionControlStore:
     created.close()
 
 
-def raw_execute(store: SessionControlStore, sql: str, params: tuple[object, ...] = ()) -> None:
+def raw_execute(
+    store: SessionControlStore, sql: str, params: tuple[object, ...] = ()
+) -> None:
     """绕过 store API 直接改库(构造 CHECK 冲突/多行等注入态)。"""
     store.connection.execute(sql, params)
 
@@ -67,14 +73,12 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     target = tmp_path / "session-control.sqlite"
     created = SessionControlStore(target)
     try:
-        version = int(
-            created.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
+        version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
         # B1/B2：SCHEMA_VERSION 4→5（session_operation_leases）→6（
         # thread_owner_bindings owner 字段槽）→7（D5 communication
         # outbox/inbox ledger）；thread_execution_intents 稳定 identity
         # 由 R23 落地。
-        assert version == SessionControlStore.SCHEMA_VERSION == 7
+        assert version == SessionControlStore.SCHEMA_VERSION == 8
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -117,10 +121,9 @@ def test_sha256_hex_pattern_has_single_neutral_definition() -> None:
         assert module.SHA256_HEX_PATTERN is SHA256_HEX_PATTERN, module.__name__
         source = Path(module.__file__).read_text(encoding="utf-8")
         # 只允许出现导入语句，不允许在别处再次 compile 出该形态。
-        assert source.count("re.compile(r\"^[0-9a-f]{64}$\")") == 0
+        assert source.count('re.compile(r"^[0-9a-f]{64}$")') == 0
         assert (
-            "session_control_primitives" in source
-            and "SHA256_HEX_PATTERN" in source
+            "session_control_primitives" in source and "SHA256_HEX_PATTERN" in source
         ), module.__name__
     assert SHA256_HEX_PATTERN.pattern == r"^[0-9a-f]{64}$"
     assert SHA256_HEX_PATTERN.fullmatch("0" * 64) is not None
@@ -159,7 +162,9 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
     target = tmp_path / "session-control.sqlite"
     first = SessionControlStore(target)
     try:
-        first.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        first.initialize_main_thread(
+            make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
     finally:
         first.close()
     second = SessionControlStore(target)
@@ -167,11 +172,9 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         # 重复建表不报错、不重置 user_version、不破坏既有行。
         row = second.get_main_thread()
         assert str(row["kind"]) == "main"
-        version = int(
-            second.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        # B1/B2：user_version 升级后为 7（原断言 4→6→7）。
-        assert version == 7
+        version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
+        # D5→8.14：schema 加入 thread_catalog GraphBinding 四字段。
+        assert version == 8
     finally:
         second.close()
 
@@ -179,9 +182,7 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
 def test_wal_mode_enabled(tmp_path: Path) -> None:
     created = SessionControlStore(tmp_path / "session-control.sqlite")
     try:
-        mode = str(
-            created.connection.execute("PRAGMA journal_mode").fetchone()[0]
-        )
+        mode = str(created.connection.execute("PRAGMA journal_mode").fetchone()[0])
         assert mode.lower() == "wal"
     finally:
         created.close()
@@ -193,8 +194,8 @@ def test_unknown_user_version_fails_closed(tmp_path: Path) -> None:
     created.close()
     outside = sqlite3.connect(target)
     try:
-        # D5：7 已是受支持版本，未知版本样本顺延为 8。
-        outside.execute("PRAGMA user_version = 8")
+        # 8 已是受支持版本，未知版本样本顺延为 9。
+        outside.execute("PRAGMA user_version = 9")
         outside.commit()
     finally:
         outside.close()
@@ -202,18 +203,19 @@ def test_unknown_user_version_fails_closed(tmp_path: Path) -> None:
         SessionControlStore(target)
 
 
-def test_v6_database_upgrades_additively_to_v7(tmp_path: Path) -> None:
-    """v6 库加法升级到 v7：communication 表补建，既有生命周期行零丢失。
+def test_v6_database_upgrades_additively_to_v8(tmp_path: Path) -> None:
+    """v6 库加法升级到 v8：通信表与 GraphBinding 列补建，旧行保持未绑定。
 
-    模拟真实 v6 库：按 v7 建库并写入生命周期数据后，DROP 掉 D5 新增的
-    communication 表并回拨 user_version=6（v6 库不存在这两张表）；重开
-    时 current=6 走加法补建路径，任何失败随 _initialize 事务整体回滚。
+    模拟真实 v6 库：先建入其它当前表和生命周期行，再重建旧形态
+    thread_catalog 并删除 D5 通信表；重开时 selector 列补为 NULL，绝不推断。
     """
     target = tmp_path / "session-control.sqlite"
     main_thread_id = make_thread_id()
     first = SessionControlStore(target)
     try:
-        first.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        first.initialize_main_thread(
+            main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         first.initialize_fence("active", 1)
     finally:
         first.close()
@@ -221,19 +223,27 @@ def test_v6_database_upgrades_additively_to_v7(tmp_path: Path) -> None:
     try:
         outside.execute("DROP TABLE communication_outbox")
         outside.execute("DROP TABLE communication_inbox")
+        outside.execute("DROP INDEX IF EXISTS idx_communication_inbox_target_accepted")
+        outside.execute("ALTER TABLE thread_catalog RENAME TO thread_catalog_v8")
         outside.execute(
-            "DROP INDEX IF EXISTS idx_communication_inbox_target_accepted"
+            "CREATE TABLE thread_catalog ("
+            "thread_id TEXT PRIMARY KEY, "
+            "kind TEXT NOT NULL CHECK (kind IN ('main', 'child')), "
+            "created_at TEXT NOT NULL)"
         )
+        outside.execute(
+            "INSERT INTO thread_catalog (thread_id, kind, created_at) "
+            "SELECT thread_id, kind, created_at FROM thread_catalog_v8"
+        )
+        outside.execute("DROP TABLE thread_catalog_v8")
         outside.execute("PRAGMA user_version = 6")
         outside.commit()
     finally:
         outside.close()
     second = SessionControlStore(target)
     try:
-        version = int(
-            second.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        assert version == 7
+        version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
+        assert version == 8
         tables = {
             str(row[0])
             for row in second.connection.execute(
@@ -241,9 +251,10 @@ def test_v6_database_upgrades_additively_to_v7(tmp_path: Path) -> None:
             )
         }
         assert {"communication_outbox", "communication_inbox"} <= tables
-        # 生命周期既有行零丢失（main row/fence 逐字段保留）
+        # 生命周期既有行零丢失，缺失 selector 不从旧 JSON/registry 回填。
         row = second.get_main_thread()
         assert str(row["thread_id"]) == main_thread_id
+        assert second.get_thread_graph_binding(main_thread_id) is None
         assert second.get_fence() == ("active", 1)
         # 升级后 communication 表可用：状态索引查询正常返回空集合
         assert second.list_target_accepted_communication_inboxes() == ()
@@ -260,17 +271,59 @@ def test_initialize_main_thread_inserts_and_get_returns_row(
     store: SessionControlStore,
 ) -> None:
     thread_id = make_thread_id()
-    store.initialize_main_thread(thread_id, DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     row = store.get_main_thread()
     assert str(row["thread_id"]) == thread_id
     assert str(row["kind"]) == "main"
     assert str(row["created_at"]) == DEFAULT_CREATED_AT.isoformat()
+    assert store.get_thread_graph_binding(thread_id) == TEST_THREAD_GRAPH_BINDING
+
+
+def test_initialize_main_thread_does_not_backfill_unbound_row(
+    store: SessionControlStore,
+) -> None:
+    thread_id = make_thread_id()
+    raw_execute(
+        store,
+        "INSERT INTO thread_catalog (thread_id, kind, created_at) "
+        "VALUES (?, 'main', ?)",
+        (thread_id, DEFAULT_CREATED_AT.isoformat()),
+    )
+
+    store.initialize_main_thread(
+        thread_id,
+        DEFAULT_CREATED_AT,
+        TEST_THREAD_GRAPH_BINDING,
+    )
+
+    assert store.get_thread_graph_binding(thread_id) is None
+
+
+def test_get_thread_graph_binding_rejects_partial_selector(
+    store: SessionControlStore,
+) -> None:
+    thread_id = make_thread_id()
+    raw_execute(
+        store,
+        "INSERT INTO thread_catalog "
+        "(thread_id, kind, created_at, graph_id) VALUES (?, 'child', ?, ?)",
+        (thread_id, DEFAULT_CREATED_AT.isoformat(), "test-graph"),
+    )
+
+    with pytest.raises(RuntimeError, match="部分缺失"):
+        store.get_thread_graph_binding(thread_id)
 
 
 def test_initialize_main_thread_is_idempotent(store: SessionControlStore) -> None:
     thread_id = make_thread_id()
-    store.initialize_main_thread(thread_id, DEFAULT_CREATED_AT)
-    store.initialize_main_thread(thread_id, DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
+    store.initialize_main_thread(
+        thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     rows = store.connection.execute("SELECT thread_id FROM thread_catalog").fetchall()
     assert len(rows) == 1
     assert str(rows[0][0]) == thread_id
@@ -279,23 +332,31 @@ def test_initialize_main_thread_is_idempotent(store: SessionControlStore) -> Non
 def test_initialize_main_thread_conflicts_on_different_thread_id(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(RuntimeError, match="不一致"):
-        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
 
 
 def test_initialize_main_thread_rejects_invalid_thread_id(
     store: SessionControlStore,
 ) -> None:
     with pytest.raises((TypeError, ValueError)):
-        store.initialize_main_thread("thr_not_valid", DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            "thr_not_valid", DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
 
 
 def test_initialize_main_thread_rejects_non_datetime(
     store: SessionControlStore,
 ) -> None:
     with pytest.raises(TypeError):
-        store.initialize_main_thread(make_thread_id(), "2026-06-01T12:00:00+00:00")
+        store.initialize_main_thread(
+            make_thread_id(), "2026-06-01T12:00:00+00:00", TEST_THREAD_GRAPH_BINDING
+        )
 
 
 def test_initialize_main_thread_rejects_naive_created_at(
@@ -305,6 +366,7 @@ def test_initialize_main_thread_rejects_naive_created_at(
         store.initialize_main_thread(
             make_thread_id(),
             datetime(2026, 6, 1, 12, 0, tzinfo=None),  # noqa: DTZ001 - 故意构造 naive datetime
+            TEST_THREAD_GRAPH_BINDING,
         )
 
 
@@ -332,7 +394,9 @@ def test_get_main_thread_missing_raises_key_error(
 
 
 def test_multiple_main_rows_fail_closed(store: SessionControlStore) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     raw_execute(
         store,
         "INSERT INTO thread_catalog (thread_id, kind, created_at) "
@@ -352,7 +416,9 @@ def test_initialize_main_thread_rejects_multiple_main_rows(
     成功——否则 main thread 的唯一性被静默破坏。
     """
     existing = make_thread_id()
-    store.initialize_main_thread(existing, DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        existing, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     raw_execute(
         store,
         "INSERT INTO thread_catalog (thread_id, kind, created_at) "
@@ -361,16 +427,22 @@ def test_initialize_main_thread_rejects_multiple_main_rows(
     )
     # 即使传入与既有 first row 一致的 thread_id，多行库也必须拒绝。
     with pytest.raises(RuntimeError, match="多个 main row"):
-        store.initialize_main_thread(existing, DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            existing, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
 
 
 def test_initialize_main_thread_conflict_does_not_absorb_second_row(
     store: SessionControlStore,
 ) -> None:
     """冲突路径不得写入第二行：拒绝后 thread_catalog 仍只有 1 行。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(RuntimeError, match="不一致"):
-        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
     rows = store.connection.execute(
         "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'main'"
     ).fetchone()
@@ -434,9 +506,7 @@ def test_fence_state_check_rejects_unknown_state_via_update(
 ) -> None:
     store.initialize_fence()
     with pytest.raises(sqlite3.IntegrityError):
-        raw_execute(
-            store, "UPDATE lifecycle_fence SET state = 'paused' WHERE id = 1"
-        )
+        raw_execute(store, "UPDATE lifecycle_fence SET state = 'paused' WHERE id = 1")
 
 
 def test_get_fence_missing_raises_key_error(store: SessionControlStore) -> None:
@@ -574,12 +644,16 @@ def test_verify_matches_catalog_main_thread_ok(
     store: SessionControlStore,
 ) -> None:
     thread_id = make_thread_id()
-    store.initialize_main_thread(thread_id, DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.verify_matches_catalog_main_thread(thread_id)
 
 
 def test_verify_mismatch_fails_closed(store: SessionControlStore) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(RuntimeError, match="不一致"):
         store.verify_matches_catalog_main_thread(make_thread_id())
 
@@ -587,7 +661,9 @@ def test_verify_mismatch_fails_closed(store: SessionControlStore) -> None:
 def test_verify_rejects_invalid_thread_id_format(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises((TypeError, ValueError)):
         store.verify_matches_catalog_main_thread("thr_0022")
 
@@ -647,16 +723,14 @@ def build_v1_database(path: Path, thread_id: str) -> None:
 
 
 def test_v1_database_upgrades_preserving_main_row(tmp_path: Path) -> None:
-    """v1 库原地升级：main row 数据零丢失、user_version 1→7、child 可插。"""
+    """v1 库原地升级：main row 数据零丢失、selector 不回填、child 可插。"""
     target = tmp_path / "nested" / "session-control.sqlite"
     main_thread_id = make_thread_id()
     build_v1_database(target, main_thread_id)
     store = SessionControlStore(target)
     try:
-        version = int(
-            store.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        assert version == 7
+        version = int(store.connection.execute("PRAGMA user_version").fetchone()[0])
+        assert version == 8
         # main row 数据零丢失（thread_id/created_at 逐字段保留）
         row = store.get_main_thread()
         assert str(row["thread_id"]) == main_thread_id
@@ -678,20 +752,18 @@ def test_v1_database_upgrades_preserving_main_row(tmp_path: Path) -> None:
 
 
 def test_v1_upgrade_reopens_idempotently(tmp_path: Path) -> None:
-    """升级后的库重开是幂等 no-op（DDL IF NOT EXISTS，user_version 保持 2）。"""
+    """升级后的库重开是幂等 no-op（DDL IF NOT EXISTS，user_version 保持 8）。"""
     target = tmp_path / "session-control.sqlite"
     main_thread_id = make_thread_id()
     build_v1_database(target, main_thread_id)
     first = SessionControlStore(target)
-    first.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
     first.close()
     second = SessionControlStore(target)
     try:
         assert str(second.get_main_thread()["thread_id"]) == main_thread_id
-        version = int(
-            second.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        assert version == 7
+        assert second.get_thread_graph_binding(main_thread_id) is None
+        version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
+        assert version == 8
         rows = second.connection.execute(
             "SELECT COUNT(*) FROM thread_creation_records"
         ).fetchone()
@@ -723,14 +795,20 @@ def test_initialize_main_thread_ignores_child_rows(
     store: SessionControlStore,
 ) -> None:
     """既有 child row 不影响 main row 的 create-or-get（kind='main' 过滤）。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     raw_execute(
         store,
         "INSERT INTO thread_catalog (thread_id, kind, created_at) "
         "VALUES (?, 'child', ?)",
         (make_thread_id(), DEFAULT_CREATED_AT.isoformat()),
     )
-    store.initialize_main_thread(store.get_main_thread()["thread_id"], DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        store.get_main_thread()["thread_id"],
+        DEFAULT_CREATED_AT,
+        TEST_THREAD_GRAPH_BINDING,
+    )
     rows = store.connection.execute(
         "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'main'"
     ).fetchall()
@@ -740,7 +818,9 @@ def test_initialize_main_thread_ignores_child_rows(
 def test_get_main_thread_returns_main_with_children(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     main_id = str(store.get_main_thread()["thread_id"])
     raw_execute(
         store,
@@ -782,16 +862,7 @@ def test_v1_upgrade_temp_table_conflict_fails_closed(tmp_path: Path) -> None:
 
 def make_thread_metadata_json() -> tuple[str, str]:
     """构造合法的 graph_binding / capability_profile canonical JSON 文本。"""
-    graph_binding = json.dumps(
-        {
-            "graph_id": "deep-agent",
-            "graph_revision": "rev-1",
-            "graph_schema_hash": "sha256:aa",
-            "capability_profile_hash": "sha256:bb",
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    graph_binding = TEST_THREAD_GRAPH_BINDING_JSON
     capability_profile = json.dumps(
         {"tools": ["read_file"]}, sort_keys=True, separators=(",", ":")
     )
@@ -854,7 +925,9 @@ def prepare_record(
     **overrides: object,
 ) -> ThreadCreationRecord:
     """测试辅助：初始化 main/fence 后 create-or-get 一条 preparing record。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     kwargs = valid_thread_creation_kwargs(store)
     kwargs.update(overrides)
@@ -864,7 +937,9 @@ def prepare_record(
 def test_create_or_get_record_freezes_identity(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     record = store.create_or_get_thread_creation_record(
         **valid_thread_creation_kwargs(store)
@@ -955,7 +1030,9 @@ def test_create_or_get_record_honors_provided_thread_id(
 def test_create_or_get_record_rejects_bad_inputs(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     base = valid_thread_creation_kwargs(store)
     # 幂等键形态
@@ -994,7 +1071,9 @@ def test_create_or_get_record_rejects_bad_inputs(
 def test_create_or_get_record_requires_active_fence(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     store.cas_fence_transition(1, "deleting")
     with pytest.raises(RuntimeError, match="非 active"):
@@ -1016,7 +1095,9 @@ def test_create_or_get_record_requires_main_row(
 def test_create_or_get_record_missing_fence_raises_key_error(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(KeyError):
         store.create_or_get_thread_creation_record(
             **valid_thread_creation_kwargs(store)
@@ -1148,8 +1229,7 @@ def test_publish_record_inserts_child_row_single_transaction(
     assert published.abort_reason is None
     # thread_catalog child row 可见（唯一可见性提交点）
     rows = store.connection.execute(
-        "SELECT thread_id, kind, created_at FROM thread_catalog "
-        "WHERE kind = 'child'"
+        "SELECT thread_id, kind, created_at FROM thread_catalog WHERE kind = 'child'"
     ).fetchall()
     assert len(rows) == 1
     assert str(rows[0]["thread_id"]) == record.child_thread_id
@@ -1177,6 +1257,7 @@ def test_publish_child_row_and_record_state_single_transaction(
     observations: list[tuple[int, str]] = []
     reader = sqlite3.connect(store.database_path, isolation_level=None)
     try:
+
         def observe(statement: str) -> None:
             if "UPDATE thread_creation_records" not in statement:
                 return
@@ -1224,9 +1305,7 @@ def test_publish_record_cas_fails_when_owner_fence_drifted(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
     # 只推进 generation、保持 active：record 冻结的是 generation=1。
-    store.connection.execute(
-        "UPDATE lifecycle_fence SET generation = 2 WHERE id = 1"
-    )
+    store.connection.execute("UPDATE lifecycle_fence SET generation = 2 WHERE id = 1")
     with pytest.raises(RuntimeError, match="owner fence 已漂移"):
         store.publish_thread_creation_record("key-1")
     # 失败回滚：无 child row、record 保持 preparing
@@ -1251,9 +1330,7 @@ def test_publish_record_rejected_when_owner_fence_deleting(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
     assert store.cas_fence_transition(1, "deleting") is True
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         store.publish_thread_creation_record("key-1")
     child_rows = store.connection.execute(
         "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'child'"
@@ -1319,7 +1396,9 @@ def test_publish_record_rejects_collaboration_ledger_regression(
     与 catalog CAS 同口径：revision 是 member 登记单调推进的计数，合法
     sibling 增长必须放行；只有 actual < frozen（账本被外部回退）才拒绝。
     """
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     register_collaboration_member_for_test(
@@ -1356,7 +1435,9 @@ def test_publish_record_tolerates_sibling_delegation_growth(
     """同 Session 并发 sibling delegation 是合法交错：冻结 revision 小于
     当前 revision（合法增长）不拦截，只按本 delegation 自身 member 行
     状态转正。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     register_collaboration_member_for_test(
@@ -1404,7 +1485,9 @@ def test_publish_record_rejects_own_member_already_published(
     仅外部直改 DB 可达（正常路径 member 由本 publish 在同一事务内转正，
     不会在 publish 前已是 published）。
     """
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     revision = register_collaboration_member_for_test(
@@ -1427,8 +1510,7 @@ def test_publish_record_rejects_own_member_already_published(
     # 外部直改：自身 member 行已是 published。
     raw_execute(
         store,
-        "UPDATE collaboration_members SET state = 'published' "
-        "WHERE delegation_id = ?",
+        "UPDATE collaboration_members SET state = 'published' WHERE delegation_id = ?",
         ("del-1",),
     )
     with pytest.raises(RuntimeError, match="非 registering"):
@@ -1450,7 +1532,9 @@ def test_publish_record_rejects_missing_own_member_row(
     仅外部直改 DB 可达（member 与 record 同事务创建、delegation_id 有
     部分唯一约束，正常路径不会缺行）。
     """
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     revision = register_collaboration_member_for_test(
@@ -1495,7 +1579,9 @@ def test_publish_record_rejects_delegated_without_collaboration_revision(
     仅外部直改 record 可达（creation 流对 delegated child 必带 member、
     因而必带非空 revision）。
     """
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     kwargs = valid_thread_creation_kwargs(store)
     record = store.create_or_get_thread_creation_record(
@@ -1589,7 +1675,9 @@ def test_get_published_child_locator_returns_frozen_locator(
 def test_get_published_child_locator_missing_raises_key_error(
     store: SessionControlStore,
 ) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(KeyError):
         store.get_published_child_thread_locator(make_thread_id())
 
@@ -1599,7 +1687,9 @@ def test_get_published_child_locator_rejects_main_row(
 ) -> None:
     """main row 不是 child，解析必须 fail closed。"""
     main_thread_id = make_thread_id()
-    store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     with pytest.raises(RuntimeError, match="不是 child"):
         store.get_published_child_thread_locator(main_thread_id)
 
@@ -1767,7 +1857,9 @@ def test_initial_execution_intent_roundtrip_and_guards(
 
 
 def test_get_thread_catalog_revision(store: SessionControlStore) -> None:
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     assert store.get_thread_catalog_revision() == 1
     raw_execute(
         store,
@@ -1884,10 +1976,8 @@ def test_v2_database_upgrades_to_v3_with_stable_identity(
     session_id, thread_id = insert_v2_intent(target)
     store = SessionControlStore(target)
     try:
-        version = int(
-            store.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        assert version == 7
+        version = int(store.connection.execute("PRAGMA user_version").fetchone()[0])
+        assert version == 8
         intent = store.get_initial_execution_intent("key-1")
         binding_id, job_id = derive_initial_execution_identity("key-1")
         assert intent.state == "pending"
@@ -1925,15 +2015,11 @@ def test_v3_migration_identity_is_deterministic_across_databases(
     for index in range(2):
         target = tmp_path / f"db-{index}" / "session-control.sqlite"
         build_v2_database(target, make_thread_id())
-        insert_v2_intent(
-            target, session_id=session_id, thread_id=thread_id
-        )
+        insert_v2_intent(target, session_id=session_id, thread_id=thread_id)
         store = SessionControlStore(target)
         try:
             intent = store.get_initial_execution_intent("key-1")
-            identities.append(
-                (intent.execution_binding_id, intent.job_id)
-            )
+            identities.append((intent.execution_binding_id, intent.job_id))
         finally:
             store.close()
     assert identities[0] == identities[1]
@@ -1965,7 +2051,9 @@ def prepare_published_intent(
     try:
         store.get_main_thread()
     except KeyError:
-        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         store.initialize_fence("active", 1)
     kwargs = valid_thread_creation_kwargs(store, idempotency_key=admission_key)
     record = store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
@@ -2238,11 +2326,14 @@ def test_record_failure_keeps_pending_recoverable(
             last_error="missing",
         )
 
+
 def test_collaboration_member_register_idempotent_and_conflict(
     store: SessionControlStore,
 ) -> None:
     """member 登记：revision 只在新登记推进；同 delegation 漂移/取消换绑拒绝。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     assert store.get_collaboration_ledger_revision() == 0
     first = store.register_collaboration_member(
@@ -2313,7 +2404,9 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
     store: SessionControlStore,
 ) -> None:
     """delegated record：ledger CAS + member 随 publish 原子转正回填。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     coordinator_thread_id = make_thread_id()
@@ -2347,8 +2440,7 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
     # test_publish_record_tolerates_sibling_delegation_growth。）
     raw_execute(
         store,
-        "UPDATE collaboration_members SET state = 'cancelled' "
-        "WHERE delegation_id = ?",
+        "UPDATE collaboration_members SET state = 'cancelled' WHERE delegation_id = ?",
         ("del-1",),
     )
     with pytest.raises(RuntimeError, match="非 registering"):
@@ -2397,7 +2489,9 @@ def test_abort_record_cancels_collaboration_member_no_rebind(
     store: SessionControlStore,
 ) -> None:
     """record abort 定点取消 member；同 delegation 重登记拒绝（不换绑）。"""
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     store.initialize_fence("active", 1)
     coordinator_session_id = make_session_id()
     revision = store.register_collaboration_member(
@@ -2432,14 +2526,17 @@ def test_abort_record_cancels_collaboration_member_no_rebind(
             task_seed=member.task_seed,
         )
 
+
 # ----------------------------------------------------------------------
 # thread owner binding 字段槽（2.1，B1/B3）
 # ----------------------------------------------------------------------
+
 
 def _sha(text: str) -> str:
     import hashlib
 
     return hashlib.sha256(text.encode()).hexdigest()
+
 
 def test_owner_binding_ensure_get_roundtrip(tmp_path: Path) -> None:
     store = SessionControlStore(tmp_path / "c.sqlite")
@@ -2463,9 +2560,7 @@ def test_owner_binding_ensure_get_roundtrip(tmp_path: Path) -> None:
                 thread_id=thread_id,
                 # 漂移桶用同日 id，使失败归因于「record 冻结 locator 不一致」
                 # 而非 §4.3 的日期一致性断言。
-                final_relative_locator=(
-                    "threads/2026/06/02/" + thread_id_at(JUNE_2)
-                ),
+                final_relative_locator=("threads/2026/06/02/" + thread_id_at(JUNE_2)),
             )
         # 非法 thread_id 拒绝
         with pytest.raises(ValueError):
@@ -2474,6 +2569,7 @@ def test_owner_binding_ensure_get_roundtrip(tmp_path: Path) -> None:
             )
     finally:
         store.close()
+
 
 def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
     store = SessionControlStore(tmp_path / "c.sqlite")
@@ -2534,6 +2630,7 @@ def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
     finally:
         store.close()
 
+
 def test_owner_binding_negative_contract(tmp_path: Path) -> None:
     """2.1 负面合同：物理路径/相对路径片段/凭据形态键拒绝落盘。"""
     store = SessionControlStore(tmp_path / "c.sqlite")
@@ -2555,7 +2652,8 @@ def test_owner_binding_negative_contract(tmp_path: Path) -> None:
             )
         with pytest.raises(TypeError, match="必须是标量"):
             store.update_thread_owner_binding(
-                thread_id, append_variant_ref={"nested": {"a": 1}},
+                thread_id,
+                append_variant_ref={"nested": {"a": 1}},
             )
         with pytest.raises(ValueError, match="键闭集"):
             store.update_thread_owner_binding(
@@ -2595,17 +2693,13 @@ def test_owner_binding_ref_and_parameter_guards(tmp_path: Path) -> None:
         thread_id = make_thread_id()
         store.ensure_thread_owner_binding(thread_id=thread_id)
         with pytest.raises(ValueError, match="必须是非空字符串"):
-            store.update_thread_owner_binding(
-                thread_id, toolset_compatibility_key=""
-            )
+            store.update_thread_owner_binding(thread_id, toolset_compatibility_key="")
         with pytest.raises(ValueError, match="含 NUL"):
             store.update_thread_owner_binding(
                 thread_id, assembly_parent_ref="assembly\x00parent"
             )
         with pytest.raises(ValueError, match="条目键必须是非空字符串"):
-            store.update_thread_owner_binding(
-                thread_id, append_attachment_ref={"": 1}
-            )
+            store.update_thread_owner_binding(thread_id, append_attachment_ref={"": 1})
         with pytest.raises(ValueError, match="prefix_epoch 必须是"):
             store.update_thread_owner_binding(
                 thread_id, prefix_epoch=0, prefix_epoch_reason="initial"
@@ -2617,9 +2711,7 @@ def test_owner_binding_ref_and_parameter_guards(tmp_path: Path) -> None:
                 stable_prefix_length=-1,
             )
         with pytest.raises(ValueError, match="desired_toolset_revision 必须是"):
-            store.update_thread_owner_binding(
-                thread_id, desired_toolset_revision=0
-            )
+            store.update_thread_owner_binding(thread_id, desired_toolset_revision=0)
         with pytest.raises(ValueError, match="需要至少一个字段"):
             store.update_thread_owner_binding(thread_id)
     finally:
@@ -2635,8 +2727,7 @@ def test_owner_binding_row_json_corruption_fail_closed(tmp_path: Path) -> None:
         # 列表槽不是 JSON 数组
         raw_execute(
             store,
-            "UPDATE thread_owner_bindings SET attachment_refs = ? "
-            "WHERE thread_id = ?",
+            "UPDATE thread_owner_bindings SET attachment_refs = ? WHERE thread_id = ?",
             ('{"a": 1}', thread_id),
         )
         with pytest.raises(RuntimeError, match="必须是 JSON 数组"):
@@ -2644,8 +2735,7 @@ def test_owner_binding_row_json_corruption_fail_closed(tmp_path: Path) -> None:
         # 列表槽 JSON 损坏
         raw_execute(
             store,
-            "UPDATE thread_owner_bindings SET attachment_refs = ? "
-            "WHERE thread_id = ?",
+            "UPDATE thread_owner_bindings SET attachment_refs = ? WHERE thread_id = ?",
             ("not-json", thread_id),
         )
         with pytest.raises(RuntimeError, match="JSON 损坏"):
@@ -2680,8 +2770,7 @@ def test_owner_binding_append_requires_list_slot(tmp_path: Path) -> None:
         store.ensure_thread_owner_binding(thread_id=thread_id)
         raw_execute(
             store,
-            "UPDATE thread_owner_bindings SET variant_refs = ? "
-            "WHERE thread_id = ?",
+            "UPDATE thread_owner_bindings SET variant_refs = ? WHERE thread_id = ?",
             ("{}", thread_id),
         )
         with pytest.raises(RuntimeError, match="必须是 JSON 数组"):
@@ -2690,6 +2779,7 @@ def test_owner_binding_append_requires_list_slot(tmp_path: Path) -> None:
             )
     finally:
         store.close()
+
 
 def test_owner_binding_scalar_tamper_layers_are_frozen(
     tmp_path: Path,
@@ -2742,14 +2832,12 @@ def test_owner_binding_scalar_tamper_layers_are_frozen(
         # 标量层：非整数文本在投影 int() 时自然抛错（不是静默返回假值）。
         raw_execute(
             store,
-            "UPDATE thread_owner_bindings SET variant_refs = '[]' "
-            "WHERE thread_id = ?",
+            "UPDATE thread_owner_bindings SET variant_refs = '[]' WHERE thread_id = ?",
             (thread_id,),
         )
         raw_execute(
             store,
-            "UPDATE thread_owner_bindings SET prefix_epoch = 'abc' "
-            "WHERE thread_id = ?",
+            "UPDATE thread_owner_bindings SET prefix_epoch = 'abc' WHERE thread_id = ?",
             (thread_id,),
         )
         with pytest.raises(ValueError, match="invalid literal"):
@@ -2768,9 +2856,7 @@ def test_owner_binding_scalar_tamper_layers_are_frozen(
         assert tampered.revision == 999
         # update 路径仍按写入口径校验：hash/length 必须成对且合法。
         with pytest.raises(ValueError, match="成对提供"):
-            store.update_thread_owner_binding(
-                thread_id, stable_prefix_hash="a" * 64
-            )
+            store.update_thread_owner_binding(thread_id, stable_prefix_hash="a" * 64)
     finally:
         store.close()
 
@@ -2917,17 +3003,11 @@ def test_outbox_advance_state_chain_and_guards(tmp_path: Path) -> None:
         )
         operation_id = record.send_operation_id
         with pytest.raises(ValueError, match="新状态非法"):
-            store.advance_communication_outbox_state(
-                operation_id, new_state="made_up"
-            )
+            store.advance_communication_outbox_state(operation_id, new_state="made_up")
         with pytest.raises(ValueError, match="必须携带 receipt JSON"):
-            store.advance_communication_outbox_state(
-                operation_id, new_state="terminal"
-            )
+            store.advance_communication_outbox_state(operation_id, new_state="terminal")
         with pytest.raises(ValueError, match="必须携带 abort_reason"):
-            store.advance_communication_outbox_state(
-                operation_id, new_state="failed"
-            )
+            store.advance_communication_outbox_state(operation_id, new_state="failed")
         with pytest.raises(RuntimeError, match="状态迁移非法"):
             store.advance_communication_outbox_state(
                 operation_id, new_state="target_accepted", receipt_json="[]"
@@ -2941,27 +3021,32 @@ def test_outbox_advance_state_chain_and_guards(tmp_path: Path) -> None:
         )
         assert accepted.state == "target_accepted"
         # 重复相同 (state, receipt) 幂等；receipt 漂移 fail closed
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="target_accepted", receipt_json="[]"
-        ).state == "target_accepted"
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="target_accepted", receipt_json="[]"
+            ).state
+            == "target_accepted"
+        )
         with pytest.raises(RuntimeError, match="载荷漂移"):
             store.advance_communication_outbox_state(
                 operation_id, new_state="target_accepted", receipt_json="[1]"
             )
         with pytest.raises(RuntimeError, match="状态迁移非法"):
+            store.advance_communication_outbox_state(operation_id, new_state="routing")
+        assert (
             store.advance_communication_outbox_state(
-                operation_id, new_state="routing"
-            )
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="execution_bound", receipt_json="[]"
-        ).state == "execution_bound"
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="terminal", receipt_json="[]"
-        ).state == "terminal"
+                operation_id, new_state="execution_bound", receipt_json="[]"
+            ).state
+            == "execution_bound"
+        )
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="terminal", receipt_json="[]"
+            ).state
+            == "terminal"
+        )
         with pytest.raises(RuntimeError, match="状态迁移非法"):
-            store.advance_communication_outbox_state(
-                operation_id, new_state="routing"
-            )
+            store.advance_communication_outbox_state(operation_id, new_state="routing")
         with pytest.raises(KeyError, match="无法推进状态"):
             store.advance_communication_outbox_state(
                 f"send-op-{uuid.uuid4().hex}", new_state="routing"
@@ -2992,9 +3077,12 @@ def test_outbox_idempotent_reentry_compares_both_payload_columns(
         assert failed.state == "failed"
         assert failed.abort_reason == "reason-A"
         # 1) 完全一致 → 幂等返回原行。
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="failed", abort_reason="reason-A"
-        ).abort_reason == "reason-A"
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed", abort_reason="reason-A"
+            ).abort_reason
+            == "reason-A"
+        )
         # 2) abort_reason 漂移 → fail closed（修复前被静默接受）。
         with pytest.raises(RuntimeError, match="载荷漂移"):
             store.advance_communication_outbox_state(
@@ -3002,13 +3090,14 @@ def test_outbox_idempotent_reentry_compares_both_payload_columns(
             )
         # 3) abort_reason 缺失 → 同样 fail closed（不得当成 None 收下）。
         with pytest.raises(ValueError, match="必须携带 abort_reason"):
-            store.advance_communication_outbox_state(
-                operation_id, new_state="failed"
-            )
+            store.advance_communication_outbox_state(operation_id, new_state="failed")
         # 漂移被拒后原行未被改动。
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="failed", abort_reason="reason-A"
-        ).abort_reason == "reason-A"
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed", abort_reason="reason-A"
+            ).abort_reason
+            == "reason-A"
+        )
     finally:
         store.close()
 
@@ -3023,16 +3112,17 @@ def test_outbox_idempotent_reentry_compares_receipt_column(
             **outbox_kwargs(make_comm_id())
         )
         operation_id = record.send_operation_id
-        store.advance_communication_outbox_state(
-            operation_id, new_state="routing"
-        )
+        store.advance_communication_outbox_state(operation_id, new_state="routing")
         store.advance_communication_outbox_state(
             operation_id, new_state="target_accepted", receipt_json="[]"
         )
         # 完全一致 → 幂等；receipt 漂移 → fail closed。
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="target_accepted", receipt_json="[]"
-        ).state == "target_accepted"
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="target_accepted", receipt_json="[]"
+            ).state
+            == "target_accepted"
+        )
         with pytest.raises(RuntimeError, match="载荷漂移"):
             store.advance_communication_outbox_state(
                 operation_id, new_state="target_accepted", receipt_json="[1]"
@@ -3077,16 +3167,19 @@ def test_outbox_failure_state_preserves_authenticated_receipt(
         assert failed.latest_receipt == '{"r":1}'
         assert failed.abort_reason == "remote-unreachable"
         # 失败态重入幂等（只比 abort_reason，receipt 由既有行保留）。
-        assert store.advance_communication_outbox_state(
-            operation_id, new_state="failed", abort_reason="remote-unreachable"
-        ).latest_receipt == '{"r":1}'
+        assert (
+            store.advance_communication_outbox_state(
+                operation_id, new_state="failed", abort_reason="remote-unreachable"
+            ).latest_receipt
+            == '{"r":1}'
+        )
         # 失败态夹带 receipt → 明确拒绝（不接受覆盖受认证 receipt）。
         with pytest.raises(ValueError, match="不得携带 receipt JSON"):
             store.advance_communication_outbox_state(
                 operation_id,
                 new_state="failed",
                 abort_reason="remote-unreachable",
-                receipt_json="{\"spoofed\":1}",
+                receipt_json='{"spoofed":1}',
             )
     finally:
         store.close()
@@ -3111,10 +3204,13 @@ def test_outbox_success_state_rejects_abort_reason(
                 abort_reason="sneaky",
             )
         # 未写入：仍停在 routing（拒绝不推进状态）。
-        assert store.connection.execute(
-            "SELECT state FROM communication_outbox WHERE send_operation_id = ?",
-            (operation_id,),
-        ).fetchone()[0] == "routing"
+        assert (
+            store.connection.execute(
+                "SELECT state FROM communication_outbox WHERE send_operation_id = ?",
+                (operation_id,),
+            ).fetchone()[0]
+            == "routing"
+        )
         # 非载荷中间态不接受任一载荷列（新 operation，accepted → routing）。
         fresh, _ = store.create_or_get_communication_outbox(
             **outbox_kwargs(make_comm_id())
@@ -3149,7 +3245,9 @@ def inbox_kwargs(
 def test_inbox_create_or_get_binds_main_and_dedupes(tmp_path: Path) -> None:
     """target main binding fresh 校验通过并幂等；身份漂移 fail closed。"""
     store = SessionControlStore(tmp_path / "inbox.sqlite")
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     try:
         main_thread_id = str(store.get_main_thread()["thread_id"])
         kwargs = inbox_kwargs(make_comm_id(), main_thread_id)
@@ -3188,7 +3286,9 @@ def test_inbox_claim_chain_guards(tmp_path: Path) -> None:
     """admission 领取：未领取写入、同 claim 幂等、更高 generation 接管、
     更低 generation 与不同 owner fail closed。"""
     store = SessionControlStore(tmp_path / "inbox-claim.sqlite")
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     try:
         main_thread_id = str(store.get_main_thread()["thread_id"])
         record, _ = store.create_or_get_communication_inbox(
@@ -3208,9 +3308,12 @@ def test_inbox_claim_chain_guards(tmp_path: Path) -> None:
         )
         assert claimed.admission_claim_owner == "w1"
         assert claimed.admission_claim_generation == 1
-        assert store.claim_communication_inbox_admission(
-            communication_id, claim_owner="w1", claim_generation=1
-        ).admission_claim_generation == 1
+        assert (
+            store.claim_communication_inbox_admission(
+                communication_id, claim_owner="w1", claim_generation=1
+            ).admission_claim_generation
+            == 1
+        )
         bumped = store.claim_communication_inbox_admission(
             communication_id, claim_owner="w1", claim_generation=2
         )
@@ -3234,7 +3337,9 @@ def test_inbox_claim_chain_guards(tmp_path: Path) -> None:
 def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
     """execution_bound CAS、重复提交幂等、identity 漂移与失败记录。"""
     store = SessionControlStore(tmp_path / "inbox-bound.sqlite")
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     try:
         main_thread_id = str(store.get_main_thread()["thread_id"])
         record, _ = store.create_or_get_communication_inbox(
@@ -3244,38 +3349,56 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
         job_id = f"job_{uuid.uuid4().hex}"
         with pytest.raises(RuntimeError, match="未被领取"):
             store.mark_communication_inbox_execution_bound(
-                communication_id, job_id=job_id, turn_id=None,
-                claim_owner="w1", claim_generation=1,
+                communication_id,
+                job_id=job_id,
+                turn_id=None,
+                claim_owner="w1",
+                claim_generation=1,
             )
         store.claim_communication_inbox_admission(
             communication_id, claim_owner="w1", claim_generation=1
         )
         with pytest.raises(ValueError, match="job_id 形态非法"):
             store.mark_communication_inbox_execution_bound(
-                communication_id, job_id="nope", turn_id=None,
-                claim_owner="w1", claim_generation=1,
+                communication_id,
+                job_id="nope",
+                turn_id=None,
+                claim_owner="w1",
+                claim_generation=1,
             )
         with pytest.raises(RuntimeError, match="claim 与当前持有 claim 不一致"):
             store.mark_communication_inbox_execution_bound(
-                communication_id, job_id=job_id, turn_id=None,
-                claim_owner="w9", claim_generation=1,
+                communication_id,
+                job_id=job_id,
+                turn_id=None,
+                claim_owner="w9",
+                claim_generation=1,
             )
         bound = store.mark_communication_inbox_execution_bound(
-            communication_id, job_id=job_id, turn_id="turn-1",
-            claim_owner="w1", claim_generation=1,
+            communication_id,
+            job_id=job_id,
+            turn_id="turn-1",
+            claim_owner="w1",
+            claim_generation=1,
         )
         assert bound.state == "execution_bound"
         assert bound.job_id == job_id
         assert bound.turn_id == "turn-1"
         repeated = store.mark_communication_inbox_execution_bound(
-            communication_id, job_id=job_id, turn_id="turn-1",
-            claim_owner="w1", claim_generation=1,
+            communication_id,
+            job_id=job_id,
+            turn_id="turn-1",
+            claim_owner="w1",
+            claim_generation=1,
         )
         assert repeated.turn_id == "turn-1"
         with pytest.raises(RuntimeError, match="identity 漂移"):
             store.mark_communication_inbox_execution_bound(
-                communication_id, job_id=job_id, turn_id="turn-2",
-                claim_owner="w1", claim_generation=1,
+                communication_id,
+                job_id=job_id,
+                turn_id="turn-2",
+                claim_owner="w1",
+                claim_generation=1,
             )
         # 失败记录：state 保持 target_accepted、untouched 的 claim 校验
         fresh, _ = store.create_or_get_communication_inbox(
@@ -3288,7 +3411,9 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
             )
         with pytest.raises(RuntimeError, match="claim 与当前持有 claim 不一致"):
             store.record_communication_inbox_admission_failure(
-                fresh_id, claim_owner="w1", claim_generation=1,
+                fresh_id,
+                claim_owner="w1",
+                claim_generation=1,
                 last_error="boom",
             )
         store.claim_communication_inbox_admission(
@@ -3301,7 +3426,9 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
         assert recorded.last_error == "boom"
         with pytest.raises(RuntimeError, match="无失败可记录"):
             store.record_communication_inbox_admission_failure(
-                communication_id, claim_owner="w1", claim_generation=1,
+                communication_id,
+                claim_owner="w1",
+                claim_generation=1,
                 last_error="boom",
             )
     finally:
@@ -3311,7 +3438,9 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
 def test_inbox_listing_and_get_fail_closed(tmp_path: Path) -> None:
     """状态索引只列 target_accepted；缺失行读取抛 KeyError。"""
     store = SessionControlStore(tmp_path / "inbox-listing.sqlite")
-    store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+    store.initialize_main_thread(
+        make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+    )
     try:
         main_thread_id = str(store.get_main_thread()["thread_id"])
         records = [
@@ -3325,21 +3454,26 @@ def test_inbox_listing_and_get_fail_closed(tmp_path: Path) -> None:
             bound.communication_id, claim_owner="w1", claim_generation=1
         )
         store.mark_communication_inbox_execution_bound(
-            bound.communication_id, job_id=f"job_{uuid.uuid4().hex}",
-            turn_id=None, claim_owner="w1", claim_generation=1,
+            bound.communication_id,
+            job_id=f"job_{uuid.uuid4().hex}",
+            turn_id=None,
+            claim_owner="w1",
+            claim_generation=1,
         )
         listed = store.list_target_accepted_communication_inboxes()
         assert {item.communication_id for item in listed} == {
             records[0].communication_id,
             records[2].communication_id,
         }
-        assert store.get_communication_inbox(
-            records[0].communication_id
-        ).communication_id == records[0].communication_id
+        assert (
+            store.get_communication_inbox(records[0].communication_id).communication_id
+            == records[0].communication_id
+        )
         with pytest.raises(KeyError, match="communication inbox 不存在"):
             store.get_communication_inbox(make_comm_id())
     finally:
         store.close()
+
 
 def test_inbox_last_error_has_no_write_time_length_cap(tmp_path: Path) -> None:
     """固化 D2 判定：last_error 是诊断真值，store 层写入不截断。
@@ -3352,7 +3486,9 @@ def test_inbox_last_error_has_no_write_time_length_cap(tmp_path: Path) -> None:
     store = SessionControlStore(tmp_path / "inbox-long-error.sqlite")
     try:
         main_thread_id = make_thread_id()
-        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         record, _ = store.create_or_get_communication_inbox(
             **inbox_kwargs(make_comm_id(), main_thread_id)
         )
@@ -3388,7 +3524,9 @@ def test_outbox_reply_causal_direction_is_enforced_by_endpoints(
         session_id = make_session_id()
         # 本 session 作为 target 收到过 forward：inbox 行把 main 记为 target。
         main_thread_id = make_thread_id()
-        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         peer_thread_id = make_thread_id()
         forward_id = make_comm_id()
         store.create_or_get_communication_inbox(
@@ -3453,7 +3591,9 @@ def test_inbox_reply_causal_direction_is_enforced_by_endpoints(
     store = SessionControlStore(tmp_path / "inbox-reply.sqlite")
     try:
         main_thread_id = make_thread_id()
-        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         peer_thread_id = make_thread_id()
         session_id = make_session_id()
         source_session_id = make_session_id()
@@ -3550,7 +3690,9 @@ def test_write_transaction_nesting_error_does_not_corrupt_outer_transaction(
     """嵌套被拒后外层事务仍可正常提交，且异常不被静默吞掉。"""
     store = SessionControlStore(tmp_path / "nested-tx-outer.sqlite")
     try:
-        store.initialize_main_thread(make_thread_id(), DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            make_thread_id(), DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         with store._write_transaction() as connection:
             connection.execute(
                 "INSERT INTO lifecycle_fence (id, state, generation) "
@@ -3590,7 +3732,9 @@ def test_communication_ledger_does_not_gate_on_lifecycle_fence(
     store = SessionControlStore(tmp_path / "comm-fence.sqlite")
     try:
         main_thread_id = make_thread_id()
-        store.initialize_main_thread(main_thread_id, DEFAULT_CREATED_AT)
+        store.initialize_main_thread(
+            main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         store.initialize_fence("active", 1)
         assert store.cas_fence_transition(1, "deleting") is True
         assert store.get_fence()[0] == "deleting"
@@ -3636,8 +3780,10 @@ def test_begin_immediate_lock_contention_raises_domain_error(
         # 另一连接先占写锁；holder 连接写完后 store 侧事务会超时。
         holder.execute("PRAGMA busy_timeout = 50")
         holder.execute("BEGIN IMMEDIATE")
-        holder.execute("INSERT INTO lifecycle_fence (id, state, generation) "
-                       "VALUES (1, 'active', 1) ON CONFLICT(id) DO NOTHING")
+        holder.execute(
+            "INSERT INTO lifecycle_fence (id, state, generation) "
+            "VALUES (1, 'active', 1) ON CONFLICT(id) DO NOTHING"
+        )
         # 缩短本 store 连接的等待，避免用例耗时 5s。
         store.connection.execute("PRAGMA busy_timeout = 50")
         with (
@@ -3699,10 +3845,12 @@ def test_thread_catalog_uuidv7_ordering_matches_time_order(
     按内嵌时间顺序。"""
     store = SessionControlStore(tmp_path / "c.sqlite")
     try:
-        ids = [thread_id_at(moment) for moment in (
-            datetime(2026, 6, 1, 12, 0, 0, ms * 1000, tzinfo=UTC)
-            for ms in range(6)
-        )]
+        ids = [
+            thread_id_at(moment)
+            for moment in (
+                datetime(2026, 6, 1, 12, 0, 0, ms * 1000, tzinfo=UTC) for ms in range(6)
+            )
+        ]
         for thread_id in ids:
             store.connection.execute(
                 "INSERT INTO thread_catalog (thread_id, kind, created_at) "
@@ -3716,9 +3864,7 @@ def test_thread_catalog_uuidv7_ordering_matches_time_order(
             )
         ]
         assert sorted_ids == ids
-        assert sorted_ids == sorted(
-            sorted_ids, key=lambda value: int(value[4:16], 16)
-        )
+        assert sorted_ids == sorted(sorted_ids, key=lambda value: int(value[4:16], 16))
     finally:
         store.close()
 

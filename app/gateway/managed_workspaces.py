@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
 from app.schemas.gateway import GatewayManagedWorkspaceDTO
 
@@ -51,6 +53,11 @@ async def create_direct_managed_workspace(
         if not create_directory:
             raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
         workspace_root.mkdir(parents=True)
+    backend_workspace_id = await asyncio.to_thread(
+        resolve_backend_workspace_id,
+        project_root,
+        workspace_root,
+    )
 
     workspace_id = build_managed_local_workspace_id(str(workspace_root))
     if any(target.workspace_id == workspace_id for target in registry.targets()):
@@ -61,6 +68,7 @@ async def create_direct_managed_workspace(
         name_customized=bool(name),
         root_path=str(workspace_root),
         backend_url="",
+        backend_workspace_id=backend_workspace_id,
         connection_kind="local",
         owner="manual",
         managed=True,

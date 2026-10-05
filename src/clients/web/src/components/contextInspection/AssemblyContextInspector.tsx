@@ -36,15 +36,18 @@ function ProjectionItem({ item }: { item: ContextItem }) {
 
 export default function AssemblyContextInspector(owner: InspectionOwner) {
   const state = useContextInspection(owner);
-  return <section className="context-inspector" aria-label="冻结请求上下文" data-session-id={owner.sessionId}>
+  return <section className="context-inspector" aria-label="冻结请求上下文" data-session-id={owner.session?.session_id ?? ""}>
     <p>只读检查指定请求的冻结 selection 与 history 投影；不会改变当前对话历史。不加载 request-only 正文或工具定义。</p>
     <div className="context-inspector-controls">
-      <label>冻结请求 <select aria-label="选择冻结 assembly" value={state.assemblyId}
-        onChange={(event) => void state.loadProjection(event.target.value, true)}>
+      <label>冻结请求 <select aria-label="选择冻结 assembly" value={state.assemblyRef}
+        onChange={(event) => {
+          const item = state.catalog.items.find((candidate) => candidate.assembly_ref === event.target.value);
+          void state.loadProjection(item ?? null, true);
+        }}>
         <option value="">请选择已封存请求</option>
-        {state.assemblyId && !state.catalog.items.some((item) => textField(item.data, "assembly_id") === state.assemblyId)
-          ? <option value={state.assemblyId}>当前检查：{state.assemblyId}（列表尚未加载）</option> : null}
-        {state.catalog.items.map((item) => <option key={item.locator} value={textField(item.data, "assembly_id")}>
+        {state.assemblyRef && !state.catalog.items.some((item) => item.assembly_ref === state.assemblyRef)
+          ? <option value={state.assemblyRef}>当前检查：{state.assemblyId}（列表尚未加载）</option> : null}
+        {state.catalog.items.map((item) => <option key={item.assembly_ref} value={item.assembly_ref ?? ""}>
           {textField(item.data, "assembly_id")} · history {String(objectField(item.data).history_view_revision)}
         </option>)}
       </select></label>
@@ -54,16 +57,16 @@ export default function AssemblyContextInspector(owner: InspectionOwner) {
     {state.catalogLoading ? <p role="status">正在读取封存请求…</p> : null}
     {state.catalogError ? <p role="alert">请求列表加载失败：{state.catalogError}</p> : null}
     {!state.catalogLoading && !state.catalogError && !state.catalog.items.length ? <p>当前会话没有已封存请求。</p> : null}
-    {state.assemblyId ? <div className="context-projection" data-assembly-id={state.assemblyId}>
+    {state.assemblyRef ? <div className="context-projection" data-assembly-id={state.assemblyId}>
       <p>已加载 {state.projection.items.length} 项{state.projection.hasMore ? "，还有后续内容" : ""}</p>
       <ol aria-label="冻结 selection 与 history" className="context-inspection-items">
-        {state.projection.items.map((item, index) => <ProjectionItem key={`${state.assemblyId}:${index}`} item={item} />)}
+        {state.projection.items.map((item, index) => <ProjectionItem key={`${state.assemblyRef}:${index}`} item={item} />)}
       </ol>
       {state.projection.fragment ? <p>当前字段尚有分片，请继续加载以完整还原。</p> : null}
       {state.projectionLoading ? <p role="status">正在读取冻结上下文…</p> : null}
       {state.projectionError ? <div role="alert"><p>冻结上下文加载失败：{state.projectionError}</p>
-        <button type="button" onClick={() => void state.loadProjection(state.assemblyId, true)}>重新读取冻结上下文</button></div> : null}
-      {state.projection.hasMore ? <button type="button" disabled={state.projectionLoading} onClick={() => void state.loadProjection(state.assemblyId)}>加载下一页上下文</button> : null}
+        <button type="button" onClick={() => void state.loadProjection(state.selectedAssembly, true)}>重新读取冻结上下文</button></div> : null}
+      {state.projection.hasMore ? <button type="button" disabled={state.projectionLoading} onClick={() => void state.loadProjection(state.selectedAssembly)}>加载下一页上下文</button> : null}
     </div> : null}
   </section>;
 }

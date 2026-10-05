@@ -24,6 +24,9 @@ function session(sessionId: string): Session {
   return {
     session_id: sessionId,
     workspace_id: "workspace-local",
+    resource_identity: `fixture-${sessionId}`,
+    vrn: `boxteam://workspace/workspace-local/resources/session/${sessionId}`,
+    scope: "workspace",
     title: sessionId,
     current_agent_id: "default",
     created_at: "2026-07-28T00:00:00Z",

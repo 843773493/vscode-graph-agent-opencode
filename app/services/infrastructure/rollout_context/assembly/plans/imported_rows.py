@@ -16,7 +16,8 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 def _ref_rows(sources: ParsedSourceManifest) -> set[tuple[object, ...]]:
     return {
-        (ref.ref_type, ref.ref_id, json_text(ref.to_dict())) for ref in sources.refs
+        (ref.thread_id, ref.ref_type, ref.ref_id, json_text(ref.to_dict()))
+        for ref in sources.refs
     }
 
 
@@ -34,8 +35,8 @@ def _tools(
         "SELECT tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, "
         "tool_set_schema_version, tool_policy_version, content_length, content_hash, "
         "redacted_stable_digest, protection, availability, tool_policy_json, tools_json "
-        "FROM tool_set_snapshots WHERE session_id = ? AND plan_id = ?",
-        (snapshot.session_id, snapshot.plan_id),
+        "FROM tool_set_snapshots WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        (snapshot.session_id, snapshot.thread_id, snapshot.plan_id),
     ).fetchall()
 
 
@@ -44,9 +45,9 @@ def write_imported_rows(
     *, sources: ParsedSourceManifest,
 ) -> None:
     """只允许新 registry；migration 已有工具行必须精确匹配，不覆盖或补半表。"""
-    identity = (snapshot.session_id, snapshot.plan_id)
+    identity = (snapshot.session_id, snapshot.thread_id, snapshot.plan_id)
     for table, columns, rows in (
-        ("context_plan_refs", "ref_type, ref_id, ref_json", _ref_rows(sources)),
+        ("context_plan_refs", "ref_thread_id, ref_type, ref_id, ref_json", _ref_rows(sources)),
         (
             "context_plan_contributions",
             "contribution_id, manifest_json",
@@ -55,8 +56,8 @@ def write_imported_rows(
     ):
         placeholders = ", ".join("?" for _ in columns.split(","))
         connection.executemany(
-            f"INSERT INTO {table}(session_id, plan_id, {columns}) "
-            f"VALUES (?, ?, {placeholders})",
+            f"INSERT INTO {table}(session_id, thread_id, plan_id, {columns}) "
+            f"VALUES (?, ?, ?, {placeholders})",
             [(*identity, *row) for row in sorted(rows)],
         )
     expected = tool_rows(snapshot.as_sealed_plan(), snapshot.assembly_id)
@@ -68,10 +69,10 @@ def write_imported_rows(
             )
         return
     connection.executemany(
-        "INSERT INTO tool_set_snapshots(session_id, plan_id, tool_set_snapshot_id, assembly_id, "
+        "INSERT INTO tool_set_snapshots(session_id, thread_id, plan_id, tool_set_snapshot_id, assembly_id, "
         "source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, "
         "content_length, content_hash, redacted_stable_digest, protection, availability, "
-        "tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [(*identity, *row, timestamp) for row in expected],
     )
 
@@ -80,9 +81,9 @@ def validate_imported_rows(
     connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
     *, sources: ParsedSourceManifest,
 ) -> None:
-    identity = (snapshot.session_id, snapshot.plan_id)
+    identity = (snapshot.session_id, snapshot.thread_id, snapshot.plan_id)
     for table, columns, expected in (
-        ("context_plan_refs", "ref_type, ref_id, ref_json", _ref_rows(sources)),
+        ("context_plan_refs", "ref_thread_id, ref_type, ref_id, ref_json", _ref_rows(sources)),
         (
             "context_plan_contributions",
             "contribution_id, manifest_json",
@@ -90,7 +91,7 @@ def validate_imported_rows(
         ),
     ):
         actual = connection.execute(
-            f"SELECT {columns} FROM {table} WHERE session_id = ? AND plan_id = ?",
+            f"SELECT {columns} FROM {table} WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
             identity,
         ).fetchall()
         if len(actual) != len(expected) or set(actual) != expected:

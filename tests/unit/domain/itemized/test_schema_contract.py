@@ -292,7 +292,7 @@ def test_context_ref_and_tool_set_ref_are_disjoint_selection_union(
 
 
 def test_provenance_detail_reference_is_typed() -> None:
-    detail_ref = DetailRef("session-1", "assembly-1", "detail-1")
+    detail_ref = DetailRef("session-1", "thread-1", "assembly-1", "detail-1")
     edge = ProvenanceEdge(
         edge_id="edge-detail",
         relation="derived_from",

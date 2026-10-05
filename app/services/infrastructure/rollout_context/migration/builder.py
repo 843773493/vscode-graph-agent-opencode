@@ -88,6 +88,8 @@ class LegacyImportBuilder:
                 target_thread_id,
                 accepted_ingress_id=target_accepted_ingress_id,
                 acceptance_idempotency_key=target_acceptance_key,
+                job_id=f"legacy-job:{target_identity_seed}",
+                admission_idempotency_key=f"legacy-admission:{target_identity_seed}",
                 payload=root.payload,
                 payload_kind=root.payload_kind,
                 turn_id=target_turn,

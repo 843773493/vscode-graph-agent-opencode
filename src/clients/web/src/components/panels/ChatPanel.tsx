@@ -10,6 +10,7 @@ import type {
   DeliveryPolicy,
   SessionChangesSummary,
   GatewayUserViewState,
+  InternalExecutionHistory,
 } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import { conversationTurnKey } from "../../state/session/turnIdentity";
@@ -18,7 +19,9 @@ import { isLiveConversationView } from "../../state/trace/traceAggregation";
 import ChatHistoryEmptyState from "../chat/ChatHistoryEmptyState";
 import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
 import ChatTurn from "../chat/ChatTurn";
+import ChatInternalExecutionDisplay from "../chat/ChatInternalExecutionDisplay";
 import ChatTurnErrorBoundary from "../chat/ChatTurnErrorBoundary";
+import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
 import { useTurnVirtualScroller } from "../chat/useTurnVirtualScroller";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
@@ -27,8 +30,7 @@ interface ChatPanelRenderState extends ChatTurnHandlers {
   apiPort: number;
   workspaceId?: string | null;
   expandDetails: boolean;
-  firstItemIndex: number;
-  transcriptLength: number;
+  lastTurnKey: string | null;
   sessionBusy: boolean;
   onLoadAgentStateMessageRawContent: (
     sessionId: string,
@@ -93,7 +95,7 @@ function ChatPanelFooter({
 }
 
 const CHAT_PANEL_VIRTUOSO_COMPONENTS: VirtuosoComponents<
-  ConversationView,
+  ChatTranscriptItem,
   ChatPanelVirtuosoContext
 > = {
   Header: ChatPanelHistoryHeader,
@@ -101,30 +103,37 @@ const CHAT_PANEL_VIRTUOSO_COMPONENTS: VirtuosoComponents<
 };
 
 const computeChatPanelItemKey: ComputeItemKey<
-  ConversationView,
+  ChatTranscriptItem,
   ChatPanelVirtuosoContext
-> = (_, conversation) => conversationTurnKey(conversation);
+> = (_, item) => item.key;
 
 const renderChatPanelItem: ItemContent<
-  ConversationView,
+  ChatTranscriptItem,
   ChatPanelVirtuosoContext
-> = (index, conversation, context) => {
+> = (_index, item, context) => {
   const state = currentChatPanelRenderState(context);
+  if (item.kind === "internal_execution") {
+    return (
+      <div className="chat-virtual-item">
+        <ChatInternalExecutionDisplay displayPart={item.displayPart} />
+      </div>
+    );
+  }
   return (
     <div
-      className="chat-virtual-turn"
-      data-turn-id={conversationTurnKey(conversation)}
+      className="chat-virtual-item"
+      data-turn-id={item.key}
     >
       <div>
         <ChatTurnErrorBoundary
-          conversationId={conversation.conversationId}
+          conversationId={item.conversation.conversationId}
         >
           <ChatTurn
             apiPort={state.apiPort}
             workspaceId={state.workspaceId}
-            conversation={conversation}
+            conversation={item.conversation}
             showRawDetails={state.expandDetails}
-            isLastTurn={index === state.firstItemIndex + state.transcriptLength - 1}
+            isLastTurn={item.key === state.lastTurnKey}
             sessionBusy={state.sessionBusy}
             onLoadAgentStateMessageRawContent={state.onLoadAgentStateMessageRawContent}
             onLoadTurnDetails={state.onLoadTurnDetails}
@@ -149,10 +158,22 @@ export function transcriptConversationsForDisplay(
   );
 }
 
+export function chatPanelSessionScopeId(
+  transcriptConversations: readonly ConversationView[],
+  conversations: readonly ConversationView[],
+  internalExecutions: readonly InternalExecutionHistory[],
+): string {
+  return transcriptConversations[0]?.sessionId
+    ?? conversations[0]?.sessionId
+    ?? internalExecutions[0]?.session_id
+    ?? "empty";
+}
+
 export default function ChatPanel({
   apiPort,
   workspaceId,
   conversations,
+  internalExecutions = [],
   expandDetails,
   hasActiveSession,
   hasNewerMessages,
@@ -184,6 +205,7 @@ export default function ChatPanel({
   apiPort: number;
   workspaceId?: string | null;
   conversations: ConversationView[];
+  internalExecutions?: InternalExecutionHistory[];
   expandDetails: boolean;
   hasActiveSession: boolean;
   hasNewerMessages: boolean;
@@ -221,9 +243,16 @@ export default function ChatPanel({
     () => transcriptConversationsForDisplay(conversations),
     [conversations],
   );
-  const sessionId = transcriptConversations[0]?.sessionId
-    ?? conversations[0]?.sessionId
-    ?? "empty";
+  const transcriptItems = React.useMemo(
+    () => chatTranscriptItems(transcriptConversations, internalExecutions),
+    [transcriptConversations, internalExecutions],
+  );
+  const lastTurnKey = [...transcriptItems].reverse().find((item) => item.kind === "turn")?.key ?? null;
+  const sessionId = chatPanelSessionScopeId(
+    transcriptConversations,
+    conversations,
+    internalExecutions,
+  );
   const {
     bindScroller,
     firstItemIndex,
@@ -235,7 +264,7 @@ export default function ChatPanel({
     showJumpToLatest,
     streamRef,
   } = useTurnVirtualScroller({
-    conversations: transcriptConversations,
+    items: transcriptItems,
     sessionId,
     onLoadNewerMessages,
     onLoadOlderMessages,
@@ -318,8 +347,8 @@ export default function ChatPanel({
     () => ({ stateRef: renderStateRef }),
     [
       expandDetails,
-      firstItemIndex,
-      transcriptConversations.length,
+      transcriptItems.length,
+      lastTurnKey,
       sessionBusy,
       projectionState,
       hasOlderMessages,
@@ -332,8 +361,7 @@ export default function ChatPanel({
     apiPort,
     workspaceId,
     expandDetails,
-    firstItemIndex,
-    transcriptLength: transcriptConversations.length,
+    lastTurnKey,
     sessionBusy,
     onLoadAgentStateMessageRawContent,
     onLoadTurnDetails,
@@ -355,11 +383,12 @@ export default function ChatPanel({
     <section className="chat-stream-shell">
       <section
         data-expand-details={String(expandDetails)}
-        data-turn-count={transcriptConversations.length}
+      data-turn-count={transcriptConversations.length}
+      data-transcript-item-count={transcriptItems.length}
         data-first-turn-id={transcriptConversations[0] ? conversationTurnKey(transcriptConversations[0]) : ""}
         className="chat-stream-virtual-shell"
       >
-      {transcriptConversations.length === 0 ? (
+      {transcriptItems.length === 0 ? (
         hasActiveSession ? (
           <ChatHistoryEmptyState
             historyError={historyError}
@@ -380,9 +409,9 @@ export default function ChatPanel({
         scrollerRef={bindScroller}
         className="chat-stream chat-transcript chat-virtual-list"
         context={virtuosoContext}
-        data={transcriptConversations}
+        data={transcriptItems}
         firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={transcriptConversations.length - 1}
+        initialTopMostItemIndex={transcriptItems.length - 1}
         computeItemKey={computeChatPanelItemKey}
         startReached={handleStartReached}
         endReached={handleEndReached}

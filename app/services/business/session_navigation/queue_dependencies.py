@@ -19,7 +19,7 @@ import sqlite3
 
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
-    NavigationMutationIntentDTO,
+    NavigationQueueCommand,
 )
 from app.services.business.session_navigation.queue_records import (
     _RECORD_COLUMNS,
@@ -36,7 +36,7 @@ class NavigationDependencyMixin:
         connection: sqlite3.Connection,
         *,
         workspace_id: str,
-        intent: NavigationMutationIntentDTO,
+        intent: NavigationQueueCommand,
         batch_ids: set[str],
     ) -> None:
         for dependency_id in intent.depends_on:
@@ -61,7 +61,7 @@ class NavigationDependencyMixin:
         connection: sqlite3.Connection,
         workspace_id: str,
         operation_id: str,
-        intent: NavigationMutationIntentDTO,
+        intent: NavigationQueueCommand,
     ) -> None:
         row = connection.execute(
             "SELECT queue_seq FROM navigation_mutation_records "
@@ -109,6 +109,7 @@ class NavigationDependencyMixin:
         *,
         workspace_id: str,
         failed_operation_id: str,
+        committed_catalog_revision: int,
         now: str,
     ) -> list[NavigationMutationRecord]:
         """把 ``failed_operation_id`` 的传递后继从 ``queued`` 直接终结为
@@ -142,11 +143,13 @@ class NavigationDependencyMixin:
             connection.execute(
                 "UPDATE navigation_mutation_records SET state = 'dependency_failed', "
                 "error_code = 'dependency_failed', error_detail = ?, "
+                "committed_catalog_revision = ?, "
                 "receipt_revision = receipt_revision + 1, updated_at = ? "
                 "WHERE gateway_id = ? AND workspace_id = ? AND actor = ? "
                 "AND operation_id = ? AND state = 'queued'",
                 (
                     f"前置 operation 未成功: {failed_operation_id}",
+                    committed_catalog_revision,
                     now,
                     record.gateway_id,
                     record.workspace_id,

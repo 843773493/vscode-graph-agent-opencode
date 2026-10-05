@@ -34,9 +34,14 @@ export type {
   RunMode,
   RunOptions,
   Session,
+  SessionMainThread,
   SessionCompactResult,
   SessionInformationSnapshot,
   InterruptSessionResult,
+  InternalDisplayProvenance,
+  InternalExecutionDisplayPart,
+  InternalExecutionHistory,
+  InternalExecutionStatus,
   SessionResource,
   SessionResourceControlResult,
   SessionResourceList,
@@ -382,8 +387,9 @@ export type WorkspaceNavigationPlacementRequest =
 
 export type GatewayWorkspace = Omit<
   Required<GatewayWorkspaceDTO>,
-  "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
+  "backend_workspace_id" | "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
 > & {
+  backend_workspace_id?: string | null;
   parent_workspace_id?: string | null;
   runtime_action?: GatewayWorkspaceDTO["runtime_action"];
   config_reload?: GatewayConfigReloadStatus;
@@ -653,6 +659,8 @@ export interface SessionCatalogNode {
   session_id?: string | null;
   folder_id?: string | null;
   has_children: boolean;
+  node_revision: number;
+  state: "active" | "deleting";
   storage_relative_path?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -662,12 +670,39 @@ export interface SessionCatalogNode {
 
 export interface SessionCatalogPage {
   revision: string;
+  catalog_revision: number;
   parent_node_id?: string | null;
   items: SessionCatalogNode[];
   cursor?: string | null;
   total: number;
   /** 目录仍按权威索引展示时，提示未通过严格物理树校验的原因。 */
   consistency_warning?: string | null;
+}
+
+export interface SessionCatalogBreadcrumb {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogNode[];
+}
+
+export interface SessionCatalogSearchResult {
+  node: SessionCatalogNode;
+  breadcrumb: SessionCatalogNode[];
+  relative_path: string;
+}
+
+export interface SessionCatalogSearchResults {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogSearchResult[];
+  cursor?: string | null;
+  total: number;
+}
+
+export interface SessionCatalogExport {
+  revision: string;
+  catalog_revision: number;
+  items: SessionCatalogNode[];
 }
 
 export type GatewaySessionSearchMatch = DeepRequired<GatewaySessionSearchMatchDTO>;

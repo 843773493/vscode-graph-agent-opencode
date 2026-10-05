@@ -30,7 +30,9 @@ def preflight_seal(
     if not isinstance(seal_idempotency_key, str) or not seal_idempotency_key:
         raise ValueError("assembly-idempotency-conflict: seal 必须有非空幂等键")
     input_bound_hash = runtime_seal_hash(snapshot, detail_key, seal_input_hash)
-    registered = read_registration(connection, snapshot.session_id, snapshot.plan_id)
+    registered = read_registration(
+        connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
+    )
     if registered.draft is None or registered.registration_origin != "runtime":
         raise ValueError("assembly-idempotency-conflict: 导入快照没有运行时 draft，不可再次 seal")
     if registered.plan_state == "sealed" and (
@@ -63,8 +65,8 @@ def bind_sealed_registration(
     )
     row = connection.execute(
         "SELECT snapshot_json, detail_ref FROM context_assemblies "
-        "WHERE session_id = ? AND plan_id = ? AND assembly_id = ?",
-        (snapshot.session_id, snapshot.plan_id, snapshot.assembly_id),
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND assembly_id = ?",
+        (snapshot.session_id, snapshot.thread_id, snapshot.plan_id, snapshot.assembly_id),
     ).fetchone()
     if (
         row is None
@@ -84,7 +86,7 @@ def bind_sealed_registration(
     cursor = connection.execute(
         "UPDATE context_plans SET plan_state = 'sealed', assembly_id = ?, "
         "seal_idempotency_key = ?, seal_hash = ?, seal_input_hash = ?, updated_at = ? "
-        "WHERE session_id = ? AND plan_id = ? AND plan_state = 'unsealed' AND revision = ?",
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND plan_state = 'unsealed' AND revision = ?",
         (
             snapshot.assembly_id,
             seal_idempotency_key,
@@ -92,6 +94,7 @@ def bind_sealed_registration(
             seal_input_hash,
             datetime.now(UTC).isoformat(),
             snapshot.session_id,
+            snapshot.thread_id,
             snapshot.plan_id,
             registered.revision,
         ),
@@ -100,17 +103,20 @@ def bind_sealed_registration(
         raise RuntimeError("assembly-idempotency-conflict: plan seal CAS 失败")
     cursor = connection.execute(
         "UPDATE tool_set_snapshots SET assembly_id = ? "
-        "WHERE session_id = ? AND plan_id = ? AND assembly_id IS NULL",
-        (snapshot.assembly_id, snapshot.session_id, snapshot.plan_id),
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ? AND assembly_id IS NULL",
+        (snapshot.assembly_id, snapshot.session_id, snapshot.thread_id, snapshot.plan_id),
     )
     if cursor.rowcount != len(registered.draft.tool_set_refs):
         raise RuntimeError("source-mismatch: draft ToolSetSnapshot 绑定行数不一致")
-    read_registration(connection, snapshot.session_id, snapshot.plan_id)
+    read_registration(
+        connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
+    )
 
 
 def record_seal_failure(
     connection: sqlite3.Connection,
     session_id: str,
+    thread_id: str,
     plan_id: str,
     *,
     seal_idempotency_key: str,
@@ -118,7 +124,7 @@ def record_seal_failure(
 ) -> str:
     """失败仅记录闭合的错误分类，禁止把含敏感正文的异常信息落盘。"""
     require_transaction(connection)
-    registered = read_registration(connection, session_id, plan_id)
+    registered = read_registration(connection, session_id, thread_id, plan_id)
     if registered.plan_state != "unsealed":
         raise ValueError("assembly-idempotency-conflict: sealed plan 不能新增失败尝试")
     if not isinstance(seal_idempotency_key, str) or not seal_idempotency_key:
@@ -134,11 +140,12 @@ def record_seal_failure(
         raise ValueError("seal failure error_code 不属于允许的控制分类")
     failure_id = f"seal-failure:{uuid4().hex}"
     connection.execute(
-        "INSERT INTO context_plan_seal_failures(failure_id, session_id, plan_id, revision, "
-        "seal_idempotency_key, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO context_plan_seal_failures(failure_id, session_id, thread_id, plan_id, revision, "
+        "seal_idempotency_key, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             failure_id,
             session_id,
+            thread_id,
             plan_id,
             registered.revision,
             seal_idempotency_key,

@@ -40,6 +40,56 @@ async function expandRow(row) {
   if (label?.startsWith("展开")) await chevron.click();
 }
 
+function matchingCatalogIntent(request, expected) {
+  if (request.method() !== "POST"
+    || !request.url().endsWith("/session-catalog/operations:enqueue")
+    || request.headers()["x-boxteam-workspace-id"] !== fixture.parentWorkspaceId) {
+    return undefined;
+  }
+  return request.postDataJSON().intents.find(
+    (intent) => Object.entries(expected).every(([key, value]) => intent[key] === value),
+  );
+}
+
+function waitForCatalogAcceptance(expected) {
+  return page.waitForResponse(
+    (response) => Boolean(matchingCatalogIntent(response.request(), expected)),
+  );
+}
+
+async function requireCatalogCommit(response, expected) {
+  if (response.status() !== 202) {
+    throw new Error(`目录操作未被接受: ${await response.text()}`);
+  }
+  const request = response.request();
+  const intent = matchingCatalogIntent(request, expected);
+  if (!intent) throw new Error("目录响应与目标 intent 不匹配");
+  const operationId = intent.client_operation_id;
+  const accepted = await response.json();
+  if (!accepted.data.receipts.some((receipt) => receipt.operation_id === operationId)) {
+    throw new Error(`目录 acceptance 缺少 operation ${operationId}`);
+  }
+  const statusUrl = new URL(response.url());
+  statusUrl.pathname = statusUrl.pathname.replace(/operations:enqueue$/, "operations");
+  statusUrl.search = new URLSearchParams({ operation_id: operationId }).toString();
+  const headers = Object.fromEntries(Object.entries(request.headers()).filter(
+    ([name]) => ["x-local-token", "x-boxteam-workspace-id", "x-boxteam-backend-workspace-id"].includes(name),
+  ));
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const status = await context.request.get(statusUrl.toString(), { headers, timeout: 5_000 });
+    if (!status.ok()) throw new Error(`目录终态查询失败: ${await status.text()}`);
+    const payload = await status.json();
+    const receipt = payload.data.items.find((item) => item.operation_id === operationId);
+    if (receipt?.state === "committed") return receipt;
+    if (["rejected", "cancelled", "dependency_failed"].includes(receipt?.state)) {
+      throw new Error(`目录操作未提交 ${operationId}: ${JSON.stringify(receipt)}`);
+    }
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`目录操作未到终态: ${operationId}`);
+}
+
 try {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
@@ -157,15 +207,11 @@ try {
   await page.getByRole("menuitem", { name: "新建会话文件夹", exact: true }).click();
   const workspaceSessionFolderDialog = page.getByRole("dialog", { name: "新建会话文件夹" });
   await workspaceSessionFolderDialog.getByRole("textbox", { name: "文件夹名称" }).fill("菜单工作区文件夹");
-  const workspaceSessionFolderResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "POST"
-      && response.url().includes("/session-catalog/folders"),
-  );
+  const workspaceSessionFolderIntent = { kind: "create_folder", name: "菜单工作区文件夹", parent_node_id: null };
+  const workspaceSessionFolderResponsePromise = waitForCatalogAcceptance(workspaceSessionFolderIntent);
   await workspaceSessionFolderDialog.getByRole("button", { name: "创建", exact: true }).click();
   const workspaceSessionFolderResponse = await workspaceSessionFolderResponsePromise;
-  if (!workspaceSessionFolderResponse.ok()) {
-    throw new Error(`工作区右键菜单创建会话文件夹失败: ${await workspaceSessionFolderResponse.text()}`);
-  }
+  await requireCatalogCommit(workspaceSessionFolderResponse, workspaceSessionFolderIntent);
   await page.getByText("菜单工作区文件夹", { exact: true }).waitFor({ state: "visible" });
   workspaceMenuCreatedSessionFolder = true;
   const bindWorkspaceResponsePromise = page.waitForResponse(
@@ -227,14 +273,12 @@ try {
   await parentRow.click({ button: "right" });
   const bloodlineTextPresent = await page.getByText(/血缘/).count() > 0;
   await page.getByRole("menuitem", { name: "新建子文件夹", exact: true }).waitFor({ state: "visible" });
-  const bindResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/session-catalog/nodes/${fixture.childSessionId}/parent`),
-  );
+  const bindIntent = { kind: "move_node", target_node_id: fixture.childSessionId, parent_node_id: fixture.parentSessionId };
+  const bindResponsePromise = waitForCatalogAcceptance(bindIntent);
   await page.keyboard.press("Escape");
   await childRow.dragTo(parentRow);
   const bindResponse = await bindResponsePromise;
-  if (!bindResponse.ok()) throw new Error(`绑定子会话失败: ${await bindResponse.text()}`);
+  await requireCatalogCommit(bindResponse, bindIntent);
 
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   await expandRow(parentRow);
@@ -259,22 +303,16 @@ try {
   const folderRenameDialog = page.getByRole("dialog", { name: "重命名会话文件夹" });
   const folderRenameInput = folderRenameDialog.getByRole("textbox", { name: "文件夹名称" });
   await folderRenameInput.fill("归档文件夹已重命名");
-  const folderRenameResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/session-catalog/folders/${fixture.folderId}`),
-  );
+  const folderRenameIntent = { kind: "rename_node", target_node_id: fixture.folderId, name: "归档文件夹已重命名" };
+  const folderRenameResponsePromise = waitForCatalogAcceptance(folderRenameIntent);
   await folderRenameDialog.getByRole("button", { name: "保存", exact: true }).click();
   const folderRenameResponse = await folderRenameResponsePromise;
-  if (!folderRenameResponse.ok()) {
-    throw new Error(`暖色窗口重命名会话文件夹失败: ${await folderRenameResponse.text()}`);
-  }
-  const moveResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/session-catalog/nodes/${fixture.childSessionId}/parent`),
-  );
+  await requireCatalogCommit(folderRenameResponse, folderRenameIntent);
+  const moveIntent = { kind: "move_node", target_node_id: fixture.childSessionId, parent_node_id: fixture.folderId };
+  const moveResponsePromise = waitForCatalogAcceptance(moveIntent);
   await childRow.dragTo(folderRow);
   const moveResponse = await moveResponsePromise;
-  if (!moveResponse.ok()) throw new Error(`拖动会话到文件夹失败: ${await moveResponse.text()}`);
+  await requireCatalogCommit(moveResponse, moveIntent);
   await parentRow.locator(".session-resource-chevron").waitFor({ state: "detached" });
   phantomSessionEmptyStatePresent = await parentRow
     .locator("xpath=..")
@@ -284,28 +322,20 @@ try {
     throw new Error("叶子会话下错误显示了“空文件夹”");
   }
 
-  const moveFolderUnderSessionPromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/session-catalog/nodes/${fixture.folderId}/parent`),
-  );
+  const moveFolderUnderSessionIntent = { kind: "move_node", target_node_id: fixture.folderId, parent_node_id: fixture.parentSessionId };
+  const moveFolderUnderSessionPromise = waitForCatalogAcceptance(moveFolderUnderSessionIntent);
   await folderRow.dragTo(parentRow);
   const moveFolderUnderSession = await moveFolderUnderSessionPromise;
-  if (!moveFolderUnderSession.ok()) {
-    throw new Error(`拖动文件夹到会话失败: ${await moveFolderUnderSession.text()}`);
-  }
+  await requireCatalogCommit(moveFolderUnderSession, moveFolderUnderSessionIntent);
   await expandRow(parentRow);
   await folderRow.waitFor({ state: "visible" });
 
   const workspaceRow = page.locator('[data-testid^="workspace-node-"]').first();
-  const moveFolderToRootPromise = page.waitForResponse(
-    (response) => response.request().method() === "PATCH"
-      && response.url().includes(`/session-catalog/nodes/${fixture.folderId}/parent`),
-  );
+  const moveFolderToRootIntent = { kind: "move_node", target_node_id: fixture.folderId, parent_node_id: null };
+  const moveFolderToRootPromise = waitForCatalogAcceptance(moveFolderToRootIntent);
   await folderRow.dragTo(workspaceRow);
   const moveFolderToRoot = await moveFolderToRootPromise;
-  if (!moveFolderToRoot.ok()) {
-    throw new Error(`拖动文件夹到工作区根失败: ${await moveFolderToRoot.text()}`);
-  }
+  await requireCatalogCommit(moveFolderToRoot, moveFolderToRootIntent);
 
   await parentRow.waitFor({ state: "visible", timeout: 15_000 });
   await parentRow.click({ button: "right" });
@@ -323,15 +353,13 @@ try {
   await forkRow.waitFor({ state: "visible", timeout: 10_000 });
 
   await parentRow.click({ button: "right" });
-  const deleteResponsePromise = page.waitForResponse(
-    (response) => response.request().method() === "DELETE"
-      && response.url().includes(`/sessions/${fixture.parentSessionId}?cascade=true`),
-  );
+  const deleteIntent = { kind: "delete_session", target_node_id: fixture.parentSessionId };
+  const deleteResponsePromise = waitForCatalogAcceptance(deleteIntent);
   await page.getByRole("menuitem", { name: "删除会话", exact: true }).click();
   const deleteSessionDialog = page.getByRole("dialog", { name: "永久删除会话" });
   await deleteSessionDialog.getByRole("button", { name: "删除", exact: true }).click();
   const deleteResponse = await deleteResponsePromise;
-  if (!deleteResponse.ok()) throw new Error(`级联删除父会话失败: ${await deleteResponse.text()}`);
+  await requireCatalogCommit(deleteResponse, deleteIntent);
 
   await writeFile(resultPath, `${JSON.stringify({
     bloodlineTextPresent,

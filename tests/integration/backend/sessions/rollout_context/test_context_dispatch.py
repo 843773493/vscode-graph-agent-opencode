@@ -56,6 +56,8 @@ def dispatch_session(
         session_id,
         accepted_ingress_id="dispatch-ingress",
         acceptance_idempotency_key="dispatch-key",
+        job_id="dispatch-job",
+        admission_idempotency_key="dispatch-admission",
         payload="请基于最新策略继续工作",
         payload_kind=PayloadKind.TEXT,
     )
@@ -101,7 +103,10 @@ def test_dispatch_projects_pending_source_to_chat_and_responses(
         seal_idempotency_key="pending-source-chat:seal",
     )
 
-    assert any(message.type == "human" and message.text == source_body for message in prepared["messages"])
+    assert any(
+        message.type == "human" and message.text == source_body
+        for message in prepared["messages"]
+    )
     native = saver.project_context_plan_to_native(session_id, prepared["plan"])
     assert {
         "role": "user",
@@ -210,9 +215,7 @@ def test_composition_preserves_checkpoint_supersession_for_tool_call(
         payload_kind=PayloadKind.TOOL_CALL,
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={"producer_kind": "provider", "producer_id": "model-call-old"},
-        payload={
-            "tool_calls": [{"id": "call-old", "name": "glob", "args": {}}]
-        },
+        payload={"tool_calls": [{"id": "call-old", "name": "glob", "args": {}}]},
         metadata={
             "execution_confirmed": True,
             "projection_message_id": previous_message_id,
@@ -272,7 +275,7 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
     request_ref = next(ref for ref in plan.refs if ref.ref_type == "request_only")
     canonical_ref = next(ref for ref in plan.refs if ref.ref_type == "canonical_item")
     ref_id = request_ref.ref_id
-    detail = DetailRef(session_id, "detail-scope-assembly", "detail")
+    detail = DetailRef(session_id, plan.thread_id, "detail-scope-assembly", "detail")
     omitted = ()
     if case == "canonical":
         ref_id = canonical_ref.ref_id
@@ -289,9 +292,11 @@ def test_composer_rejects_detail_binding_outside_included_request_scope(
             ),
         )
     elif case == "session":
-        detail = DetailRef("foreign-session", "detail-scope-assembly", "detail")
+        detail = DetailRef(
+            "foreign-session", plan.thread_id, "detail-scope-assembly", "detail"
+        )
     elif case == "assembly":
-        detail = DetailRef(session_id, "foreign-assembly", "detail")
+        detail = DetailRef(session_id, plan.thread_id, "foreign-assembly", "detail")
     elif case == "untyped":
         detail = "detail"
     root = saver._storage.root(session_id)
@@ -316,11 +321,13 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt(
     dispatch_session: tuple[RolloutCheckpointSaver, str, str, Path],
 ) -> None:
     saver, session_id, turn_id, sessions = dispatch_session
+    thread_id = saver._storage._path_resolver.main_thread_id(session_id)
     saver.register_context_contribution(session_id, _prompt("previous-prompt"))
     saver.register_source_overlay(
         SimpleNamespace(
             overlay_id="policy-overlay",
             session_id=session_id,
+            thread_id=thread_id,
             checkpoint_ns="",
             source_kind="workspace_policy",
             source_revision="policy-v2",
@@ -335,6 +342,8 @@ def test_dispatch_preserves_overlay_and_excludes_previous_prompt(
             status="active",
             idempotency_key="policy-overlay-key",
         ),
+        session_id=session_id,
+        thread_id=thread_id,
         base_content={"policy": "基础规则"},
         delta_content={"policy": "本轮规则变化"},
     )
@@ -440,6 +449,8 @@ def test_same_plan_and_source_ids_stay_with_their_session_owner(
         second_session,
         accepted_ingress_id="second-ingress",
         acceptance_idempotency_key="second-acceptance",
+        job_id="second-job",
+        admission_idempotency_key="second-admission",
         payload="独立会话",
     )
     plans: list[ContextRequestPlan] = []
@@ -523,7 +534,9 @@ def test_detail_manifest_mismatch_prevents_assembly_commit(
 
     def register_with_corrupt_manifest(record: DetailRecord) -> None:
         register(record)
-        with saver._storage._connect(session_id, "") as connection:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(session_id), "", session_id=session_id
+        ) as connection:
             connection.execute(
                 f"UPDATE context_plan_details SET {column} = ? WHERE detail_ref = ?",
                 (value, detail_ref_key(record.detail_ref)),
@@ -545,7 +558,12 @@ def test_detail_manifest_mismatch_prevents_assembly_commit(
             seal_idempotency_key="test_context_dispatch:279:seal",
         )
     assert saver._storage.jsonl_path(session_id).read_bytes() == before
-    with saver._storage._connect(session_id, "", read_only=True) as connection:
+    with saver._storage._connect(
+        saver._storage.main_thread_id(session_id),
+        "",
+        read_only=True,
+        session_id=session_id,
+    ) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM context_assemblies"
         ).fetchone() == (0,)

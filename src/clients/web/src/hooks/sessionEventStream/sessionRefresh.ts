@@ -8,6 +8,7 @@ import {
   fetchWorkspaceSessionListSnapshot,
   isCurrentWorkspaceSessionListSnapshot,
 } from "../workspace/workspaceSessionListRefresh";
+import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
 function sessionListsMatch(
   left: AppState["sessions"],
@@ -51,16 +52,17 @@ export async function refreshSessionMetadata(
 
 export async function refreshWorkspaceSessionList(
   apiPort: number,
-  workspaceId: string | null,
+  workspaceTarget: GatewayWorkspaceRequestTarget | null,
   setState: SetAppState,
   options: { force?: boolean } = {},
 ): Promise<void> {
-  if (!workspaceId) {
+  if (!workspaceTarget) {
     throw new Error("刷新工作区会话列表时缺少 workspace_id");
   }
+  const workspaceId = workspaceTarget.workspace_id;
   const snapshot = await fetchWorkspaceSessionListSnapshot(
     apiPort,
-    workspaceId,
+    workspaceTarget,
     options,
   );
   if (!isCurrentWorkspaceSessionListSnapshot(snapshot)) {

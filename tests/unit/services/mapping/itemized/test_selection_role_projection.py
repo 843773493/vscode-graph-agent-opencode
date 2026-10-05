@@ -56,11 +56,12 @@ def test_typed_fields_round_trip(
 def contribution_to_manifest(contribution: ContextContribution) -> dict:
     from dataclasses import replace
 
-    from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
     from app.domain.itemized.request_plan import ContextRequestPlan
+    from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
 
     plan = ContextRequestPlan(
         session_id="session-role",
+        thread_id="thread-1",
         plan_id="plan-role",
         refs=(),
         contributions=(replace(contribution, body=None),),

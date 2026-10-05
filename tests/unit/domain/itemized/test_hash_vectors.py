@@ -7,8 +7,8 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.itemized.hash import plan_hash, request_hash
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash import plan_hash, request_hash
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     content_hash,
@@ -16,8 +16,8 @@ from app.domain.itemized.hashing import (
     payload_content_length,
     sha256_jcs,
 )
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 
 
@@ -176,12 +176,34 @@ def test_plan_identity_and_provider_profile_have_separate_hash_scopes(
 ) -> None:
     assert (
         ContextRequestPlan(
-            session_id=golden_plan.session_id, plan_id="one", refs=()
+            session_id=golden_plan.session_id, thread_id=golden_plan.thread_id, plan_id="one", refs=()
         ).plan_hash()
         == ContextRequestPlan(
-            session_id=golden_plan.session_id, plan_id="two", refs=()
+            session_id=golden_plan.session_id, thread_id=golden_plan.thread_id, plan_id="two", refs=()
         ).plan_hash()
     )
+    assert ContextRequestPlan(
+        session_id=golden_plan.session_id,
+        thread_id="thread-sibling",
+        plan_id="one",
+        refs=(),
+    ).plan_hash() != ContextRequestPlan(
+        session_id=golden_plan.session_id,
+        thread_id=golden_plan.thread_id,
+        plan_id="one",
+        refs=(),
+    ).plan_hash()
+    assert ContextRequestPlan(
+        session_id="session-sibling",
+        thread_id=golden_plan.thread_id,
+        plan_id="one",
+        refs=(),
+    ).plan_hash() != ContextRequestPlan(
+        session_id=golden_plan.session_id,
+        thread_id=golden_plan.thread_id,
+        plan_id="one",
+        refs=(),
+    ).plan_hash()
     assert (
         replace(golden_plan, plan_creation_idempotency_key="other-key").plan_hash()
         == golden_plan.plan_hash()

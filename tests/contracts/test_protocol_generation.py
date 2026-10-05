@@ -1,5 +1,6 @@
 from app.protocol.generated.boxteam.workspace.v2 import (
     job_pb2,
+    public_pb2,
     session_interaction_pb2,
 )
 
@@ -20,3 +21,21 @@ def test_python_binding_preserves_cross_file_import_and_oneof() -> None:
 
     assert event.WhichOneof("payload") == "job_updated"
     assert event.job_updated.progress == 42
+
+
+def test_current_job_and_pending_request_owner_fields_keep_distinct_wire_tags() -> None:
+    for message_type in (job_pb2.Job, public_pb2.JobDTO):
+        field = message_type.DESCRIPTOR.fields_by_name["thread_id"]
+        assert field.number == 14
+        value = message_type(job_id="job_fixture", thread_id="thr_fixture")
+        decoded = message_type.FromString(value.SerializeToString())
+        assert decoded.thread_id == "thr_fixture"
+    fields = public_pb2.PendingRequestDTO.DESCRIPTOR.fields_by_name
+    assert fields["thread_id"].number == 19
+    assert fields["turn_id"].number == 20
+    assert fields["execution_binding"].number == 21
+    pending = public_pb2.PendingRequestDTO(thread_id="thr_fixture")
+    assert not pending.HasField("turn_id")
+    pending.turn_id = "turn_fixture"
+    decoded = public_pb2.PendingRequestDTO.FromString(pending.SerializeToString())
+    assert decoded.HasField("turn_id") and decoded.turn_id == "turn_fixture"

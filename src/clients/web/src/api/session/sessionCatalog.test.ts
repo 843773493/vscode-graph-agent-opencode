@@ -20,20 +20,34 @@ afterEach(() => {
   unwrapSessionCatalogFetch();
 });
 
+const workspaceTarget = {
+  workspace_id: "workspace-1",
+  backend_workspace_id: "backend-workspace-1",
+  connection_kind: "local",
+} as const;
+
 describe("会话目录节点合法性校验", () => {
   test("成功：合法节点原样返回", async () => {
-    installSessionCatalogFetchMock(() => catalogPage([
+    let request: RequestInit | undefined;
+    installSessionCatalogFetchMock((captured) => {
+      request = captured.init;
+      return catalogPage([
       { node_id: "cnode_1", kind: "folder", name: "文件夹", has_children: true },
-    ]));
-    const page = await listSessionCatalogChildren(48_401, "workspace-1");
+      ]);
+    });
+    const page = await listSessionCatalogChildren(48_401, workspaceTarget);
     expect(page.items[0]?.node_id).toBe("cnode_1");
+    expect(new Headers(request?.headers).get("X-BoxTeam-Workspace-Id"))
+      .toBe("workspace-1");
+    expect(new Headers(request?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
+      .toBe("backend-workspace-1");
   });
 
   test("缺少 node_id 的子节点必须响亮失败而不是留给 React 警告", async () => {
     installSessionCatalogFetchMock(() => catalogPage([
       { kind: "folder", name: "坏文件夹", has_children: true },
     ]));
-    await expect(listSessionCatalogChildren(48_402, "workspace-1"))
+    await expect(listSessionCatalogChildren(48_402, workspaceTarget))
       .rejects.toThrow("会话目录子节点第 1 个节点的 node_id 必须是非空字符串");
   });
 
@@ -41,7 +55,7 @@ describe("会话目录节点合法性校验", () => {
     installSessionCatalogFetchMock(() => catalogPage([
       { node_id: 42, kind: "session", name: "坏会话", session_id: "s1", has_children: false },
     ]));
-    await expect(listSessionCatalogChildren(48_403, "workspace-1"))
+    await expect(listSessionCatalogChildren(48_403, workspaceTarget))
       .rejects.toThrow("node_id 必须是非空字符串");
   });
 
@@ -50,7 +64,7 @@ describe("会话目录节点合法性校验", () => {
       { node_id: "dup", kind: "session", name: "甲", session_id: "s-a", has_children: false },
       { node_id: "dup", kind: "session", name: "乙", session_id: "s-b", has_children: false },
     ]));
-    await expect(listSessionCatalogChildren(48_404, "workspace-1"))
+    await expect(listSessionCatalogChildren(48_404, workspaceTarget))
       .rejects.toThrow("会话目录子节点存在重复的 node_id: dup");
   });
 
@@ -58,7 +72,7 @@ describe("会话目录节点合法性校验", () => {
     installSessionCatalogFetchMock(() => catalogPage([
       { kind: "session", name: "缺 ID", session_id: "s1", has_children: false },
     ]));
-    await expect(refreshSessionCatalog(48_405, "workspace-1"))
+    await expect(refreshSessionCatalog(48_405, workspaceTarget))
       .rejects.toThrow("会话目录刷新第 1 个节点的 node_id 必须是非空字符串");
   });
 
@@ -67,7 +81,7 @@ describe("会话目录节点合法性校验", () => {
       data: { revision: "catalog", items: [{ kind: "folder", name: "坏文件夹" }] },
       request_id: "req-catalog",
     }));
-    await expect(getSessionCatalogBreadcrumb(48_406, "workspace-1", "cnode_1"))
+    await expect(getSessionCatalogBreadcrumb(48_406, workspaceTarget, "cnode_1"))
       .rejects.toThrow("会话目录面包屑第 1 个节点的 node_id 必须是非空字符串");
   });
 });

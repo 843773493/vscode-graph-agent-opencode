@@ -50,16 +50,9 @@ export type {
   WorkspaceFileLocation,
 } from "./api/workspaceFilesystem";
 export {
-  assignSessionCatalogFolder,
-  createSessionCatalogFolder,
-  deleteSessionCatalogFolder,
   getSessionCatalogBreadcrumb,
   listSessionCatalogChildren,
-  moveSessionCatalogFolder,
-  moveSessionCatalogNode,
-  moveSessionParent,
   refreshSessionCatalog,
-  renameSessionCatalogFolder,
 } from "./api/session/sessionCatalog";
 export {
   getWorkspace,
@@ -71,10 +64,10 @@ export {
   compactSessionContext,
   createSession,
   DEFAULT_SESSION_TITLE,
-  deleteSession,
   forkSessionContext,
   getSession,
   getSessionInformation,
+  getSessionMainThread,
   listChildThreads,
   listSessions,
   updateSession,

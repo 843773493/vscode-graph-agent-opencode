@@ -14,11 +14,17 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
 from app.core.session_catalog_store.validators import (
     validate_session_id,
     validate_storage_relative_locator,
 )
+
+SessionCreationPurpose = Literal["normal", "context_fork"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +35,7 @@ class SessionCatalogNode:
     kind: str
     parent_node_id: str | None
     display_name: str
+    title_source: str | None
     state: str
     revision: int
     workspace_id: str
@@ -53,6 +60,14 @@ class SessionCreationRecord:
     workspace_id: str
     parent_node_id: str | None
     display_name: str
+    title_source: str
+    purpose: SessionCreationPurpose
+    graph_id: str
+    graph_revision: int
+    graph_schema_hash: str
+    capability_profile_hash: str
+    session_metadata_json: str
+    request_intent_json: str | None
     created_at: str
     storage_relative_locator: str
     preimage_hash: str
@@ -61,6 +76,16 @@ class SessionCreationRecord:
     abort_reason: str | None
     record_created_at: str
     record_updated_at: str
+
+    @property
+    def graph_binding(self) -> ThreadGraphBindingRecord:
+        """从创建记录冻结的四字段取得 selector，不读取当前图注册表。"""
+        from app.core.session_control_store.contracts import ThreadGraphBindingRecord
+
+        return ThreadGraphBindingRecord(
+            self.graph_id, self.graph_revision,
+            self.graph_schema_hash, self.capability_profile_hash,
+        )
 
 
 @dataclass(frozen=True, slots=True)

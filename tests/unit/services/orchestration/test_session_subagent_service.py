@@ -15,6 +15,10 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.schemas.internal_v2.session import SessionDTO
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -22,6 +26,7 @@ from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
     SessionSubagentUnavailableError,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 WORKSPACE_ID = "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21"
 
@@ -74,10 +79,12 @@ async def parent_session(
         workspace_id=WORKSPACE_ID,
         gate=NavigationTopologyGate(sessions_root),
     )
-    result = await creation.create(
+    record = await creation.prepare(
         idempotency_key="owner-key",
         title="父会话",
+        purpose="normal",
         parent_node_id=None,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata={
             "kind": "normal",
             "delegation": None,
@@ -87,10 +94,14 @@ async def parent_session(
             "context_source_session_id": None,
         },
     )
+    result = await creation.publish_prepared(record)
     now = datetime.now(UTC)
     return SessionDTO(
         session_id=result.session_id,
         workspace_id=WORKSPACE_ID,
+        resource_identity=session_resource_identity(WORKSPACE_ID, result.session_id),
+        vrn=session_resource_vrn(WORKSPACE_ID, result.session_id),
+        scope="workspace",
         title="父会话",
         current_agent_id="default",
         created_at=now,

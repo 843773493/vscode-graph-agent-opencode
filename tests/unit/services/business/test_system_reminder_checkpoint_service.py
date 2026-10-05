@@ -5,6 +5,8 @@ from app.services.business.system_reminder_checkpoint_service import (
     persist_interrupt_checkpoint,
 )
 
+THREAD_ID = "thr_018f1234567870008000000000000001"
+
 
 class FakeMutationIntentOwner:
     def __init__(self) -> None:
@@ -28,6 +30,7 @@ def test_persist_interrupt_checkpoint_submits_pending_source_intent() -> None:
     persist_interrupt_checkpoint(
         checkpointer=owner,
         session_id="sess_interrupt",
+        thread_id=THREAD_ID,
         active_tool_name=None,
         event_identity="turn-interrupt",
     )
@@ -55,6 +58,7 @@ def test_persist_interrupt_checkpoint_submits_tool_reminder_without_checkpoint_m
     persist_interrupt_checkpoint(
         checkpointer=owner,
         session_id="sess_interrupt",
+        thread_id=THREAD_ID,
         active_tool_name="python_exec",
         event_identity="turn-tool-interrupt",
     )

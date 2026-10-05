@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from typing import Literal
 
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -58,6 +59,7 @@ class RolloutViewMembershipMixin:
         item_ids: Iterable[str],
         branch_id: str | None = None,
         require_view: bool = False,
+        source_kind: Literal["canonical", "display_only"] = "canonical",
     ) -> bool:
         """把 canonical item 幂等加入 active view，并集中分配 item ordinal。
 
@@ -72,6 +74,8 @@ class RolloutViewMembershipMixin:
                 for item_id in item_ids
             )
         )
+        if source_kind not in {"canonical", "display_only"}:
+            raise ValueError(f"context view item source_kind 非法: {source_kind!r}")
         if not values:
             return False
         view_id = self._active_context_view_id(connection, checkpoint_ns, branch_id)
@@ -83,7 +87,9 @@ class RolloutViewMembershipMixin:
             return False
         placeholders = ",".join("?" for _ in values)
         catalog_rows = connection.execute(
-            f"SELECT item_id, turn_scope FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence, item_id",
+            f"SELECT item_id, semantic_kind, turn_id, turn_scope, execution_id "
+            f"FROM item_catalog WHERE item_id IN ({placeholders}) "
+            "ORDER BY item_sequence, item_id",
             values,
         ).fetchall()
         found = {
@@ -104,8 +110,14 @@ class RolloutViewMembershipMixin:
             field="context_view_items.logical_item_ordinal",
         )
         inserted = False
-        for item_id, turn_scope in catalog_rows:
+        for item_id, semantic_kind, turn_id, turn_scope, execution_id in catalog_rows:
             item_id = strict_text(item_id, field="item_catalog.item_id")
+            semantic_kind = strict_text(
+                semantic_kind, field=f"item_catalog.semantic_kind: {item_id}"
+            )
+            turn_id = strict_optional_text(
+                turn_id, field=f"item_catalog.turn_id: {item_id}"
+            )
             turn_scope = strict_optional_text(
                 turn_scope, field=f"item_catalog.turn_scope: {item_id}"
             )
@@ -116,10 +128,31 @@ class RolloutViewMembershipMixin:
                 "pending_next_turn",
             }:
                 raise RuntimeError(f"item_catalog.turn_scope 非法: {item_id}")
-            if turn_scope not in {"turn_root", "turn_member"}:
-                continue
+            execution_id = strict_optional_text(
+                execution_id, field=f"item_catalog.execution_id: {item_id}"
+            )
+            if source_kind == "canonical":
+                if turn_scope not in {"turn_root", "turn_member"}:
+                    continue
+            elif (
+                execution_id is None
+                or turn_id is not None
+                or (
+                    semantic_kind == "runtime_notice"
+                    and turn_scope not in {"ambient", "pending_next_turn"}
+                )
+                or (
+                    semantic_kind != "runtime_notice"
+                    and turn_scope is not None
+                )
+            ):
+                raise RuntimeError(
+                    "display_only membership 必须引用已绑定 execution 的 Turn-less item: "
+                    f"item_id={item_id}, semantic_kind={semantic_kind}, "
+                    f"turn_scope={turn_scope}"
+                )
             existing = connection.execute(
-                "SELECT logical_item_ordinal FROM context_view_items "
+                "SELECT logical_item_ordinal, visible, source_kind FROM context_view_items "
                 "WHERE view_id = ? AND item_id = ?",
                 (view_id, item_id),
             ).fetchone()
@@ -128,12 +161,23 @@ class RolloutViewMembershipMixin:
                     existing[0],
                     field=f"context_view_items.logical_item_ordinal: {item_id}",
                 )
+                if (
+                    existing[1] != 1
+                    or strict_text(
+                        existing[2], field=f"context_view_items.source_kind: {item_id}"
+                    )
+                    != source_kind
+                ):
+                    raise RuntimeError(
+                        "context view item 已有不同 membership 身份: "
+                        f"view_id={view_id}, item_id={item_id}, source_kind={source_kind}"
+                    )
                 continue
             try:
                 cursor = connection.execute(
                     "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
-                    "VALUES (?, ?, ?, 1, 'canonical')",
-                    (view_id, item_id, next_ordinal),
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (view_id, item_id, next_ordinal, source_kind),
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError("active view item membership 插入未产生一条记录")

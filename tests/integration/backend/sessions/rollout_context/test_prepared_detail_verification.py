@@ -10,8 +10,8 @@ from dataclasses import replace
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
     detail_relative_path,
@@ -44,6 +44,9 @@ from tests.integration.backend.sessions.rollout_context.test_protected_detail_up
 )
 from tests.integration.backend.sessions.rollout_context.test_protected_detail_upgrade import (
     sessions_dir as sessions_dir,  # noqa: PLC0414 - 显式导出 pytest fixture
+)
+from tests.integration.backend.sessions.rollout_context.test_protected_detail_upgrade import (
+    thread_root as thread_root,  # noqa: PLC0414 - 显式导出 pytest fixture
 )
 from tests.integration.backend.sessions.rollout_context.test_protected_detail_upgrade import (
     upgrade_arguments as upgrade_arguments,  # noqa: PLC0414 - 显式导出 pytest fixture
@@ -252,17 +255,19 @@ def test_session_key_is_authenticated_and_never_created(
         assert path.is_symlink()
 
 
-@pytest.mark.parametrize("owner", ["session", "assembly", "detail"])
+@pytest.mark.parametrize("owner", ["session", "thread", "assembly", "detail"])
 def test_foreign_typed_owner_cannot_verify_staged_bytes(capability, prepared, owner):
     ref = prepared.record.detail_ref
     target = DetailRef(
         "foreign" if owner == "session" else ref.session_id,
+        "foreign" if owner == "thread" else ref.thread_id,
         "foreign" if owner == "assembly" else ref.assembly_id,
         "foreign" if owner == "detail" else ref.detail_id,
     )
     record = replace(
         prepared.record,
         session_id=target.session_id,
+        thread_id=target.thread_id,
         assembly_id=target.assembly_id,
         detail_id=target.detail_id,
         relative_path=detail_relative_path(target).as_posix(),
@@ -433,10 +438,11 @@ def test_failure_does_not_expose_plaintext_or_exception_chain(
 
 @pytest.mark.parametrize("body", [None, True, 1.25, "私有文本", [], {}, [1, "a"]])
 def test_typed_json_markers_verify_using_real_store_output(
-    capability, upgrade_store, session_root, body
+    capability, upgrade_store, thread_root, upgrade_arguments, body
 ):
     record = upgrade_store.write(
         session_id=SESSION_ID,
+        thread_id=upgrade_arguments["target_ref"].thread_id,
         assembly_id="typed-assembly",
         detail_kind="request_source",
         retention_class="request_replay",
@@ -449,9 +455,9 @@ def test_typed_json_markers_verify_using_real_store_output(
     assert (
         capability.verify_prepared_detail(
             record=record,
-            manifest_bytes=(session_root / record.relative_path).read_bytes(),
+            manifest_bytes=(thread_root / record.relative_path).read_bytes(),
             protected_bytes=(
-                session_root / protected_detail_relative_path(record.detail_ref)
+                thread_root / protected_detail_relative_path(record.detail_ref)
             ).read_bytes(),
         )
         is None

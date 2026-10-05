@@ -36,6 +36,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_store import (
     SessionCatalogNode,
     SessionCatalogStore,
+    SessionCreationRecord,
     SubtreeDeleteRecord,
     validate_thread_id,
 )
@@ -76,6 +77,7 @@ class SessionCatalogFolderProjection:
     kind: Literal["folder"]
     parent_node_id: str | None
     name: str
+    node_revision: int
     # catalog 权威 state：active=已提交可见；deleting=逻辑删除中（读路径按语义
     # 将其从目录树暂时隐藏，但保留 state 让前端区分 pending 与 committed）。
     state: Literal["active", "deleting"] = "active"
@@ -89,6 +91,8 @@ class SessionCatalogSessionProjection:
     kind: Literal["session"]
     parent_node_id: str | None
     name: str
+    title_source: str
+    node_revision: int
     created_at: datetime
     updated_at: datetime
     storage_relative_path: str
@@ -200,6 +204,7 @@ class SessionCatalogPathResolver:
                 kind=node.kind,
                 parent_node_id=node.parent_node_id,
                 name=node.display_name,
+                node_revision=node.revision,
                 state=node.state,
             )
         if node.storage_relative_locator is None:
@@ -212,6 +217,12 @@ class SessionCatalogPathResolver:
                 "session 节点缺少 created_at"
                 f"（catalog 被外部改动，fail closed）: node_id={node.node_id}"
             )
+        if node.title_source not in ("default", "user", "auto"):
+            raise RuntimeError(
+                "session 节点缺少合法 title_source"
+                f"（catalog 被外部改动，fail closed）: node_id={node.node_id}, "
+                f"title_source={node.title_source!r}"
+            )
         self._store.resolve_session_locator(node.storage_relative_locator)
         created_at = datetime.fromisoformat(node.created_at)
         return SessionCatalogSessionProjection(
@@ -219,6 +230,8 @@ class SessionCatalogPathResolver:
             kind=node.kind,
             parent_node_id=node.parent_node_id,
             name=node.display_name,
+            title_source=node.title_source,
+            node_revision=node.revision,
             created_at=created_at,
             updated_at=created_at,
             storage_relative_path=node.storage_relative_locator[len("sessions/"):],
@@ -313,6 +326,14 @@ class SessionCatalogPathResolver:
             for node in self._list_all_catalog_nodes()
         ]
 
+    def catalog_snapshot(
+        self,
+    ) -> tuple[int, list[SessionCatalogNodeProjection]]:
+        """在同一 catalog 读快照中返回 navigation revision 与节点投影。"""
+        self._ensure_consistency_verified()
+        navigation_revision, nodes = self._store.read_nodes_snapshot()
+        return navigation_revision, [self._project_node(node) for node in nodes]
+
     # ------------------------------------------------------------------
     # 读方法
     # ------------------------------------------------------------------
@@ -338,6 +359,72 @@ class SessionCatalogPathResolver:
             raise RuntimeError(
                 "会话物理目录缺失或不是普通目录，拒绝解析（fail closed）: "
                 f"session_id={session_id}, path={path}"
+            )
+        return path
+
+    def resolve_prepared_session_node(
+        self,
+        record: SessionCreationRecord,
+    ) -> Path:
+        """按同一 durable preparing record 解析尚未发布的精确 Session 目录。"""
+        if not isinstance(record, SessionCreationRecord):
+            raise TypeError(
+                f"record 必须是 SessionCreationRecord: {record!r}"
+            )
+        self._ensure_consistency_verified()
+        stored = self._store.get_creation_record(
+            record.session_creation_idempotency_key
+        )
+        if stored != record:
+            raise RuntimeError(
+                "prepared SessionCreationRecord 与 durable row 不一致，拒绝解析: "
+                f"key={record.session_creation_idempotency_key!r}"
+            )
+        if record.workspace_id != self._workspace_id:
+            raise RuntimeError(
+                "prepared record workspace 不属于当前 resolver: "
+                f"record={record.workspace_id!r}, resolver={self._workspace_id!r}"
+            )
+        if record.state != "preparing":
+            raise RuntimeError(
+                "prepared Session 解析要求 state=preparing: "
+                f"session_id={record.session_id}, state={record.state}"
+            )
+        if record.purpose not in ("normal", "context_fork"):
+            raise RuntimeError(
+                "prepared record purpose 非法（fail closed）: "
+                f"purpose={record.purpose!r}"
+            )
+        staging = self.sessions_root / ".staging" / record.session_id
+        target = self._store.resolve_session_locator(
+            record.storage_relative_locator
+        )
+        staging_exists = staging.exists() or staging.is_symlink()
+        target_exists = target.exists() or target.is_symlink()
+        if staging_exists == target_exists:
+            raise RuntimeError(
+                "prepared record 必须且只能定位到 staging 或 frozen locator: "
+                f"session_id={record.session_id}, staging={staging}, target={target}"
+            )
+        path = staging if staging_exists else target
+        if not path.is_dir() or path.is_symlink():
+            raise RuntimeError(
+                "prepared Session 物理目录缺失或不是普通目录: "
+                f"session_id={record.session_id}, path={path}"
+            )
+        return path
+
+    def resolve_prepared_thread_node(
+        self,
+        record: SessionCreationRecord,
+        thread_id: str,
+    ) -> Path:
+        """prepared target 只含 main thread，拒绝解析任何尚未发布的 child。"""
+        path = self.resolve_prepared_session_node(record)
+        if thread_id not in ("main", record.session_id, record.main_thread_id):
+            raise KeyError(
+                "prepared Session 尚无目标 child thread: "
+                f"session_id={record.session_id}, thread_id={thread_id!r}"
             )
         return path
 
@@ -584,14 +671,8 @@ class SessionCatalogPathResolver:
 
     @property
     def revision(self) -> int:
-        """变更敏感计数：``catalog_metadata.generation``（单调 generation）。
-
-        每个写入 ``nodes`` 的 catalog 写事务提交前恰好自增一次 generation
-        （见 ``SessionCatalogStore.write_transaction``），因此该计数与旧口径
-        ``sum(所有节点 revision)`` 一样对任何节点增删改敏感，但由单行查询
-        O(1) 取得，不再做全表 BFS 聚合。用于目录服务缓存失效判定。
-        """
-        return self._store.current_generation()
+        """由真实 nodes 行变化推进的单调导航 revision，用于目录缓存失效。"""
+        return self._store.current_navigation_revision()
 
     # ------------------------------------------------------------------
     # 导航写方法（SQLite-only，不动物理）

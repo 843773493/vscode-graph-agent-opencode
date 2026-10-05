@@ -14,6 +14,7 @@ export interface TerminalAttach {
   cols?: number | undefined;
   rows?: number | undefined;
   after_sequence?: number | undefined;
+  grant_token: string;
 }
 
 export interface TerminalDetach {
@@ -47,7 +48,7 @@ export interface TerminalClientMessage {
 }
 
 function createBaseTerminalAttach(): TerminalAttach {
-  return { terminal_id: "", cols: undefined, rows: undefined, after_sequence: undefined };
+  return { terminal_id: "", cols: undefined, rows: undefined, after_sequence: undefined, grant_token: "" };
 }
 
 export const TerminalAttach: MessageFns<TerminalAttach> = {
@@ -57,6 +58,7 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
       cols: isSet(object.cols) ? globalThis.Number(object.cols) : undefined,
       rows: isSet(object.rows) ? globalThis.Number(object.rows) : undefined,
       after_sequence: isSet(object.after_sequence) ? globalThis.Number(object.after_sequence) : undefined,
+      grant_token: isSet(object.grant_token) ? globalThis.String(object.grant_token) : "",
     };
   },
 
@@ -74,6 +76,9 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     if (message.after_sequence !== undefined) {
       obj.after_sequence = Math.round(message.after_sequence);
     }
+    if (message.grant_token !== "") {
+      obj.grant_token = message.grant_token;
+    }
     return obj;
   },
 
@@ -86,6 +91,7 @@ export const TerminalAttach: MessageFns<TerminalAttach> = {
     message.cols = object.cols ?? undefined;
     message.rows = object.rows ?? undefined;
     message.after_sequence = object.after_sequence ?? undefined;
+    message.grant_token = object.grant_token ?? "";
     return message;
   },
 };

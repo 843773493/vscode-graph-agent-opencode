@@ -68,11 +68,9 @@ HOP_BY_HOP_HEADERS = frozenset(
 # 能透传给上游，否则客户端可以伪造工作区选择或把本地凭据漂到被代理服务。集合与
 # 逐跳头部一样只此一份，避免两条代理各写一份而漏掉其中一个。
 #
-# ``x-boxteam-gateway-id`` 也在此列：它是 Gateway 自己的稳定身份（``identity.json``
-# 的 ``load_or_create_gateway_id``），由 Gateway 按请求注入并经
-# :func:`load_proxy_gateway_id` 重新写入权威值。若不先剥离客户端的同名头部，
-# 客户端就能冒充任意 gateway_id 到达工作区后端；与 ``x-request-id`` 一样，断言的是
-# 「上游看不到客户端伪造值」，而不是该键彻底不存在。
+# ``x-boxteam-gateway-id`` 与 ``x-boxteam-navigation-actor`` 也在此列：二者均由
+# Gateway 在完成本跳认证后按请求注入权威值。先剥离同名入站头，才能保证客户端与
+# federation 对端都不能替当前 Gateway 伪造目标工作区的幂等身份。
 GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
     {
         "host",
@@ -81,6 +79,7 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
         "x-boxteam-federation-token",
         "x-boxteam-workspace-id",
         "x-boxteam-gateway-id",
+        "x-boxteam-navigation-actor",
     }
 )
 
@@ -198,4 +197,3 @@ def build_upstream_url(
             f"规范化结果={url.path!r}"
         )
     return url
-

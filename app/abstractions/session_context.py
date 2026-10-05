@@ -49,19 +49,28 @@ class AgentContextState(TypedDict):
 
 
 class SessionContextMessageSourceProtocol(Protocol):
-    async def get_agent_context_state(self, session_id: str) -> AgentContextState: ...
+    async def get_agent_context_state(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> AgentContextState: ...
 
 
 class SessionContextAssemblySourceProtocol(Protocol):
     """上下文检查面只消费 Saver 冻结的 assembly 和 history diagnostics。"""
 
     def list_context_assemblies(
-        self, session_id: str, *, turn_id: str | None = None
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        turn_id: str | None = None,
     ) -> tuple[ContextAssemblySnapshot, ...]: ...
 
     def get_context_assembly(
         self,
         session_id: str,
+        thread_id: str,
         *,
         assembly_id: str,
     ) -> ContextAssemblySnapshot: ...
@@ -69,6 +78,7 @@ class SessionContextAssemblySourceProtocol(Protocol):
     def project_context_plan_to_history_with_diagnostics(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -95,6 +105,9 @@ class SessionInformationSourceProtocol(Protocol):
 
 
 class SessionContextQueryProtocol(Protocol):
+    @property
+    def workspace_id(self) -> str: ...
+
     async def read_context(
         self,
         request: SessionContextReadRequest,
@@ -107,6 +120,8 @@ class SessionContextQueryProtocol(Protocol):
 
 
 class WorkspaceSessionContextClientProtocol(Protocol):
+    async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...
+
     async def read_gateway_context(
         self,
         request: SessionContextReadRequest,

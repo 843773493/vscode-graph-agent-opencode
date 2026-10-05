@@ -22,7 +22,7 @@ class FileEditSnapshot:
 class StoredFileEdit:
     edit_id: str
     session_id: str
-    turn_id: str
+    turn_id: str | None
     tool_call_id: str
     execution_id: str
     tool_name: str
@@ -101,7 +101,7 @@ class SessionChangesRecorderProtocol(Protocol):
         self,
         *,
         session_id: str,
-        turn_id: str,
+        turn_id: str | None,
         tool_call_id: str,
         execution_id: str,
         tool_name: str,

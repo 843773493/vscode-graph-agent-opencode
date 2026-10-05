@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import UTC, datetime
-from unittest.mock import create_autospec
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
@@ -27,7 +27,17 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.session_context_query_service import (
     SessionContextQueryService,
 )
-from app.services.business.session_context_resource import SessionContextCursorCodec
+from app.services.business.session_context_resource import (
+    SessionContextCursorCodec,
+    context_assembly_identity,
+    session_context_read_operation,
+    session_resource_identity,
+    session_resource_vrn,
+    workspace_session_inventory_identity,
+    workspace_session_inventory_vrn,
+)
+
+BACKEND_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 
 
 def _resign_cursor_offset(cursor: str, offset: int) -> str:
@@ -35,11 +45,51 @@ def _resign_cursor_offset(cursor: str, offset: int) -> str:
     padded = cursor + "=" * (-len(cursor) % 4)
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     return SessionContextCursorCodec.encode(
-        resource=payload["resource"],
+        resource_identity=payload["resource_identity"],
+        vrn=payload["vrn"],
+        scope=payload["scope"],
         revision=payload["revision"],
         operation=payload["operation"],
+        record_index=payload["record_index"],
+        assembly_ref=payload["assembly_ref"],
         offset=offset,
         char_offset=payload.get("char_offset", 0),
+    )
+
+
+def _session_request(session_id: str = "ses_target", **kwargs: object) -> SessionContextReadRequest:
+    return SessionContextReadRequest(
+        resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, session_id),
+        vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, session_id),
+        scope="workspace",
+        **kwargs,
+    )
+
+
+def _workspace_inventory_request(**kwargs: object) -> SessionContextReadRequest:
+    return SessionContextReadRequest(
+        resource_identity=workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
+        vrn=workspace_session_inventory_vrn(BACKEND_WORKSPACE_ID),
+        scope="workspace",
+        **kwargs,
+    )
+
+
+def _session_search_request(session_id: str = "ses_target", **kwargs: object) -> SessionContextSearchRequest:
+    return SessionContextSearchRequest(
+        resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, session_id),
+        vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, session_id),
+        scope="workspace",
+        **kwargs,
+    )
+
+
+def _workspace_inventory_search_request(**kwargs: object) -> SessionContextSearchRequest:
+    return SessionContextSearchRequest(
+        resource_identity=workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
+        vrn=workspace_session_inventory_vrn(BACKEND_WORKSPACE_ID),
+        scope="workspace",
+        **kwargs,
     )
 
 
@@ -49,17 +99,25 @@ class _FakeSessionLookup:
         self.sessions = [
             SessionDTO(
                 session_id="ses_target",
-                workspace_id="ws_one",
+                workspace_id=BACKEND_WORKSPACE_ID,
+                resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"),
+                vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target"),
+                scope="workspace",
                 title="目标会话",
                 current_agent_id="default",
+                thread_id="thread_target",
                 created_at=timestamp,
                 updated_at=timestamp,
             ),
             SessionDTO(
                 session_id="ses_other",
-                workspace_id="ws_one",
+                workspace_id=BACKEND_WORKSPACE_ID,
+                resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, "ses_other"),
+                vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_other"),
+                scope="workspace",
                 title="其他会话",
                 current_agent_id="reviewer",
+                thread_id="thread_other",
                 created_at=timestamp,
                 updated_at=timestamp,
             ),
@@ -90,6 +148,7 @@ class _FakeSessionLookup:
 class _FakeMessageSource:
     def __init__(self) -> None:
         self.checkpoint_id = "ckpt-1"
+        self.context_state_owners: list[tuple[str, str]] = []
         self.records = [
             {"role": "system", "content": "SECRET SYSTEM"},
             {"role": "user", "type": "human", "content": "最初目标 ALPHA"},
@@ -112,8 +171,12 @@ class _FakeMessageSource:
             {"role": "assistant", "type": "ai", "content": "第四次回答"},
         ]
 
-    async def get_agent_context_state(self, session_id: str) -> dict[str, object]:
-        del session_id
+    async def get_agent_context_state(
+        self,
+        session_id: str,
+        thread_id: str,
+    ) -> dict[str, object]:
+        self.context_state_owners.append((session_id, thread_id))
         return {
             "records": list(self.records),
             "checkpoint_id": self.checkpoint_id,
@@ -144,7 +207,7 @@ class _FakeInformationSource:
                 updated_at=session.updated_at,
             ),
             workspace=SessionInformationWorkspaceDTO(
-                workspace_id="ws_one",
+                workspace_id=BACKEND_WORKSPACE_ID,
                 name="测试工作区",
                 root_path="/workspace",
             ),
@@ -178,6 +241,7 @@ def _service():
             message_source=message_source,
             session_lookup=_FakeSessionLookup(),
             assembly_source=assembly_source,
+            workspace_id=BACKEND_WORKSPACE_ID,
         )
         service.bind_information_source(_FakeInformationSource())
         return service
@@ -189,9 +253,8 @@ def _service():
 async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_content(
     _service,
 ):
-    result = await _service(_FakeMessageSource()).read_context(
-        SessionContextReadRequest(resource="boxteam://session/ses_target")
-    )
+    message_source = _FakeMessageSource()
+    result = await _service(message_source).read_context(_session_request())
 
     serialized = result.model_dump_json()
     assert result.revision.startswith("content:")
@@ -206,6 +269,84 @@ async def test_overview_defaults_to_initial_goal_recent_three_rounds_and_safe_co
     assert "SECRET RESULT" not in serialized
     assert "SECRET MEDIA" not in serialized
     assert any(item.kind == "execution" for item in result.items)
+    assert message_source.context_state_owners == [
+        ("ses_target", "thread_target")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_assemblies_read_uses_catalog_resolved_main_thread():
+    assembly_source = create_autospec(
+        SessionContextAssemblySourceProtocol, spec_set=True
+    )
+    assembly_source.list_context_assemblies.return_value = ()
+    service = SessionContextQueryService(
+        message_source=_FakeMessageSource(),
+        session_lookup=_FakeSessionLookup(),
+        assembly_source=assembly_source,
+        workspace_id=BACKEND_WORKSPACE_ID,
+    )
+
+    result = await service.read_context(_session_request(view="assemblies"))
+
+    assert result.items == []
+    assembly_source.list_context_assemblies.assert_called_once_with(
+        "ses_target",
+        "thread_target",
+    )
+
+
+@pytest.mark.asyncio
+async def test_assembly_history_projection_uses_session_thread_pair():
+    assembly_source = create_autospec(
+        SessionContextAssemblySourceProtocol, spec_set=True
+    )
+    snapshot = MagicMock()
+    snapshot.assembly_id = "asm_target"
+    snapshot.session_id = "ses_target"
+    snapshot.plan_id = "plan_target"
+    snapshot.plan_hash = "plan-hash"
+    snapshot.history_view_revision = 1
+    snapshot.source_overlay_epoch = 0
+    snapshot.target_format = "langchain"
+    snapshot.request_hash = "request-hash"
+    snapshot.compiler_version = "compiler"
+    snapshot.provider_version = "provider"
+    snapshot.projector_id = "projector"
+    snapshot.projector_version = "1"
+    snapshot.selection = ()
+    snapshot.loss = ()
+    plan = object()
+    snapshot.as_sealed_plan.return_value = plan
+    assembly_source.list_context_assemblies.return_value = (snapshot,)
+    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = (
+        [],
+        (),
+    )
+    service = SessionContextQueryService(
+        message_source=_FakeMessageSource(),
+        session_lookup=_FakeSessionLookup(),
+        assembly_source=assembly_source,
+        workspace_id=BACKEND_WORKSPACE_ID,
+    )
+    assembly_ref = context_assembly_identity(
+        session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"),
+        "asm_target",
+    )
+
+    await service.read_context(
+        _session_request(view="assembly", assembly_ref=assembly_ref)
+    )
+
+    assembly_source.list_context_assemblies.assert_called_once_with(
+        "ses_target",
+        "thread_target",
+    )
+    assembly_source.project_context_plan_to_history_with_diagnostics.assert_called_once_with(
+        "ses_target",
+        "thread_target",
+        plan,
+    )
 
 
 @pytest.mark.asyncio
@@ -217,7 +358,7 @@ async def test_overview_handles_fewer_user_rounds_than_default_window(_service):
     ]
 
     result = await _service(message_source).read_context(
-        SessionContextReadRequest(resource="boxteam://session/ses_target")
+        _session_request()
     )
 
     serialized = result.model_dump_json()
@@ -228,8 +369,7 @@ async def test_overview_handles_fewer_user_rounds_than_default_window(_service):
 @pytest.mark.asyncio
 async def test_records_can_explicitly_include_detailed_fields(_service):
     result = await _service(_FakeMessageSource()).read_context(
-        SessionContextReadRequest(
-            resource="boxteam://session/ses_target",
+        _session_request(
             view="records",
             include=[
                 "visible_text",
@@ -256,8 +396,7 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
     source = _FakeMessageSource()
     service = _service(source)
     first = await service.read_context(
-        SessionContextReadRequest(
-            resource="boxteam://session/ses_target",
+        _session_request(
             view="messages",
             limit=2,
         )
@@ -266,41 +405,37 @@ async def test_read_cursor_is_opaque_and_fails_when_revision_changes(_service):
     assert first.next_cursor is not None
 
     second = await service.read_context(
-        SessionContextReadRequest(
-            resource="boxteam://session/ses_target",
+        _session_request(
             view="messages",
             limit=2,
             cursor=first.next_cursor,
         )
     )
-    assert second.items[0].locator != first.items[0].locator
+    assert second.items[0].record_index != first.items[0].record_index
 
     source.records[-1]["content"] = "第四次回答已变化"
     with pytest.raises(SessionContextRevisionChangedError):
         await service.read_context(
-            SessionContextReadRequest(
-                resource="boxteam://session/ses_target",
+            _session_request(
                 view="messages",
                 cursor=first.next_cursor,
             )
         )
     with pytest.raises(SessionContextRevisionChangedError):
         await service.read_context(
-            SessionContextReadRequest(
-                resource="boxteam://session/ses_target",
-                expected_revision=first.revision,
+            _session_request(
+                revision=first.revision,
             )
         )
 
 
 @pytest.mark.asyncio
-async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
+async def test_search_literal_by_default_regex_explicit_and_structured_match_can_be_read(
     _service,
 ):
     service = _service(_FakeMessageSource())
     literal = await service.search_context(
-        SessionContextSearchRequest(
-            resource="boxteam://session/ses_target",
+        _session_search_request(
             query="问题 BETA",
             max_chars=1024,
         )
@@ -309,20 +444,22 @@ async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
     assert literal.returned_chars <= 1024
     assert literal.total_matches == 1
     match = literal.matches[0]
-    assert match.locator.endswith("#record=4")
+    assert match.vrn == session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target")
+    assert match.resource_identity == session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target")
+    assert match.record_index == 4
     assert match.revision.startswith("content:")
 
     expanded = await service.read_context(
-        SessionContextReadRequest(
-            resource=match.locator,
-            expected_revision=match.revision,
+        _session_request(
+            view="records",
+            record_index=match.record_index,
+            revision=match.revision,
         )
     )
     assert expanded.items[0].text == "第二个问题 BETA"
 
     regex = await service.search_context(
-        SessionContextSearchRequest(
-            resource="boxteam://session/ses_target",
+        _session_search_request(
             query=r"(GAMMA|DELTA)$",
             match_mode="regex",
         )
@@ -334,35 +471,42 @@ async def test_search_literal_by_default_regex_explicit_and_locator_can_be_read(
 async def test_inventory_information_and_output_budget(_service):
     service = _service(_FakeMessageSource())
     inventory = await service.read_context(
-        SessionContextReadRequest(
-            resource="boxteam://workspace/ws_one/sessions",
+        _workspace_inventory_request(
             view="inventory",
             limit=1,
         )
     )
     assert len(inventory.items) == 1
     assert inventory.has_more is True
-    assert inventory.items[0].locator.startswith("boxteam://workspace/ws_one/session/")
+    assert inventory.items[0].kind == "session"
+    assert inventory.items[0].vrn == session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target")
 
     information = await service.read_context(
-        SessionContextReadRequest(
-            resource="boxteam://workspace/ws_one/session/ses_target",
+        _session_request(
             view="information",
         )
     )
     assert information.items[0].data is not None
     assert information.items[0].data["execution"]["status"] == "running"
 
+    with pytest.raises(ValueError, match="max_chars 太小.*资源身份"):
+        await service.read_context(
+            _session_request(
+                view="records",
+                include=["raw_record"],
+                max_chars=1024,
+            )
+        )
+
     budgeted = await service.read_context(
-        SessionContextReadRequest(
-            resource="boxteam://session/ses_target",
+        _session_request(
             view="records",
             include=["raw_record"],
-            max_chars=1024,
+            max_chars=2048,
         )
     )
     assert budgeted.returned_chars == len(budgeted.model_dump_json())
-    assert budgeted.returned_chars <= 1024
+    assert budgeted.returned_chars <= 2048
     assert budgeted.truncated is True
 
 
@@ -371,17 +515,20 @@ async def test_overview_complete_dto_respects_budget_and_cursor_advances(_servic
     service = _service(_FakeMessageSource())
     cursor = None
     seen_cursors: set[str] = set()
+    pages = 0
+    chunk_items = 0
 
     for _ in range(30):
         page = await service.read_context(
-            SessionContextReadRequest(
-                resource="boxteam://session/ses_target",
-                max_chars=1024,
+            _session_request(
+                max_chars=1600,
                 cursor=cursor,
             )
         )
+        pages += 1
         assert page.returned_chars == len(page.model_dump_json())
-        assert page.returned_chars <= 1024
+        assert page.returned_chars <= 1600
+        chunk_items += sum(item.kind.endswith("_chunk") for item in page.items)
         if not page.has_more:
             break
         assert page.next_cursor is not None
@@ -390,6 +537,8 @@ async def test_overview_complete_dto_respects_budget_and_cursor_advances(_servic
         cursor = page.next_cursor
     else:
         pytest.fail("overview cursor 未在 30 页内结束")
+    assert pages > 1
+    assert chunk_items > 0
 
 
 @pytest.mark.asyncio
@@ -405,9 +554,9 @@ async def test_oversized_single_record_can_be_reassembled_through_cursor(_servic
 
     for _ in range(100):
         page = await service.read_context(
-            SessionContextReadRequest(
-                resource="boxteam://session/ses_target#record=0",
+            _session_request(
                 view="records",
+                record_index=0,
                 include=["raw_record"],
                 max_chars=4096,
                 cursor=cursor,
@@ -439,8 +588,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
     与同族已修的「limit<=0 返回永不前进空页」是同一类静默失败。
     """
     service = _service(_FakeMessageSource())
-    request = SessionContextReadRequest(
-        resource="boxteam://session/ses_target",
+    request = _session_request(
         view="messages",
     )
     first = await service.read_context(request)
@@ -448,9 +596,16 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
     assert first.next_cursor is None
 
     beyond = SessionContextCursorCodec.encode(
-        resource="boxteam://session/ses_target",
+        resource_identity=request.resource_identity,
+        vrn=request.vrn,
+        scope=request.scope,
         revision=first.revision,
-        operation="read:messages",
+        operation=session_context_read_operation(
+            view=request.view,
+            include=request.include,
+            recent_rounds=request.recent_rounds,
+            include_initial_goal=request.include_initial_goal,
+        ),
         offset=len(first.items) + 1,
     )
     with pytest.raises(ValueError, match="offset 越界"):
@@ -461,9 +616,16 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
         request.model_copy(
             update={
                 "cursor": SessionContextCursorCodec.encode(
-                    resource="boxteam://session/ses_target",
+                    resource_identity=request.resource_identity,
+                    vrn=request.vrn,
+                    scope=request.scope,
                     revision=first.revision,
-                    operation="read:messages",
+                    operation=session_context_read_operation(
+                        view=request.view,
+                        include=request.include,
+                        recent_rounds=request.recent_rounds,
+                        include_initial_goal=request.include_initial_goal,
+                    ),
                     offset=len(first.items),
                 )
             }
@@ -477,8 +639,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
 async def test_search_cursor_offset_beyond_matches_is_rejected(_service) -> None:
     """search 的 cursor offset 越过总匹配数时同样必须 fail-closed。"""
     service = _service(_FakeMessageSource())
-    request = SessionContextSearchRequest(
-        resource="boxteam://session/ses_target",
+    request = _session_search_request(
         query="回答",
         sources=["effective_context"],
         match_mode="literal",

@@ -45,6 +45,8 @@ def restore_case(
         session,
         accepted_ingress_id="restore-ingress",
         acceptance_idempotency_key="restore-acceptance",
+        job_id="restore-job",
+        admission_idempotency_key="restore-admission",
         payload="恢复备份不能创建同名双 inode",
     )
     plan = ContextRequestPlan(
@@ -55,7 +57,9 @@ def restore_case(
     )
     registered = saver.create_context_plan(session, plan)
     assert registered.revision == 0 and registered.plan_state == "unsealed"
-    with saver._storage._connect(session, read_only=True) as connection:
+    with saver._storage._connect(
+        saver._storage.main_thread_id(session), read_only=True, session_id=session
+    ) as connection:
         assert connection.execute(
             "SELECT schema_version FROM database_meta"
         ).fetchone() == (4,)
@@ -140,7 +144,11 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             evidence["old_reader"] = _observe(reader)
             assert not reader.in_transaction
         restarted = RolloutCheckpointSaver(case.saver._storage.sessions_dir)
-        with restarted._storage._connect(case.session, read_only=True) as fresh:
+        with restarted._storage._connect(
+            restarted._storage.main_thread_id(case.session),
+            read_only=True,
+            session_id=case.session,
+        ) as fresh:
             evidence["new_connection"] = _observe(fresh)
         registered = restarted.get_context_plan_registration(
             case.session, plan_id=case.plan.plan_id
@@ -157,7 +165,11 @@ def _restore_with_reader(case: RestoreCase, reader_mode: str) -> dict[str, objec
             evidence["post_restore_write"] = {"revision": written.revision}
             if reader is not None:
                 evidence["old_reader_after_write"] = _observe(reader)
-            with restarted._storage._connect(case.session, read_only=True) as fresh:
+            with restarted._storage._connect(
+                restarted._storage.main_thread_id(case.session),
+                read_only=True,
+                session_id=case.session,
+            ) as fresh:
                 evidence["new_connection_after_write"] = _observe(fresh)
         assert (
             case.saver._storage.jsonl_path(case.session).read_bytes() == original_jsonl
@@ -325,7 +337,11 @@ def test_restore_rejects_invalid_source_before_target_write(restore_case, payloa
     assert broken.read_bytes() == payload
     assert case.index.read_bytes() == before
     assert case.index.stat().st_ino == inode
-    with case.saver._storage._connect(case.session, read_only=True) as connection:
+    with case.saver._storage._connect(
+        case.saver._storage.main_thread_id(case.session),
+        read_only=True,
+        session_id=case.session,
+    ) as connection:
         assert _observe(connection)["revision"] == 0
 
 

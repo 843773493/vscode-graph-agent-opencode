@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  createSessionCatalogFolder,
-  assignSessionCatalogFolder,
-  deleteSessionCatalogFolder,
   getSessionCatalogBreadcrumb,
   listSessionCatalogChildren,
-  moveSessionCatalogNode,
-  moveSessionCatalogFolder,
   refreshSessionCatalog,
-  renameSessionCatalogFolder,
 } from "../../api";
+import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
 import {
   createWorkspaceNavigationFolder,
   deleteWorkspaceNavigationFolder,
@@ -20,19 +15,48 @@ import {
 } from "../../gatewayApi";
 import type {
   GatewaySessionSearchResults,
+  GatewayUserAccess,
+  SessionCatalogNode,
   SessionCatalogPage,
   WorkspaceNavigationTree,
 } from "../../types/backend";
+import {
+  projectCatalogBranch,
+  projectCatalogBreadcrumb,
+  type CatalogProjectedNode,
+} from "../../state/session/sessionCatalogProjection";
+import {
+  catalogOutboxOperationIsTerminal,
+  type CatalogOutbox,
+  type CatalogOutboxIntent,
+} from "../../state/session/sessionCatalogOutbox";
+import {
+  sessionCatalogOutboxScopeKey,
+  type SessionCatalogOutboxRuntime,
+  type SessionCatalogOutboxSnapshot,
+} from "./sessionCatalogOutboxRuntime";
 import type { SessionGeneratorResourcesController } from "../sessionResourceExplorer/useSessionGeneratorResources";
 import { changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
 import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
+import {
+  requireGatewayWorkspaceRequestTarget,
+  type GatewayWorkspaceRequestTarget,
+} from "../../api/workspaceIdentity";
 
-export interface CatalogBranchState extends SessionCatalogPage {
+export interface CatalogBranchState extends Omit<SessionCatalogPage, "catalog_revision"> {
+  /** 请求尚未取得后端 snapshot 时为空；已加载页总是由 DTO 提供数值 generation。 */
+  catalog_revision?: number;
   loading: boolean;
   error: string | null;
+}
+
+export interface ProjectedCatalogBranchState extends Omit<CatalogBranchState, "items"> {
+  items: CatalogProjectedNode[];
+  pending_node_ids: string[];
+  locally_removed_node_ids: string[];
 }
 
 const emptySearch: GatewaySessionSearchResults = {
@@ -107,6 +131,9 @@ function branchFailureState(
 ): CatalogBranchState {
   return {
     revision: branch?.revision ?? "",
+    ...(branch?.catalog_revision === undefined
+      ? {}
+      : { catalog_revision: branch.catalog_revision }),
     parent_node_id: parentNodeId,
     items: branch?.items ?? [],
     cursor: branch?.cursor ?? null,
@@ -117,8 +144,30 @@ function branchFailureState(
   };
 }
 
+function projectConfirmedNode(node: SessionCatalogNode): CatalogProjectedNode {
+  return {
+    node_id: node.node_id,
+    kind: node.kind,
+    name: node.name,
+    parent_node_id: node.parent_node_id ?? null,
+    session_id: node.session_id ?? null,
+    folder_id: node.folder_id ?? null,
+    has_children: node.has_children,
+    node_revision: node.node_revision,
+    state: node.state,
+    storage_relative_path: node.storage_relative_path ?? null,
+    created_at: node.created_at ?? null,
+    updated_at: node.updated_at ?? null,
+    session: node.session ?? null,
+    pending_state: null,
+    pending_operation_id: null,
+    client_ref: null,
+  };
+}
+
 export function useSessionResourceExplorer({
   apiPort,
+  workspaces,
   activeWorkspaceId,
   searchOpen,
   searchQuery,
@@ -127,8 +176,12 @@ export function useSessionResourceExplorer({
   catalogSyncKeys,
   catalogRefreshVersions,
   generatorResources,
+  sessionCatalogOutboxRuntime,
+  sessionCatalogOutboxSnapshot,
+  gatewayUserAccess,
 }: {
   apiPort: number;
+  workspaces: readonly GatewayWorkspaceRequestTarget[];
   activeWorkspaceId: string | null;
   searchOpen: boolean;
   searchQuery: string;
@@ -137,6 +190,9 @@ export function useSessionResourceExplorer({
   catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   generatorResources: SessionGeneratorResourcesController;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
+  sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
+  gatewayUserAccess?: GatewayUserAccess | null;
 }) {
   const [navigation, setNavigation] = useState<WorkspaceNavigationTree | null>(null);
   const navigationRef = useRef(navigation);
@@ -168,6 +224,7 @@ export function useSessionResourceExplorer({
   const currentSessionRevealRequestRef = useRef(0);
   const navigationRequestRef = useRef(0);
   const branchRequestRefs = useRef<Map<string, number>>(new Map());
+  const catalogRefreshInFlightRef = useRef<Map<string, Promise<SessionCatalogPage[]>>>(new Map());
   // 导航请求的发布闸门：只有最新一次请求能把结果写回，且成功发布必须同时清掉
   // 上一次的导航错误。六处调用点只允许走这一个入口，杜绝「漏清错误」或
   // 「迟到响应覆盖新树」在某个分支被单独写错。
@@ -185,6 +242,96 @@ export function useSessionResourceExplorer({
   const catalogSyncKeysRef = useRef(catalogSyncKeys);
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
   const generationOutputSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
+  const terminalOutboxSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
+  const trackedOutboxOperationKeysRef = useRef<Set<string>>(new Set());
+
+  const workspaceRequestTarget = useCallback(
+    (workspaceId: string) => requireGatewayWorkspaceRequestTarget(workspaces, workspaceId),
+    [workspaces],
+  );
+
+  const openCatalogOutbox = useCallback(async (workspaceId: string) => {
+    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+      throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
+    }
+    return await sessionCatalogOutboxRuntime.openWorkspace(
+      workspaceRequestTarget(workspaceId),
+      gatewayUserAccess,
+    );
+  }, [gatewayUserAccess, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
+
+  const readCatalogOutbox = useCallback((workspaceId: string) => {
+    if (!gatewayUserAccess || !sessionCatalogOutboxSnapshot) return null;
+    const key = sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess);
+    return sessionCatalogOutboxSnapshot.get(key)?.outbox ?? null;
+  }, [gatewayUserAccess, sessionCatalogOutboxSnapshot]);
+
+  const catalogRevisionFor = useCallback(async (workspaceId: string): Promise<number> => {
+    const prefix = `${workspaceId}:`;
+    const revisions = [...branchesRef.current.entries()]
+      .filter(([key, branch]) => key.startsWith(prefix)
+        && branch.catalog_revision !== undefined)
+      .map(([, branch]) => branch.catalog_revision as number);
+    if (revisions.length > 0) return Math.max(...revisions);
+    const catalog = await fetchSessionCatalogSnapshot(
+      apiPort,
+      workspaceRequestTarget(workspaceId),
+    );
+    return catalog.catalog_revision;
+  }, [apiPort, workspaceRequestTarget]);
+
+  const confirmedNodeFor = useCallback((workspaceId: string, nodeId: string) => {
+    const prefix = `${workspaceId}:`;
+    const matches = [...branchesRef.current.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .flatMap(([, branch]) => branch.items)
+      .filter((node) => node.node_id === nodeId);
+    if (matches.length === 0) {
+      throw new Error(`会话目录节点尚未在 confirmed 分支加载: ${workspaceId}/${nodeId}`);
+    }
+    const node = matches[0];
+    if (matches.some((item) => item.node_revision !== node.node_revision)) {
+      throw new Error(`会话目录节点 revision 在已加载分支间冲突: ${nodeId}`);
+    }
+    return node;
+  }, []);
+
+  const parentCreationFor = useCallback((outbox: CatalogOutbox, parentNodeId: string | null) => {
+    if (!parentNodeId) return null;
+    const operation = outbox.operations.find(
+      (item) => item.kind === "create_folder"
+        && (item.client_ref === parentNodeId || item.created_node_id === parentNodeId),
+    );
+    if (!operation) return null;
+    return catalogOutboxOperationIsTerminal(operation)
+      ? { parentNodeId: operation.created_node_id, createdBy: null }
+      : { parentNodeId: null, createdBy: operation.client_operation_id };
+  }, []);
+
+  const submitCatalogIntent = useCallback(async (
+    workspaceId: string,
+    intent: CatalogOutboxIntent,
+    options: { expectedRevision?: number | null },
+  ) => {
+    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+      throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
+    }
+    await openCatalogOutbox(workspaceId);
+    const baseCatalogRevision = await catalogRevisionFor(workspaceId);
+    const intentOptions = {
+      baseCatalogRevision,
+      ...(options.expectedRevision === undefined
+        ? {}
+        : { expectedRevision: options.expectedRevision }),
+    };
+    const submitted = await sessionCatalogOutboxRuntime.submit(
+      workspaceRequestTarget(workspaceId),
+      gatewayUserAccess,
+      intent,
+      intentOptions,
+    );
+    return submitted;
+  }, [catalogRevisionFor, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
 
   const refreshNavigation = useCallback(async () => {
     const requestId = navigationRequestRef.current + 1;
@@ -207,6 +354,13 @@ export function useSessionResourceExplorer({
     parentNodeId?: string | null,
     append = false,
   ): Promise<SessionCatalogPage | undefined> => {
+    if (sessionCatalogOutboxRuntime && gatewayUserAccess) {
+      void openCatalogOutbox(workspaceId).catch((error: unknown) => {
+        sessionCatalogOutboxRuntime.reportError(
+          `恢复会话目录 outbox 失败 (${workspaceId}): ${errorMessage(error)}`,
+        );
+      });
+    }
     const key = branchKey(workspaceId, parentNodeId);
     const requestKey = `${key}:${append ? "append" : "replace"}`;
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
@@ -220,6 +374,9 @@ export function useSessionResourceExplorer({
       const next = new Map(previous);
       next.set(key, {
         revision: current?.revision ?? "",
+        ...(current?.catalog_revision === undefined
+          ? {}
+          : { catalog_revision: current.catalog_revision }),
         parent_node_id: parentNodeId ?? null,
         items: current?.items ?? [],
         cursor: current?.cursor ?? null,
@@ -237,7 +394,7 @@ export function useSessionResourceExplorer({
           try {
             page = await listSessionCatalogChildren(
               apiPort,
-              workspaceId,
+              workspaceRequestTarget(workspaceId),
               parentNodeId,
               append ? current?.cursor : null,
             );
@@ -286,26 +443,156 @@ export function useSessionResourceExplorer({
     })();
     trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort]);
+  }, [apiPort, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
 
-  const refreshCatalogWorkspace = useCallback(async (workspaceId: string) => {
+  const loadCatalogBranch = useCallback(async (
+    workspaceId: string,
+    parentNodeId: string | null,
+  ): Promise<SessionCatalogPage> => {
+    const key = branchKey(workspaceId, parentNodeId);
+    const request = loadBranch(workspaceId, parentNodeId);
+    const requestId = branchRequestRefs.current.get(key);
+    const page = await request;
+    if (!page || branchRequestRefs.current.get(key) !== requestId) {
+      throw new Error(
+        `会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`,
+      );
+    }
+    return page;
+  }, [loadBranch]);
+
+  const pruneOutboxAfterBranchRefresh = useCallback(async (
+    workspaceId: string,
+    pages: readonly SessionCatalogPage[],
+    operationIds?: readonly string[],
+  ) => {
+    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess
+      || pages.length === 0 || operationIds?.length === 0) return;
+    const handle = await openCatalogOutbox(workspaceId);
+    const operations = handle.driver.current().operations;
+    const selectedIds = new Set(operationIds ?? operations.map(
+      (operation) => operation.client_operation_id,
+    ));
+    const minimumRevision = Math.min(...pages.map((page) => {
+      if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < 0) {
+        throw new Error(`目录分支缺少有效 catalog revision: ${handle.gatewayWorkspaceId}`);
+      }
+      return page.catalog_revision;
+    }));
+    const maximumRevision = Math.max(...pages.map((page) => page.catalog_revision));
+    const pruneableOperationIds = operations
+      .filter((operation) => selectedIds.has(operation.client_operation_id)
+        && catalogOutboxOperationIsTerminal(operation)
+        && (operation.committed_catalog_revision === null
+          || operation.committed_catalog_revision <= minimumRevision))
+      .map((operation) => operation.client_operation_id);
+    if (pruneableOperationIds.length > 0) {
+      await handle.driver.prune(maximumRevision, pruneableOperationIds);
+    }
+  }, [gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime]);
+
+  const reconcileCatalogBranches = useCallback(async (
+    workspaceId: string,
+    parentNodeIds: Array<string | null>,
+    operationIds?: readonly string[],
+  ) => {
+    const uniqueParentNodeIds = [...new Set(parentNodeIds)];
+    const results = await Promise.all(uniqueParentNodeIds.map(async (parentNodeId) => {
+      try {
+        return { page: await loadCatalogBranch(workspaceId, parentNodeId), error: null };
+      } catch (error) {
+        return {
+          page: null,
+          error: `${parentNodeId ?? "root"}: ${errorMessage(error)}`,
+        };
+      }
+    }));
+    const errors = results.flatMap((result) => result.error === null ? [] : [result.error]);
+    if (errors.length > 0) {
+      throw new Error(`重新读取会话目录失败: ${errors.join("；")}`);
+    }
+    const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
+    await pruneOutboxAfterBranchRefresh(workspaceId, pages, operationIds);
+    return pages;
+  }, [loadCatalogBranch, pruneOutboxAfterBranchRefresh]);
+
+  const refreshCatalogWorkspace = useCallback(async (
+    workspaceId: string,
+    options: {
+      additionalParentNodeIds?: readonly (string | null)[];
+      operationIds?: readonly string[];
+      forceRoot?: boolean;
+    } = {},
+  ) => {
     const parentNodeIds = new Set<string | null>();
     for (const [key, branch] of branchesRef.current.entries()) {
       if (key.startsWith(`${workspaceId}:`)) {
         parentNodeIds.add(branch.parent_node_id ?? null);
       }
     }
-    if (workspaceId === activeWorkspaceId || parentNodeIds.size > 0) {
+    for (const parentNodeId of options.additionalParentNodeIds ?? []) {
+      parentNodeIds.add(parentNodeId);
+    }
+    const scopedSnapshotKey = gatewayUserAccess
+      ? sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess)
+      : null;
+    const currentOutbox = scopedSnapshotKey
+      ? sessionCatalogOutboxRuntime?.getSnapshot().get(scopedSnapshotKey)?.outbox
+      : null;
+    const terminalOperations = currentOutbox?.operations.filter(
+      catalogOutboxOperationIsTerminal,
+    ) ?? [];
+    const operationIds = options.operationIds
+      ?? terminalOperations.map((operation) => operation.client_operation_id);
+    for (const operation of terminalOperations) {
+      if (operation.kind === "create_folder") {
+        parentNodeIds.add(operation.parent_node_id);
+      }
+      if (operation.target_node_id) {
+        for (const [key, branch] of branchesRef.current.entries()) {
+          if (!key.startsWith(`${workspaceId}:`)) continue;
+          const target = branch.items.find((node) => node.node_id === operation.target_node_id);
+          if (target) parentNodeIds.add(target.parent_node_id ?? null);
+        }
+      }
+      if (operation.kind === "move_node") {
+        parentNodeIds.add(operation.parent_node_id);
+      }
+    }
+    const hasTerminalOutboxOperation = terminalOperations.length > 0;
+    if (options.forceRoot || hasTerminalOutboxOperation
+      || operationIds.length > 0
+      || workspaceId === activeWorkspaceId || parentNodeIds.size > 0) {
       parentNodeIds.add(null);
     }
-    await Promise.all(
-      [...parentNodeIds].map((parentNodeId) =>
-        loadBranch(workspaceId, parentNodeId),
-      ),
-    );
-  }, [activeWorkspaceId, loadBranch]);
+    const refreshKey = `${workspaceId}\u0000${options.forceRoot ? "root" : ""}\u0000`
+      + [...operationIds].sort().join("\u0001");
+    const inFlight = catalogRefreshInFlightRef.current.get(refreshKey);
+    if (inFlight) return await inFlight;
+    const request = reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds);
+    catalogRefreshInFlightRef.current.set(refreshKey, request);
+    try {
+      return await request;
+    } finally {
+      if (catalogRefreshInFlightRef.current.get(refreshKey) === request) {
+        catalogRefreshInFlightRef.current.delete(refreshKey);
+      }
+    }
+  }, [
+    activeWorkspaceId,
+    gatewayUserAccess,
+    reconcileCatalogBranches,
+    sessionCatalogOutboxRuntime,
+  ]);
 
   const refreshResourceTree = useCallback(async () => {
+    if (activeWorkspaceId && sessionCatalogOutboxRuntime && gatewayUserAccess) {
+      void openCatalogOutbox(activeWorkspaceId).catch((error: unknown) => {
+        sessionCatalogOutboxRuntime.reportError(
+          `恢复会话目录 outbox 失败 (${activeWorkspaceId}): ${errorMessage(error)}`,
+        );
+      });
+    }
     const navigationPromise = refreshNavigation();
     const catalogPromise = activeWorkspaceId
       ? (async () => {
@@ -314,7 +601,10 @@ export function useSessionResourceExplorer({
           branchRequestRefs.current.set(rootKey, requestId);
           let rootPage: SessionCatalogPage;
           try {
-            rootPage = await refreshSessionCatalog(apiPort, activeWorkspaceId);
+            rootPage = await refreshSessionCatalog(
+              apiPort,
+              workspaceRequestTarget(activeWorkspaceId),
+            );
           } catch (error) {
             // 上面已经顶掉在途的根分支读取，它的结果不会再写回；刷新自身失败时
             // 必须由这里写入失败终态，否则根分支会永远停在 loadBranch 留下的
@@ -358,7 +648,16 @@ export function useSessionResourceExplorer({
       catalogPromise,
     ]);
     return nextNavigation;
-  }, [activeWorkspaceId, apiPort, loadBranch, refreshNavigation]);
+  }, [
+    activeWorkspaceId,
+    apiPort,
+    gatewayUserAccess,
+    loadBranch,
+    openCatalogOutbox,
+    refreshNavigation,
+    sessionCatalogOutboxRuntime,
+    workspaceRequestTarget,
+  ]);
 
   const loadBranchUntilNode = useCallback(async (
     workspaceId: string,
@@ -403,6 +702,9 @@ export function useSessionResourceExplorer({
       const next = new Map(previous);
       next.set(key, {
         revision: effectiveLoaded?.revision ?? "",
+        ...(effectiveLoaded?.catalog_revision === undefined
+          ? {}
+          : { catalog_revision: effectiveLoaded.catalog_revision }),
         parent_node_id: parentNodeId,
         items: effectiveLoaded?.items ?? [],
         cursor: effectiveLoaded?.cursor ?? null,
@@ -421,7 +723,7 @@ export function useSessionResourceExplorer({
       while (true) {
         const page = await listSessionCatalogChildren(
           apiPort,
-          workspaceId,
+          workspaceRequestTarget(workspaceId),
           parentNodeId,
           cursor,
         );
@@ -470,6 +772,9 @@ export function useSessionResourceExplorer({
         const branch = next.get(key);
         next.set(key, {
           revision: branch?.revision ?? "",
+          ...(branch?.catalog_revision === undefined
+            ? {}
+            : { catalog_revision: branch.catalog_revision }),
           parent_node_id: parentNodeId,
           items: branch?.items ?? items,
           cursor: branch?.cursor ?? null,
@@ -481,7 +786,7 @@ export function useSessionResourceExplorer({
       });
       throw error;
     }
-  }, [apiPort, loadBranch]);
+  }, [apiPort, loadBranch, workspaceRequestTarget]);
 
   const toggleExpanded = useCallback((
     id: string,
@@ -563,14 +868,78 @@ export function useSessionResourceExplorer({
     });
   }, []);
 
+  const trackCatalogIntent = useCallback((
+    workspaceId: string,
+    handle: Awaited<ReturnType<SessionCatalogOutboxRuntime["openWorkspace"]>>,
+    operationId: string,
+    parentNodeIds: Array<string | null>,
+  ) => {
+    if (!sessionCatalogOutboxRuntime) return;
+    const trackedKey = `${handle.partitionKey}\u0000${operationId}`;
+    trackedOutboxOperationKeysRef.current.add(trackedKey);
+    void (async () => {
+      let terminalError: unknown = null;
+      try {
+        await sessionCatalogOutboxRuntime.waitForTerminal(handle, operationId);
+      } catch (error: unknown) {
+        terminalError = error;
+      }
+      const currentOperation = handle.driver.current().operations.find(
+        (operation) => operation.client_operation_id === operationId,
+      );
+      const committed = currentOperation?.state === "committed";
+      let refreshError: unknown = null;
+      try {
+        await refreshCatalogWorkspace(workspaceId, {
+          additionalParentNodeIds: parentNodeIds,
+          operationIds: [operationId],
+        });
+      } catch (error: unknown) {
+        refreshError = error;
+      }
+      if (terminalError || refreshError) {
+        const status = committed
+          ? refreshError
+            ? "已提交但目录分支刷新失败"
+            : "已提交但终态确认过程失败"
+          : refreshError
+            ? "未提交或终态未确认，且目录分支刷新失败"
+            : "未提交或终态未确认";
+        const details = [terminalError, refreshError]
+          .filter((error): error is unknown => error !== null)
+          .map(errorMessage)
+          .join("；");
+        sessionCatalogOutboxRuntime.reportError(
+          `会话目录操作 ${operationId}${status}: ${details}`,
+        );
+      }
+      trackedOutboxOperationKeysRef.current.delete(trackedKey);
+    })();
+  }, [refreshCatalogWorkspace, sessionCatalogOutboxRuntime]);
+
   const createSessionFolder = useCallback(async (
     workspaceId: string,
     name: string,
     parentFolderId?: string | null,
   ) => {
-    await createSessionCatalogFolder(apiPort, workspaceId, name, parentFolderId);
+    const handle = await openCatalogOutbox(workspaceId);
+    const parent = parentCreationFor(
+      handle.driver.current(),
+      parentFolderId ?? null,
+    );
+    if (parent?.createdBy) {
+      throw new Error("父文件夹尚未提交，当前目录协议不能在待提交文件夹下新建子文件夹");
+    }
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "create_folder",
+      name,
+      parentNodeId: parent ? parent.parentNodeId : parentFolderId ?? null,
+    }, {});
+    if ("handle" in result) {
+      trackCatalogIntent(workspaceId, result.handle, result.operationId, [parentFolderId ?? null]);
+    }
     await loadBranch(workspaceId, parentFolderId);
-  }, [apiPort, loadBranch]);
+  }, [loadBranch, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
 
   const renameWorkspaceFolder = useCallback(async (nodeId: string, name: string) => {
     const requestId = navigationRequestRef.current + 1;
@@ -620,9 +989,16 @@ export function useSessionResourceExplorer({
     name: string,
     parentFolderId?: string | null,
   ) => {
-    await renameSessionCatalogFolder(apiPort, workspaceId, folderId, name);
-    await loadBranch(workspaceId, parentFolderId);
-  }, [apiPort, loadBranch]);
+    const node = confirmedNodeFor(workspaceId, folderId);
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "rename_node",
+      targetNodeId: folderId,
+      name,
+    }, { expectedRevision: node.node_revision });
+    if ("handle" in result) {
+      trackCatalogIntent(workspaceId, result.handle, result.operationId, [parentFolderId ?? null]);
+    }
+  }, [confirmedNodeFor, submitCatalogIntent, trackCatalogIntent]);
 
   const moveSessionFolder = useCallback(async (
     workspaceId: string,
@@ -630,14 +1006,24 @@ export function useSessionResourceExplorer({
     parentFolderId?: string | null,
     previousParentId?: string | null,
   ) => {
-    await moveSessionCatalogFolder(apiPort, workspaceId, folderId, parentFolderId);
-    await Promise.all([
-      loadBranch(workspaceId, previousParentId),
-      parentFolderId !== previousParentId
-        ? loadBranch(workspaceId, parentFolderId)
-        : Promise.resolve(),
-    ]);
-  }, [apiPort, loadBranch]);
+    const node = confirmedNodeFor(workspaceId, folderId);
+    const handle = await openCatalogOutbox(workspaceId);
+    const parent = parentCreationFor(handle.driver.current(), parentFolderId ?? null);
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "move_node",
+      targetNodeId: folderId,
+      parentNodeId: parent ? parent.parentNodeId : parentFolderId ?? null,
+      parentCreatedByOperationId: parent?.createdBy,
+    }, { expectedRevision: node.node_revision });
+    if ("handle" in result) {
+      trackCatalogIntent(
+        workspaceId,
+        result.handle,
+        result.operationId,
+        [previousParentId ?? null, parentFolderId ?? null],
+      );
+    }
+  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
 
   const deleteSessionFolder = useCallback(async (
     workspaceId: string,
@@ -645,38 +1031,88 @@ export function useSessionResourceExplorer({
     parentFolderId?: string | null,
   ) => {
     let deletedCurrentSession = false;
+    const outboxRuntime = sessionCatalogOutboxRuntime;
+    if (!outboxRuntime) {
+      throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+    }
+    const handle = await openCatalogOutbox(workspaceId);
+    const node = confirmedNodeFor(workspaceId, folderId);
     if (workspaceId === activeWorkspaceId && currentSessionId) {
       const breadcrumb = await getSessionCatalogBreadcrumb(
         apiPort,
-        workspaceId,
+        workspaceRequestTarget(workspaceId),
         currentSessionId,
       );
-      deletedCurrentSession = breadcrumb.items.some(
+      const outbox = handle.driver.current();
+      const projected = outbox
+        ? projectCatalogBreadcrumb(breadcrumb, { confirmedNodes: breadcrumb.items, outbox }, currentSessionId)
+        : breadcrumb;
+      deletedCurrentSession = projected.items.some(
         (item) => item.node_id === folderId,
       );
     }
-    await deleteSessionCatalogFolder(apiPort, workspaceId, folderId);
-    await loadBranch(workspaceId, parentFolderId);
-    return deletedCurrentSession;
-  }, [activeWorkspaceId, apiPort, currentSessionId, loadBranch]);
-
-  const reconcileCatalogBranches = useCallback(async (
-    workspaceId: string,
-    parentNodeIds: Array<string | null>,
-  ) => {
-    const uniqueParentNodeIds = [...new Set(parentNodeIds)];
-    const errors = (await Promise.all(uniqueParentNodeIds.map(async (parentNodeId) => {
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "delete_folder",
+      targetNodeId: folderId,
+      recursive: true,
+    }, { expectedRevision: node.node_revision });
+    const trackedKey = `${handle.partitionKey}\u0000${result.operationId}`;
+    trackedOutboxOperationKeysRef.current.add(trackedKey);
+    try {
+      let terminalError: unknown = null;
       try {
-        await loadBranch(workspaceId, parentNodeId);
-        return null;
-      } catch (error) {
-        return `${parentNodeId ?? "root"}: ${errorMessage(error)}`;
+        await outboxRuntime.waitForTerminal(handle, result.operationId);
+      } catch (error: unknown) {
+        terminalError = error;
       }
-    }))).filter((error): error is string => error !== null);
-    if (errors.length > 0) {
-      throw new Error(`重新读取会话目录失败: ${errors.join("；")}`);
+      const currentOperation = handle.driver.current().operations.find(
+        (operation) => operation.client_operation_id === result.operationId,
+      );
+      const committed = currentOperation?.state === "committed";
+      let refreshError: unknown = null;
+      try {
+        await refreshCatalogWorkspace(workspaceId, {
+          additionalParentNodeIds: [parentFolderId ?? null],
+          operationIds: [result.operationId],
+        });
+      } catch (error: unknown) {
+        refreshError = error;
+      }
+      if (terminalError || refreshError) {
+        const status = committed
+          ? refreshError
+            ? "已提交但目录分支刷新失败"
+            : "已提交但终态确认过程失败"
+          : refreshError
+            ? "未提交或终态未确认，且目录分支刷新失败"
+            : "未提交或终态未确认";
+        const details = [terminalError, refreshError]
+          .filter((error): error is unknown => error !== null)
+          .map(errorMessage)
+          .join("；");
+        outboxRuntime.reportError(
+          `会话目录操作 ${result.operationId}${status}: ${details}`,
+        );
+        if (terminalError && refreshError) {
+          throw new Error(`${errorMessage(terminalError)}；${errorMessage(refreshError)}`);
+        }
+        throw terminalError ?? refreshError;
+      }
+    } finally {
+      trackedOutboxOperationKeysRef.current.delete(trackedKey);
     }
-  }, [loadBranch]);
+    return deletedCurrentSession;
+  }, [
+    activeWorkspaceId,
+    apiPort,
+    confirmedNodeFor,
+    currentSessionId,
+    openCatalogOutbox,
+    refreshCatalogWorkspace,
+    sessionCatalogOutboxRuntime,
+    submitCatalogIntent,
+    workspaceRequestTarget,
+  ]);
 
   const moveCatalogNode = useCallback(async (
     workspaceId: string,
@@ -684,26 +1120,24 @@ export function useSessionResourceExplorer({
     parentNodeId: string | null,
     previousParentNodeId: string | null,
   ) => {
-    try {
-      await moveSessionCatalogNode(apiPort, workspaceId, nodeId, parentNodeId);
-    } catch (operationError) {
-      try {
-        await reconcileCatalogBranches(
-          workspaceId,
-          [previousParentNodeId, parentNodeId],
-        );
-      } catch (reconciliationError) {
-        throw new Error(
-          `${errorMessage(operationError)}；${errorMessage(reconciliationError)}`,
-        );
-      }
-      throw operationError;
+    const node = confirmedNodeFor(workspaceId, nodeId);
+    const handle = await openCatalogOutbox(workspaceId);
+    const parent = parentCreationFor(handle.driver.current(), parentNodeId);
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "move_node",
+      targetNodeId: nodeId,
+      parentNodeId: parent ? parent.parentNodeId : parentNodeId,
+      parentCreatedByOperationId: parent?.createdBy,
+    }, { expectedRevision: node.node_revision });
+    if ("handle" in result) {
+      trackCatalogIntent(
+        workspaceId,
+        result.handle,
+        result.operationId,
+        [previousParentNodeId, parentNodeId],
+      );
     }
-    await reconcileCatalogBranches(
-      workspaceId,
-      [previousParentNodeId, parentNodeId],
-    );
-  }, [apiPort, reconcileCatalogBranches]);
+  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
 
   const assignSessionFolder = useCallback(async (
     workspaceId: string,
@@ -711,14 +1145,73 @@ export function useSessionResourceExplorer({
     folderId?: string | null,
     previousParentId?: string | null,
   ) => {
-    await assignSessionCatalogFolder(apiPort, workspaceId, sessionId, folderId);
-    await Promise.all([
-      loadBranch(workspaceId, previousParentId),
-      folderId !== previousParentId
-        ? loadBranch(workspaceId, folderId)
-        : Promise.resolve(),
-    ]);
-  }, [apiPort, loadBranch]);
+    const node = confirmedNodeFor(workspaceId, sessionId);
+    const handle = await openCatalogOutbox(workspaceId);
+    const parent = parentCreationFor(handle.driver.current(), folderId ?? null);
+    const result = await submitCatalogIntent(workspaceId, {
+      kind: "move_node",
+      targetNodeId: node.node_id,
+      parentNodeId: parent ? parent.parentNodeId : folderId ?? null,
+      parentCreatedByOperationId: parent?.createdBy,
+    }, { expectedRevision: node.node_revision });
+    if ("handle" in result) {
+      trackCatalogIntent(
+        workspaceId,
+        result.handle,
+        result.operationId,
+        [previousParentId ?? null, folderId ?? null],
+      );
+    }
+  }, [confirmedNodeFor, openCatalogOutbox, parentCreationFor, submitCatalogIntent, trackCatalogIntent]);
+
+  const projectedBranches = useMemo(() => {
+    const confirmedByWorkspace = new Map<string, Map<string, SessionCatalogNode>>();
+    for (const [key, branch] of branches) {
+      const workspaceId = key.slice(0, key.indexOf(":"));
+      const nodes = confirmedByWorkspace.get(workspaceId) ?? new Map<string, SessionCatalogNode>();
+      for (const node of branch.items) {
+        const previous = nodes.get(node.node_id);
+        if (previous && (previous.node_revision !== node.node_revision
+          || previous.parent_node_id !== node.parent_node_id)) {
+          throw new Error(`已加载目录分页包含互相冲突的 node revision: ${workspaceId}/${node.node_id}`);
+        }
+        nodes.set(node.node_id, node);
+      }
+      confirmedByWorkspace.set(workspaceId, nodes);
+    }
+    const projected = new Map<string, ProjectedCatalogBranchState>();
+    for (const [key, branch] of branches) {
+      const workspaceId = key.slice(0, key.indexOf(":"));
+      const outbox = readCatalogOutbox(workspaceId);
+      const confirmedNodes = [...(confirmedByWorkspace.get(workspaceId)?.values() ?? [])];
+      if (outbox && branch.catalog_revision !== undefined) {
+        const page: SessionCatalogPage = {
+          revision: branch.revision,
+          catalog_revision: branch.catalog_revision,
+          parent_node_id: branch.parent_node_id,
+          items: branch.items,
+          cursor: branch.cursor,
+          total: branch.total,
+          consistency_warning: branch.consistency_warning,
+        };
+        const projection = projectCatalogBranch(page, { confirmedNodes, outbox });
+        projected.set(key, {
+          ...branch,
+          ...projection,
+          loading: branch.loading,
+          error: branch.error,
+        });
+        continue;
+      }
+      projected.set(key, {
+        ...branch,
+        items: branch.items.map(projectConfirmedNode),
+        pending_node_ids: [],
+        locally_removed_node_ids: [],
+      });
+    }
+    return projected;
+  }, [branches, readCatalogOutbox]);
 
   useEffect(() => {
     void refreshNavigation().catch(() => {
@@ -745,11 +1238,64 @@ export function useSessionResourceExplorer({
       return;
     }
     void Promise.all(
-      changedWorkspaceIds.map(refreshCatalogWorkspace),
+      changedWorkspaceIds.map((workspaceId) => refreshCatalogWorkspace(workspaceId)),
     ).catch(() => {
       // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
     });
   }, [catalogRefreshVersions, catalogSyncKeys, refreshCatalogWorkspace]);
+
+  useEffect(() => {
+    const nextSyncKeys = new Map<string, string>();
+    if (sessionCatalogOutboxSnapshot && gatewayUserAccess) {
+      for (const [scopeKey, entry] of sessionCatalogOutboxSnapshot) {
+        if (scopeKey !== sessionCatalogOutboxScopeKey(
+          entry.gatewayWorkspaceId,
+          gatewayUserAccess,
+        )) {
+          continue;
+        }
+        const terminalOperations = entry.outbox.operations.filter((operation) =>
+          catalogOutboxOperationIsTerminal(operation)
+          && !trackedOutboxOperationKeysRef.current.has(
+            `${entry.partitionKey}\u0000${operation.client_operation_id}`,
+          ),
+        );
+        if (terminalOperations.length === 0) continue;
+        const operationIds = terminalOperations.map(
+          (operation) => operation.client_operation_id,
+        ).sort();
+        const signature = terminalOperations.map((operation) =>
+          `${operation.client_operation_id}:${operation.state}:${operation.committed_catalog_revision ?? "null"}`,
+        ).sort().join("\u0001");
+        nextSyncKeys.set(scopeKey, signature);
+        if (terminalOutboxSyncKeysRef.current.get(scopeKey) === signature) continue;
+        void refreshCatalogWorkspace(entry.gatewayWorkspaceId, { operationIds })
+          .then(() => {
+            const failures = terminalOperations.filter(
+              (operation) => operation.state !== "committed",
+            );
+            for (const operation of failures) {
+              sessionCatalogOutboxRuntime?.reportError(
+                `会话目录操作 ${operation.client_operation_id}未提交 (${operation.state})`
+                + `: ${operation.error_detail ?? operation.error_code ?? "后端未提供错误详情"}`,
+              );
+            }
+          })
+          .catch((error: unknown) => {
+            sessionCatalogOutboxRuntime?.reportError(
+              `会话目录终态分支刷新失败 (${entry.gatewayWorkspaceId}, `
+              + `${operationIds.join(", ")}): ${errorMessage(error)}`,
+            );
+          });
+      }
+    }
+    terminalOutboxSyncKeysRef.current = nextSyncKeys;
+  }, [
+    gatewayUserAccess,
+    refreshCatalogWorkspace,
+    sessionCatalogOutboxRuntime,
+    sessionCatalogOutboxSnapshot,
+  ]);
 
   useEffect(() => {
     const nextOutputSyncKeys = new Map<string, string[]>();
@@ -778,7 +1324,7 @@ export function useSessionResourceExplorer({
     if (changedWorkspaceIds.length === 0) {
       return;
     }
-    void Promise.all(changedWorkspaceIds.map(refreshCatalogWorkspace))
+    void Promise.all(changedWorkspaceIds.map((workspaceId) => refreshCatalogWorkspace(workspaceId)))
       .catch(() => {
         // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
       });
@@ -857,7 +1403,11 @@ export function useSessionResourceExplorer({
     currentSessionRevealKeyRef.current = revealKey;
     const requestId = currentSessionRevealRequestRef.current + 1;
     currentSessionRevealRequestRef.current = requestId;
-    void getSessionCatalogBreadcrumb(apiPort, activeWorkspaceId, currentSessionId)
+    void getSessionCatalogBreadcrumb(
+      apiPort,
+      workspaceRequestTarget(activeWorkspaceId),
+      currentSessionId,
+    )
       .then(async (breadcrumb) => {
         if (currentSessionRevealRequestRef.current !== requestId) {
           return;
@@ -880,13 +1430,14 @@ export function useSessionResourceExplorer({
     currentSessionId,
     navigation,
     revealSearchResult,
+    workspaceRequestTarget,
   ]);
 
   return useMemo(() => ({
     navigation,
     navigationError,
     revealError,
-    branches,
+    branches: projectedBranches,
     expandedIds,
     searchResults,
     searching,
@@ -918,7 +1469,7 @@ export function useSessionResourceExplorer({
     deleteGenerator,
     previewGenerator,
   }), [
-    branches,
+    projectedBranches,
     createGenerator,
     createSessionFolder,
     createWorkspaceFolder,

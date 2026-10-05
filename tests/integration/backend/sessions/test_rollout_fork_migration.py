@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Callable
 
 import pytest
-
-from app.domain.itemized.errors import FormatDispatchError
-from app.services.infrastructure.rollout_context.migration.artifacts import (
-    artifact_manifest,
-)
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
     _storage,
     _write_v1_source,
     migration_audits,
     prepare_migration_workspace,
+)
+
+from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.migration.artifacts import (
+    artifact_manifest,
 )
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -53,6 +54,12 @@ def _complete_copy(storage, source: str, target: str) -> str:
         "source_view_id": view,
         "fork_mode": "full_rollout_copy",
         "relationship": "detached",
+        "checkpoint_ns": "",
+        "source_thread_id": storage.main_thread_id(source),
+        "target_thread_id": storage.main_thread_id(target),
+        "source_snapshot_sha256": hashlib.sha256(
+            f"synthetic-source-snapshot:{source}:{target}".encode()
+        ).hexdigest(),
     }
     materialization, fork_id = storage.begin_fork_materialization(**fields)
     assert storage.commit_fork_materialization(materialization, **fields) == fork_id

@@ -351,6 +351,7 @@ async def test_local_workspace_is_rejected(tmp_path: Path) -> None:
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:8010",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
     )
     manager = SshPortForwardManager(

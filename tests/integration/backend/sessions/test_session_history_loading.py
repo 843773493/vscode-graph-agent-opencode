@@ -1269,8 +1269,14 @@ async def test_history_turn_visibility_uses_canonical_root_membership(
             "SELECT head_view_id FROM branches WHERE status = 'active'"
         ).fetchone()[0]
         assert storage.context_turn_count(copied, view_id) == expected
+        bounds = storage.read_history_snapshot_bounds(copied, view_id)
         rows, has_more = storage.read_context_turn_page(
-            copied, view_id, direction="tail", anchor_ordinal=None, limit=1,
+            copied,
+            view_id,
+            direction="tail",
+            anchor_ordinal=None,
+            upper_ordinal=bounds.upper_turn_ordinal,
+            limit=1,
         )
         assert len(rows) == expected
         assert has_more is False

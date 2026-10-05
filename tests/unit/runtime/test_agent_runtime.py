@@ -23,6 +23,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",
+            thread_id="thread_test",
             agent_id="default",
             workspace_root=Path("/workspace"),
             config_service=config_service,
@@ -30,11 +31,14 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
             background_message_bus=MagicMock(),
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
+            mcp_tools=mcp_tools,
+            graph_binding_store=MagicMock(),
             model_visibility_overrides=visibility_overrides,
         )
 
     assert create_runtime.call_args.kwargs["job_service"] is job_service
     assert create_runtime.call_args.kwargs["mcp_tools"] is mcp_tools
+    dependency_provider.get_mcp_tools.assert_not_called()
     assert (
         create_runtime.call_args.kwargs["model_visibility_overrides"]
         is visibility_overrides

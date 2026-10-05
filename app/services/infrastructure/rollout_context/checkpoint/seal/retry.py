@@ -57,13 +57,20 @@ def seal_input_hash(
 
 
 def require_registered_draft(
-    owner, session_id: str, plan: ContextRequestPlan, checkpoint_ns: str
+    owner,
+    session_id: str,
+    thread_id: str,
+    plan: ContextRequestPlan,
+    checkpoint_ns: str,
 ):
-    owner._require_context_plan_owner(session_id, plan)
+    owner._require_context_plan_owner(session_id, thread_id, plan)
     if plan.plan_state != "unsealed" or plan.assembly_id is not None:
         raise ValueError("plan-order-integrity: seal 输入必须是已注册 unsealed plan")
     registered = owner.get_context_plan_registration(
-        session_id, plan_id=plan.plan_id, checkpoint_ns=checkpoint_ns
+        session_id,
+        thread_id=thread_id,
+        plan_id=plan.plan_id,
+        checkpoint_ns=checkpoint_ns,
     )
     if draft_manifest(plan) != draft_manifest(runtime_draft(registered)):
         raise ValueError(
@@ -76,6 +83,8 @@ def committed_retry(
     owner,
     registered,
     *,
+    session_id: str,
+    thread_id: str,
     seal_idempotency_key: str,
     input_hash: str,
     checkpoint_ns: str,
@@ -92,6 +101,7 @@ def committed_retry(
         raise ValueError("assembly-idempotency-conflict: plan 已绑定另一个 seal key")
     committed = owner._storage.get_context_assembly(
         draft.session_id,
+        thread_id,
         assembly_id=registered.assembly_id,
         checkpoint_ns=checkpoint_ns,
     )
@@ -103,10 +113,13 @@ def committed_retry(
         if entry.included and entry.ref.ref_type == "request_only"
     }
     try:
-        candidate = owner._composer_for(draft.session_id, checkpoint_ns).assembly(
+        candidate = owner._composer_for(
+            session_id, thread_id, checkpoint_ns
+        ).assembly(
             plan=draft,
             assembly_id=committed.assembly_id,
             session_id=draft.session_id,
+            thread_id=draft.thread_id,
             request_detail_refs=detail_refs,
             **assembly_options,
         )
@@ -133,7 +146,11 @@ def committed_retry(
     if explicit_included:
         # 调用者正文只能用于等值验证；从 committed detail 读取的值才是权威。
         persisted = owner._request_content_for_plan(
-            draft.session_id, checkpoint_ns, committed.as_sealed_plan(), None
+            session_id,
+            thread_id,
+            checkpoint_ns,
+            committed.as_sealed_plan(),
+            None,
         )
         for key, value in explicit_included.items():
             body = persisted.get(key)

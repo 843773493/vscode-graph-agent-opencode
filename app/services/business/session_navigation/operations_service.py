@@ -30,6 +30,7 @@ from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_subtree_delete import SubtreeDeleteResult
 from app.core.sqlite_state import utc_now_text
 from app.schemas.internal_v2.session_navigation.operations import (
+    AutoSessionTitleCommand,
     NavigationEventDTO,
     NavigationEventsPageDTO,
     NavigationMutationEnqueueRequest,
@@ -316,6 +317,25 @@ class SessionCatalogOperationsService:
             created_node_ids=created_node_ids,
         )
 
+    async def enqueue_auto_session_title(
+        self,
+        command: AutoSessionTitleCommand,
+        scope: NavigationAuthScope,
+    ) -> NavigationMutationRecord:
+        """把内部自动标题 CAS 放入同一 durable 导航队列。"""
+        self._require_worker_ready()
+        self._require_scope(scope)
+        with self._store.write_transaction() as connection:
+            records = self._queue.enqueue_batch(
+                connection,
+                gateway_id=scope.gateway_id,
+                workspace_id=self._workspace_id,
+                actor=scope.actor,
+                intents=[command],
+                now=utc_now_text(),
+            )
+        return records[0]
+
     async def await_terminal(
         self,
         operation_id: str,
@@ -533,7 +553,7 @@ class SessionCatalogOperationsService:
     @staticmethod
     def _revision_in(connection) -> int:
         """只读快照口径的 catalog revision（与队列/执行器共用同一读取实现）。"""
-        return read_catalog_revision(connection, committed=False)
+        return read_catalog_revision(connection)
 
     @staticmethod
     def _encode_cursor(after: int, watermark: int) -> str:

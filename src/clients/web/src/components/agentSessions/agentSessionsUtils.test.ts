@@ -83,11 +83,6 @@ describe("工作区故障展示", () => {
 describe("会话目录时间展示", () => {
   test("同名会话显示更新时间供用户区分", () => {
     const presentation = sessionCatalogTimePresentation({
-      node_id: "ses_test",
-      kind: "session",
-      name: "相同标题",
-      session_id: "ses_test",
-      has_children: false,
       updated_at: "2026-08-12T10:23:44Z",
     });
 

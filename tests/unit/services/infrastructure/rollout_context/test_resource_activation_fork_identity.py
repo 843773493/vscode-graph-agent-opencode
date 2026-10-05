@@ -7,6 +7,7 @@ owner 的 operational ref 不得直接用于 target lookup。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -49,9 +50,19 @@ def test_full_copy_rebuilds_target_local_activation_identity(
         relationship="detached",
         checkpoint_ns="",
         detail_capability=saver._detail_store.fork_detail_capability(),
+        source_snapshot_sha256=hashlib.sha256(
+            b"synthetic-source-snapshot:resource-activation"
+        ).hexdigest(),
     )
 
-    with closing(sqlite3.connect(saver._storage.index_path(TARGET_SESSION_ID, ""))) as connection:
+    target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
+    with closing(
+        sqlite3.connect(
+            saver._storage.index_path(
+                TARGET_SESSION_ID, "", thread_id=target_thread_id
+            )
+        )
+    ) as connection:
         target_snapshot_id = connection.execute(
             "SELECT activation_snapshot_id FROM resource_activation_snapshots"
         ).fetchone()[0]
@@ -105,12 +116,20 @@ def test_full_copy_rebuilds_target_local_activation_identity(
             ActivationLineageBodyStore(restarted._storage, restarted._detail_store),
         )
     )
-    with closing(sqlite3.connect(restarted._storage.index_path(TARGET_SESSION_ID, ""))) as connection:
+    target_thread_id = restarted._storage.main_thread_id(TARGET_SESSION_ID)
+    with closing(
+        sqlite3.connect(
+            restarted._storage.index_path(
+                TARGET_SESSION_ID, "", thread_id=target_thread_id
+            )
+        )
+    ) as connection:
         target_assembly = connection.execute(
             "SELECT assembly_id, plan_hash, request_hash FROM context_assemblies LIMIT 1"
         ).fetchone()
     restored = restarted.load_sealed_resource_activation(
         TARGET_SESSION_ID,
+        thread_id=restarted._storage.main_thread_id(TARGET_SESSION_ID),
         assembly_id=target_assembly[0],
         plan_hash=target_assembly[1],
         request_hash=target_assembly[2],

@@ -28,6 +28,7 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
     refs = [
         {
             "session_id": ref.session_id,
+            "thread_id": ref.thread_id,
             "plan_id": ref.plan_id,
             "ref_id": ref.ref_id,
             "ref_type": ref.ref_type,
@@ -74,6 +75,7 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
             "ref": (
                 {
                     "session_id": entry.ref.session_id,
+                    "thread_id": entry.ref.thread_id,
                     "plan_id": entry.ref.plan_id,
                     "ref_type": entry.ref.ref_type,
                     "ref_id": entry.ref.ref_id,
@@ -104,6 +106,7 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
     tool_set_refs = [
         {
             "session_id": ref.session_id,
+            "thread_id": ref.thread_id,
             "plan_id": ref.plan_id,
             "tool_set_snapshot_id": ref.ref_id,
             "source_revision": ref.source_revision,
@@ -142,6 +145,8 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
     return sha256_jcs(
         {
             "schema": "context-plan-hash:v2",
+            "session_id": plan.session_id,
+            "thread_id": plan.thread_id,
             "format_version": plan.format_version,
             "active_view_id": plan.active_view_id,
             "history_view_revision": plan.history_view_revision,

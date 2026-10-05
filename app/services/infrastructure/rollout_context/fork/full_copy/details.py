@@ -41,21 +41,27 @@ def materialize_details(state: FullCopyRemapState) -> None:
             "detail-forbidden: fork staging 缺少显式 capability/key"
         )
     cursor = state.connection.execute(
-        f"SELECT {','.join(_COLUMNS)} FROM context_plan_details ORDER BY detail_ref"
+        f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
+        "WHERE session_id = ? AND thread_id = ? ORDER BY detail_ref",
+        (state.source_session_id, state.source_thread_id),
     )
     raw_rows = cursor.fetchall()
     rows = [_detail_mapping(tuple(row)) for row in raw_rows]
-    state.detail_rows = tuple((row[0], row[3], row[8]) for row in raw_rows)
+    state.detail_rows = tuple((row[0], row[3], row[9]) for row in raw_rows)
     state.session_root = state.service.root(
-        state.target_session_id, state.checkpoint_ns
+        state.target_session_id,
+        state.checkpoint_ns,
+        thread_id=state.target_thread_id,
     ).parent
     for raw, row in zip(raw_rows, rows, strict=True):
         source_key = raw[0]
         source = detail_record_from_mapping(row)
-        source.detail_ref.require_owner(state.source_session_id)
+        source.detail_ref.require_owner(
+            state.source_session_id, state.source_thread_id
+        )
         target_key = state.maps["detail"][source_key]
         target_ref = detail_ref_from_key(target_key)
-        target_ref.require_owner(state.target_session_id)
+        target_ref.require_owner(state.target_session_id, state.target_thread_id)
         artifact = None
         try:
             artifact = capability.prepare_detail(
@@ -71,6 +77,7 @@ def materialize_details(state: FullCopyRemapState) -> None:
             record = replace(
                 source,
                 session_id=target_ref.session_id,
+                thread_id=target_ref.thread_id,
                 assembly_id=target_ref.assembly_id,
                 detail_id=target_ref.detail_id,
                 relative_path=detail_relative_path(target_ref).as_posix(),

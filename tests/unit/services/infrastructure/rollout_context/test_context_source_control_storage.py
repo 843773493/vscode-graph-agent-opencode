@@ -23,7 +23,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
@@ -38,7 +37,7 @@ from app.services.infrastructure.rollout_context.storage.service import RolloutS
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
-CHILD_THREAD_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
+CHILD_SESSION_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
 
 
 def _create_session_node(
@@ -115,7 +114,7 @@ def sessions_root(tmp_path: Path) -> Path:
     root = tmp_path / ".boxteam" / "sessions"
     root.mkdir(parents=True)
     _create_session_node(root, SESSION_ID)
-    _create_session_node(root, CHILD_THREAD_ID, parent_node_id=SESSION_ID)
+    _create_session_node(root, CHILD_SESSION_ID, parent_node_id=SESSION_ID)
     return root
 
 
@@ -134,8 +133,11 @@ def control_state_port(
 
 
 @pytest.fixture
-def owner() -> ContextSourceOwnerKey:
-    return ContextSourceOwnerKey(session_id=SESSION_ID, thread_id=MAIN_THREAD_ID)
+def owner(rollout_storage: RolloutStorage) -> ContextSourceOwnerKey:
+    return ContextSourceOwnerKey(
+        session_id=SESSION_ID,
+        thread_id=rollout_storage.main_thread_id(SESSION_ID),
+    )
 
 
 def test_storage_and_saver_mixins_are_wired_into_unique_owners(
@@ -178,14 +180,12 @@ def test_restart_recovery_does_not_reinject_tracked_source(
 
     assert rebuilt.observe("skill:debugging", "v1\n") is False
     assert rebuilt.prepare_pending() is None
-    assert rebuilt.metadata() == (
-        {"name": "debugging", "description": "调试工作流"},
-    )
+    assert rebuilt.metadata() == ({"name": "debugging", "description": "调试工作流"},)
     # 新 storage 实例读回同一事实，证明状态在 SQLite 而不是内存。
     fresh_storage = RolloutStorage(rollout_storage.sessions_dir)
     (stored,) = fresh_storage.read_context_source_control_states(
         SESSION_ID,
-        thread_id=MAIN_THREAD_ID,
+        thread_id=owner.thread_id,
     )
     assert stored.tracking_status == "tracked"
     assert stored.latest_visible_committed_revision == stored.latest_revision
@@ -210,20 +210,23 @@ def test_restart_recovery_keeps_untrack_state(
 
 
 def test_restart_recovery_keeps_threads_isolated(
+    rollout_storage: RolloutStorage,
     control_state_port: RolloutCheckpointSaver,
 ) -> None:
-    main_owner = ContextSourceOwnerKey(session_id=SESSION_ID, thread_id=MAIN_THREAD_ID)
-    # 当前模型下 child thread 的物理形态就是 delegated child session（R6b
-    # 形态），owner 以 child session 自身为主键（thread_id=MAIN）。不同 owner
-    # 各自持有独立 rollout 与控制状态。
+    main_owner = ContextSourceOwnerKey(
+        session_id=SESSION_ID,
+        thread_id=rollout_storage.main_thread_id(SESSION_ID),
+    )
     child_owner = ContextSourceOwnerKey(
-        session_id=CHILD_THREAD_ID,
-        thread_id=MAIN_THREAD_ID,
+        session_id=CHILD_SESSION_ID,
+        thread_id=rollout_storage.main_thread_id(CHILD_SESSION_ID),
     )
     main = _new_manager(main_owner, control_state_port)
     _track_skill(main)
 
-    child = ContextSourceManager(owner=child_owner, control_state_port=control_state_port)
+    child = ContextSourceManager(
+        owner=child_owner, control_state_port=control_state_port
+    )
     assert child.metadata() == ()
     child.register(_descriptor())
     _track_skill(child, "child\n")
@@ -231,7 +234,10 @@ def test_restart_recovery_keeps_threads_isolated(
     (main_state,) = control_state_port.load_context_source_control_states(main_owner)
     (child_state,) = control_state_port.load_context_source_control_states(child_owner)
 
-    assert main_state.latest_visible_committed_revision != child_state.latest_visible_committed_revision
+    assert (
+        main_state.latest_visible_committed_revision
+        != child_state.latest_visible_committed_revision
+    )
     assert main_state.tracking_status == child_state.tracking_status == "tracked"
     rebuilt_child = _new_manager(child_owner, control_state_port)
     assert rebuilt_child.observe("skill:debugging", "child\n") is False
@@ -241,10 +247,15 @@ def test_restart_recovery_keeps_threads_isolated(
 def test_owner_rejects_bare_session_id_as_thread(
     rollout_storage: RolloutStorage,
 ) -> None:
-    with pytest.raises(ValueError, match="MAIN_THREAD_ID"):
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id=SESSION_ID,
+        )
+    with pytest.raises(ValueError, match="thread_id 形态非法"):
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id="main",
         )
 
 
@@ -252,18 +263,22 @@ def test_owner_availability_matches_authoritative_index(
     rollout_storage: RolloutStorage,
     control_state_port: RolloutCheckpointSaver,
 ) -> None:
-    assert rollout_storage.context_source_control_owner_available(SESSION_ID)
-    # R18 catalog 模式适配：child thread 物理形态即 delegated child session
-    # （R6b 形态），第二个节点的可用性以其自身为主键探测（旧模式按「
-    # SESSION_ID 的子 thread」形态探测，二者等价：都是第二个已注册节点）。
-    assert rollout_storage.context_source_control_owner_available(CHILD_THREAD_ID)
+    assert rollout_storage.context_source_control_owner_available(
+        SESSION_ID,
+        thread_id=rollout_storage.main_thread_id(SESSION_ID),
+    )
+    assert rollout_storage.context_source_control_owner_available(
+        CHILD_SESSION_ID,
+        thread_id=rollout_storage.main_thread_id(CHILD_SESSION_ID),
+    )
     assert not rollout_storage.context_source_control_owner_available(
-        "tools_inspection_session"
+        "tools_inspection_session",
+        thread_id=rollout_storage.main_thread_id(SESSION_ID),
     )
     assert not control_state_port.context_source_control_owner_available(
         ContextSourceOwnerKey(
             session_id="tools_inspection_session",
-            thread_id=MAIN_THREAD_ID,
+            thread_id=rollout_storage.main_thread_id(SESSION_ID),
         )
     )
 
@@ -275,18 +290,20 @@ def test_synthetic_session_has_no_restorable_control_state(
     """合成 session 没有 ContextStore：恢复短路返回空，而不是解析失败。"""
     owner = ContextSourceOwnerKey(
         session_id="tools_inspection_session",
-        thread_id=MAIN_THREAD_ID,
+        thread_id=rollout_storage.main_thread_id(SESSION_ID),
     )
 
-    assert rollout_storage.read_context_source_control_states(
-        "tools_inspection_session"
-    ) == ()
+    assert (
+        rollout_storage.read_context_source_control_states(
+            "tools_inspection_session",
+            thread_id=owner.thread_id,
+        )
+        == ()
+    )
     assert control_state_port.load_context_source_control_states(owner) == ()
     manager = ContextSourceManager(owner=owner, control_state_port=control_state_port)
     manager.register(_descriptor())
-    assert manager.metadata() == (
-        {"name": "debugging", "description": "调试工作流"},
-    )
+    assert manager.metadata() == ({"name": "debugging", "description": "调试工作流"},)
     # 写入仍必须显式失败：没有 durable owner 时不允许伪造持久化成功。
     with pytest.raises(KeyError):
         rollout_storage.write_context_source_control_state(
@@ -306,12 +323,15 @@ def test_synthetic_session_has_no_restorable_control_state(
 def test_read_short_circuits_for_owner_outside_authoritative_index(
     rollout_storage: RolloutStorage,
 ) -> None:
-    assert rollout_storage.read_context_source_control_states(
-        "ses_019c1b918afd7857877ba5414bddf667"
-    ) == ()
-    # 非 main thread 物理形态尚未落地（OpenSpec 8.5 前），解析 fail closed——
-    # 这是新模型的显式合同，短路语义仅覆盖「节点不在权威目录」（上一条断言）。
-    with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
+    assert (
+        rollout_storage.read_context_source_control_states(
+            "ses_019c1b918afd7857877ba5414bddf667",
+            thread_id=rollout_storage.main_thread_id(SESSION_ID),
+        )
+        == ()
+    )
+    # 已登记 Session 下缺失 Thread 必须 fail closed，不能短路成空控制状态。
+    with pytest.raises(RuntimeError, match="catalog 中不存在精确 SessionThread owner"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="thr_019bd65d75ea759187d180cdef62d7ec",
@@ -329,18 +349,20 @@ def test_read_fails_closed_when_indexed_node_directory_is_missing(
 
     # 防篡改收敛到物理解析点（fail closed），不扫盘比对。
     with pytest.raises(RuntimeError, match="会话物理目录缺失"):
-        rollout_storage.read_context_source_control_states(SESSION_ID)
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id=rollout_storage.main_thread_id(SESSION_ID),
+        )
 
 
 def test_owner_rejects_thread_from_other_session(
     rollout_storage: RolloutStorage,
 ) -> None:
-    # SESSION_ID 是可寻址的 session 节点，先命中 child session 别名分支；它
-    # 不是 CHILD_THREAD_ID 的子节点，归属校验拒绝，不会是形态错误。
-    with pytest.raises(RuntimeError, match="thread 不属于目标 session"):
+    # canonical Thread ID 不能跨 Session 重用。
+    with pytest.raises(RuntimeError, match="catalog 中不存在精确 SessionThread owner"):
         rollout_storage.read_context_source_control_states(
-            CHILD_THREAD_ID,
-            thread_id=SESSION_ID,
+            CHILD_SESSION_ID,
+            thread_id=rollout_storage.main_thread_id(SESSION_ID),
         )
 
 
@@ -364,7 +386,7 @@ def test_owner_rejects_non_canonical_thread_id_shape(
             thread_id="thr_short",
         )
     # 未登记的合法 canonical thread id 不得被当作「没有控制状态」短路。
-    with pytest.raises(RuntimeError, match="非 main thread 物理形态未落地"):
+    with pytest.raises(RuntimeError, match="catalog 中不存在精确 SessionThread owner"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="thr_019bd65d75ea759187d180cdef62d7ec",
@@ -451,7 +473,13 @@ def test_write_does_not_reconcile_uncommitted_jsonl_tail(
     )
 
     assert jsonl_path.stat().st_size == size_before
-    assert rollout_storage.read_context_source_control_states(SESSION_ID) != ()
+    assert (
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id=owner.thread_id,
+        )
+        != ()
+    )
 
 
 def test_write_does_not_take_rollout_file_lock(
@@ -465,7 +493,9 @@ def test_write_does_not_take_rollout_file_lock(
     必须立即完成而不是等待锁超时。
     """
     rollout_storage.initialize(SESSION_ID, "")
-    lock = rollout_storage._lock(SESSION_ID, "")
+    lock = rollout_storage._lock(
+        rollout_storage.main_thread_id(SESSION_ID), "", session_id=SESSION_ID
+    )
     holder_ready = threading.Event()
     release = threading.Event()
 
@@ -508,7 +538,13 @@ def test_existing_rollout_without_control_table_is_upgraded_on_first_write(
         connection.execute("DROP TABLE context_source_control_states")
         connection.commit()
 
-    assert rollout_storage.read_context_source_control_states(SESSION_ID) == ()
+    assert (
+        rollout_storage.read_context_source_control_states(
+            SESSION_ID,
+            thread_id=owner.thread_id,
+        )
+        == ()
+    )
 
     stored = rollout_storage.write_context_source_control_state(
         ContextSourceControlState(
@@ -522,7 +558,10 @@ def test_existing_rollout_without_control_table_is_upgraded_on_first_write(
             latest_revision="sha256:latest",
         )
     )
-    (reloaded,) = rollout_storage.read_context_source_control_states(SESSION_ID)
+    (reloaded,) = rollout_storage.read_context_source_control_states(
+        SESSION_ID,
+        thread_id=owner.thread_id,
+    )
 
     assert stored.state_revision == 1
     assert reloaded == stored

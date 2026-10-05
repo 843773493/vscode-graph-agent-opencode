@@ -409,10 +409,14 @@ describe("会话目录 outbox 对账", () => {
     expect(failed.outbox.operations.map((item) => item.client_operation_id)).toEqual([opId("a")]);
   });
 
-  test("只清理已确认对账 revision 的终态条目", () => {
+  test("只按 committed catalog revision 清理已确认的终态条目", () => {
     let outbox = outboxWithRename();
     outbox = applyCatalogOutboxReceipts(outbox, [
-      receipt(opId("a"), { state: "committed", receipt_revision: 20 }),
+      receipt(opId("a"), {
+        state: "committed",
+        receipt_revision: 20,
+        committed_catalog_revision: 19,
+      }),
     ]);
     outbox = addCatalogOutboxIntent(
       outbox,
@@ -420,9 +424,9 @@ describe("会话目录 outbox 对账", () => {
       { kind: "rename_node", targetNodeId: "node-1", name: "第二次" },
       { baseCatalogRevision: 7, expectedRevision: 3 },
     );
-    const pruned = pruneReconciledCatalogOutbox(outbox, 19);
+    const pruned = pruneReconciledCatalogOutbox(outbox, 18);
     expect(pruned.operations.map((item) => item.client_operation_id)).toEqual([opId("a"), opId("b")]);
-    const finalized = pruneReconciledCatalogOutbox(outbox, 20);
+    const finalized = pruneReconciledCatalogOutbox(outbox, 19);
     expect(finalized.operations.map((item) => item.client_operation_id)).toEqual([opId("b")]);
   });
 

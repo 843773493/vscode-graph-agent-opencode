@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.session_catalog_store import (
     SessionCatalogNode,
@@ -60,7 +61,9 @@ def build_session_directory(
     (directory / "session.json").write_text("{}\n", encoding="utf-8")
     control = SessionControlStore(directory / "session-control.sqlite")
     try:
-        control.initialize_main_thread(main_thread_id, created_at)
+        control.initialize_main_thread(
+            main_thread_id, created_at, TEST_THREAD_GRAPH_BINDING
+        )
         control.initialize_fence("active", 1)
     finally:
         control.close()
@@ -94,7 +97,7 @@ def create_physical_session(
 
 
 def date_bucket_dir(sessions_root: Path, locator: str) -> Path:
-    return sessions_root / locator[len("sessions/"):]
+    return sessions_root / locator[len("sessions/") :]
 
 
 def manually_drain_session(
@@ -197,9 +200,7 @@ def service(
 
 
 @pytest.fixture
-def tree(
-    store: SessionCatalogStore, sessions_root: Path
-) -> DeleteTree:
+def tree(store: SessionCatalogStore, sessions_root: Path) -> DeleteTree:
     root = store.create_folder(make_node_id(), WORKSPACE_ID, None, "删除根")
     session_s1 = create_physical_session(
         store, sessions_root, parent_node_id=root.node_id, display_name="会话1"
@@ -243,9 +244,7 @@ async def test_delete_full_flow_tombstones_and_isolates(
     sessions_root: Path,
     tree: DeleteTree,
 ) -> None:
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     assert result.record_state == "completed"
     assert result.root_node_id == tree.root
     assert result.frozen_node_ids == tuple(sorted(tree.subtree_node_ids))
@@ -262,14 +261,14 @@ async def test_delete_full_flow_tombstones_and_isolates(
         tree.session_s3,
     ):
         session_id = session_node.node_id
-        isolated = (
-            sessions_root / _DELETING_DIR_NAME / "del-key-1" / session_id
-        )
+        isolated = sessions_root / _DELETING_DIR_NAME / "del-key-1" / session_id
         assert isolated.is_dir()
         # 物理内容随目录整体隔离（session.json 保留）
         assert (isolated / "session.json").is_file()
         # 源日期桶目录已不在
-        assert not date_bucket_dir(sessions_root, session_node.storage_relative_locator).exists()
+        assert not date_bucket_dir(
+            sessions_root, session_node.storage_relative_locator
+        ).exists()
         control = SessionControlStore(isolated / "session-control.sqlite")
         try:
             assert control.get_fence() == ("deleting", 2)
@@ -313,10 +312,7 @@ async def test_runtime_drain_failure_blocks_physical_isolation(
     assert calls == [first_session]
     assert source.is_dir()
     assert not (
-        sessions_root
-        / _DELETING_DIR_NAME
-        / "del-key-runtime-blocked"
-        / first_session
+        sessions_root / _DELETING_DIR_NAME / "del-key-runtime-blocked" / first_session
     ).exists()
     assert store.get_subtree_delete_record("del-key-runtime-blocked").state == (
         "deleting"
@@ -367,9 +363,7 @@ async def test_composite_drain_retries_only_undrained_session(
         ("node_debug", second),
         ("resources", second),
     ]
-    assert (
-        sessions_root / _DELETING_DIR_NAME / "del-key-composite" / first
-    ).is_dir()
+    assert (sessions_root / _DELETING_DIR_NAME / "del-key-composite" / first).is_dir()
 
     fail_session_id = ""
     result = await asyncio.wait_for(
@@ -469,10 +463,7 @@ async def test_resource_cleanup_reads_deleting_session_before_physical_isolation
         )
         assert not source.exists()
         assert (
-            sessions_root
-            / _DELETING_DIR_NAME
-            / "del-key-resource-order"
-            / session_id
+            sessions_root / _DELETING_DIR_NAME / "del-key-resource-order" / session_id
         ).is_dir()
 
 
@@ -486,9 +477,7 @@ async def test_delete_leaves_outside_subtree_untouched(
     outsider = tree.outsider
     node = store.get_node(outsider.node_id)
     assert node.state == "active"
-    assert date_bucket_dir(
-        sessions_root, outsider.storage_relative_locator
-    ).is_dir()
+    assert date_bucket_dir(sessions_root, outsider.storage_relative_locator).is_dir()
     control = SessionControlStore(
         date_bucket_dir(sessions_root, outsider.storage_relative_locator)
         / "session-control.sqlite"
@@ -514,10 +503,7 @@ async def test_delete_single_session_uses_same_protocol(
     with pytest.raises(KeyError):
         store.get_node(tree.session_s2.node_id)
     isolated = (
-        sessions_root
-        / _DELETING_DIR_NAME
-        / "del-key-1"
-        / tree.session_s2.node_id
+        sessions_root / _DELETING_DIR_NAME / "del-key-1" / tree.session_s2.node_id
     )
     assert isolated.is_dir()
     control = SessionControlStore(isolated / "session-control.sqlite")
@@ -537,9 +523,7 @@ async def test_delete_empty_folder_root_completes_without_drain(
     root_id = store.create_folder(
         make_node_id(), WORKSPACE_ID, None, "空文件夹"
     ).node_id
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=root_id
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=root_id)
     assert result.record_state == "completed"
     assert result.frozen_node_ids == (root_id,)
     assert result.drained_session_ids == ()
@@ -560,12 +544,8 @@ async def test_delete_idempotent_same_key_returns_same_result(
     sessions_root: Path,
     tree: DeleteTree,
 ) -> None:
-    first = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
-    second = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    first = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+    second = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     assert second == first
     assert second.record_state == "completed"
     rows = store.connection.execute(
@@ -603,9 +583,7 @@ async def test_delete_rejects_subtree_containing_deleting_node(
 ) -> None:
     store.set_node_state(tree.session_s2.node_id, "deleting")
     with pytest.raises(RuntimeError, match="非 active"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     with pytest.raises(KeyError):
         store.get_subtree_delete_record("del-key-1")
     # 子树未被 mark
@@ -625,9 +603,7 @@ async def test_delete_mark_cas_failure_keeps_subtree_active(
     )
     store.rename_node(tree.session_s1.node_id, "漂移")
     with pytest.raises(RuntimeError, match="漂移"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     # 失败回滚：子树仍全部 active、record 保持 preparing
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "active"
@@ -639,9 +615,7 @@ async def test_delete_missing_root_raises_keyerror(
     store: SessionCatalogStore,
 ) -> None:
     with pytest.raises(KeyError):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=make_node_id()
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=make_node_id())
     with pytest.raises(KeyError):
         store.get_subtree_delete_record("del-key-1")
 
@@ -679,11 +653,12 @@ async def test_failed_drain_keeps_whole_subtree_deleting(
         root_node_id=tree.root,
     )
     first_session = min(record.frozen_session_locators)
-    (date_bucket_dir(sessions_root, record.frozen_session_locators[first_session]) / "session-control.sqlite").unlink()
+    (
+        date_bucket_dir(sessions_root, record.frozen_session_locators[first_session])
+        / "session-control.sqlite"
+    ).unlink()
     with pytest.raises(RuntimeError, match="缺少"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "deleting"
     assert store.get_subtree_delete_record("del-key-1").state == "deleting"
@@ -704,9 +679,7 @@ async def test_recovery_deleting_not_drained_resumes_drain(
     prepare_and_mark(store, key="del-key-1", root_node_id=tree.root)
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "deleting"
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     assert result.record_state == "completed"
     for node_id in tree.subtree_node_ids:
         with pytest.raises(KeyError):
@@ -735,17 +708,11 @@ async def test_recovery_partial_drain_resumes_from_progress(
     junk.mkdir(parents=True)
     (junk / "junk.txt").write_text("垃圾", encoding="utf-8")
     with pytest.raises(RuntimeError, match="同时存在"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
-    assert store.get_subtree_delete_record("del-key-1").drained_session_ids == (
-        first,
-    )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
+    assert store.get_subtree_delete_record("del-key-1").drained_session_ids == (first,)
     # 清理垃圾后重入：按 drained_session_ids 定点继续，不重做第一个
     shutil.rmtree(junk)
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     assert result.record_state == "completed"
     assert result.drained_session_ids == tuple(ordered)
     for node_id in tree.subtree_node_ids:
@@ -769,9 +736,7 @@ async def test_recovery_crash_window_skips_drain_callback(
     ordered = sorted(record.frozen_session_locators)
     isolated = ordered[0]
     # 复现崩溃：第一个 session 已 fence+rename，但进度未记录。
-    source = date_bucket_dir(
-        sessions_root, record.frozen_session_locators[isolated]
-    )
+    source = date_bucket_dir(sessions_root, record.frozen_session_locators[isolated])
     control = SessionControlStore(source / "session-control.sqlite")
     try:
         assert control.cas_fence_transition(1, "deleting") is True
@@ -793,9 +758,7 @@ async def test_recovery_crash_window_skips_drain_callback(
             raise RuntimeError(f"会话物理目录缺失: {session_id}")
 
     service.set_session_drain_callback(composite_drain)
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
 
     assert result.record_state == "completed"
     # 已隔离的 session 未重跑回调；其余未隔离的 session 正常回调。
@@ -822,9 +785,7 @@ async def test_recovery_finish_crash_completes_on_reentry(
             session_id=session_id,
             locator=locator,
         )
-    result = await service.delete(
-        idempotency_key="del-key-1", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     assert result.record_state == "completed"
     for node_id in tree.subtree_node_ids:
         with pytest.raises(KeyError):
@@ -849,9 +810,7 @@ async def test_mark_cas_rejection_aborts_preparing_record_and_keeps_nodes_active
     store.rename_node(tree.root, "并发修改后的根")
 
     with pytest.raises(RuntimeError, match="revision 已漂移"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
 
     record = store.get_subtree_delete_record("del-key-1")
     assert record.state == "aborted"
@@ -880,14 +839,10 @@ async def test_abort_mid_drain_keeps_nodes_and_isolated_dir(
     # 节点保持 deleting（不回滚 active）、隔离目录保留
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "deleting"
-    assert (
-        sessions_root / _DELETING_DIR_NAME / "del-key-1" / ordered[0]
-    ).is_dir()
+    assert (sessions_root / _DELETING_DIR_NAME / "del-key-1" / ordered[0]).is_dir()
     # 同 key 重入被拒（含 reason）
     with pytest.raises(RuntimeError, match="已中止"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
 
 
 async def test_abort_preparing_then_new_key_delete_succeeds(
@@ -902,13 +857,9 @@ async def test_abort_preparing_then_new_key_delete_succeeds(
     )
     store.abort_subtree_delete("del-key-1", "预检 blocker")
     with pytest.raises(RuntimeError, match="已中止"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     # 换新 key 重试：子树仍 active，可完整删除
-    result = await service.delete(
-        idempotency_key="del-key-2", root_node_id=tree.root
-    )
+    result = await service.delete(idempotency_key="del-key-2", root_node_id=tree.root)
     assert result.record_state == "completed"
     for node_id in tree.subtree_node_ids:
         with pytest.raises(KeyError):
@@ -932,22 +883,13 @@ async def test_delete_target_conflict_fail_closed(
         root_node_id=tree.root,
     )
     first_session = min(record.frozen_session_locators)
-    junk = (
-        sessions_root
-        / _DELETING_DIR_NAME
-        / "del-key-1"
-        / first_session
-    )
+    junk = sessions_root / _DELETING_DIR_NAME / "del-key-1" / first_session
     junk.mkdir(parents=True)
     (junk / "junk.txt").write_text("垃圾", encoding="utf-8")
     with pytest.raises(RuntimeError, match="同时存在"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     # fail closed：进度未记、目录未被覆盖
-    assert (
-        store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
-    )
+    assert store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
     assert (junk / "junk.txt").is_file()
 
 
@@ -964,9 +906,7 @@ async def test_delete_fence_generation_mismatch_fail_closed(
     )
     first_session = min(record.frozen_session_locators)
     locator = record.frozen_session_locators[first_session]
-    control_path = (
-        date_bucket_dir(sessions_root, locator) / "session-control.sqlite"
-    )
+    control_path = date_bucket_dir(sessions_root, locator) / "session-control.sqlite"
     connection = sqlite3.connect(control_path)
     try:
         connection.execute("UPDATE lifecycle_fence SET generation = 5")
@@ -974,14 +914,10 @@ async def test_delete_fence_generation_mismatch_fail_closed(
     finally:
         connection.close()
     with pytest.raises(RuntimeError, match="generation 不符"):
-        await service.delete(
-            idempotency_key="del-key-1", root_node_id=tree.root
-        )
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
     # fail closed：源目录仍在原位、进度未记
     assert date_bucket_dir(sessions_root, locator).is_dir()
-    assert (
-        store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
-    )
+    assert store.get_subtree_delete_record("del-key-1").drained_session_ids == ()
 
 
 # ----------------------------------------------------------------------
@@ -1059,6 +995,7 @@ async def test_service_default_gate_creates_own_gate(
         idempotency_key="del-key-1", root_node_id=tree.root
     )
     assert result.record_state == "completed"
+
 
 async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
     """子树删除服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""

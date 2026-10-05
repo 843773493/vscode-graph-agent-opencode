@@ -29,10 +29,7 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
-from app.agents.itemized_context_middleware import (
-    _runtime_checkpoint_ns,
-    _runtime_session_id,
-)
+from app.agents.itemized_context_middleware import _runtime_checkpoint_ns
 from app.agents.summarization.planning import (
     _prefix_cutoff_candidates,
     build_cache_preserving_event,
@@ -59,6 +56,7 @@ from app.agents.summarization.state import (
 )
 from app.agents.workspace_tool_paths import backend_virtual_to_workspace_relative
 from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import require_current_session_thread_owner
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     CompactionPreflightPort,
 )
@@ -162,8 +160,18 @@ class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware)
         """把边界候选交给唯一 compaction preflight port 验证。"""
         if not candidates:
             return frozenset()
+        runtime = request.runtime
+        if runtime is None:
+            raise RuntimeError("compaction preflight 缺少 runtime")
+        thread_id = getattr(runtime.execution_info, "thread_id", None)
+        if not isinstance(thread_id, str) or not thread_id:
+            raise RuntimeError("compaction preflight 缺少 runtime thread_id")
+        owner = require_current_session_thread_owner(
+            langgraph_thread_id=thread_id
+        )
         return self._compaction_preflight.safe_compaction_prefix_cutoffs(
-            _runtime_session_id(request),
+            owner.session_id,
+            owner.thread_id,
             checkpoint_ns=_runtime_checkpoint_ns(request),
             state_messages=state_messages,
             cutoff_indexes=candidates,

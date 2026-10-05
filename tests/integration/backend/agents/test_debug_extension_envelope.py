@@ -24,6 +24,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from tests.integration.backend.agents.test_debug_prompt_flow import (
     ScriptedModelState,
+    _session_main_thread_id,
     _write_debug_fixture,
 )
 from tests.support.api_waiters import wait_for_job_done
@@ -80,6 +81,7 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     )
     assert create_response.status_code == 200, create_response.text
     session_id = create_response.json()["data"]["session_id"]
+    main_thread_id = await _session_main_thread_id(scripted_client, session_id)
     prompt = (
         "请先使用 skill_load(name=debugging)，然后按 Skill 通过固定信封真实执行调试动作；"
         "完成后只回复 envelope acceptance。"
@@ -148,10 +150,12 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
 
     debug_response = await scripted_client.get(
         "/api/v1/debug/node",
-        params={"session_id": session_id, "thread_id": "main"},
+        params={"session_id": session_id},
     )
     assert debug_response.status_code == 200, debug_response.text
-    actions = debug_response.json()["data"]["actions"]
+    debug_state = debug_response.json()["data"]
+    assert debug_state["thread_id"] == main_thread_id
+    actions = debug_state["actions"]
     audited = [
         action
         for action in actions

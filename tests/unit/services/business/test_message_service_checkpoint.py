@@ -6,16 +6,49 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import (
+    current_session_thread_owner,
+    session_thread_owner_scope,
+)
+from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_service import MessageService
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.support.message_service import build_message_service
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
+
+
+class _RecordingCheckpointReader:
+    def __init__(self) -> None:
+        self.reads: list[tuple[dict[str, object], MutationIntentOwner | None]] = []
+
+    async def aget_tuple(self, config: dict[str, object]) -> None:
+        configurable = config["configurable"]
+        assert isinstance(configurable, dict)
+        thread_id = configurable["thread_id"]
+        assert isinstance(thread_id, str)
+        self.reads.append(
+            (
+                config,
+                current_session_thread_owner(langgraph_thread_id=thread_id),
+            )
+        )
+
+
+def _configured_thread_id(config: dict[str, object]) -> object:
+    configurable = config["configurable"]
+    assert isinstance(configurable, dict)
+    return configurable["thread_id"]
 
 
 def _visible_metadata(message_id: str, **extra: object) -> dict[str, object]:
@@ -32,13 +65,135 @@ def _create_saver(tmp_path, session_bundle_factory, session_id: str):
     return RolloutCheckpointSaver(sessions_dir=tmp_path), session_dir
 
 
+def _checkpoint_owner(sessions_root, session_id: str):
+    thread_id = get_session_path_resolver(sessions_root).main_thread_id(session_id)
+    return session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id
+    )
+
+
+async def _put_checkpoint(saver, session_id: str, config, checkpoint, metadata, versions):
+    """历史 fixture 先经真实用户/内部准入建立根，checkpoint 只提交投影。"""
+    thread_id = config["configurable"]["thread_id"]
+    codec = LangChainMessageCodec()
+    admission = None
+    messages = checkpoint.get("channel_values", {}).get("messages", [])
+    for index, message in enumerate(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        message_id = codec.message_id(message, index)
+        job_id = f"job-fixture-{message_id}"
+        admission_key = f"admission-fixture:{message_id}"
+        if codec.is_internal(message):
+            admission = saver.admit_internal_execution(
+                session_id,
+                thread_id=thread_id,
+                job_id=job_id,
+                intent=InternalExecutionIntent(
+                    message_id=message_id,
+                    execution_id=f"execution-fixture-{message_id}",
+                    admission_idempotency_key=admission_key,
+                ),
+                message=message.model_copy(update={"id": message_id}),
+            )
+        else:
+            result = saver.accept_turn(
+                session_id,
+                thread_id=thread_id,
+                accepted_ingress_id=message_id,
+                acceptance_idempotency_key=f"fixture:{message_id}",
+                job_id=job_id,
+                admission_idempotency_key=admission_key,
+                payload=message.content,
+                payload_kind="text" if isinstance(message.content, str) else "structured_content",
+                turn_id=codec.turn_id(message, None, message_id),
+                root_item_id=f"item-{message_id}",
+                acceptance_metadata={
+                    "message_created_at": message.response_metadata.get("created_at"),
+                    "message_metadata": message.response_metadata.get("message_metadata", {}),
+                    "attachments": message.response_metadata.get("attachments", []),
+                },
+            )
+            admission = saver.execution_admission(
+                session_id, thread_id=thread_id, execution_id=result["execution_id"]
+            )
+        next_input = next(
+            (
+                cursor
+                for cursor in range(index + 1, len(messages))
+                if isinstance(messages[cursor], HumanMessage)
+            ),
+            len(messages),
+        )
+        partial = {
+            **checkpoint,
+            "id": f"{checkpoint['id']}-fixture-{index}",
+            "channel_values": {
+                **checkpoint["channel_values"],
+                "messages": messages[:next_input],
+            },
+        }
+        with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+            await saver.aput(config, partial, metadata, versions)
+    assert admission is not None, "checkpoint fixture 必须含真实输入根"
+    with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+        return await saver.aput(config, checkpoint, metadata, versions)
+
+
+@pytest.mark.asyncio
+async def test_main_thread_message_reads_use_catalog_owner_and_thread_config(
+    tmp_path,
+    session_bundle_factory,
+):
+    session_id = "ses_019c1bb705d872778f7f2b8e56394a96"
+    session_bundle_factory(tmp_path, session_id)
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(session_id)
+    checkpointer = _RecordingCheckpointReader()
+    service = build_message_service(tmp_path, checkpointer=checkpointer)
+
+    assert (await service.list(session_id)).items == []
+    assert await service._load_raw_messages(session_id) == []
+    assert await service._load_messages(session_id) == []
+
+    expected_owner = MutationIntentOwner(session_id=session_id, thread_id=thread_id)
+    assert len(checkpointer.reads) == 3
+    assert [owner for _config, owner in checkpointer.reads] == [
+        expected_owner,
+        expected_owner,
+        expected_owner,
+    ]
+    assert [
+        _configured_thread_id(config) for config, _owner in checkpointer.reads
+    ] == [thread_id, thread_id, thread_id]
+
+
+@pytest.mark.asyncio
+async def test_agent_context_read_keeps_explicit_child_thread_owner():
+    session_id = "ses_019c1bb705d872778f7f2b8e56394a96"
+    child_thread_id = "thr_019c1bb705d872778f7f2b8e56394a96"
+    checkpointer = _RecordingCheckpointReader()
+    service = MessageService(
+        main_thread_resolver=lambda _session_id: "thr_main_019c1bb705d872778f7f2b8e56394a96",
+        checkpointer=checkpointer,
+    )
+
+    await service.get_agent_context_state(session_id, child_thread_id)
+
+    assert checkpointer.reads == [
+        (
+            {"configurable": {"thread_id": child_thread_id, "checkpoint_ns": ""}},
+            MutationIntentOwner(session_id=session_id, thread_id=child_thread_id),
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_message_service_loads_history_from_checkpoint(
     tmp_path,
     session_bundle_factory,
 ):
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019c1bb705d872778f7f2b8e56394a96")
-    config = {"configurable": {"thread_id": "ses_019c1bb705d872778f7f2b8e56394a96", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c1bb705d872778f7f2b8e56394a96"), "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -59,12 +214,13 @@ async def test_message_service_loads_history_from_checkpoint(
         "updated_channels": ["messages"],
         "id": "ckpt-1",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c1bb705d872778f7f2b8e56394a96"):
+        await _put_checkpoint(saver, "ses_019c1bb705d872778f7f2b8e56394a96",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019c1bb705d872778f7f2b8e56394a96", limit=10)
@@ -93,7 +249,7 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         session_bundle_factory,
         "ses_019c6649fc527ba687eb47130ec99a94",
     )
-    config = {"configurable": {"thread_id": "ses_019c6649fc527ba687eb47130ec99a94", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c6649fc527ba687eb47130ec99a94"), "checkpoint_ns": ""}}
     raw_messages = []
     for index in range(6):
         raw_messages.extend(
@@ -108,17 +264,18 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
                 ),
             ]
         )
-    await saver.aput(
-        config,
-        {
-            "channel_values": {"messages": raw_messages},
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-paged",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c6649fc527ba687eb47130ec99a94"):
+        await _put_checkpoint(saver, "ses_019c6649fc527ba687eb47130ec99a94",
+            config,
+            {
+                "channel_values": {"messages": raw_messages},
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-paged",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     latest = await service.list(session_id="ses_019c6649fc527ba687eb47130ec99a94", limit=4)
@@ -151,17 +308,18 @@ async def test_message_service_pages_from_latest_and_reuses_projection(
         await service.list("ses_019c6649fc527ba687eb47130ec99a94", limit=True)
 
     other_saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019bd514077379d387c3d64d7d77aa5d")
-    await other_saver.aput(
-        {"configurable": {"thread_id": "ses_019bd514077379d387c3d64d7d77aa5d", "checkpoint_ns": ""}},
-        {
-            "id": "ckpt-other",
-            "channel_values": {"messages": [HumanMessage(content="另一个会话")]},
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019bd514077379d387c3d64d7d77aa5d"):
+        await _put_checkpoint(other_saver, "ses_019bd514077379d387c3d64d7d77aa5d",
+            {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019bd514077379d387c3d64d7d77aa5d"), "checkpoint_ns": ""}},
+            {
+                "id": "ckpt-other",
+                "channel_values": {"messages": [HumanMessage(content="另一个会话")]},
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
     with pytest.raises(ValueError, match="消息历史已更新"):
         await build_message_service(tmp_path, checkpointer=other_saver).list(
             "ses_019bd514077379d387c3d64d7d77aa5d", cursor=latest.next_cursor
@@ -178,44 +336,45 @@ async def test_visible_history_omits_inline_media_payload_from_metadata(
         session_bundle_factory,
         "ses_019c3567da377a6f855e1bddac8f1f76",
     )
-    await saver.aput(
-        {"configurable": {"thread_id": "ses_019c3567da377a6f855e1bddac8f1f76", "checkpoint_ns": ""}},
-        {
-            "channel_values": {
-                "messages": [
-                    HumanMessage(
-                        content=[
-                            {"type": "text", "text": "查看图片"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "data:image/png;base64,very-large-payload"
-                                },
-                            },
-                        ],
-                        response_metadata=_visible_metadata(
-                            "msg_media",
-                            attachments=[
+    with _checkpoint_owner(tmp_path, "ses_019c3567da377a6f855e1bddac8f1f76"):
+        await _put_checkpoint(saver, "ses_019c3567da377a6f855e1bddac8f1f76",
+            {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c3567da377a6f855e1bddac8f1f76"), "checkpoint_ns": ""}},
+            {
+                "channel_values": {
+                    "messages": [
+                        HumanMessage(
+                            content=[
+                                {"type": "text", "text": "查看图片"},
                                 {
-                                    "file_id": (
-                                        "boxteam-session://ses_019c3567da377a6f855e1bddac8f1f76/"
-                                        "attachments/a.png"
-                                    ),
-                                    "name": "a.png",
-                                    "content_type": "image/png",
-                                }
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": "data:image/png;base64,very-large-payload"
+                                    },
+                                },
                             ],
-                        ),
-                    )
-                ]
+                            response_metadata=_visible_metadata(
+                                "msg_media",
+                                attachments=[
+                                    {
+                                        "file_id": (
+                                            "boxteam-session://ses_019c3567da377a6f855e1bddac8f1f76/"
+                                            "attachments/a.png"
+                                        ),
+                                        "name": "a.png",
+                                        "content_type": "image/png",
+                                    }
+                                ],
+                            ),
+                        )
+                    ]
+                },
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-media-projection",
             },
-            "channel_versions": {"messages": "1"},
-            "updated_channels": ["messages"],
-            "id": "ckpt-media-projection",
-        },
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     page = await build_message_service(tmp_path, checkpointer=saver).list(
         "ses_019c3567da377a6f855e1bddac8f1f76",
@@ -283,7 +442,7 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
         session_bundle_factory,
         "ses_019b7822fc117bb08dea7a0b82f4ae24",
     )
-    config = {"configurable": {"thread_id": "ses_019b7822fc117bb08dea7a0b82f4ae24", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019b7822fc117bb08dea7a0b82f4ae24"), "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -311,12 +470,13 @@ async def test_human_message_role_and_source_survive_legacy_system_metadata(
         "updated_channels": ["messages"],
         "id": "ckpt-delegated",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019b7822fc117bb08dea7a0b82f4ae24"):
+        await _put_checkpoint(saver, "ses_019b7822fc117bb08dea7a0b82f4ae24",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id="ses_019b7822fc117bb08dea7a0b82f4ae24",
@@ -372,7 +532,7 @@ async def test_message_service_restores_identity_from_rollout_index(
         "ses_00f90d52b18f77068e06ede2aa8f4135",
     )
     config = {
-        "configurable": {"thread_id": "ses_00f90d52b18f77068e06ede2aa8f4135", "checkpoint_ns": ""}
+        "configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_00f90d52b18f77068e06ede2aa8f4135"), "checkpoint_ns": ""}
     }
     checkpoint = {
         "channel_values": {"messages": [HumanMessage(content="hi")]},
@@ -380,12 +540,13 @@ async def test_message_service_restores_identity_from_rollout_index(
         "updated_channels": ["messages"],
         "id": "ckpt-invalid-message",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_00f90d52b18f77068e06ede2aa8f4135"):
+        await _put_checkpoint(saver, "ses_00f90d52b18f77068e06ede2aa8f4135",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id="ses_00f90d52b18f77068e06ede2aa8f4135",
@@ -403,7 +564,10 @@ async def test_agent_context_state_applies_summarization_event(
     session_bundle_factory,
 ):
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019bab7eeedc7a5f83bddb61e54d8a28")
-    config = {"configurable": {"thread_id": "ses_019bab7eeedc7a5f83bddb61e54d8a28", "checkpoint_ns": ""}}
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(
+        "ses_019bab7eeedc7a5f83bddb61e54d8a28"
+    )
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
     checkpoint = {
         "channel_values": {
             "messages": [
@@ -425,15 +589,23 @@ async def test_agent_context_state_applies_summarization_event(
         "updated_channels": ["_summarization_event"],
         "id": "ckpt-compacted",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1", "_summarization_event": "1"},
-    )
+    with session_thread_owner_scope(
+        MutationIntentOwner(
+            session_id="ses_019bab7eeedc7a5f83bddb61e54d8a28",
+            thread_id=thread_id,
+        ),
+        langgraph_thread_id=thread_id,
+    ):
+        await _put_checkpoint(saver, "ses_019bab7eeedc7a5f83bddb61e54d8a28",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1", "_summarization_event": "1"},
+        )
 
     state = await build_message_service(tmp_path, checkpointer=saver).get_agent_context_state(
-        "ses_019bab7eeedc7a5f83bddb61e54d8a28"
+        "ses_019bab7eeedc7a5f83bddb61e54d8a28",
+        thread_id,
     )
 
     assert state["checkpoint_id"] == "ckpt-compacted"
@@ -458,8 +630,11 @@ async def test_agent_context_state_applies_cache_preserving_event(
         session_bundle_factory,
         "ses_019bd626995878aa855827ea5ee075e3",
     )
+    thread_id = get_session_path_resolver(tmp_path).main_thread_id(
+        "ses_019bd626995878aa855827ea5ee075e3"
+    )
     config = {
-        "configurable": {"thread_id": "ses_019bd626995878aa855827ea5ee075e3", "checkpoint_ns": ""}
+        "configurable": {"thread_id": thread_id, "checkpoint_ns": ""}
     }
     prefix = [HumanMessage(content="稳定问题"), AIMessage(content="稳定回答")]
     messages = [
@@ -486,15 +661,23 @@ async def test_agent_context_state_applies_cache_preserving_event(
         "updated_channels": ["_summarization_event"],
         "id": "ckpt-cache-compacted",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1", "_summarization_event": "1"},
-    )
+    with session_thread_owner_scope(
+        MutationIntentOwner(
+            session_id="ses_019bd626995878aa855827ea5ee075e3",
+            thread_id=thread_id,
+        ),
+        langgraph_thread_id=thread_id,
+    ):
+        await _put_checkpoint(saver, "ses_019bd626995878aa855827ea5ee075e3",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1", "_summarization_event": "1"},
+        )
 
     state = await build_message_service(tmp_path, checkpointer=saver).get_agent_context_state(
-        "ses_019bd626995878aa855827ea5ee075e3"
+        "ses_019bd626995878aa855827ea5ee075e3",
+        thread_id,
     )
 
     assert state["compacted"] is True
@@ -513,7 +696,7 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
     session_bundle_factory,
 ):
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019bc833e9ed76e589f8bfb74e0f1c45")
-    config = {"configurable": {"thread_id": "ses_019bc833e9ed76e589f8bfb74e0f1c45", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019bc833e9ed76e589f8bfb74e0f1c45"), "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
         response_metadata=_visible_metadata("msg_user_001"),
@@ -533,12 +716,13 @@ async def test_message_service_preserves_distinct_canonical_message_ids(
         "updated_channels": ["messages"],
         "id": "ckpt-dedupe",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019bc833e9ed76e589f8bfb74e0f1c45"):
+        await _put_checkpoint(saver, "ses_019bc833e9ed76e589f8bfb74e0f1c45",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019bc833e9ed76e589f8bfb74e0f1c45", limit=10)
@@ -560,7 +744,7 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
         session_bundle_factory,
         "ses_019bbce5408b787b82a9a5784a27a13b",
     )
-    config = {"configurable": {"thread_id": "ses_019bbce5408b787b82a9a5784a27a13b", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019bbce5408b787b82a9a5784a27a13b"), "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content="请调用 test_tool_2",
         response_metadata=_visible_metadata("msg_user_001"),
@@ -580,12 +764,13 @@ async def test_agent_state_preserves_distinct_canonical_message_records(
         "updated_channels": ["messages"],
         "id": "ckpt-state-dedupe",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019bbce5408b787b82a9a5784a27a13b"):
+        await _put_checkpoint(saver, "ses_019bbce5408b787b82a9a5784a27a13b",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     state_snapshot = await service.get_agent_state_messages("ses_019bbce5408b787b82a9a5784a27a13b")
@@ -603,7 +788,7 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
 ):
     """验证 Responses API 路径下产生的 reasoning 块被正确提取到 metadata。"""
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019c12dfdacd7e7d82be83372cbc0392")
-    config = {"configurable": {"thread_id": "ses_019c12dfdacd7e7d82be83372cbc0392", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c12dfdacd7e7d82be83372cbc0392"), "checkpoint_ns": ""}}
     reasoning_msg = AIMessage(
         content=[
             {
@@ -629,12 +814,13 @@ async def test_message_service_extracts_responses_api_reasoning_blocks(
         "updated_channels": ["messages"],
         "id": "ckpt-r",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c12dfdacd7e7d82be83372cbc0392"):
+        await _put_checkpoint(saver, "ses_019c12dfdacd7e7d82be83372cbc0392",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019c12dfdacd7e7d82be83372cbc0392", limit=10)
@@ -662,7 +848,7 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
         session_bundle_factory,
         "ses_019c6e09448a736781904c34872e97fc",
     )
-    config = {"configurable": {"thread_id": "ses_019c6e09448a736781904c34872e97fc", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c6e09448a736781904c34872e97fc"), "checkpoint_ns": ""}}
     reasoning_text = "用户想查看当前系统时间。"
     tool_call = {
         "name": "python_exec",
@@ -690,12 +876,13 @@ async def test_agent_state_renders_standard_reasoning_tool_call_message(
         "updated_channels": ["messages"],
         "id": "ckpt-tool-reasoning",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c6e09448a736781904c34872e97fc"):
+        await _put_checkpoint(saver, "ses_019c6e09448a736781904c34872e97fc",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019c6e09448a736781904c34872e97fc", limit=10)
@@ -719,7 +906,7 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
     session_bundle_factory,
 ):
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019b8cb2c7737f1f8d93ffaa04a00c94")
-    config = {"configurable": {"thread_id": "ses_019b8cb2c7737f1f8d93ffaa04a00c94", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019b8cb2c7737f1f8d93ffaa04a00c94"), "checkpoint_ns": ""}}
     tool_call_message = AIMessage(
         content="",
         tool_calls=[
@@ -757,12 +944,13 @@ async def test_message_service_hides_empty_assistant_tool_call_messages(
         "updated_channels": ["messages"],
         "id": "ckpt-tool-hidden",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019b8cb2c7737f1f8d93ffaa04a00c94"):
+        await _put_checkpoint(saver, "ses_019b8cb2c7737f1f8d93ffaa04a00c94",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019b8cb2c7737f1f8d93ffaa04a00c94", limit=10)
@@ -778,7 +966,7 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
 ):
     """多模态用户消息应在 Agent State 中保留 image_url 块。"""
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019c060ad21373a6803a34c5f2a272fd")
-    config = {"configurable": {"thread_id": "ses_019c060ad21373a6803a34c5f2a272fd", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c060ad21373a6803a34c5f2a272fd"), "checkpoint_ns": ""}}
     image_block = {
         "type": "image_url",
         "image_url": {"url": "data:image/jpeg;base64,abc123"},
@@ -805,12 +993,13 @@ async def test_message_service_preserves_image_blocks_in_agent_state(
         "updated_channels": ["messages"],
         "id": "ckpt-image",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c060ad21373a6803a34c5f2a272fd"):
+        await _put_checkpoint(saver, "ses_019c060ad21373a6803a34c5f2a272fd",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019c060ad21373a6803a34c5f2a272fd", limit=10)
@@ -837,7 +1026,7 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
         session_bundle_factory,
         "ses_019c673c9b157dfb8d2b3c46507d43f9",
     )
-    config = {"configurable": {"thread_id": "ses_019c673c9b157dfb8d2b3c46507d43f9", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019c673c9b157dfb8d2b3c46507d43f9"), "checkpoint_ns": ""}}
     user_message = HumanMessage(
         content=[
             {"type": "text", "text": "请按时间顺序说明这个视频。"},
@@ -875,12 +1064,13 @@ async def test_message_service_uses_user_content_blocks_for_user_message_text(
         "updated_channels": ["messages"],
         "id": "ckpt-video-display",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019c673c9b157dfb8d2b3c46507d43f9"):
+        await _put_checkpoint(saver, "ses_019c673c9b157dfb8d2b3c46507d43f9",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019c673c9b157dfb8d2b3c46507d43f9", limit=10)
@@ -933,7 +1123,7 @@ def test_registered_hidden_system_reminder_stays_hidden():
 async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
     """验证 refusal 块被识别并标记。"""
     saver, _ = _create_saver(tmp_path, session_bundle_factory, "ses_019bb43f7d9374e482e381580fa355ba")
-    config = {"configurable": {"thread_id": "ses_019bb43f7d9374e482e381580fa355ba", "checkpoint_ns": ""}}
+    config = {"configurable": {"thread_id": get_session_path_resolver(tmp_path).main_thread_id("ses_019bb43f7d9374e482e381580fa355ba"), "checkpoint_ns": ""}}
     msg = AIMessage(
         content=[{"type": "refusal", "refusal": "我拒绝回答"}],
         response_metadata=_visible_metadata("msg_assistant"),
@@ -952,12 +1142,13 @@ async def test_message_service_refusal_block(tmp_path, session_bundle_factory):
         "updated_channels": ["messages"],
         "id": "ckpt-rf",
     }
-    await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        {"messages": "1"},
-    )
+    with _checkpoint_owner(tmp_path, "ses_019bb43f7d9374e482e381580fa355ba"):
+        await _put_checkpoint(saver, "ses_019bb43f7d9374e482e381580fa355ba",
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
 
     service = build_message_service(tmp_path, checkpointer=saver)
     messages = await service.list(session_id="ses_019bb43f7d9374e482e381580fa355ba", limit=10)

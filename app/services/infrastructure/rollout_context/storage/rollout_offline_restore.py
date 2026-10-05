@@ -124,15 +124,20 @@ class RolloutOfflineRestoreMixin:
         thread_id: str,
         checkpoint_ns: str = "",
         *,
+        session_id: str,
         destination: str | Path | None = None,
     ) -> Path:
         """使用 SQLite backup API 创建可恢复的 index 副本。"""
         thread_id = strict_text(thread_id, field="backup.thread_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("backup.checkpoint_ns 必须是字符串")
-        with self._host._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._host._connect(thread_id, checkpoint_ns) as connection:
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._host._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._validate_schema_state(connection)
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
                 if integrity != "ok":
@@ -140,7 +145,10 @@ class RolloutOfflineRestoreMixin:
                         f"SQLite backup integrity_check 失败: {integrity}"
                     )
             return self._backup_index_unlocked(
-                thread_id, checkpoint_ns, destination=destination
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                destination=destination,
             )
 
     def _backup_index_unlocked(
@@ -148,10 +156,13 @@ class RolloutOfflineRestoreMixin:
         thread_id: str,
         checkpoint_ns: str,
         *,
+        session_id: str,
         destination: str | Path | None,
     ) -> Path:
         """在调用方已持有 rollout 写锁时复制 SQLite。"""
-        source_path = self._host.index_path(thread_id, checkpoint_ns)
+        source_path = self._host.index_path(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
         self._require_regular_file(source_path, field="SQLite backup source")
         target_path = (
             Path(destination).absolute()
@@ -188,6 +199,8 @@ class RolloutOfflineRestoreMixin:
         thread_id: str,
         backup_path: str | Path,
         checkpoint_ns: str = "",
+        *,
+        session_id: str,
     ) -> RolloutReadSnapshot:
         """恢复显式指定的 SQLite backup。"""
         thread_id = strict_text(thread_id, field="restore.thread_id")
@@ -197,15 +210,21 @@ class RolloutOfflineRestoreMixin:
         self._require_regular_file(source_path, field="SQLite restore source")
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
-        with self._host._lock(thread_id, checkpoint_ns):
-            self._restore_index_backup_unlocked(thread_id, checkpoint_ns, source_path)
-        return self.validate_index(thread_id, checkpoint_ns)
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
+            self._restore_index_backup_unlocked(
+                thread_id, checkpoint_ns, source_path, session_id=session_id
+            )
+        return self.validate_index(session_id, thread_id, checkpoint_ns)
 
     def restore_index_backup_offline(
         self,
         thread_id: str,
         backup_path: str | Path,
         checkpoint_ns: str = "",
+        *,
+        session_id: str,
     ) -> RolloutReadSnapshot:
         """显式离线恢复完全损坏的 index，并保留原文件供审计。
 
@@ -220,14 +239,18 @@ class RolloutOfflineRestoreMixin:
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         self._require_standalone_offline_restore_source(source_path)
-        target_path = self._host.index_path(thread_id, checkpoint_ns)
+        target_path = self._host.index_path(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
         target_root = target_path.parent
         candidate_path = target_root / f".index.sqlite.{uuid4().hex}.offline-restore"
         operation_id = uuid4().hex
         quarantine_root = target_root / "recovery-quarantine"
         quarantine_path = quarantine_root / operation_id
 
-        with self._host._lock(thread_id, checkpoint_ns):
+        with self._host._lock(
+            thread_id, checkpoint_ns, session_id=session_id
+        ):
             self._require_regular_file(target_path, field="SQLite offline restore target")
             if not target_path.is_file():
                 raise FileNotFoundError(target_path)
@@ -249,6 +272,7 @@ class RolloutOfflineRestoreMixin:
                 source_hash = self._prepare_offline_restore_candidate(
                     source_path,
                     candidate_path,
+                    session_id=session_id,
                     thread_id=thread_id,
                     checkpoint_ns=checkpoint_ns,
                 )
@@ -284,13 +308,14 @@ class RolloutOfflineRestoreMixin:
                 ) as restored:
                     self._validate_offline_restore_candidate(
                         restored,
+                        session_id=session_id,
                         thread_id=thread_id,
                         checkpoint_ns=checkpoint_ns,
                     )
                 manifest = {
                     "schema": "rollout-index-offline-restore:v1",
                     "operation_id": operation_id,
-                    "session_id": thread_id,
+                    "session_id": session_id,
                     "checkpoint_ns": checkpoint_ns,
                     "created_at": datetime.now(UTC).isoformat(),
                     "source_path": str(source_path),
@@ -327,16 +352,20 @@ class RolloutOfflineRestoreMixin:
             finally:
                 if candidate_path.exists() or candidate_path.is_symlink():
                     candidate_path.unlink()
-        return self.validate_index(thread_id, checkpoint_ns)
+        return self.validate_index(session_id, thread_id, checkpoint_ns)
 
     def _restore_index_backup_unlocked(
         self,
         thread_id: str,
         checkpoint_ns: str,
         source_path: Path,
+        *,
+        session_id: str,
     ) -> None:
         """持有 rollout 写锁，通过 SQLite 事务写回原 inode，保留 reader 快照。"""
-        target_path = self._host.index_path(thread_id, checkpoint_ns)
+        target_path = self._host.index_path(
+            session_id, checkpoint_ns, thread_id=thread_id
+        )
         source_path = source_path.absolute()
         for role, path in (("source", source_path), ("target", target_path)):
             self._require_regular_file(path, field=f"SQLite restore {role}")

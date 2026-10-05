@@ -207,6 +207,7 @@ export interface GatewayHealthDTO {
   active_workspace_id?: string | undefined;
   process_id: number;
   development_restart_available?: boolean | undefined;
+  gateway_id: string;
 }
 
 export interface GatewayInboundAccessListDTO {
@@ -445,6 +446,7 @@ export interface GatewayWorkspaceDTO {
   services?: { [key: string]: any } | undefined;
   connection_error?: string | undefined;
   checked_at: string;
+  backend_workspace_id?: string | undefined;
 }
 
 export interface GatewayWorkspaceListDTO {
@@ -2057,7 +2059,13 @@ export const GatewayDirectoryListDTO: MessageFns<GatewayDirectoryListDTO> = {
 };
 
 function createBaseGatewayHealthDTO(): GatewayHealthDTO {
-  return { status: undefined, active_workspace_id: undefined, process_id: 0, development_restart_available: undefined };
+  return {
+    status: undefined,
+    active_workspace_id: undefined,
+    process_id: 0,
+    development_restart_available: undefined,
+    gateway_id: "",
+  };
 }
 
 export const GatewayHealthDTO: MessageFns<GatewayHealthDTO> = {
@@ -2071,6 +2079,7 @@ export const GatewayHealthDTO: MessageFns<GatewayHealthDTO> = {
       development_restart_available: isSet(object.development_restart_available)
         ? globalThis.Boolean(object.development_restart_available)
         : undefined,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
     };
   },
 
@@ -2088,6 +2097,9 @@ export const GatewayHealthDTO: MessageFns<GatewayHealthDTO> = {
     if (message.development_restart_available !== undefined) {
       obj.development_restart_available = message.development_restart_available;
     }
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
     return obj;
   },
 
@@ -2100,6 +2112,7 @@ export const GatewayHealthDTO: MessageFns<GatewayHealthDTO> = {
     message.active_workspace_id = object.active_workspace_id ?? undefined;
     message.process_id = object.process_id ?? 0;
     message.development_restart_available = object.development_restart_available ?? undefined;
+    message.gateway_id = object.gateway_id ?? "";
     return message;
   },
 };
@@ -3592,6 +3605,7 @@ function createBaseGatewayWorkspaceDTO(): GatewayWorkspaceDTO {
     services: undefined,
     connection_error: undefined,
     checked_at: "",
+    backend_workspace_id: undefined,
   };
 }
 
@@ -3619,6 +3633,9 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
       services: isObject(object.services) ? object.services : undefined,
       connection_error: isSet(object.connection_error) ? globalThis.String(object.connection_error) : undefined,
       checked_at: isSet(object.checked_at) ? globalThis.String(object.checked_at) : "",
+      backend_workspace_id: isSet(object.backend_workspace_id)
+        ? globalThis.String(object.backend_workspace_id)
+        : undefined,
     };
   },
 
@@ -3675,6 +3692,9 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     if (message.checked_at !== "") {
       obj.checked_at = message.checked_at;
     }
+    if (message.backend_workspace_id !== undefined) {
+      obj.backend_workspace_id = message.backend_workspace_id;
+    }
     return obj;
   },
 
@@ -3704,6 +3724,7 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     message.services = object.services ?? undefined;
     message.connection_error = object.connection_error ?? undefined;
     message.checked_at = object.checked_at ?? "";
+    message.backend_workspace_id = object.backend_workspace_id ?? undefined;
     return message;
   },
 };

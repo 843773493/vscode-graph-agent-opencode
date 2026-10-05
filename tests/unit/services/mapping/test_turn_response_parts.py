@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.services.mapping.turn_response_parts import response_parts_from_records
+from datetime import datetime
+
+from app.domain.itemized.records import CanonicalItemRecord
+from app.services.mapping.turn_response_parts import (
+    response_parts_from_internal_item,
+    response_parts_from_records,
+)
 
 NOW = "2026-09-09T00:00:00+00:00"
 
@@ -40,6 +46,89 @@ def _projection(*items: dict[str, object], status: str = "completed") -> dict[st
         "final_item_sequence": 8,
         "final_item_created_at": NOW,
     }
+
+
+def _canonical_item(
+    *,
+    item_id: str,
+    item_sequence: int,
+    semantic_kind: str,
+    payload_kind: str,
+    payload: object,
+    metadata: dict[str, object] | None = None,
+) -> CanonicalItemRecord:
+    return CanonicalItemRecord.create(
+        item_sequence=item_sequence,
+        item_id=item_id,
+        semantic_kind=semantic_kind,
+        payload_kind=payload_kind,
+        status="completed",
+        producer_ref={"producer_kind": "provider", "producer_id": "execution_1"},
+        payload=payload,
+        created_at=NOW,
+        metadata=metadata or {},
+    )
+
+
+def test_internal_execution_response_item_uses_canonical_identity_and_include() -> None:
+    item = _canonical_item(
+        item_id="item-internal-output",
+        item_sequence=17,
+        semantic_kind="assistant_output",
+        payload_kind="text",
+        payload="内部执行回复",
+    )
+
+    parts = response_parts_from_internal_item(
+        item,
+        include=frozenset({"final_response", "internal"}),
+        logical_item_ordinal=7,
+    )
+    excluded = response_parts_from_internal_item(
+        item,
+        include=frozenset({"internal"}),
+        logical_item_ordinal=7,
+    )
+
+    assert len(parts) == 1
+    assert parts[0].kind == "text"
+    assert parts[0].projection == "summary"
+    assert parts[0].part_id == "item-internal-output:part:0"
+    assert parts[0].source.item_sequence == 17
+    assert parts[0].source.logical_item_ordinal == 7
+    assert parts[0].source.created_at == datetime.fromisoformat(NOW)
+    assert parts[0].text == "内部执行回复"
+    assert excluded == []
+
+
+def test_internal_execution_tool_payload_is_only_detailed_when_requested() -> None:
+    item = _canonical_item(
+        item_id="item-internal-tool",
+        item_sequence=18,
+        semantic_kind="tool_call",
+        payload_kind="tool_call",
+        payload={
+            "tool_calls": [
+                {"id": "call-1", "name": "read_file", "args": {"path": "a.py"}}
+            ]
+        },
+    )
+
+    summary = response_parts_from_internal_item(
+        item,
+        include=frozenset({"tool_summary"}),
+        logical_item_ordinal=7,
+    )
+    detail = response_parts_from_internal_item(
+        item,
+        include=frozenset({"tool_call"}),
+        logical_item_ordinal=7,
+    )
+
+    assert summary[0].projection == "summary"
+    assert summary[0].arguments is None
+    assert detail[0].projection == "detail"
+    assert detail[0].arguments == '{"path":"a.py"}'
 
 
 def test_detail_keeps_backend_order_and_only_enriches_tool_payload() -> None:

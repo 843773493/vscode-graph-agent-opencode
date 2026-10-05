@@ -6,6 +6,10 @@ import type {
 } from "../contentViewLoaderTypes";
 import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
 import { errorMessage } from "../../utils/errorMessage";
+import {
+  requireGatewayWorkspaceRequestTarget,
+  type GatewayWorkspaceRequestTarget,
+} from "../../api/workspaceIdentity";
 
 /** 工作区刷新编排链路：工作区级刷新的三个原语——切换前置重置、刷新收口、强制
  * 刷新工作区会话列表——全部归属工作区层级，不再由 AppProvider 直接持有。
@@ -15,11 +19,13 @@ import { errorMessage } from "../../utils/errorMessage";
  * 不能当布尔使用。 */
 export function useWorkspaceRefreshOrchestration({
   apiPort,
+  gatewayWorkspaces,
   setState,
   refreshSessions,
   abortCurrentStream,
 }: {
   apiPort: number | null;
+  gatewayWorkspaces: readonly GatewayWorkspaceRequestTarget[];
   setState: SetAppState;
   refreshSessions: FinishWorkspaceRefresh;
   abortCurrentStream: () => void;
@@ -84,11 +90,11 @@ export function useWorkspaceRefreshOrchestration({
   const refreshGatewayWorkspaceSessions = useCallback(async (workspaceId: string) => {
     await refreshWorkspaceSessionList(
       apiPort ?? DEFAULT_BACKEND_PORT,
-      workspaceId,
+      requireGatewayWorkspaceRequestTarget(gatewayWorkspaces, workspaceId),
       setState,
       { force: true },
     );
-  }, [apiPort, setState]);
+  }, [apiPort, gatewayWorkspaces, setState]);
 
   return {
     finishWorkspaceRefresh,

@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar, runtime_checkable
 
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    UserExecutionIdentity,
+)
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -25,9 +29,15 @@ from app.schemas.internal_v2.pending_request import (
 class JobServiceProtocol(Protocol):
     def assert_accepting_jobs(self) -> None: ...
 
+    def reserve_user_execution_identity(self) -> UserExecutionIdentity: ...
+
+    def reserve_internal_job_id(self) -> str: ...
+
     async def list(self, session_id: str | None = None) -> list[JobDTO]: ...
 
     async def get(self, job_id: str) -> JobDTO: ...
+
+    def get_execution_binding(self, job_id: str) -> ExecutionBinding: ...
 
     async def run_session_idle_operation(
         self,
@@ -109,7 +119,9 @@ class JobServiceProtocol(Protocol):
         session_id: str,
         message: str,
         *,
-        job_id: str | None = None,
+        thread_id: str,
+        execution_binding: ExecutionBinding | None = None,
+        reserved_job_id: str | None = None,
         agent_id: str = "default",
         message_id: str,
         attachments: list[AttachmentRef] | None = None,

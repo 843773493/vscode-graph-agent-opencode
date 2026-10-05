@@ -15,7 +15,16 @@ from app.domain.itemized.runtime import (
     ExecutionRecord,
     ModelCallRecord,
     ProvenanceEdge,
+    TurnExecutionLink,
     TurnRecord,
+)
+from app.domain.itemized.serde.runtime import (
+    execution_record_from_dict,
+    execution_record_to_dict,
+    model_call_record_from_dict,
+    model_call_record_to_dict,
+    turn_execution_link_from_dict,
+    turn_execution_link_to_dict,
 )
 
 
@@ -69,8 +78,16 @@ def test_turn_record_thread_identity_roundtrips(turn_record: TurnRecord) -> None
 @pytest.fixture
 def control_records() -> tuple[ExecutionRecord, ModelCallRecord]:
     return (
-        ExecutionRecord(execution_id="execution-1", turn_id="turn-1", attempt=1),
+        ExecutionRecord(
+            session_id="session-1",
+            thread_id="thread-1",
+            execution_id="execution-1",
+            turn_id="turn-1",
+            attempt=1,
+        ),
         ModelCallRecord(
+            session_id="session-1",
+            thread_id="thread-1",
             model_call_id="call-1",
             execution_id="execution-1",
             attempt=1,
@@ -99,6 +116,59 @@ def test_control_records_use_outcome_not_item_status(
         raw = json.loads(canonical_json_bytes(asdict(updated)))
         assert "status" not in raw and raw["outcome"] == outcome
         assert type(record)(**raw) == updated
+
+
+def test_execution_and_model_call_identity_is_thread_qualified() -> None:
+    main_execution = ExecutionRecord(
+        session_id="session-1",
+        thread_id="thread-main",
+        execution_id="execution-1",
+        turn_id="turn-1",
+        attempt=1,
+    )
+    child_execution = ExecutionRecord(
+        session_id="session-1",
+        thread_id="thread-child",
+        execution_id="execution-1",
+        turn_id="turn-1",
+        attempt=1,
+    )
+    main_call = ModelCallRecord(
+        session_id="session-1",
+        thread_id="thread-main",
+        model_call_id="call-1",
+        execution_id="execution-1",
+        attempt=1,
+        provider="provider-1",
+    )
+    child_call = ModelCallRecord(
+        session_id="session-1",
+        thread_id="thread-child",
+        model_call_id="call-1",
+        execution_id="execution-1",
+        attempt=1,
+        provider="provider-1",
+    )
+
+    assert execution_record_from_dict(execution_record_to_dict(main_execution)) == main_execution
+    assert execution_record_from_dict(execution_record_to_dict(child_execution)) == child_execution
+    assert main_execution != child_execution
+    assert model_call_record_from_dict(model_call_record_to_dict(main_call)) == main_call
+    assert model_call_record_from_dict(model_call_record_to_dict(child_call)) == child_call
+    assert main_call != child_call
+
+
+def test_turn_execution_link_roundtrips_complete_owner_pair() -> None:
+    link = TurnExecutionLink(
+        session_id="session-1",
+        thread_id="thread-child",
+        turn_id="turn-1",
+        execution_id="execution-1",
+        execution_role="initial",
+        execution_ordinal=1,
+        link_idempotency_key="turn-1:initial:execution-1",
+    )
+    assert turn_execution_link_from_dict(turn_execution_link_to_dict(link)) == link
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ function navigationNode(workspaceId: string, name: string) {
 function gatewayWorkspace(workspaceId: string): GatewayWorkspace {
   return {
     workspace_id: workspaceId,
+    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
     parent_workspace_id: null,
     name: workspaceId,
     root_path: "/home/test",

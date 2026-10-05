@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Final
+from typing import ClassVar, Final
+
+from app.core.path_utils import get_workspace_id
 
 _UNSET: Final = object()
 
@@ -40,21 +42,21 @@ class InterruptibleState:
 
 
 class SessionInterruptState:
-    """按 session_id 维护当前可打断阶段，供跨 task 查询。"""
+    """按受控 workspace UUID 和 session_id 维护跨 task 可打断状态。"""
 
-    _states: Dict[str, InterruptibleState] = {}
+    _states: ClassVar[dict[tuple[str, str], InterruptibleState]] = {}
 
     @classmethod
     def _store(cls, session_id: str, state: InterruptibleState) -> None:
         """写入或回收：全默认态等价于无记录，直接释放键避免长驻无界增长。"""
         if state.is_default():
-            cls._states.pop(session_id, None)
+            cls._states.pop((get_workspace_id(), session_id), None)
         else:
-            cls._states[session_id] = state
+            cls._states[(get_workspace_id(), session_id)] = state
 
     @classmethod
     def get(cls, session_id: str) -> InterruptibleState:
-        return cls._states.get(session_id, InterruptibleState())
+        return cls._states.get((get_workspace_id(), session_id), InterruptibleState())
 
     @classmethod
     def set(
@@ -69,7 +71,7 @@ class SessionInterruptState:
         interrupt_request_id: str | None | object = _UNSET,
         clear_active_tools: bool = False,
     ) -> None:
-        state = cls._states.get(session_id, InterruptibleState())
+        state = cls._states.get((get_workspace_id(), session_id), InterruptibleState())
         changes_activity = phase is not _UNSET or tool_name is not _UNSET
         if state.active_tools_by_run_id and changes_activity and not clear_active_tools:
             raise RuntimeError(
@@ -100,7 +102,7 @@ class SessionInterruptState:
         if not tool_name:
             raise ValueError("登记活动工具时 tool_name 不能为空")
 
-        state = cls._states.get(session_id, InterruptibleState())
+        state = cls._states.get((get_workspace_id(), session_id), InterruptibleState())
         existing_tool_name = state.active_tools_by_run_id.get(run_id)
         if existing_tool_name is not None and existing_tool_name != tool_name:
             raise RuntimeError(
@@ -116,7 +118,7 @@ class SessionInterruptState:
     @classmethod
     def end_tool(cls, session_id: str, *, run_id: str) -> InterruptibleState:
         """移除已结束工具；其他并发工具仍保持可打断状态。"""
-        state = cls._states.get(session_id)
+        state = cls._states.get((get_workspace_id(), session_id))
         if state is None or run_id not in state.active_tools_by_run_id:
             raise RuntimeError(
                 f"结束了未登记的活动工具: session_id={session_id} run_id={run_id}"
@@ -137,4 +139,4 @@ class SessionInterruptState:
 
     @classmethod
     def clear(cls, session_id: str) -> None:
-        cls._states.pop(session_id, None)
+        cls._states.pop((get_workspace_id(), session_id), None)

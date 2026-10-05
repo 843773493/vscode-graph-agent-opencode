@@ -34,6 +34,7 @@ def _local_target() -> WorkspaceTarget:
         root_path="/local",
         backend_url="http://local",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         owner="system",
         managed=True,
         system_default=True,

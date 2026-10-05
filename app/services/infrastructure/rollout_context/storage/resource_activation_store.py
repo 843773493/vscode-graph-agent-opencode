@@ -155,11 +155,15 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             self.prepare_lineage(snapshot.parent, checkpoint_ns=checkpoint_ns)
         body_ref = self._lineage_body.write_lineage_manifest(
             owner_session_id=snapshot.owner_session_id,
+            owner_thread_id=snapshot.owner_thread_id,
             activation_snapshot_id=snapshot.activation_snapshot_id,
             checkpoint_ns=checkpoint_ns,
             manifest=lineage_manifest(snapshot),
         )
-        if body_ref.session_id != snapshot.owner_session_id:
+        if (body_ref.session_id, body_ref.thread_id) != (
+            snapshot.owner_session_id,
+            snapshot.owner_thread_id,
+        ):
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
                 "lineage detail ref 与 snapshot owner session 不一致",
@@ -285,8 +289,10 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         session_id = snapshot.owner_session_id
         thread_id = snapshot.owner_thread_id
         with self._storage._lock(
-            session_id, checkpoint_ns
-        ), self._storage._connect(session_id, checkpoint_ns) as connection:
+            thread_id, checkpoint_ns, session_id=session_id
+        ), self._storage._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._storage._require_v2_runtime(connection)
             self.require_schema(connection)
             existing = self._select_existing(
@@ -303,8 +309,10 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                 )
         body_ref = self.prepare_lineage(snapshot, checkpoint_ns=checkpoint_ns)
         with self._storage._lock(
-            session_id, checkpoint_ns
-        ), self._storage._connect(session_id, checkpoint_ns) as connection:
+            thread_id, checkpoint_ns, session_id=session_id
+        ), self._storage._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._storage._require_v2_runtime(connection)
             self.require_schema(connection)
             connection.execute("BEGIN IMMEDIATE")

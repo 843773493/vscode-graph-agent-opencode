@@ -23,7 +23,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
 _COLUMNS = (
-    "detail_ref", "session_id", "checkpoint_ns", "assembly_id", "detail_id",
+    "detail_ref", "session_id", "thread_id", "checkpoint_ns", "assembly_id", "detail_id",
     "detail_kind", "retention_class", "visibility", "relative_path", "content_hash",
     "source_revision", "content_length", "redacted_stable_digest", "protection",
     "availability", "required", "sensitive", "status", "created_at", "expires_at",
@@ -54,22 +54,30 @@ def validate_assembly_details(
         if entry.included and entry.detail_ref is not None
     }
     if header_detail_key is not None:
-        detail_ref_from_key(header_detail_key).require_owner(snapshot.session_id, snapshot.assembly_id)
+        detail_ref_from_key(header_detail_key).require_owner(
+            snapshot.session_id, snapshot.thread_id, snapshot.assembly_id
+        )
         selected.setdefault(header_detail_key, None)
     rows = connection.execute(
-        f"SELECT {','.join(_COLUMNS)} FROM context_plan_details WHERE assembly_id = ?",
-        (snapshot.assembly_id,),
+        f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
+        "WHERE session_id = ? AND thread_id = ? AND assembly_id = ?",
+        (snapshot.session_id, snapshot.thread_id, snapshot.assembly_id),
     ).fetchall()
     records = {row[0]: _detail_mapping(tuple(row)) for row in rows}
     if set(records) != set(selected):
         raise RuntimeError("detail-unavailable: sealed assembly detail manifest 集合不一致")
     for key, record in records.items():
         ref = detail_ref_from_key(key)
-        ref.require_owner(snapshot.session_id, snapshot.assembly_id)
+        ref.require_owner(snapshot.session_id, snapshot.thread_id, snapshot.assembly_id)
         entry = selected[key]
         # optional header 是审计附件，不是进入请求的正文。fork/GC 可以保留
         # 它的 unavailable manifest；included source 和 required header 仍必须可读。
         needs_body = entry is not None or bool(record["required"])
+        if (record["session_id"], record["thread_id"]) != (
+            snapshot.session_id,
+            snapshot.thread_id,
+        ):
+            raise RuntimeError("source-mismatch: detail manifest 与 assembly owner 不一致")
         if record["checkpoint_ns"] != checkpoint_ns or (
             needs_body and record["availability"] != "available"
         ):
@@ -105,10 +113,13 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if detail.relative_path != expected_path.as_posix():
             raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
         self._safe_session_relative_path(
-            self.root(ref.session_id, detail.checkpoint_ns).parent, expected_path,
+            self.root(
+                ref.session_id, detail.checkpoint_ns, thread_id=ref.thread_id
+            ).parent,
+            expected_path,
         )
         values = (
-            key, ref.session_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
+            key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
             detail.detail_kind, detail.retention_class, detail.visibility,
             detail.relative_path, detail.content_hash, detail.source_revision,
             detail.length, detail.redacted_stable_digest, detail.protection,
@@ -116,9 +127,15 @@ class DetailRegistryMixin(DetailRetentionMixin):
             detail.status, datetime.now(UTC).isoformat(), detail.expires_at,
         )
         _detail_mapping(values)
-        with self._lock(ref.session_id, detail.checkpoint_ns):
-            self.initialize(ref.session_id, detail.checkpoint_ns)
-            with self._connect(ref.session_id, detail.checkpoint_ns) as connection:
+        with self._lock(
+            ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
+        ):
+            self.initialize(
+                ref.session_id, detail.checkpoint_ns, thread_id=ref.thread_id
+            )
+            with self._connect(
+                ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
                     f"SELECT {','.join(_COLUMNS)} FROM context_plan_details WHERE detail_ref = ?",
@@ -139,19 +156,27 @@ class DetailRegistryMixin(DetailRetentionMixin):
                 connection.commit()
 
     def get_context_plan_detail(
-        self, thread_id: str, *, detail_ref: DetailRef, checkpoint_ns: str = "",
+        self,
+        session_id: str,
+        thread_id: str,
+        *,
+        detail_ref: DetailRef,
+        checkpoint_ns: str = "",
     ) -> dict[str, object]:
+        session_id = strict_text(session_id, field="get_context_plan_detail.session_id")
         thread_id = strict_text(thread_id, field="get_context_plan_detail.thread_id")
         checkpoint_ns = strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         key = detail_ref_key(detail_ref)
-        detail_ref.require_owner(thread_id)
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        detail_ref.require_owner(session_id, thread_id)
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True
+        ) as connection:
             self._require_v2_runtime(connection)
             row = connection.execute(
                 f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
-                "WHERE detail_ref = ? AND session_id = ? AND checkpoint_ns = ?",
-                (key, thread_id, checkpoint_ns),
+                "WHERE detail_ref = ? AND session_id = ? AND thread_id = ? AND checkpoint_ns = ?",
+                (key, session_id, thread_id, checkpoint_ns),
             ).fetchone()
         if row is None:
             raise KeyError(f"detail-unavailable: context detail 不存在: {detail_ref}")

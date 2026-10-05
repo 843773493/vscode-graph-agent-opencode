@@ -15,8 +15,9 @@ import httpx
 
 from configs.installer import install_user_configuration
 from configs.runtime import load_validated_config
+from tests.support.process_scope import register_test_process, unregister_test_process
 from tests.support.processes import (
-    kill_process_on_port,
+    ensure_local_port_available,
     resolve_workspace_python_executable,
     terminate_process,
 )
@@ -101,16 +102,6 @@ async def acquire_gateway_guest(client: httpx.AsyncClient) -> None:
         raise RuntimeError(f"Gateway 测试游客登录失败: {response.text}")
 
 
-def _is_running_backend(backend_url: str) -> bool:
-    if backend_url == "managed-by-gateway":
-        return False
-    try:
-        with urlopen(f"{backend_url.rstrip('/')}/api/v1/health", timeout=1) as response:
-            return response.status == 200
-    except OSError:
-        return False
-
-
 def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
     deadline = time.monotonic() + READY_TIMEOUT_SECONDS
     request = Request(
@@ -134,13 +125,13 @@ def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
 def start_gateway_process(
     *,
     workspace_root: Path,
-    default_backend_url: str,
+    default_backend_url: str | None,
     port: int,
     ssh_tunnel_port_range: tuple[int, int] | None = None,
     extra_env: dict[str, str] | None = None,
     refresh_config: bool = False,
 ) -> GatewayProcess:
-    kill_process_on_port(port)
+    ensure_local_port_available(port, service_name="Gateway")
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
     boxteam_home = _test_boxteam_home(workspace_root)
@@ -165,8 +156,7 @@ def start_gateway_process(
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
     env["BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
-    if _is_running_backend(default_backend_url):
-        env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
+    env.pop("BOXTEAM_DEFAULT_BACKEND_URL", None)
     env["PYTHONUNBUFFERED"] = "1"
     env["BOXTEAM_PYTHON_BIN"] = str(python_executable)
     node_executable = shutil.which("node")
@@ -183,6 +173,12 @@ def start_gateway_process(
         env["BOXTEAM_GATEWAY_SSH_TUNNEL_PORT_MAX"] = str(ssh_tunnel_port_range[1])
     if extra_env:
         env.update(extra_env)
+    if default_backend_url is not None:
+        if not default_backend_url.strip():
+            raise ValueError("Gateway attached backend URL 不能为空")
+        env["BOXTEAM_DEFAULT_BACKEND_URL"] = default_backend_url
+    else:
+        env.pop("BOXTEAM_DEFAULT_BACKEND_URL", None)
     process = subprocess.Popen(
         [
             str(python_executable),
@@ -209,22 +205,29 @@ def start_gateway_process(
     )
     try:
         wait_for_gateway_ready(port, process)
-    except Exception:
-        close_gateway_process(handle)
+    except BaseException as startup_error:
+        try:
+            close_gateway_process(handle)
+        except BaseException as cleanup_error:  # noqa: BLE001 - 启动和清理错误一并保留
+            raise BaseExceptionGroup(
+                "Gateway 测试进程启动失败且清理已启动进程失败",
+                [startup_error, cleanup_error],
+            ) from None
         raise
+    register_test_process(
+        handle,
+        lambda: close_gateway_process(handle),
+    )
     return handle
 
 
 def close_gateway_process(handle: GatewayProcess) -> None:
     try:
         terminate_process(handle.process)
-        # Gateway 会在 lifespan 中逐个回收托管工作区进程；给已收到终止信号的
-        # Node 辅助服务一个很短的退出窗口，避免下一条用例删除隔离工作区时竞态写日志。
-        time.sleep(0.5)
-        kill_process_on_port(handle.port)
     finally:
         handle.stdout_file.close()
         handle.stderr_file.close()
+    unregister_test_process(handle)
 
 
 def workspace_root_from_response(response: httpx.Response) -> str:

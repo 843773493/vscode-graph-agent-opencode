@@ -166,6 +166,7 @@ export interface Job {
   created_at: string | undefined;
   updated_at: string | undefined;
   ended_at?: string | undefined;
+  thread_id: string;
 }
 
 export interface JobProgress {
@@ -191,6 +192,7 @@ function createBaseJob(): Job {
     created_at: undefined,
     updated_at: undefined,
     ended_at: undefined,
+    thread_id: "",
   };
 }
 
@@ -210,6 +212,7 @@ export const Job: MessageFns<Job> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       ended_at: isSet(object.ended_at) ? globalThis.String(object.ended_at) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -254,6 +257,9 @@ export const Job: MessageFns<Job> = {
     if (message.ended_at !== undefined) {
       obj.ended_at = message.ended_at;
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -275,6 +281,7 @@ export const Job: MessageFns<Job> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.ended_at = object.ended_at ?? undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };

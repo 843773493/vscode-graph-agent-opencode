@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
@@ -60,7 +61,9 @@ raise SystemExit(code)
 """
 
 
-def _child_lock_probe(lock_path: Path, mode: str, *extra: str) -> subprocess.CompletedProcess[str]:
+def _child_lock_probe(
+    lock_path: Path, mode: str, *extra: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", _FLOCK_CHILD, str(lock_path), mode, *extra],
         capture_output=True,
@@ -164,8 +167,7 @@ async def test_session_gate_lock_path_and_read_guard_type(
     assert isinstance(guard, SessionReadGuard)
     async with guard:
         expected = (
-            tmp_path / "navigation" / "session-lifecycle-gates"
-            / f"{session_id}.lock"
+            tmp_path / "navigation" / "session-lifecycle-gates" / f"{session_id}.lock"
         )
         assert guard.path == expected
         assert expected.is_file()
@@ -179,9 +181,7 @@ async def test_read_guard_allows_concurrent_and_blocks_exclusive(
     async with gate.shared(session_id):
         async with gate.shared(session_id):
             pass
-        blocked = _child_lock_probe(
-            gate.gates_root / f"{session_id}.lock", "ex"
-        )
+        blocked = _child_lock_probe(gate.gates_root / f"{session_id}.lock", "ex")
         assert blocked.returncode == 3
 
 
@@ -324,9 +324,7 @@ def test_lease_settling_and_terminal_cas_chain(
     )
     # 错 token 不能推进 settling
     with pytest.raises(RuntimeError, match="settling CAS 失败"):
-        control.mark_lease_settling(
-            lease_id=lease.lease_id, expected_fencing_token=999
-        )
+        control.mark_lease_settling(lease_id=lease.lease_id, expected_fencing_token=999)
     settling = control.mark_lease_settling(
         lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token
     )
@@ -462,9 +460,7 @@ def test_lease_takeover_from_active_directly(
 def test_lease_verify_token_missing_or_terminal(
     control: SessionControlStore,
 ) -> None:
-    assert not control.verify_lease_token(
-        lease_id="lease_" + "0" * 32, fencing_token=1
-    )
+    assert not control.verify_lease_token(lease_id="lease_" + "0" * 32, fencing_token=1)
     lease = control.create_or_get_lease(
         operation_kind="execution",
         operation_identity="op-" + uuid.uuid4().hex,
@@ -553,9 +549,7 @@ def test_lease_missing_row_read_and_cas_diagnostics(
     with pytest.raises(KeyError, match="operation lease 不存在"):
         control.get_lease(missing)
     with pytest.raises(KeyError, match="operation lease 不存在"):
-        control.mark_lease_settling(
-            lease_id=missing, expected_fencing_token=1
-        )
+        control.mark_lease_settling(lease_id=missing, expected_fencing_token=1)
     with pytest.raises(KeyError, match="operation lease 不存在"):
         control.settle_lease(
             lease_id=missing,
@@ -574,23 +568,21 @@ def test_schema_v4_upgrades_to_current_schema_zero_loss(
     store = SessionControlStore(db_path)
     main_thread_id = make_thread_id()
     store.initialize_fence()
-    store.initialize_main_thread(main_thread_id, datetime.now(UTC))
+    store.initialize_main_thread(
+        main_thread_id, datetime.now(UTC), TEST_THREAD_GRAPH_BINDING
+    )
     store.close()
     # 模拟 v4 库：删除 v5 新表并回退 user_version。
     raw = sqlite3.connect(db_path)
     raw.execute("DROP TABLE session_operation_leases")
-    raw.execute(
-        "DROP INDEX IF EXISTS idx_session_operation_leases_non_terminal"
-    )
+    raw.execute("DROP INDEX IF EXISTS idx_session_operation_leases_non_terminal")
     raw.execute("PRAGMA user_version = 4")
     raw.commit()
     raw.close()
     reopened = SessionControlStore(db_path)
     try:
-        version = int(
-            reopened.connection.execute("PRAGMA user_version").fetchone()[0]
-        )
-        assert version == reopened.SCHEMA_VERSION == 7
+        version = int(reopened.connection.execute("PRAGMA user_version").fetchone()[0])
+        assert version == reopened.SCHEMA_VERSION == 8
         main_row = reopened.get_main_thread()
         assert str(main_row["thread_id"]) == main_thread_id
         lease = reopened.create_or_get_lease(

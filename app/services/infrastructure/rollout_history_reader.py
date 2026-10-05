@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from langchain_core.messages import BaseMessage
 
@@ -11,20 +12,31 @@ from app.core.history_loading import (
     HistoryLoadingConfig,
     default_history_loading_config,
 )
+from app.domain.itemized.enums import ControlOutcome, SemanticKind
+from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.turn import (
+    InternalDisplayProvenanceDTO,
+    InternalExecutionDisplayPartDTO,
+    InternalExecutionHistoryDTO,
     TurnDetailDTO,
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
+    TurnResponsePartDTO,
     TurnSummaryDTO,
 )
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     ContextChain,
     RolloutContextReader,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    InternalExecutionHistoryEntry,
+)
 from app.services.infrastructure.rollout_context.storage.service import (
     RolloutReadSnapshot,
 )
-from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
+from app.services.infrastructure.rollout_history.paging import (
+    HistoryPageReadMixin,
+)
 from app.services.infrastructure.rollout_history.snapshot import (
     IndexedHistorySnapshots,
     IndexedTurnSpan,
@@ -38,7 +50,29 @@ from app.services.mapping.itemized.history_turns.projection import (
     project_detail,
     summary,
 )
-from app.services.mapping.turn_response_parts import response_parts_from_records
+from app.services.mapping.turn_response_parts import (
+    response_parts_from_internal_item,
+    response_parts_from_records,
+)
+
+
+@dataclass(slots=True)
+class _InternalExecutionHistoryProjection:
+    execution_id: str
+    job_id: str
+    outcome: str
+    created_at: str
+    updated_at: str
+    display_parts: list[InternalExecutionDisplayPartDTO] = field(default_factory=list)
+    response_parts: list[TurnResponsePartDTO] = field(default_factory=list)
+
+
+def _internal_response_part_order(part: TurnResponsePartDTO) -> tuple[int, int]:
+    logical_item_ordinal = part.source.logical_item_ordinal
+    part_ordinal = part.source.part_ordinal
+    if logical_item_ordinal is None or part_ordinal is None:
+        raise RuntimeError("internal response part 缺少 membership ordinal 或 part ordinal")
+    return logical_item_ordinal, part_ordinal
 
 
 class RolloutHistoryReader(HistoryPageReadMixin):
@@ -49,22 +83,36 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     def bootstrap(
         self,
         session_id: str,
+        thread_id: str,
         *,
         policy: HistoryLoadingConfig | None = None,
     ) -> tuple[TurnSummaryDTO | None, str | None, int]:
-        indexed = self._snapshots.read(session_id)
+        indexed = self._snapshots.read(session_id, thread_id)
         try:
             rollout_id = indexed.rollout_id
             projection_epoch = indexed.projection_epoch
             snapshot = indexed.snapshot
-            if indexed.view_id is None or indexed.turn_count == 0:
+            if indexed.view_id is None:
                 return None, None, projection_epoch
             configured = policy or default_history_loading_config()
+            bounds = self._context_reader.read_history_snapshot_bounds(
+                snapshot,
+                indexed.chain,
+            )
+            if (
+                bounds.view_id != indexed.view_id
+                or bounds.history_view_revision
+                != snapshot.manifest.history_view_revision
+            ):
+                raise RuntimeError("bootstrap history bounds 与 snapshot owner 不一致")
+            if bounds.upper_turn_ordinal is None:
+                return None, None, projection_epoch
             raw_spans, _ = self._context_reader.read_context_turn_page(
                 snapshot,
                 indexed.chain,
                 direction="tail",
                 anchor_ordinal=None,
+                upper_ordinal=bounds.upper_turn_ordinal,
                 limit=1,
             )
             if not raw_spans:
@@ -84,12 +132,25 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             )
             cursor = self._encode_cursor(
                 session_id=session_id,
+                thread_id=snapshot.thread_id,
+                checkpoint_ns=snapshot.checkpoint_ns,
                 rollout_id=rollout_id,
                 projection_epoch=projection_epoch,
-                # context_view_turns 的 keyset ordinal 从 0 开始；DTO
-                # ordinal 是对外的 1-based 展示序号，二者不能复用。
-                anchor_ordinal=span.ordinal,
+                view_id=indexed.view_id,
+                history_view_revision=bounds.history_view_revision,
+                turn_read_upper_bound=bounds.upper_turn_ordinal,
+                logical_item_read_upper_bound=(
+                    bounds.upper_logical_item_ordinal
+                ),
+                # 游标沿用 snapshot SQL 返回的 1-based logical ordinal。
+                turn_ordinal=span.ordinal,
+                logical_item_ordinal=None,
                 direction="before",
+                query_mode="tail",
+                effective_include=tuple(sorted(set(configured.initial_include))),
+                anchor_turn_id=None,
+                window_before_turns=None,
+                window_after_turns=None,
                 stage=0,
             )
             return page.summaries[0], cursor, projection_epoch
@@ -99,11 +160,12 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     def load(
         self,
         session_id: str,
+        thread_id: str,
         request: TurnHistoryLoadRequest,
         *,
         policy: HistoryLoadingConfig | None = None,
     ) -> TurnHistoryPageDTO:
-        indexed = self._snapshots.read(session_id)
+        indexed = self._snapshots.read(session_id, thread_id)
         try:
             return self._load_indexed_history(
                 session_id,
@@ -185,6 +247,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             span.ordinal,
             messages,
             turn_id=span.turn_id,
+            root_logical_item_ordinal=span.root_logical_item_ordinal,
             message_sequences=message_sequences,
             projection=projection,
             response_parts=response_parts,
@@ -265,6 +328,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         snapshot: RolloutReadSnapshot,
         chain: ContextChain,
         tool_call_ids: tuple[str, ...] = (),
+        internal_entries: tuple[InternalExecutionHistoryEntry, ...] = (),
     ) -> TurnHistoryPageDTO:
         budget = DetailReadBudget(LoadLimits())
         summary_budget = DetailReadBudget(LoadLimits())
@@ -342,6 +406,12 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         return TurnHistoryPageDTO(
             items=items,
             summaries=summaries,
+            internal_executions=self._project_internal_entries(
+                session_id,
+                snapshot.thread_id,
+                internal_entries,
+                include=include,
+            ),
             next_cursor=next_cursor,
             has_more=has_more,
             before_cursor=before_cursor,
@@ -350,3 +420,83 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             has_after=has_after,
             projection_epoch=projection_epoch,
         )
+
+    @staticmethod
+    def _project_internal_entries(
+        session_id: str,
+        thread_id: str,
+        entries: tuple[InternalExecutionHistoryEntry, ...],
+        *,
+        include: tuple[str, ...],
+    ) -> list[InternalExecutionHistoryDTO]:
+        projections: dict[str, _InternalExecutionHistoryProjection] = {}
+        fields = frozenset(include)
+        for entry in entries:
+            outcome = ControlOutcome(entry.outcome)
+            projection = projections.get(entry.execution_id)
+            if projection is None:
+                projection = _InternalExecutionHistoryProjection(
+                    execution_id=entry.execution_id,
+                    job_id=entry.job_id,
+                    outcome=outcome.value,
+                    created_at=entry.created_at,
+                    updated_at=entry.updated_at,
+                )
+                projections[entry.execution_id] = projection
+            elif (
+                projection.job_id != entry.job_id
+                or projection.outcome != outcome.value
+                or projection.created_at != entry.created_at
+                or projection.updated_at != entry.updated_at
+            ):
+                raise RuntimeError(
+                    "同一 internal execution 的 durable metadata 不一致: "
+                    f"{entry.execution_id}"
+                )
+
+            item = entry.item
+            if "internal" in fields and item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
+                notice = RuntimeNoticePayload.from_dict(item.payload)
+                display_part = notice.display_part
+                if display_part.kind == "generated_session_result":
+                    projection.display_parts.append(
+                        InternalExecutionDisplayPartDTO(
+                            kind=display_part.kind,
+                            text=display_part.text,
+                            item_id=item.item_id,
+                            item_sequence=item.item_sequence,
+                            logical_item_ordinal=entry.logical_item_ordinal,
+                            created_at=item.created_at,
+                            provenance=InternalDisplayProvenanceDTO(
+                                **display_part.provenance.to_dict()
+                            ),
+                        )
+                    )
+            projection.response_parts.extend(
+                response_parts_from_internal_item(
+                    item,
+                    include=fields,
+                    logical_item_ordinal=entry.logical_item_ordinal,
+                )
+            )
+
+        return [
+            InternalExecutionHistoryDTO(
+                execution_id=projection.execution_id,
+                job_id=projection.job_id,
+                session_id=session_id,
+                thread_id=thread_id,
+                status=projection.outcome,
+                created_at=projection.created_at,
+                updated_at=projection.updated_at,
+                display_parts=sorted(
+                    projection.display_parts,
+                    key=lambda part: part.logical_item_ordinal,
+                ),
+                response_parts=sorted(
+                    projection.response_parts,
+                    key=_internal_response_part_order,
+                ),
+            )
+            for projection in projections.values()
+        ]

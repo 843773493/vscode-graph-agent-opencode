@@ -14,6 +14,7 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
     require_cursor_offset_in_range,
+    session_context_read_operation,
     set_exact_returned_chars,
 )
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
@@ -102,7 +103,9 @@ def tool_summary(record: dict[str, object]) -> list[str]:
 
 def project_record_items(
     *,
-    resource: str,
+    resource_identity: str,
+    vrn: str,
+    scope: str,
     records: list[dict[str, object]],
     include: set[SessionContextInclude],
     messages_only: bool,
@@ -125,7 +128,9 @@ def project_record_items(
         items.append(
             SessionContextItemDTO(
                 kind="message" if messages_only else "record",
-                locator=f"{resource}#record={index}",
+                resource_identity=resource_identity,
+                vrn=vrn,
+                scope=scope,
                 role=role,
                 record_index=index,
                 text=text or None,
@@ -142,7 +147,6 @@ def project_record_items(
 def paginate_read_items(
     *,
     request: SessionContextReadRequest,
-    resource: str,
     revision: str,
     items: list[SessionContextItemDTO],
     offset: int,
@@ -152,7 +156,7 @@ def paginate_read_items(
     raw_message_count: int = 0,
     effective_record_count: int = 0,
 ) -> SessionContextReadResultDTO:
-    require_cursor_offset_in_range(offset, len(items), resource=resource)
+    require_cursor_offset_in_range(offset, len(items), vrn=request.vrn)
     selected = items[offset:offset + request.limit]
     returned: list[SessionContextItemDTO] = []
     budget_truncated = False
@@ -165,7 +169,6 @@ def paginate_read_items(
             candidate_completed = completed_items + 1
             candidate = _build_read_result(
                 request=request,
-                resource=resource,
                 revision=revision,
                 items=candidate_items,
                 offset=offset,
@@ -187,7 +190,6 @@ def paginate_read_items(
             break
         fitted, remaining_item_offset = _largest_fitting_chunk(
             request=request,
-            resource=resource,
             revision=revision,
             item=item,
             item_offset=offset,
@@ -199,7 +201,7 @@ def paginate_read_items(
             effective_record_count=effective_record_count,
         )
         if fitted is None:
-            raise ValueError("max_chars 太小，无法返回包含 locator 的最小上下文分片")
+            raise ValueError("max_chars 太小，无法返回包含资源身份的最小上下文分片")
         returned.append(fitted)
         if remaining_item_offset is not None:
             budget_truncated = True
@@ -208,7 +210,6 @@ def paginate_read_items(
         completed_items += 1
     result = _build_read_result(
         request=request,
-        resource=resource,
         revision=revision,
         items=returned,
         offset=offset,
@@ -229,7 +230,6 @@ def paginate_read_items(
 def _largest_fitting_chunk(
     *,
     request: SessionContextReadRequest,
-    resource: str,
     revision: str,
     item: SessionContextItemDTO,
     item_offset: int,
@@ -255,7 +255,6 @@ def _largest_fitting_chunk(
         chunk = _chunk_item(item, serialized, char_offset, end)
         result = _build_read_result(
             request=request,
-            resource=resource,
             revision=revision,
             items=[chunk],
             offset=item_offset,
@@ -288,7 +287,10 @@ def _chunk_item(
         data.update({"next_chunk_start": end, "total_chars": len(serialized)})
     return SessionContextItemDTO(
         kind=f"{item.kind}_chunk",
-        locator=item.locator,
+        resource_identity=item.resource_identity,
+        vrn=item.vrn,
+        scope=item.scope,
+        assembly_ref=item.assembly_ref,
         role=item.role,
         record_index=item.record_index,
         text=serialized[start:end],
@@ -300,7 +302,6 @@ def _chunk_item(
 def _build_read_result(
     *,
     request: SessionContextReadRequest,
-    resource: str,
     revision: str,
     items: list[SessionContextItemDTO],
     offset: int,
@@ -317,15 +318,28 @@ def _build_read_result(
     next_cursor = None
     if has_more:
         next_cursor = SessionContextCursorCodec.encode(
-            resource=resource,
+            resource_identity=request.resource_identity,
+            vrn=request.vrn,
+            scope=request.scope,
             revision=revision,
-            operation=f"read:{request.view}",
+            operation=session_context_read_operation(
+                view=request.view,
+                include=request.include,
+                recent_rounds=request.recent_rounds,
+                include_initial_goal=request.include_initial_goal,
+            ),
+            record_index=request.record_index,
+            assembly_ref=request.assembly_ref,
             offset=offset + completed_items,
             char_offset=next_item_char_offset or 0,
         )
     result = SessionContextReadResultDTO(
-        resource=resource,
+        resource_identity=request.resource_identity,
+        vrn=request.vrn,
+        scope=request.scope,
         view=request.view,
+        record_index=request.record_index,
+        assembly_ref=request.assembly_ref,
         revision=revision,
         compacted=compacted,
         compaction_cutoff=compaction_cutoff,

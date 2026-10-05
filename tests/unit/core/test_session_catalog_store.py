@@ -24,6 +24,7 @@ from app.core.session_catalog_store import (
     ForkRetentionClaim,
     SessionCatalogNode,
     SessionCatalogStore,
+    SessionCreationPurpose,
     SessionCreationRecord,
     SessionLifecycleFence,
     SourceRetainedByForkError,
@@ -40,6 +41,7 @@ from tests.support.canonical_id_at import (
     session_id_for_name_at,
     thread_id_for_name_at,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 WORKSPACE_ID = "ws-primary"
 OTHER_WORKSPACE_ID = "ws-other"
@@ -349,7 +351,7 @@ def test_store_initializes_wal_and_pragmas(store: SessionCatalogStore) -> None:
     )
     assert int(store.connection.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     assert int(store.connection.execute("PRAGMA busy_timeout").fetchone()[0]) == 5000
-    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+    assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 7
 
 
 def test_store_does_not_create_sessions_root(
@@ -385,7 +387,7 @@ def test_store_reopens_existing_database(
     second = SessionCatalogStore(database_path, sessions_root)
     try:
         assert second.get_node(folder_id).display_name == "持久文件夹"
-        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert int(second.connection.execute("PRAGMA user_version").fetchone()[0]) == 7
     finally:
         second.close()
 
@@ -683,9 +685,10 @@ def test_duplicate_locator_rejected_by_unique_constraint(
     session_id = make_session_id()
     locator = f"sessions/2026/06/01/{session_id}"
     store.connection.execute(
-        "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, state, "
-        "revision, workspace_id, created_at, storage_relative_locator, main_thread_id) "
-        "VALUES (?, 'session', NULL, 'a', 'active', 1, ?, ?, ?, ?)",
+        "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
+        "title_source, state, revision, workspace_id, created_at, "
+        "storage_relative_locator, main_thread_id) "
+        "VALUES (?, 'session', NULL, 'a', 'user', 'active', 1, ?, ?, ?, ?)",
         (
             session_id,
             WORKSPACE_ID,
@@ -696,9 +699,10 @@ def test_duplicate_locator_rejected_by_unique_constraint(
     )
     with pytest.raises(sqlite3.IntegrityError):
         store.connection.execute(
-            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, state, "
-            "revision, workspace_id, created_at, storage_relative_locator, main_thread_id) "
-            "VALUES (?, 'session', NULL, 'b', 'active', 1, ?, ?, ?, ?)",
+            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
+            "title_source, state, revision, workspace_id, created_at, "
+            "storage_relative_locator, main_thread_id) "
+            "VALUES (?, 'session', NULL, 'b', 'user', 'active', 1, ?, ?, ?, ?)",
             (
                 make_session_id(),
                 WORKSPACE_ID,
@@ -1445,6 +1449,8 @@ def create_record(
     display_name: str = "记录会话",
     created_at: datetime | None = None,
     preimage_hash: str = "preimage-A",
+    purpose: SessionCreationPurpose = "normal",
+    session_metadata_json: str = "{}",
 ) -> SessionCreationRecord:
     """测试辅助：create-or-get 一个 creation record。"""
     moment = created_at or datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
@@ -1453,6 +1459,9 @@ def create_record(
         workspace_id=WORKSPACE_ID,
         parent_node_id=parent_node_id,
         display_name=display_name,
+        purpose=purpose,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
+        session_metadata_json=session_metadata_json,
         preimage_hash=preimage_hash,
         created_at=moment,
         session_id=session_id_for_name_at(key, moment),
@@ -1485,6 +1494,35 @@ def test_create_or_get_creates_preparing_record(
         store.get_node(record.session_id)
 
 
+def test_creation_record_freezes_purpose_and_metadata(
+    store: SessionCatalogStore,
+) -> None:
+    record = create_record(
+        store,
+        key="fork-key",
+        display_name="分叉会话",
+        purpose="context_fork",
+        session_metadata_json='{"kind":"context_fork"}',
+    )
+    assert record.purpose == "context_fork"
+    assert record.session_metadata_json == '{"kind":"context_fork"}'
+    assert store.list_preparing_creation_records(
+        workspace_id=WORKSPACE_ID, purpose="context_fork"
+    ) == [record]
+    assert store.list_preparing_creation_records(
+        workspace_id=WORKSPACE_ID, purpose="normal"
+    ) == []
+
+
+def test_creation_record_publish_requires_matching_purpose(
+    store: SessionCatalogStore,
+) -> None:
+    create_record(store, key="fork-key", purpose="context_fork")
+    with pytest.raises(RuntimeError, match="purpose 与 durable record 不一致"):
+        store.publish_creation_record("fork-key", expected_purpose="normal")
+    assert store.get_creation_record("fork-key").state == "preparing"
+
+
 def test_create_or_get_idempotent_same_key_same_preimage(
     store: SessionCatalogStore,
 ) -> None:
@@ -1503,6 +1541,26 @@ def test_create_or_get_conflicting_preimage_rejected(
     create_record(store, key="key-1", preimage_hash=make_preimage("a"))
     with pytest.raises(RuntimeError, match="冲突"):
         create_record(store, key="key-1", preimage_hash=make_preimage("b"))
+
+
+def test_create_or_get_rejects_purpose_rebind(
+    store: SessionCatalogStore,
+) -> None:
+    create_record(store, key="key-1", purpose="normal")
+    with pytest.raises(RuntimeError, match="purpose 冲突"):
+        create_record(store, key="key-1", purpose="context_fork")
+
+
+def test_create_or_get_rejects_metadata_rebind(
+    store: SessionCatalogStore,
+) -> None:
+    create_record(store, key="key-1", session_metadata_json="{}")
+    with pytest.raises(RuntimeError, match="metadata 冲突"):
+        create_record(
+            store,
+            key="key-1",
+            session_metadata_json='{"kind":"context_fork"}',
+        )
 
 
 def test_create_or_get_freezes_parent_revision(
@@ -1553,6 +1611,9 @@ def test_create_or_get_rejects_invalid_created_at(
             workspace_id=WORKSPACE_ID,
             parent_node_id=None,
             display_name="会话",
+            purpose="normal",
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
+            session_metadata_json="{}",
             created_at="2026-06-01",  # type: ignore[arg-type]
             preimage_hash="preimage-A",
         )
@@ -1562,6 +1623,9 @@ def test_create_or_get_rejects_invalid_created_at(
             workspace_id=WORKSPACE_ID,
             parent_node_id=None,
             display_name="会话",
+            purpose="normal",
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
+            session_metadata_json="{}",
             created_at=datetime(2026, 6, 1, 12, 0),  # type: ignore[arg-type]  # noqa: DTZ001 - 故意构造 naive datetime 验证拒绝
             preimage_hash="preimage-A",
         )
@@ -1582,14 +1646,17 @@ def test_creation_record_session_id_unique_rejected_by_constraint(
         store.connection.execute(
             "INSERT INTO session_creation_records ("
             "session_creation_idempotency_key, session_id, main_thread_id, "
-            "workspace_id, parent_node_id, display_name, created_at, "
+            "workspace_id, parent_node_id, display_name, title_source, purpose, "
+            "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
+            "session_metadata_json, created_at, "
             "storage_relative_locator, preimage_hash, parent_revision, "
             "state, abort_reason, record_created_at, record_updated_at) "
-            "VALUES ('key-2', ?, 'thr_" + "0" * 32 + "', ?, NULL, 'x', ?, "
-            "?, 'p', NULL, 'preparing', NULL, ?, ?)",
+            "VALUES ('key-2', ?, 'thr_" + "0" * 32 + "', ?, NULL, 'x', "
+            "'user', 'normal', ?, ?, ?, ?, '{}', ?, ?, 'p', NULL, 'preparing', NULL, ?, ?)",
             (
                 record.session_id,
                 WORKSPACE_ID,
+                *TEST_THREAD_GRAPH_BINDING.as_tuple(),
                 record.created_at,
                 record.storage_relative_locator,
                 record.record_created_at,
@@ -1607,15 +1674,18 @@ def test_creation_record_locator_unique_rejected_by_constraint(
         store.connection.execute(
             "INSERT INTO session_creation_records ("
             "session_creation_idempotency_key, session_id, main_thread_id, "
-            "workspace_id, parent_node_id, display_name, created_at, "
+            "workspace_id, parent_node_id, display_name, title_source, purpose, "
+            "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
+            "session_metadata_json, created_at, "
             "storage_relative_locator, preimage_hash, parent_revision, "
             "state, abort_reason, record_created_at, record_updated_at) "
-            "VALUES ('key-2', ?, ?, ?, NULL, 'x', ?, ?, 'p', NULL, "
-            "'preparing', NULL, ?, ?)",
+            "VALUES ('key-2', ?, ?, ?, NULL, 'x', 'user', 'normal', ?, ?, ?, ?, '{}', ?, ?, "
+            "'p', NULL, 'preparing', NULL, ?, ?)",
             (
                 other_session_id,
                 record.main_thread_id,
                 WORKSPACE_ID,
+                *TEST_THREAD_GRAPH_BINDING.as_tuple(),
                 record.created_at,
                 record.storage_relative_locator,
                 record.record_created_at,
@@ -1631,15 +1701,18 @@ def test_creation_record_state_check_rejected_by_constraint(
         store.connection.execute(
             "INSERT INTO session_creation_records ("
             "session_creation_idempotency_key, session_id, main_thread_id, "
-            "workspace_id, parent_node_id, display_name, created_at, "
+            "workspace_id, parent_node_id, display_name, title_source, purpose, "
+            "graph_id, graph_revision, graph_schema_hash, capability_profile_hash, "
+            "session_metadata_json, created_at, "
             "storage_relative_locator, preimage_hash, parent_revision, "
             "state, abort_reason, record_created_at, record_updated_at) "
-            "VALUES ('key-x', ?, ?, ?, NULL, 'x', ?, ?, 'p', NULL, "
+            "VALUES ('key-x', ?, ?, ?, NULL, 'x', 'user', 'normal', ?, ?, ?, ?, '{}', ?, ?, 'p', NULL, "
             "'paused', NULL, ?, ?)",
             (
                 make_session_id(),
                 make_thread_id(),
                 WORKSPACE_ID,
+                *TEST_THREAD_GRAPH_BINDING.as_tuple(),
                 "2026-06-01T12:00:00+00:00",
                 f"sessions/2026/06/01/{make_session_id()}",
                 "2026-06-01T00:00:00+00:00",
@@ -1658,7 +1731,7 @@ def test_publish_creation_record_publishes_node_and_record(
         parent_node_id=parent.node_id,
         display_name="发布会话",
     )
-    node = store.publish_creation_record("key-1")
+    node = store.publish_creation_record("key-1", expected_purpose="normal")
     assert node.node_id == record.session_id
     assert node.kind == "session"
     assert node.state == "active"
@@ -1682,7 +1755,7 @@ def test_publish_creation_record_parent_revision_drift_rejected(
     create_record(store, key="key-1", parent_node_id=parent.node_id)
     store.rename_node(parent.node_id, "漂移")
     with pytest.raises(RuntimeError, match="漂移"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
     # 失败回滚：node 未发布、record 仍 preparing
     record = store.get_creation_record("key-1")
     assert record.state == "preparing"
@@ -1706,7 +1779,7 @@ def test_publish_creation_record_parent_missing_rejected(
     finally:
         connection.close()
     with pytest.raises(RuntimeError, match="父节点已不存在"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
     assert store.get_creation_record("key-1").state == "preparing"
 
 
@@ -1717,7 +1790,7 @@ def test_publish_creation_record_deleting_parent_rejected(
     create_record(store, key="key-1", parent_node_id=parent.node_id)
     store.set_node_state(parent.node_id, "deleting")
     with pytest.raises(RuntimeError, match="非 active"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
     assert store.get_creation_record("key-1").state == "preparing"
 
 
@@ -1730,9 +1803,9 @@ def test_publish_creation_record_locator_occupied_rejected(
     injected_node_id = make_session_id()
     store.connection.execute(
         "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-        "state, revision, workspace_id, created_at, "
+        "title_source, state, revision, workspace_id, created_at, "
         "storage_relative_locator, main_thread_id) "
-        "VALUES (?, 'session', NULL, '占位', 'active', 1, ?, ?, ?, ?)",
+        "VALUES (?, 'session', NULL, '占位', 'user', 'active', 1, ?, ?, ?, ?)",
         (
             injected_node_id,
             WORKSPACE_ID,
@@ -1742,7 +1815,7 @@ def test_publish_creation_record_locator_occupied_rejected(
         ),
     )
     with pytest.raises(RuntimeError, match="storage_relative_locator"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
     # 失败回滚：record 仍 preparing；record 的 session node 未发布；
     # 注入的占位 node 未受影响
     assert store.get_creation_record("key-1").state == "preparing"
@@ -1758,16 +1831,16 @@ def test_publish_creation_record_missing_record_raises_keyerror(
     store: SessionCatalogStore,
 ) -> None:
     with pytest.raises(KeyError):
-        store.publish_creation_record("missing-key")
+        store.publish_creation_record("missing-key", expected_purpose="normal")
 
 
 def test_publish_creation_record_twice_rejected(
     store: SessionCatalogStore,
 ) -> None:
     create_record(store, key="key-1")
-    store.publish_creation_record("key-1")
+    store.publish_creation_record("key-1", expected_purpose="normal")
     with pytest.raises(RuntimeError, match="已发布"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
 
 
 def test_publish_creation_record_aborted_rejected(
@@ -1776,7 +1849,7 @@ def test_publish_creation_record_aborted_rejected(
     create_record(store, key="key-1")
     store.abort_creation_record("key-1", "外部原因")
     with pytest.raises(RuntimeError, match="已中止"):
-        store.publish_creation_record("key-1")
+        store.publish_creation_record("key-1", expected_purpose="normal")
 
 
 def test_abort_creation_record_records_reason(
@@ -1806,7 +1879,7 @@ def test_abort_creation_record_published_rejected(
     store: SessionCatalogStore,
 ) -> None:
     create_record(store, key="key-1")
-    store.publish_creation_record("key-1")
+    store.publish_creation_record("key-1", expected_purpose="normal")
     with pytest.raises(RuntimeError, match="不可撤销"):
         store.abort_creation_record("key-1", "迟到的回收")
 
@@ -1818,84 +1891,78 @@ def test_abort_creation_record_missing_raises_keyerror(
         store.abort_creation_record("missing-key", "原因")
 
 
-def test_schema_upgrade_v1_database_adds_records_table(
-    tmp_path: Path, sessions_root: Path
+@pytest.mark.parametrize("legacy_version", [1, 2, 3, 4])
+def test_store_rejects_legacy_schema_without_modifying_it(
+    tmp_path: Path,
+    sessions_root: Path,
+    legacy_version: int,
 ) -> None:
-    """v1 库（手工建 nodes 表 + user_version=1）打开后自动升 v3。"""
+    """旧 schema 不经隐式迁移；拒绝时原行与 user_version 保持原样。"""
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"
-    database_path.parent.mkdir(parents=True, exist_ok=True)
+    first = SessionCatalogStore(database_path, sessions_root)
+    folder_id = make_session_id()
+    first.create_folder(folder_id, WORKSPACE_ID, None, "旧版保留")
+    first.close()
+
     connection = sqlite3.connect(database_path)
     try:
-        # 手工构建 R10 v1 形态（nodes 表 DDL 本轮冻结不变）
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nodes (
-                node_id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
-                parent_node_id TEXT REFERENCES nodes(node_id),
-                display_name TEXT NOT NULL,
-                state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
-                revision INTEGER NOT NULL DEFAULT 1,
-                workspace_id TEXT NOT NULL,
-                created_at TEXT,
-                storage_relative_locator TEXT,
-                main_thread_id TEXT,
-                CHECK (
-                    (kind = 'session'
-                        AND created_at IS NOT NULL
-                        AND storage_relative_locator IS NOT NULL
-                        AND main_thread_id IS NOT NULL)
-                    OR (kind = 'folder'
-                        AND created_at IS NULL
-                        AND storage_relative_locator IS NULL
-                        AND main_thread_id IS NULL)
-                ),
-                UNIQUE (workspace_id, main_thread_id),
-                UNIQUE (workspace_id, storage_relative_locator)
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_nodes_workspace "
-            "ON nodes(workspace_id)"
-        )
-        folder_id = make_session_id()
-        connection.execute(
-            "INSERT INTO nodes (node_id, kind, parent_node_id, display_name, "
-            "state, revision, workspace_id) "
-            "VALUES (?, 'folder', NULL, '升级前文件夹', 'active', 1, ?)",
-            (folder_id, WORKSPACE_ID),
-        )
-        connection.execute("PRAGMA user_version = 1")
+        connection.execute(f"PRAGMA user_version = {legacy_version}")
         connection.commit()
     finally:
         connection.close()
-    store = SessionCatalogStore(database_path, sessions_root)
+
+    with pytest.raises(CatalogMaintenanceRequiredError, match="旧版不受支持"):
+        SessionCatalogStore(database_path, sessions_root)
+
+    connection = sqlite3.connect(database_path)
     try:
-        assert (
-            int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 3
-        )
-        # 加法升级：records 表存在且可用
-        record = create_record(store, key="key-upgraded")
-        assert record.state == "preparing"
-        # v1 数据完整保留
-        assert store.get_node(folder_id).display_name == "升级前文件夹"
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == legacy_version
+        row = connection.execute(
+            "SELECT display_name FROM nodes WHERE node_id = ?", (folder_id,)
+        ).fetchone()
+        assert row is not None and row[0] == "旧版保留"
     finally:
-        store.close()
+        connection.close()
 
 
-def test_schema_v0_fresh_creates_v3(tmp_path: Path, sessions_root: Path) -> None:
+def test_store_rejects_v5_schema_version_without_modifying_it(
+    tmp_path: Path, sessions_root: Path
+) -> None:
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    folder_id = make_session_id()
+    first.create_folder(folder_id, WORKSPACE_ID, None, "v5 保留")
+    first.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("PRAGMA user_version = 5")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(CatalogMaintenanceRequiredError, match="旧版不受支持"):
+        SessionCatalogStore(database_path, sessions_root)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 5
+        row = connection.execute(
+            "SELECT display_name FROM nodes WHERE node_id = ?", (folder_id,)
+        ).fetchone()
+        assert row is not None and row[0] == "v5 保留"
+    finally:
+        connection.close()
+
+
+def test_schema_v0_fresh_creates_v7(tmp_path: Path, sessions_root: Path) -> None:
     store = SessionCatalogStore(
         tmp_path / "navigation" / "session-catalog.sqlite", sessions_root
     )
     try:
         assert (
             int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 3
+            == 7
         )
         tables = {
             str(row[0])
@@ -1904,23 +1971,75 @@ def test_schema_v0_fresh_creates_v3(tmp_path: Path, sessions_root: Path) -> None
             ).fetchall()
         }
         assert "session_creation_records" in tables
+        assert "subtree_delete_records" in tables
         assert "fork_retention_claims" in tables
         assert "catalog_metadata" in tables
+        assert store.current_generation() == 0
+        assert store.current_navigation_revision() == 0
+        trigger_names = {
+            str(row[0])
+            for row in store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        assert trigger_names >= {
+            "nodes_navigation_revision_insert",
+            "nodes_navigation_revision_update",
+            "nodes_navigation_revision_delete",
+        }
     finally:
         store.close()
 
 
-@pytest.mark.parametrize("table", ["nodes", "session_creation_records"])
+def test_navigation_revision_tracks_only_real_node_changes(
+    store: SessionCatalogStore,
+) -> None:
+    before_generation = store.current_generation()
+    before_revision = store.current_navigation_revision()
+
+    with store.write_transaction():
+        pass
+    assert store.current_generation() == before_generation + 1
+    assert store.current_navigation_revision() == before_revision
+
+    folder = store.create_folder(make_session_id(), WORKSPACE_ID, None, "目录")
+    assert store.current_navigation_revision() == before_revision + 1
+    assert store.current_generation() == before_generation + 2
+
+    with store.write_transaction() as connection:
+        connection.execute(
+            "UPDATE nodes SET display_name = display_name WHERE node_id = ?",
+            (folder.node_id,),
+        )
+    assert store.current_navigation_revision() == before_revision + 1
+
+    store.rename_node(folder.node_id, "已改名")
+    assert store.current_navigation_revision() == before_revision + 2
+
+    with store.write_transaction() as connection:
+        connection.execute(
+            "DELETE FROM nodes WHERE node_id = ?", (folder.node_id,)
+        )
+    assert store.current_navigation_revision() == before_revision + 3
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "nodes",
+        "session_creation_records",
+        "subtree_delete_records",
+        "fork_retention_claims",
+        "catalog_metadata",
+    ],
+)
 def test_store_rejects_lost_authoritative_table_on_reopen(
     tmp_path: Path, sessions_root: Path, table: str
 ) -> None:
     """已登记的权威表被外部删掉时重开必须响亮失败，不得静默重建空表。
 
-    ``nodes`` 是会话位置与父子组织的唯一权威。若外部进程把已登记版本的
-    权威表删除而 ``user_version`` 仍停在当前版本，此前
-    ``CREATE TABLE IF NOT EXISTS`` 会悄悄把表重建为**空表**，等于把全部
-    会话静默丢失——违反 AGENTS.md “绝不返回虚假默认值”。重开必须
-    fail closed 并指明缺表。
+    ``nodes`` 与其写入依赖表承载权威目录和可恢复记录。已登记 v4 缺少其中
+    任一张表时必须 fail closed，不能由 ``CREATE TABLE IF NOT EXISTS`` 静默补空表。
     """
     database_path = tmp_path / "navigation" / "session-catalog.sqlite"
     first = SessionCatalogStore(database_path, sessions_root)
@@ -1936,6 +2055,99 @@ def test_store_rejects_lost_authoritative_table_on_reopen(
         connection.close()
 
     with pytest.raises(RuntimeError, match=table):
+        SessionCatalogStore(database_path, sessions_root)
+
+
+def test_store_reopens_canonical_navigation_revision_triggers(
+    tmp_path: Path, sessions_root: Path
+) -> None:
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    first.close()
+
+    reopened = SessionCatalogStore(database_path, sessions_root)
+    try:
+        assert reopened.current_navigation_revision() == 0
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    "trigger_name",
+    [
+        "nodes_navigation_revision_insert",
+        "nodes_navigation_revision_update",
+        "nodes_navigation_revision_delete",
+    ],
+)
+def test_store_rejects_lost_navigation_revision_trigger_on_reopen(
+    tmp_path: Path, sessions_root: Path, trigger_name: str
+) -> None:
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    first.create_folder(make_session_id(), WORKSPACE_ID, None, "触发器")
+    first.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(f"DROP TRIGGER {trigger_name}")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(CatalogMaintenanceRequiredError, match="缺少导航 revision triggers"):
+        SessionCatalogStore(database_path, sessions_root)
+
+
+@pytest.mark.parametrize(
+    ("trigger_name", "no_op_trigger_ddl"),
+    [
+        (
+            "nodes_navigation_revision_insert",
+            (
+                "CREATE TRIGGER nodes_navigation_revision_insert "
+                "AFTER INSERT ON nodes BEGIN SELECT 1; END"
+            ),
+        ),
+        (
+            "nodes_navigation_revision_update",
+            (
+                "CREATE TRIGGER nodes_navigation_revision_update "
+                "AFTER UPDATE ON nodes BEGIN SELECT 1; END"
+            ),
+        ),
+        (
+            "nodes_navigation_revision_delete",
+            (
+                "CREATE TRIGGER nodes_navigation_revision_delete "
+                "AFTER DELETE ON nodes BEGIN SELECT 1; END"
+            ),
+        ),
+    ],
+)
+def test_store_rejects_same_name_no_op_navigation_revision_trigger_on_reopen(
+    tmp_path: Path,
+    sessions_root: Path,
+    trigger_name: str,
+    no_op_trigger_ddl: str,
+) -> None:
+    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
+    first = SessionCatalogStore(database_path, sessions_root)
+    first.create_folder(make_session_id(), WORKSPACE_ID, None, "触发器")
+    first.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(f"DROP TRIGGER {trigger_name}")
+        connection.execute(no_op_trigger_ddl)
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(
+        CatalogMaintenanceRequiredError,
+        match=f"definition_mismatch=\\['{trigger_name}'\\]",
+    ):
         SessionCatalogStore(database_path, sessions_root)
 
 
@@ -2440,38 +2652,6 @@ def test_delete_empty_folder_missing_raises_keyerror(
         store.delete_empty_folder(make_session_id())
 
 
-def test_schema_upgrade_v2_database_adds_subtree_table(
-    tmp_path: Path, sessions_root: Path
-) -> None:
-    """库缺 subtree_delete_records 表（R14 加法补表）重开后幂等补建，不动版本。"""
-    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
-    # 用真实 store 建立当前形态，再仅删除 R14 加法补建的 subtree_delete_records
-    # 表，精确还原缺表现场；不在此复制第二份 DDL。
-    first = SessionCatalogStore(database_path, sessions_root)
-    folder_id = make_session_id()
-    first.create_folder(folder_id, WORKSPACE_ID, None, "升级前文件夹")
-    first.close()
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.execute("DROP TABLE subtree_delete_records")
-        connection.commit()
-    finally:
-        connection.close()
-    store = SessionCatalogStore(database_path, sessions_root)
-    try:
-        # 加法补表：user_version 不动（保持 3），新表可用
-        assert (
-            int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-            == 3
-        )
-        record = create_subtree_record(store, root_node_id=folder_id)
-        assert record.state == "preparing"
-        # v2 数据完整保留
-        assert store.get_node(folder_id).display_name == "升级前文件夹"
-    finally:
-        store.close()
-
-
 # ----------------------------------------------------------------------
 # R18-3：单连接跨线程事务串行化（确定性回归，Event 强制交叠窗口）
 # ----------------------------------------------------------------------
@@ -2916,13 +3096,15 @@ def test_released_claim_then_delete_succeeds(
 def test_claim_and_delete_share_write_transaction_generation(
     store: SessionCatalogStore,
 ) -> None:
-    """claim 与删除提交都推进 generation（同一写事务序列竞争的证据）。"""
+    """claim 推进备份 generation，但不使导航 revision 变化。"""
     ids = build_delete_tree(store)
-    before = store.current_generation()
+    before_generation = store.current_generation()
+    before_revision = store.current_navigation_revision()
     _create_claim(
         store, source_session_id=ids["s1"], target_session_id=ids["s2"]
     )
-    assert store.current_generation() == before + 1
+    assert store.current_generation() == before_generation + 1
+    assert store.current_navigation_revision() == before_revision
 
 
 def test_create_or_get_claim_in_caller_transaction_rolls_back_together(
@@ -3072,35 +3254,6 @@ def test_store_rejects_corrupt_catalog_on_open(
         SessionCatalogStore(database_path, sessions_root)
 
 
-def test_schema_upgrade_v2_database_adds_claim_and_metadata_tables(
-    tmp_path: Path, sessions_root: Path
-) -> None:
-    """v2 库（无 claim/metadata 表）打开后显式一次性迁移升 v3。"""
-    database_path = tmp_path / "navigation" / "session-catalog.sqlite"
-    first = SessionCatalogStore(database_path, sessions_root)
-    folder_id = make_session_id()
-    first.create_folder(folder_id, WORKSPACE_ID, None, "升级前文件夹")
-    first.close()
-    connection = sqlite3.connect(database_path)
-    try:
-        # 精确还原 v2 缺表现场：删两新表并回退 user_version。
-        connection.execute("DROP TABLE fork_retention_claims")
-        connection.execute("DROP TABLE catalog_metadata")
-        connection.execute("PRAGMA user_version = 2")
-        connection.commit()
-    finally:
-        connection.close()
-    store = SessionCatalogStore(database_path, sessions_root)
-    try:
-        assert int(store.connection.execute("PRAGMA user_version").fetchone()[0]) == 3
-        # 迁移后新表可用，generation 从 0 起。
-        assert store.current_generation() == 0
-        # v2 数据完整保留。
-        assert store.get_node(folder_id).display_name == "升级前文件夹"
-    finally:
-        store.close()
-
-
 # ----------------------------------------------------------------------
 # 8.1-G 复用面：write/read 事务公开别名与 CAS 导航写
 # ----------------------------------------------------------------------
@@ -3217,6 +3370,7 @@ CREATE TABLE nodes (
     kind TEXT NOT NULL CHECK (kind IN ('folder', 'session')),
     parent_node_id TEXT REFERENCES nodes(node_id),
     display_name TEXT NOT NULL,
+    title_source TEXT CHECK (title_source IN ('default', 'user', 'auto')),
     state TEXT NOT NULL CHECK (state IN ('active', 'deleting')),
     revision INTEGER NOT NULL DEFAULT 1,
     workspace_id TEXT NOT NULL,
@@ -3227,11 +3381,13 @@ CREATE TABLE nodes (
         (kind = 'session'
             AND created_at IS NOT NULL
             AND storage_relative_locator IS NOT NULL
-            AND main_thread_id IS NOT NULL)
+            AND main_thread_id IS NOT NULL
+            AND title_source IS NOT NULL)
         OR (kind = 'folder'
             AND created_at IS NULL
             AND storage_relative_locator IS NULL
-            AND main_thread_id IS NULL)
+            AND main_thread_id IS NULL
+            AND title_source IS NULL)
     ),
     UNIQUE (workspace_id, main_thread_id),
     UNIQUE (workspace_id, storage_relative_locator)

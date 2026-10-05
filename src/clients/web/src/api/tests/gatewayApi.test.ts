@@ -193,23 +193,26 @@ describe("Gateway 用户访问控制请求", () => {
 });
 
 describe("手动创建会话连接", () => {
-  test("终端和浏览器复用工作区 manager，并绑定当前会话", async () => {
-    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
-    let requestCount = 0;
+  test("终端请求工作区 owner，浏览器复用 manager，并绑定当前会话", async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown>; workspaceId: string | null }> = [];
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
         const [input, init] = args;
-        requestCount += 1;
-        if (requestCount === 1) {
+        const path = new URL(String(input)).pathname;
+        if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "test-token" } });
+        }
+        if (path === "/api/gateway/users/current") {
+          return Response.json({ data: { kind: "guest", user_id: null, lease_generation: 1 }, request_id: "req_current" });
         }
         const url = String(input);
         requests.push({
           url,
           body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+          workspaceId: new Headers(init?.headers).get("X-BoxTeam-Workspace-Id"),
         });
-        return url.includes("terminal-manager")
-          ? Response.json({ data: { terminal_id: "term_manual" } })
+        return url.includes("/api/v1/resources/terminals")
+          ? Response.json({ data: { resource_id: "term_manual" }, request_id: "req_manual_terminal" })
           : Response.json({ data: { browser_id: "browser_manual" } });
       },
       { preconnect: originalFetch.preconnect },
@@ -232,9 +235,10 @@ describe("手动创建会话连接", () => {
     expect(browser).toEqual({ kind: "browser", resourceId: "browser_manual" });
     expect(requests).toHaveLength(2);
     expect(requests[0].url).toContain(
-      "/api/gateway/workspaces/gw_manual/terminal-manager/api/terminals",
+      "/api/v1/resources/terminals",
     );
-    expect(requests[0].body.session_id).toBe("ses_manual");
+    expect(requests[0].workspaceId).toBe("gw_manual");
+    expect(requests[0].body).toMatchObject({ session_id: "ses_manual", retention_scope: "thread" });
     expect(requests[1].url).toContain(
       "/api/gateway/workspaces/gw_manual/browser-manager/api/browsers",
     );

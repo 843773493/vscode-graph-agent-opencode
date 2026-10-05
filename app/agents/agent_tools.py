@@ -40,10 +40,10 @@ from app.agents.tools.terminal import (
 )
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 
 if TYPE_CHECKING:
     from app.services.business.session_goal_service import SessionGoalService
@@ -64,7 +64,7 @@ def build_default_tools(
     message_service: Any | None = None,
     session_service: Any | None = None,
     config_service: Any | None = None,
-    terminal_manager_client: TerminalManagerClient | None = None,
+    terminal_resource_owner: TerminalResourceOwner | None = None,
     invocation_context: ToolInvocationContext | None = None,
     workspace_root: Path | None = None,
     goal_service: SessionGoalService | None = None,
@@ -87,8 +87,8 @@ def build_default_tools(
         raise RuntimeError("build_default_tools 需要显式传入 SessionService")
     if config_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 ConfigService")
-    if terminal_manager_client is None:
-        raise RuntimeError("build_default_tools 需要显式传入 TerminalManagerClient")
+    if terminal_resource_owner is None:
+        raise RuntimeError("build_default_tools 需要显式传入 TerminalResourceOwner")
     if invocation_context is None:
         raise RuntimeError("build_default_tools 需要显式传入 ToolInvocationContext")
     if communication_binding_lookup is None:
@@ -113,20 +113,24 @@ def build_default_tools(
         create_exec_command_tool(
             session_id=session_id,
             agent_id=agent_id,
-            terminal_client=terminal_manager_client,
+            terminal_owner=terminal_resource_owner,
+            invocation_context=invocation_context,
             workspace_root=workspace_root,
         ),
         create_write_stdin_tool(
             session_id=session_id,
-            terminal_client=terminal_manager_client,
+            terminal_owner=terminal_resource_owner,
+            invocation_context=invocation_context,
         ),
         create_list_terminal_sessions_tool(
             session_id=session_id,
-            terminal_client=terminal_manager_client,
+            terminal_owner=terminal_resource_owner,
+            invocation_context=invocation_context,
         ),
         create_kill_terminal_tool(
             session_id=session_id,
-            terminal_client=terminal_manager_client,
+            terminal_owner=terminal_resource_owner,
+            invocation_context=invocation_context,
         ),
         *build_agent_collaboration_tools(
             session_id=session_id,

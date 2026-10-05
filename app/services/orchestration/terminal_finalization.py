@@ -105,11 +105,12 @@ class StreamTerminalStateMixin:
         }
         if reason is not None:
             payload["reason"] = reason
-        await self.writer.commit(
-            "model.completed",
-            payload,
-            model_call_id=self.current_model_call_id,
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "model.completed",
+                payload,
+                model_call_id=self.current_model_call_id,
+            )
         if self._model_call_outcome_sink is not None:
             normalized_outcome = (
                 "completed"
@@ -129,15 +130,16 @@ class StreamTerminalStateMixin:
     async def retrying(self, reason: str) -> None:
         if self.current_model_call_id is None:
             return
-        await self.writer.commit(
-            "model.retrying",
-            {
-                "model_call_id": self.current_model_call_id,
-                "attempt": self.current_attempt,
-                "reason": reason,
-            },
-            model_call_id=self.current_model_call_id,
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "model.retrying",
+                {
+                    "model_call_id": self.current_model_call_id,
+                    "attempt": self.current_attempt,
+                    "reason": reason,
+                },
+                model_call_id=self.current_model_call_id,
+            )
 
     async def fail_model(
         self,
@@ -171,18 +173,19 @@ class StreamTerminalStateMixin:
             ),
             partial=outcome == "user_interrupt",
         )
-        await self.writer.commit(
-            "model.failed",
-            {
-                "model_call_id": self.current_model_call_id,
-                "attempt": self.current_attempt,
-                "outcome": outcome,
-                "error_code": code,
-                "message": message,
-                "retryable": retryable,
-            },
-            model_call_id=self.current_model_call_id,
-        )
+        if self.writer is not None:
+            await self.writer.commit(
+                "model.failed",
+                {
+                    "model_call_id": self.current_model_call_id,
+                    "attempt": self.current_attempt,
+                    "outcome": outcome,
+                    "error_code": code,
+                    "message": message,
+                    "retryable": retryable,
+                },
+                model_call_id=self.current_model_call_id,
+            )
         if self._model_call_outcome_sink is not None:
             await self._model_call_outcome_sink(
                 self.current_model_call_id,
@@ -211,20 +214,21 @@ class StreamTerminalStateMixin:
                 tool_call_id,
                 False,
             )
-            await self.writer.commit(
-                "tool_call.completed",
-                {
-                    "tool_call_id": tool_call_id,
-                    "tool_invocation_id": tool_invocation_id,
-                    "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
-                    "status": "cancelled" if arguments_complete else "incomplete",
-                    "completion_reason": "user_interrupt",
-                    "arguments_complete": arguments_complete,
-                },
-                model_call_id=self.current_model_call_id,
-                tool_call_id=tool_call_id,
-                tool_invocation_id=tool_invocation_id,
-            )
+            if self.writer is not None:
+                await self.writer.commit(
+                    "tool_call.completed",
+                    {
+                        "tool_call_id": tool_call_id,
+                        "tool_invocation_id": tool_invocation_id,
+                        "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
+                        "status": "cancelled" if arguments_complete else "incomplete",
+                        "completion_reason": "user_interrupt",
+                        "arguments_complete": arguments_complete,
+                    },
+                    model_call_id=self.current_model_call_id,
+                    tool_call_id=tool_call_id,
+                    tool_invocation_id=tool_invocation_id,
+                )
             self._completed_tool_call_ids.add(tool_call_id)
         for tool_execution_id, (tool_call_id, tool_name) in tuple(
             self._active_tool_executions.items()

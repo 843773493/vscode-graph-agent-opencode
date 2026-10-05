@@ -7,6 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.session_navigation_http import submit_navigation_operation
+
 
 async def _create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/v1/sessions", json={"title": title})
@@ -74,23 +76,28 @@ async def test_catalog_node_move_supports_session_and_folder_children(
     )
     assert implicit_move_response.status_code == 422, implicit_move_response.text
 
-    folder_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "拖放文件夹"},
+    folder_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="拖放文件夹",
     )
-    assert folder_response.status_code == 200, folder_response.text
-    folder_id = folder_response.json()["data"]["items"][-1]["folder_id"]
-    assign_response = await client.put(
-        f"/api/v1/session-catalog/sessions/{child_session_id}/folder",
-        json={"folder_id": folder_id},
+    assert folder_receipt["state"] == "committed"
+    folder_id = str(folder_receipt["created_node_id"])
+    assign_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=child_session_id,
+        parent_node_id=folder_id,
     )
-    assert assign_response.status_code == 200, assign_response.text
+    assert assign_receipt["state"] == "committed"
 
-    move_folder_response = await client.patch(
-        f"/api/v1/session-catalog/nodes/{folder_id}/parent",
-        json={"parent_node_id": parent_session_id},
+    move_folder_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=folder_id,
+        parent_node_id=parent_session_id,
     )
-    assert move_folder_response.status_code == 200, move_folder_response.text
+    assert move_folder_receipt["state"] == "committed"
     nested_nodes = await _catalog_nodes(client)
     parent_path = _node_path(sessions_root, nested_nodes[parent_session_id])
     folder_path = _node_path(sessions_root, nested_nodes[folder_id])
@@ -101,44 +108,47 @@ async def test_catalog_node_move_supports_session_and_folder_children(
     assert child_response.status_code == 200, child_response.text
     assert child_response.json()["data"]["parent_session_id"] == parent_session_id
 
-    move_folder_root_response = await client.patch(
-        f"/api/v1/session-catalog/nodes/{folder_id}/parent",
-        json={"parent_node_id": None},
+    move_folder_root_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=folder_id,
+        parent_node_id=None,
     )
-    assert move_folder_root_response.status_code == 200, move_folder_root_response.text
+    assert move_folder_root_receipt["state"] == "committed"
     root_nodes = await _catalog_nodes(client)
     assert _node_path(sessions_root, root_nodes[folder_id]).parent == sessions_root
     root_child_response = await client.get(f"/api/v1/sessions/{child_session_id}")
     assert root_child_response.status_code == 200, root_child_response.text
     assert root_child_response.json()["data"]["parent_session_id"] is None
 
-    bind_direct_response = await client.patch(
-        f"/api/v1/session-catalog/nodes/{child_session_id}/parent",
-        json={"parent_node_id": parent_session_id},
+    bind_direct_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=child_session_id,
+        parent_node_id=parent_session_id,
     )
-    assert bind_direct_response.status_code == 200, bind_direct_response.text
+    assert bind_direct_receipt["state"] == "committed"
     bound_nodes = await _catalog_nodes(client)
     assert (
         _node_path(sessions_root, bound_nodes[child_session_id]).parent
         == parent_path / "children"
     )
 
-    cycle_response = await client.patch(
-        f"/api/v1/session-catalog/nodes/{parent_session_id}/parent",
-        json={"parent_node_id": child_session_id},
+    cycle_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=parent_session_id,
+        parent_node_id=child_session_id,
     )
-    assert cycle_response.status_code == 409, cycle_response.text
-    assert "循环" in cycle_response.text
+    assert cycle_receipt["state"] == "rejected"
+    assert "循环" in str(cycle_receipt["error_detail"])
 
-    delete_parent_response = await client.delete(
-        f"/api/v1/sessions/{parent_session_id}",
-        params={"cascade": True},
+    delete_parent_receipt = await submit_navigation_operation(
+        client,
+        "delete_session",
+        target_node_id=parent_session_id,
     )
-    assert delete_parent_response.status_code == 200, delete_parent_response.text
-    delete_folder_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{folder_id}"
-    )
-    assert delete_folder_response.status_code == 204, delete_folder_response.text
+    assert delete_parent_receipt["state"] == "committed"
 
 
 @pytest.mark.asyncio
@@ -174,24 +184,28 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     )
     sentinel_values = _write_bundle_sentinels(initial_session_path)
 
-    parent_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "项目资料"},
+    parent_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="项目资料",
     )
-    assert parent_response.status_code == 200, parent_response.text
-    parent_folder_id = parent_response.json()["data"]["items"][-1]["folder_id"]
-    child_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "阶段一", "parent_folder_id": parent_folder_id},
+    assert parent_receipt["state"] == "committed"
+    parent_folder_id = str(parent_receipt["created_node_id"])
+    child_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="阶段一",
+        parent_node_id=parent_folder_id,
     )
-    assert child_response.status_code == 200, child_response.text
-    child_folder_id = child_response.json()["data"]["items"][-1]["folder_id"]
-    sibling_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "待归档"},
+    assert child_receipt["state"] == "committed"
+    child_folder_id = str(child_receipt["created_node_id"])
+    sibling_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="待归档",
     )
-    assert sibling_response.status_code == 200, sibling_response.text
-    sibling_folder_id = sibling_response.json()["data"]["items"][-1]["folder_id"]
+    assert sibling_receipt["state"] == "committed"
+    sibling_folder_id = str(sibling_receipt["created_node_id"])
 
     created_nodes = await _catalog_nodes(client)
     parent_path = _node_path(sessions_root, created_nodes[parent_folder_id])
@@ -204,16 +218,20 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     assert (parent_path / ".boxteam-folder.json").is_file()
     assert (child_path / ".boxteam-folder.json").is_file()
 
-    assign_parent_response = await client.put(
-        f"/api/v1/session-catalog/sessions/{session_ids[0]}/folder",
-        json={"folder_id": parent_folder_id},
+    assign_parent_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=session_ids[0],
+        parent_node_id=parent_folder_id,
     )
-    assert assign_parent_response.status_code == 200, assign_parent_response.text
-    assign_child_response = await client.put(
-        f"/api/v1/session-catalog/sessions/{session_ids[1]}/folder",
-        json={"folder_id": child_folder_id},
+    assert assign_parent_receipt["state"] == "committed"
+    assign_child_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=session_ids[1],
+        parent_node_id=child_folder_id,
     )
-    assert assign_child_response.status_code == 200, assign_child_response.text
+    assert assign_child_receipt["state"] == "committed"
 
     assigned_nodes = await _catalog_nodes(client)
     assigned_session_path = _node_path(
@@ -224,11 +242,13 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     assert assigned_session_path.parent == child_path
     _assert_bundle_sentinels(assigned_session_path, sentinel_values)
 
-    rename_folder_response = await client.patch(
-        f"/api/v1/session-catalog/folders/{child_folder_id}",
-        json={"name": "阶段一已重命名"},
+    rename_folder_receipt = await submit_navigation_operation(
+        client,
+        "rename_node",
+        target_node_id=child_folder_id,
+        name="阶段一已重命名",
     )
-    assert rename_folder_response.status_code == 200, rename_folder_response.text
+    assert rename_folder_receipt["state"] == "committed"
     renamed_nodes = await _catalog_nodes(client)
     renamed_child_path = _node_path(sessions_root, renamed_nodes[child_folder_id])
     renamed_session_path = _node_path(sessions_root, renamed_nodes[session_ids[1]])
@@ -237,11 +257,13 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     assert renamed_session_path.parent == renamed_child_path
     _assert_bundle_sentinels(renamed_session_path, sentinel_values)
 
-    move_folder_response = await client.patch(
-        f"/api/v1/session-catalog/folders/{child_folder_id}",
-        json={"parent_folder_id": sibling_folder_id},
+    move_folder_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=child_folder_id,
+        parent_node_id=sibling_folder_id,
     )
-    assert move_folder_response.status_code == 200, move_folder_response.text
+    assert move_folder_receipt["state"] == "committed"
     moved_nodes = await _catalog_nodes(client)
     moved_child_path = _node_path(sessions_root, moved_nodes[child_folder_id])
     moved_session_path = _node_path(sessions_root, moved_nodes[session_ids[1]])
@@ -250,11 +272,13 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     assert moved_session_path.parent == moved_child_path
     _assert_bundle_sentinels(moved_session_path, sentinel_values)
 
-    rename_session_response = await client.patch(
-        f"/api/v1/sessions/{session_ids[1]}",
-        json={"title": "Catalog Needle Renamed"},
+    rename_session_receipt = await submit_navigation_operation(
+        client,
+        "rename_node",
+        target_node_id=session_ids[1],
+        name="Catalog Needle Renamed",
     )
-    assert rename_session_response.status_code == 200, rename_session_response.text
+    assert rename_session_receipt["state"] == "committed"
     title_nodes = await _catalog_nodes(client)
     title_session_path = _node_path(sessions_root, title_nodes[session_ids[1]])
     assert title_session_path == moved_session_path
@@ -333,36 +357,49 @@ async def test_session_catalog_uses_authoritative_index_for_crud_and_validation(
     assert indexed_session["parent_node_id"] == child_folder_id
     assert indexed_session["name"] == "Catalog Needle Renamed"
 
-    nonempty_delete_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{parent_folder_id}"
+    nonempty_delete_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=parent_folder_id,
     )
-    assert nonempty_delete_response.status_code == 409
+    assert nonempty_delete_receipt["state"] == "rejected"
+    assert nonempty_delete_receipt["error_code"] == "invalid_operation"
     assert parent_path.is_dir()
 
-    delete_session_response = await client.delete(
-        f"/api/v1/sessions/{session_ids[1]}"
+    delete_session_receipt = await submit_navigation_operation(
+        client,
+        "delete_session",
+        target_node_id=session_ids[1],
     )
-    assert delete_session_response.status_code == 200, delete_session_response.text
+    assert delete_session_receipt["state"] == "committed"
     assert not rebuilt_session_path.exists()
-    delete_child_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{child_folder_id}"
+    delete_child_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=child_folder_id,
     )
-    assert delete_child_response.status_code == 204, delete_child_response.text
+    assert delete_child_receipt["state"] == "committed"
     assert not rebuilt_child_path.exists()
 
-    move_parent_session_to_root = await client.put(
-        f"/api/v1/session-catalog/sessions/{session_ids[0]}/folder",
-        json={"folder_id": None},
+    move_parent_session_to_root = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=session_ids[0],
+        parent_node_id=None,
     )
-    assert move_parent_session_to_root.status_code == 200
-    delete_parent_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{parent_folder_id}"
+    assert move_parent_session_to_root["state"] == "committed"
+    delete_parent_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=parent_folder_id,
     )
-    assert delete_parent_response.status_code == 204
-    delete_sibling_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{sibling_folder_id}"
+    assert delete_parent_receipt["state"] == "committed"
+    delete_sibling_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=sibling_folder_id,
     )
-    assert delete_sibling_response.status_code == 204
+    assert delete_sibling_receipt["state"] == "committed"
     assert not parent_path.exists()
     assert not sibling_path.exists()
 
@@ -373,28 +410,33 @@ async def test_session_folder_rejects_cycle_without_moving_physical_nodes(
     e2e_workspace_root_path: str,
 ) -> None:
     sessions_root = Path(e2e_workspace_root_path).resolve() / ".boxteam" / "sessions"
-    parent_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "循环父目录"},
+    parent_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="循环父目录",
     )
-    assert parent_response.status_code == 200, parent_response.text
-    parent_id = parent_response.json()["data"]["items"][-1]["folder_id"]
-    child_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "循环子目录", "parent_folder_id": parent_id},
+    assert parent_receipt["state"] == "committed"
+    parent_id = str(parent_receipt["created_node_id"])
+    child_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="循环子目录",
+        parent_node_id=parent_id,
     )
-    assert child_response.status_code == 200, child_response.text
-    child_id = child_response.json()["data"]["items"][-1]["folder_id"]
+    assert child_receipt["state"] == "committed"
+    child_id = str(child_receipt["created_node_id"])
     before_nodes = await _catalog_nodes(client)
     parent_path = _node_path(sessions_root, before_nodes[parent_id])
     child_path = _node_path(sessions_root, before_nodes[child_id])
 
-    cycle_response = await client.patch(
-        f"/api/v1/session-catalog/folders/{parent_id}",
-        json={"parent_folder_id": child_id},
+    cycle_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=parent_id,
+        parent_node_id=child_id,
     )
-    assert cycle_response.status_code == 400, cycle_response.text
-    assert "循环" in cycle_response.text
+    assert cycle_receipt["state"] == "rejected"
+    assert "循环" in str(cycle_receipt["error_detail"])
     after_nodes = await _catalog_nodes(client)
     assert after_nodes[parent_id]["storage_relative_path"] == before_nodes[parent_id][
         "storage_relative_path"
@@ -412,41 +454,51 @@ async def test_session_folder_recursive_delete_removes_complete_session_bundles(
     e2e_workspace_root_path: str,
 ) -> None:
     sessions_root = Path(e2e_workspace_root_path).resolve() / ".boxteam" / "sessions"
-    parent_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "递归删除年月日"},
+    parent_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="递归删除年月日",
     )
-    assert parent_response.status_code == 200, parent_response.text
-    parent_id = parent_response.json()["data"]["items"][-1]["folder_id"]
-    child_response = await client.post(
-        "/api/v1/session-catalog/folders",
-        json={"name": "时分秒", "parent_folder_id": parent_id},
+    assert parent_receipt["state"] == "committed"
+    parent_id = str(parent_receipt["created_node_id"])
+    child_receipt = await submit_navigation_operation(
+        client,
+        "create_folder",
+        name="时分秒",
+        parent_node_id=parent_id,
     )
-    assert child_response.status_code == 200, child_response.text
-    child_id = child_response.json()["data"]["items"][-1]["folder_id"]
+    assert child_receipt["state"] == "committed"
+    child_id = str(child_receipt["created_node_id"])
     session_id = await _create_session(client, "递归删除生成会话")
-    assign_response = await client.put(
-        f"/api/v1/session-catalog/sessions/{session_id}/folder",
-        json={"folder_id": child_id},
+    assign_receipt = await submit_navigation_operation(
+        client,
+        "move_node",
+        target_node_id=session_id,
+        parent_node_id=child_id,
     )
-    assert assign_response.status_code == 200, assign_response.text
+    assert assign_receipt["state"] == "committed"
     nodes = await _catalog_nodes(client)
     parent_path = _node_path(sessions_root, nodes[parent_id])
     session_path = _node_path(sessions_root, nodes[session_id])
     _write_bundle_sentinels(session_path)
 
-    guarded_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{parent_id}"
+    guarded_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=parent_id,
     )
-    assert guarded_response.status_code == 409
+    assert guarded_receipt["state"] == "rejected"
+    assert guarded_receipt["error_code"] == "invalid_operation"
     assert parent_path.is_dir()
     assert session_path.is_dir()
 
-    recursive_response = await client.delete(
-        f"/api/v1/session-catalog/folders/{parent_id}",
-        params={"recursive": "true"},
+    recursive_receipt = await submit_navigation_operation(
+        client,
+        "delete_folder",
+        target_node_id=parent_id,
+        recursive=True,
     )
-    assert recursive_response.status_code == 204, recursive_response.text
+    assert recursive_receipt["state"] == "committed"
     assert not parent_path.exists()
     assert not session_path.exists()
     remaining_nodes = await _catalog_nodes(client)

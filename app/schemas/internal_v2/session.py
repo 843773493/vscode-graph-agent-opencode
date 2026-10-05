@@ -6,6 +6,7 @@ from typing import Literal, Optional, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import TimestampedDTO
+from .session_context import SessionContextScope, SessionResourceIdentity
 from .session_resource import SessionResourceKind
 
 TitleSource = Literal["default", "user", "auto"]
@@ -29,7 +30,6 @@ class SessionCreateRequest(BaseModel):
 
     title: Optional[str] = "新会话"
     agent_id: Optional[str] = None
-    title_source: Optional[TitleSource] = None
     folder_id: Optional[str] = None
 
 
@@ -40,20 +40,22 @@ class SessionForkRequest(BaseModel):
     turn_id: str | None = None
     anchor_mode: Literal["inclusive", "before"] = "inclusive"
     pinned: bool = False
+    place_under_source: bool = False
 
 
 class SessionUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Optional[str] = None
     agent_id: Optional[str] = None
     provider_id: Optional[str] = None
-    title_source: Optional[TitleSource] = None
 
 
 class SessionDTO(TimestampedDTO):
     session_id: str
     workspace_id: str
+    resource_identity: SessionResourceIdentity
+    vrn: str
+    scope: SessionContextScope
     title: str
     title_source: TitleSource = "default"
     current_agent_id: str

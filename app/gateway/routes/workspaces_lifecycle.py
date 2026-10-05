@@ -39,8 +39,9 @@ from app.gateway.routes.workspaces_managed import (
     _remote_http_error_detail,
 )
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.local_workspace import wait_for_workspace_health
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.runtime.process import wait_for_http_ok
+from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
 from app.gateway.ssh_connections import (
@@ -191,8 +192,14 @@ async def add_local_workspace(
     else:
         backend_url = payload.backend_url.rstrip("/")
         gateway_config = request.app.state.gateway_config
-        await wait_for_http_ok(
+        backend_workspace_id = await asyncio.to_thread(
+            resolve_backend_workspace_id,
+            get_project_root(),
+            workspace_root,
+        )
+        await wait_for_workspace_health(
             f"{backend_url}/api/v1/health",
+            backend_workspace_id,
             request_timeout_seconds=(
                 gateway_config.gateway_process_health_request_timeout_seconds
             ),
@@ -211,11 +218,15 @@ async def add_local_workspace(
                 name_customized=bool(payload.name),
                 root_path=str(workspace_root),
                 backend_url=backend_url,
+                backend_workspace_id=backend_workspace_id,
                 connection_kind="local",
                 owner="manual",
                 managed=False,
             ),
-            runtime=WorkspaceRuntime(service_urls={"workspace_api": backend_url}),
+            runtime=WorkspaceRuntime(
+                service_urls={"workspace_api": backend_url},
+                backend_workspace_id=backend_workspace_id,
+            ),
             activate=False,
         )
     return APIResponse(

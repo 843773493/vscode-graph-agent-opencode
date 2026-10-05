@@ -16,7 +16,6 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.path_utils import get_session_path_resolver
-from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -28,6 +27,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.integration.stubs.http_stubs import openai_chat_stub
+from tests.support.custom_tool_test_workspace import (
+    prepare_custom_tool_test_workspace,
+)
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -37,7 +39,6 @@ from tests.support.gateway_processes import (
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
-from tests.support.workspaces import prepare_default_test_workspace
 
 PARTIAL_TEXT_SESSION_ID = "ses_019c5123cafb789e8fdf8704f6464f74"
 PARTIAL_TEXT_TURN_ID = "boundary-turn-0004"
@@ -49,8 +50,10 @@ PARTIAL_TEXT_USER_CONTENT = "请分析这个问题；如果我中断，请保留
 
 def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
-    session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
-        PARTIAL_TEXT_SESSION_ID
+    resolver = get_session_path_resolver(sessions_dir)
+    session_dir = resolver.resolve_thread_node(
+        PARTIAL_TEXT_SESSION_ID,
+        resolver.main_thread_id(PARTIAL_TEXT_SESSION_ID),
     )
     shutil.rmtree(session_dir / "rollout")
 
@@ -59,6 +62,8 @@ def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
         PARTIAL_TEXT_SESSION_ID,
         accepted_ingress_id="ingress-boundary-partial-text-0004",
         acceptance_idempotency_key="acceptance-boundary-partial-text-0004",
+        job_id="job-boundary-partial-text-0004",
+        admission_idempotency_key="execution-boundary-partial-text-0004",
         payload=PARTIAL_TEXT_USER_CONTENT,
         payload_kind=PayloadKind.TEXT,
         turn_id=PARTIAL_TEXT_TURN_ID,
@@ -127,14 +132,11 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_default_test_workspace(
+    workspace_root = prepare_custom_tool_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板是旧 JSON 权威索引形态；先建立 SQLite catalog authority，
-    # 否则后端启动会按唯一 resolver 契约 fail-closed。
-    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
     _seed_v2_partial_text_turn(workspace_root)
     return str(workspace_root)
 
@@ -219,9 +221,12 @@ async def test_partial_text_cancelled_turn_is_explicit_in_real_web_chain(
     assert build.returncode == 0, f"Web 构建失败:\n{build.stdout}\n{build.stderr}"
 
     sessions_dir = Path(integration_workspace_root_path) / ".boxteam" / "sessions"
+    resolver = get_session_path_resolver(sessions_dir)
     rollout_path = (
-        get_session_path_resolver(sessions_dir)
-        .resolve_session_node(PARTIAL_TEXT_SESSION_ID)
+        resolver.resolve_thread_node(
+            PARTIAL_TEXT_SESSION_ID,
+            resolver.main_thread_id(PARTIAL_TEXT_SESSION_ID),
+        )
         / "rollout"
         / "rollout.jsonl"
     )

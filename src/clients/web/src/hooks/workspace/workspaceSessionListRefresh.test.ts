@@ -22,11 +22,22 @@ function apiResponse(data: unknown): Response {
 const session = {
   session_id: "ses_catalog_only",
   workspace_id: "ws-test",
+  resource_identity: "fixture-ses_catalog_only",
+  vrn: "boxteam://workspace/ws-test/resources/session/ses_catalog_only",
+  scope: "workspace",
   title: "只在目录索引中的会话",
   current_agent_id: "test-agent",
   created_at: "2026-08-31T00:00:00Z",
   updated_at: "2026-08-31T00:00:01Z",
 };
+
+function workspaceTarget(workspaceId: string) {
+  return {
+    workspace_id: workspaceId,
+    backend_workspace_id: "00000000-0000-0000-0000-000000000001",
+    connection_kind: "local" as const,
+  };
+}
 
 describe("工作区会话列表快照", () => {
   test("/sessions 为空时从 session-catalog 根节点回填会话并支持刷新恢复", async () => {
@@ -65,7 +76,10 @@ describe("工作区会话列表快照", () => {
       throw new Error(`测试收到未声明请求: ${url}`);
     }, { preconnect: originalFetch.preconnect });
 
-    const result = await fetchWorkspaceSessionListSnapshot(49_401, "ws-test");
+    const result = await fetchWorkspaceSessionListSnapshot(
+      49_401,
+      workspaceTarget("ws-test"),
+    );
 
     expect(result.sessions).toEqual([session]);
     expect(requestedUrls.some((url) => url.includes("/session-catalog/children"))).toBe(true);
@@ -96,9 +110,9 @@ describe("工作区会话列表快照", () => {
       throw new Error(`测试收到未声明请求: ${url}`);
     }, { preconnect: originalFetch.preconnect });
 
-    const first = fetchWorkspaceSessionListSnapshot(49_402, "ws-coalesce");
+    const first = fetchWorkspaceSessionListSnapshot(49_402, workspaceTarget("ws-coalesce"));
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
-    const second = fetchWorkspaceSessionListSnapshot(49_402, "ws-coalesce");
+    const second = fetchWorkspaceSessionListSnapshot(49_402, workspaceTarget("ws-coalesce"));
     releaseListRequest();
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
@@ -127,10 +141,18 @@ describe("工作区会话列表快照", () => {
       throw new Error(`测试收到未声明请求: ${url}`);
     }, { preconnect: originalFetch.preconnect });
 
-    const first = fetchWorkspaceSessionListSnapshot(49_403, "ws-force");
+    const first = fetchWorkspaceSessionListSnapshot(49_403, workspaceTarget("ws-force"));
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
-    const forcedFirst = fetchWorkspaceSessionListSnapshot(49_403, "ws-force", { force: true });
-    const forcedSecond = fetchWorkspaceSessionListSnapshot(49_403, "ws-force", { force: true });
+    const forcedFirst = fetchWorkspaceSessionListSnapshot(
+      49_403,
+      workspaceTarget("ws-force"),
+      { force: true },
+    );
+    const forcedSecond = fetchWorkspaceSessionListSnapshot(
+      49_403,
+      workspaceTarget("ws-force"),
+      { force: true },
+    );
     expect(sessionListRequestCount).toBe(1);
 
     releases.shift()!();

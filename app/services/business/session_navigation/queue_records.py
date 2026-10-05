@@ -26,7 +26,8 @@ from dataclasses import dataclass
 
 from app.schemas.internal_v2.session_navigation.operations import (
     NAVIGATION_MUTATION_TERMINAL_STATES,
-    NavigationMutationIntentDTO,
+    AutoSessionTitleCommand,
+    NavigationQueueCommand,
 )
 
 __all__ = [
@@ -139,22 +140,32 @@ class NavigationQueueOwner:
         return f"{self.owner_id}:{self.generation}"
 
 
-def compute_intent_preimage_hash(intent: NavigationMutationIntentDTO) -> str:
+def compute_intent_preimage_hash(intent: NavigationQueueCommand) -> str:
     """规范化 intent 参数并计算 preimage hash（同 key 异 preimage 冲突的判据）。
 
     只纳入会影响业务结果的规范化字段；``client_operation_id`` 本身与
     ``client_sequence``、``base_catalog_revision`` 不参与 preimage（重试时
     客户端可能给出新的快照修订，但意图未变）。
     """
-    payload = {
-        "kind": intent.kind,
-        "target_node_id": intent.target_node_id,
-        "created_by_operation_id": intent.created_by_operation_id,
-        "name": intent.name,
-        "parent_node_id": intent.parent_node_id,
-        "recursive": intent.recursive,
-        "depends_on": sorted(intent.depends_on),
-    }
+    if isinstance(intent, AutoSessionTitleCommand):
+        payload = {
+            "kind": intent.kind,
+            "target_node_id": intent.target_node_id,
+            "name": intent.name,
+            "expected_revision": intent.expected_revision,
+            "expected_title": intent.expected_title,
+            "expected_title_source": intent.expected_title_source,
+        }
+    else:
+        payload = {
+            "kind": intent.kind,
+            "target_node_id": intent.target_node_id,
+            "created_by_operation_id": intent.created_by_operation_id,
+            "name": intent.name,
+            "parent_node_id": intent.parent_node_id,
+            "recursive": intent.recursive,
+            "depends_on": sorted(intent.depends_on),
+        }
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -164,17 +175,21 @@ def compute_intent_preimage_hash(intent: NavigationMutationIntentDTO) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _params_json(intent: NavigationMutationIntentDTO) -> str:
+def _params_json(intent: NavigationQueueCommand) -> str:
+    params: dict[str, object] = {
+        "expected_revision": intent.expected_revision,
+        "base_catalog_revision": intent.base_catalog_revision,
+        "target_node_id": intent.target_node_id,
+        "created_by_operation_id": intent.created_by_operation_id,
+        "name": intent.name,
+        "parent_node_id": intent.parent_node_id,
+        "recursive": intent.recursive,
+    }
+    if isinstance(intent, AutoSessionTitleCommand):
+        params["expected_title"] = intent.expected_title
+        params["expected_title_source"] = intent.expected_title_source
     return json.dumps(
-        {
-            "expected_revision": intent.expected_revision,
-            "base_catalog_revision": intent.base_catalog_revision,
-            "target_node_id": intent.target_node_id,
-            "created_by_operation_id": intent.created_by_operation_id,
-            "name": intent.name,
-            "parent_node_id": intent.parent_node_id,
-            "recursive": intent.recursive,
-        },
+        params,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

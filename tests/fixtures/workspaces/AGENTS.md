@@ -15,6 +15,6 @@
 # 规范
 
 - 测试通过 `tests/support/workspaces.py` 从本目录复制工作区。
-- 静态会话必须同时维护 `session.json`、`rollout/rollout.jsonl`、`rollout/index.sqlite` 和权威导航索引。
+- 静态会话必须同时维护 `session.json`、`rollout/rollout.jsonl`、`rollout/index.sqlite` 和权威 `navigation/session-catalog.sqlite`。
 - fixture 内容必须确定性、可复查，并与对应测试场景保持明确命名。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

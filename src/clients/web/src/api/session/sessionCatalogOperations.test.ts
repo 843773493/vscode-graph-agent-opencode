@@ -17,6 +17,12 @@ afterEach(() => {
   unwrapSessionCatalogFetch();
 });
 
+const workspaceTarget = {
+  workspace_id: "workspace-1",
+  backend_workspace_id: "backend-workspace-1",
+  connection_kind: "local",
+} as const;
+
 describe("会话目录 operation 状态闭集", () => {
   test("终态只包含 committed/rejected/cancelled/dependency_failed", () => {
     expect(["queued", "running"].map((state) =>
@@ -55,7 +61,7 @@ describe("会话目录批量入队协议", () => {
       });
     });
 
-    const result = await enqueueSessionCatalogOperations(48_501, "workspace-1", [{
+    const result = await enqueueSessionCatalogOperations(48_501, workspaceTarget, [{
       client_operation_id: "op_00000000000000000000000000000001",
       client_sequence: 1,
       kind: "create_folder",
@@ -68,6 +74,8 @@ describe("会话目录批量入队协议", () => {
     expect(request!.method).toBe("POST");
     expect(new Headers(request!.init?.headers).get("X-BoxTeam-Workspace-Id"))
       .toBe("workspace-1");
+    expect(new Headers(request!.init?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
+      .toBe("backend-workspace-1");
     expect(JSON.parse(String(request!.init?.body))).toEqual({ intents: [{
       client_operation_id: "op_00000000000000000000000000000001",
       client_sequence: 1,
@@ -85,7 +93,7 @@ describe("会话目录批量入队协议", () => {
     installSessionCatalogFetchMock(() => {
       throw new Error("空批次不应发请求");
     });
-    await expect(enqueueSessionCatalogOperations(48_502, "workspace-1", []))
+    await expect(enqueueSessionCatalogOperations(48_502, workspaceTarget, []))
       .rejects.toThrow("会话目录批量入队至少需要一个 intent");
   });
 
@@ -99,7 +107,7 @@ describe("会话目录批量入队协议", () => {
       );
     });
     try {
-      await enqueueSessionCatalogOperations(48_503, "workspace-1", [{
+      await enqueueSessionCatalogOperations(48_503, workspaceTarget, [{
         client_operation_id: "op_00000000000000000000000000000001",
         client_sequence: 1,
         kind: "rename_node",
@@ -131,7 +139,7 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
       },
       request_id: "req-status",
     }));
-    const page = await querySessionCatalogOperationStatus(48_504, "workspace-1", [
+    const page = await querySessionCatalogOperationStatus(48_504, workspaceTarget, [
       "op_00000000000000000000000000000009",
     ]);
     expect(page.catalog_revision).toBe(12);
@@ -142,7 +150,7 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
     installSessionCatalogFetchMock(() => {
       throw new Error("空集合不应发请求");
     });
-    await expect(querySessionCatalogOperationStatus(48_505, "workspace-1", []))
+    await expect(querySessionCatalogOperationStatus(48_505, workspaceTarget, []))
       .rejects.toThrow("会话目录状态查询至少需要一个 operation_id");
   });
 
@@ -151,7 +159,7 @@ describe("会话目录按 ID 状态查询与 snapshot", () => {
       data: { workspace_id: "workspace-1", catalog_revision: 12, event_seq_watermark: 7, generation: 12 },
       request_id: "req-snapshot",
     }));
-    const snapshot = await fetchSessionCatalogSnapshot(48_506, "workspace-1");
+    const snapshot = await fetchSessionCatalogSnapshot(48_506, workspaceTarget);
     expect(snapshot.catalog_revision).toBe(12);
     expect(snapshot.event_seq_watermark).toBe(7);
   });
@@ -186,7 +194,7 @@ describe("会话目录 navigation 事件 channel", () => {
         request_id: "req-events",
       });
     });
-    const page = await listSessionCatalogNavigationEvents(48_507, "workspace-1", { after: 7 });
+    const page = await listSessionCatalogNavigationEvents(48_507, workspaceTarget, { after: 7 });
     expect(request!.path).toBe("/api/v1/session-catalog/navigation-events");
     expect(request!.url).toContain("after=7");
     expect(page.event_seq_watermark).toBe(9);
@@ -198,7 +206,7 @@ describe("会话目录 navigation 事件 channel", () => {
     installSessionCatalogFetchMock(() => {
       throw new Error("负 cursor 不应发请求");
     });
-    await expect(listSessionCatalogNavigationEvents(48_508, "workspace-1", { after: -1 }))
+    await expect(listSessionCatalogNavigationEvents(48_508, workspaceTarget, { after: -1 }))
       .rejects.toThrow("navigation 事件 cursor 必须是非负整数: -1");
   });
 });

@@ -3,10 +3,10 @@ import type {
   ChildThreadList,
   ChildThreadSummary,
   CursorPage,
-  DeleteSessionResult,
   Session,
   SessionCompactResult,
   SessionInformationSnapshot,
+  SessionMainThread,
   SessionUpdateRequest,
 } from "../../types/backend";
 import { parseChildThreadStatus } from "../../types/protocol";
@@ -78,6 +78,27 @@ export async function getSession(
   );
 }
 
+export async function getSessionMainThread(
+  port: number,
+  sessionId: string,
+  workspaceId?: string | null,
+): Promise<SessionMainThread> {
+  const data = unwrapApiData(
+    await requestJson<APIResponse<SessionMainThread>>(
+      port,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/main-thread`,
+      { headers: workspaceHeader(workspaceId) },
+    ),
+  );
+  if (
+    data.session_id !== sessionId
+    || !/^thr_[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/u.test(data.thread_id)
+  ) {
+    throw new Error("main thread 协议响应与请求会话不匹配或 thread_id 非 canonical");
+  }
+  return data;
+}
+
 export async function getSessionInformation(
   port: number,
   sessionId: string,
@@ -130,6 +151,7 @@ export async function createSession(
 export async function forkSessionContext(
   port: number,
   sessionId: string,
+  placeUnderSource: boolean,
   workspaceId?: string | null,
 ): Promise<Session> {
   return unwrapApiData(
@@ -139,6 +161,7 @@ export async function forkSessionContext(
       {
         method: "POST",
         headers: workspaceHeader(workspaceId),
+        body: JSON.stringify({ place_under_source: placeUnderSource }),
       },
     ),
   );
@@ -159,21 +182,6 @@ export async function updateSession(
         headers: workspaceHeader(workspaceId),
         body: JSON.stringify(payload),
       },
-    ),
-  );
-}
-
-export async function deleteSession(
-  port: number,
-  sessionId: string,
-  workspaceId?: string | null,
-  cascade = false,
-): Promise<DeleteSessionResult> {
-  return unwrapApiData(
-    await requestJson<APIResponse<DeleteSessionResult>>(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}${cascade ? "?cascade=true" : ""}`,
-      { method: "DELETE", headers: workspaceHeader(workspaceId) },
     ),
   );
 }

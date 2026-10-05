@@ -73,6 +73,8 @@ class RolloutPartsMixin:
     ) -> ContentPartAnchor:
         """重启后恢复 anchor，并校验 view、part 与父 JSONL 行完整性。"""
         thread_id = strict_text(thread_id, field="thread_id")
+        session_id = thread_id
+        owner_thread_id = self.main_thread_id(session_id)
         anchor_id = strict_text(anchor_id, field="operation_anchors.anchor_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -81,11 +83,16 @@ class RolloutPartsMixin:
         # 先跳过通用 item 内容校验，避免把可定位的 anchor 损坏误报成
         # 泛化的 rollout integrity error。offset/commit chain 仍然照常校验。
         self.initialize(
-            thread_id,
+            session_id,
             checkpoint_ns,
             validate_jsonl_items=False,
         )
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        with self._connect(
+            owner_thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             row = connection.execute(
                 "SELECT anchor_id, item_id, part_id, mode, view_id, branch_id, "
@@ -243,6 +250,8 @@ class RolloutPartsMixin:
     ) -> None:
         """建立 part locator 派生索引，正文仍只从父 JSONL item 读取。"""
         thread_id = strict_text(thread_id, field="thread_id")
+        session_id = thread_id
+        owner_thread_id = self.main_thread_id(session_id)
         item_id = strict_text(item_id, field="item_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -278,9 +287,11 @@ class RolloutPartsMixin:
             raise ItemSchemaError(
                 "content part json_pointer 必须锚定父 CanonicalItemRecord.payload"
             )
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns)
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 parent = connection.execute(
                     "SELECT jsonl_offset, jsonl_length, semantic_kind FROM item_catalog WHERE item_id = ?",
@@ -399,9 +410,13 @@ class RolloutPartsMixin:
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        session_id = thread_id
+        owner_thread_id = self.main_thread_id(session_id)
+        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns)
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
                     "SELECT item_id, part_id, mode, view_id, branch_id, recovery_capability, fragment_identity, fragment_length, fragment_hash, fragment_layout_json FROM operation_anchors WHERE anchor_id = ?",
@@ -544,18 +559,25 @@ class RolloutPartsMixin:
 
     def register_provenance_edge(
         self,
+        session_id: str,
         thread_id: str,
         edge: ProvenanceEdge,
         *,
         checkpoint_ns: str = "",
     ) -> None:
+        session_id = strict_text(session_id, field="session_id")
         thread_id = strict_text(thread_id, field="thread_id")
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(
+                session_id, checkpoint_ns, thread_id=owner_thread_id
+            )
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
                     "SELECT relation, source_ref, target_ref, attempt, supersedes_relation_id, replay_input FROM item_relations WHERE relation_id = ?",

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.pending_request import PendingRequestDTO
 from app.services.business.job.service import JobService
 from app.services.infrastructure.pending_request_store import PendingRequestStore
@@ -55,10 +56,18 @@ def _request(
     request_id: str | None = "request_test",
 ) -> PendingRequestDTO:
     now = datetime.now(UTC)
+    execution_binding = UserExecutionIdentity(
+        job_id=job_id,
+        turn_id=f"turn_{job_id}",
+        admission_idempotency_key=f"admission_{job_id}",
+    )
     return PendingRequestDTO(
         job_id=job_id,
+        execution_binding=execution_binding,
         message_id=message_id,
         session_id=session_id,
+        thread_id=f"thr_{session_id}",
+        turn_id=execution_binding.turn_id,
         content=message_id,
         delivery_policy="after_turn",
         enqueue_sequence=sequence,
@@ -143,6 +152,7 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
         service.start_job(
             "ses_019b8605a35b7fd6829e9dfec660d38c",
             "后发送",
+            thread_id="thr_ses_019b8605a35b7fd6829e9dfec660d38c",
             message_id="msg_new",
             message_created_at=datetime.now(UTC).isoformat(),
         ),

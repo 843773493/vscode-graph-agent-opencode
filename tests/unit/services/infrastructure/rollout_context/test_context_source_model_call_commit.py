@@ -18,7 +18,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 
-OWNER = ContextSourceOwnerKey(session_id="ses_b4csm", thread_id="main")
+OWNER = ContextSourceOwnerKey(
+    session_id="ses_b4csm", thread_id="thr_018f1234567870008000000000000001"
+)
 
 
 class _FakeControlStatePort:

@@ -78,26 +78,26 @@
 
 - *(跨进程也保证毫秒内有序)*：否决，需要跨进程共享计数器/锁，本地单机工具不值得引入该复杂度，且无法用本机实测支撑。
 
-### D3：破坏性范围 = 无运行时开关 + 存量 v4 一次性显式处置
+### D3：破坏性范围 = 只接受 v7，旧 UUIDv4 catalog 显式失败
 
-**决定**：**不引入任何运行时维护开关**——判死 `identity_profile_migration_active` 及任何等价的「窗口期接受 `v4|v7`」运行时分叉；canonical 校验器**始终只接受 v7**。存量 v4 走**一次性显式处置**：启动/迁移遇到 v4 canonical id MUST fail-closed 并隔离，同时给出可操作的显式报告。
+**决定**：**不引入任何运行时维护开关**——判死 `identity_profile_migration_active` 及任何等价的「窗口期接受 `v4|v7`」运行时分叉；canonical 校验器**始终只接受 v7**。旧 UUIDv4 Session Catalog 不再有 importer：遇到 v4 位 profile 或只有旧 JSON catalog 的工作区时显式失败，保留原数据，交由用户从当前格式备份恢复或人工处理。
 
 - **无运行时开关**：系统 MUST NOT 提供运行时维护开关，MUST NOT 存在「只接受 v4」「长期双接受」或「窗口期受控双接受」的任何运行态；MUST NOT 为兼容存量而放宽校验到 `v4|v7`。
-- **存量 v4 显式处置**：判据是既有迁移机对非法 id 的 `illegal_id` 隔离（`app/core/session_catalog_migration` 的 `_preflight`/`_physical` 段）。要求：**fail-closed 隔离 + 显式报告**（被隔离 id、物理路径、原因、建议动作），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建、MUST NOT 提供旧 ID path alias、MUST NOT 静默吸收。
-- **收敛断言**：MUST 有一条测试证明「`v4` 位 profile 的 canonical 身份被拒绝、`v7` 被接受」，以机械证明**不存在窗口期与运行时双轨**；另 MUST 有一条负向断言证明源码中不存在 `identity_profile_migration_active` 及等价开关。
+- **旧 UUIDv4 显式拒绝**：canonical validator 遇到 v4 必须明确拒绝；缺少 SQLite catalog 而存在旧 JSON index 时 resolver MUST fail-closed 并保持输入不变。系统 MUST NOT 自动导入、隔离、重编号、双读、扫盘重建或提供旧 ID path alias。现有 session creation/deletion 等链路各自的隔离语义仍由其 owner 维护，不由已删除的 catalog importer 承担。
+- **收敛断言**：MUST 有测试证明「`v4` 位 profile 的 canonical 身份被拒绝、`v7` 被接受」，并证明旧 JSON-only workspace fail-closed 且原件不变；另 MUST 有一条负向断言证明源码中不存在 `identity_profile_migration_active` 及等价开关。
 
 **理由**：
 
 - 与本仓既有纪律一致（AGENTS.md 第 1 条「彻底根除双轨」：运行时开关造成的窗口期双接受**本身就是双轨**，即使声明有终态也不接受；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
 - `validate_session_id` 只接受 v7 位 profile；任何「放宽读到 `v4|v7`」都必须新增第二套接受分支，正是双轨，故**否决**窗口期方案。
-- 存量迁移可行性的判据以「代码是否声明了必须迁移的落盘形态」为准：代码明确声明 id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的**目录叶名**（`session_catalog_store.py` 的 locator 校验）与 SQLite **主键**，且 id 会内嵌进 rollout/message_stream/trace/llm_request 等持久文件（实测同一 session 目录内 10+ 个文件命中该 `ses_` 值），因此存量数据确实是问题面——但处置方式定为 **fail-closed 隔离 + 可操作显式报告**，而不是运行时双轨重编号。
+- 存量数据确实会与 v7-only 校验不兼容：id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的目录叶名、SQLite 主键，也会内嵌进 rollout/message_stream/trace/llm_request 等持久文件。当前变更选择显式拒绝并保留原件；没有 Session Catalog importer，也不提供自动隔离或重编号路径。用户从当前格式备份恢复或人工处理旧工作区。
 
 **否决的备选**：
 
 - *(a) 维护窗口 + `identity_profile_migration_active` 门控的受控双接受*：否决——运行期双接受即双轨，违反 AGENTS.md 第 1 条。
 - *(b) 承认窗口期即双轨并给收口期限*：否决——同上，只是把双轨说成有期限。
 - *(c) 只对新写入生效（无终态的双接受期）*：否决，等价于长期 `v4|v7` 双轨。
-- *(d) 显式失效旧数据*：否决，会销毁用户会话/历史；改用 fail-closed 隔离 + 可操作报告保留原数据，由用户显式决定归档或失效。
+- *(d) 在线兼容或自动改写旧数据*：否决，会引入第二套接受/定位语义并可能破坏用户数据；旧格式显式失败、保持原件，由用户恢复备份或人工处理。
 
 ### D4：日期桶 = 必须与 id 内嵌时间戳（UTC）一致，且可校验
 
@@ -140,7 +140,7 @@
 
 **决定**：不因 v7 重建表或索引，不加列、不加索引、不加迁移 DDL。
 
-**理由**：v7 与 v4 的文本长度、类型与 `TEXT` 比较语义完全相同，主键定义不变；改变的是值的分布（新写入获得时间局部性）。`nodes.node_id`、`thread_catalog.thread_id` 等既有 `TEXT PRIMARY KEY` 无需任何变更。收益是**新数据**获得 B-tree 插入局部性与按 id 排序≈按时间排序；历史行在一次性迁移重编号后同样受益。
+**理由**：v7 与 v4 的文本长度、类型与 `TEXT` 比较语义完全相同，主键定义不变；改变的是值的分布（新写入获得时间局部性）。`nodes.node_id`、`thread_catalog.thread_id` 等既有 `TEXT PRIMARY KEY` 无需任何变更。收益是**新数据**获得 B-tree 插入局部性与按 id 排序≈按时间排序；本 change 不重编号历史行。
 
 **备选**：重建表以「整理」页空间：否决，收益不抵风险，且违反「零回归/务实」原则。
 
@@ -170,9 +170,9 @@
 **待 owner 处理的收口项（本 change 不代改）**：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（写死 `payload` 第 13 个 hex MUST 为 `4`、拒绝「非 v4 bit profile」）、`specs/rollout-checkpoint-storage/spec.md`（同款 v4 断言）与 `add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`、`tasks.md`（同款 `4` 与「非 v4 bit profile」文本）与本 change 冲突，MUST 由其 owner 收口为 v7（列为待处理项，见「待确认问题」）。
 **待 owner 处理的收口项（本 change 不代改）**：四处在途文本仍写死 v4，需由各自 owner 收口为本 change 的 v7 定义，具名清单与 owner 声明见 D11。
 
-### D9：哈希/幂等键审计是迁移的阻断前置（owner 裁定）
+### D9：未来持久身份重写前的哈希/幂等键审计（owner 裁定）
 
-**决定**：`content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入审计 MUST 作为**阻断性任务**排在迁移任务之前；审计结论未落定前迁移 MUST NOT 开工。任何以 id 为输入的哈希/幂等键 MUST 给出明确处置（随迁移一致重算，或该 id 不参与迁移）。
+**决定**：本 change 不重写任何存量 canonical ID。若未来另一个经授权的 change 提出持久身份重写，`content_hash` / `plan_hash` / `request_hash` / itemized plan-hash / 幂等键 / 去重键的输入审计 MUST 作为阻断性任务排在重写任务之前；审计结论未落定前重写 MUST NOT 开工。任何以 id 为输入的哈希/幂等键 MUST 给出明确处置（随身份重写一致重算，或该 id 不参与重写）。
 
 **已实测的现状证据（缩小审计范围，不作为结论）**：
 
@@ -184,15 +184,15 @@
 
 - `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_idempotency_key(commit_kind, subject_id, outcome, metadata)`：其签名**显式包含 `subject_id`**，而 `subject_id` 在生产调用点就是 canonical id（如 `assembly/sealing.py` 的 `n=f"assembly:{snapshot.assembly_id}"`、`execution/recovery.py` 的 `resume:{turn_id}:{execution_id}`）。因此该幂等键**直接以 canonical id 为输入**，重编号后必然漂移。
 
-因此审计 MUST 覆盖的已知命中面至少包含：`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash` / `default_idempotency_key(subject_id=...)`，以及全仓 `idempotency_key` 生成点（如 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_*`、`assembly/sealing.py`、`execution/recovery.py`、`reasoning_checkpoint_service.py` 的 `acceptance_*`）。
+因此任何未来身份重写审计 MUST 覆盖的已知命中面至少包含：`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash` / `default_idempotency_key(subject_id=...)`，以及全仓 `idempotency_key` 生成点（如 `app/services/infrastructure/rollout_context/storage/transaction.py` 的 `default_*`、`assembly/sealing.py`、`execution/recovery.py`、`reasoning_checkpoint_service.py` 的 `acceptance_*`）。
 
-**A5 的处置要求**：`default_idempotency_key` 已判定「会漂移」，故它 MUST 出现在 tasks §5A 的处置表里并给出「随迁移一致重算」或「该 id 不参与迁移」的明确处置，MUST NOT 只登记不处置。
+**A5 的处置要求**：`default_idempotency_key` 已判定「会漂移」，故任何未来身份重写计划都 MUST 给它和其他命中符号明确处置；本 change 的审计结果不得被解读为已有重写工具或 importer。
 
-**为什么裁定为阻断而非「先迁后补」**：迁移后哈希漂移若无人负责，会让 assembly/plan 校验假 mismatch 或静默重算，直接破坏「零回归」与「绝不默默失败」。
+**为什么裁定为阻断**：如果未来进行身份重写，哈希漂移若无人负责，会让 assembly/plan 校验假 mismatch 或静默重算，直接破坏「零回归」与「绝不默默失败」。
 
 ### D10：gateway 控制面库逐表分类，失效必须显式报告（owner 裁定）
 
-**决定**：不预先决定控制面是否失效，而是要求**逐表分类**，三类处置语义写死在规范里：`migrate` / `explicitly_invalidated`（MUST 用户可见显式报告）/ `not_affected`（MUST 判定依据）。`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非实测证明是「可安全丢弃的租约」），因为租约承担并发互斥，静默丢弃会造成双访问。
+**决定**：逐表分类控制面承载的 session 身份，三类结果为 `migrate` / `explicitly_invalidated`（MUST 用户可见显式报告）/ `not_affected`（MUST 有判定依据）。本 change 不重写或隔离控制面中的存量 ID；`migrate` 只表示该持久面受未来身份重写影响，不能触发隐式导入。`user_access_lease` MUST NOT 归入 `explicitly_invalidated`（除非实测证明其语义是「可安全丢弃的租约」），因为租约承担并发互斥，静默丢弃会造成双访问。
 
 **已实测的控制面候选面**：`app/gateway/control/gateway_state.py` 中 `user_view_state` 以 `(user_id, workspace_id, session_id)` 为 `PRIMARY KEY`、`user_access_lease.access_session_id TEXT NOT NULL UNIQUE`。二者承载 session 身份，MUST 进入逐表分类。
 
@@ -211,9 +211,9 @@
 
 **为什么**：避免第二套定义或重复文本漂移；由 owner 收口可保持单一事实源。
 
-### D12：迁移面 = 工厂产出前缀 × 持久面 的全集矩阵（A4）
+### D12：身份 profile 变更影响面 = 工厂前缀 × 持久面的全集矩阵（A4）
 
-**决定**：迁移面 MUST 按「**唯一 id 工厂产出的全部前缀** × **是否进入持久面**」的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 字面后缀匹配。`IdentifierPrefix`（`app/core/identifier.py`）实测为 **33 个前缀**的闭合 `Literal`；逐前缀判定见下表。判定口径：进入**目录叶名 / 文件名 / SQLite 主键或列 / JSONL 或 JSON 字段**者记为持久面，只在进程内内存/事件总线中使用者记为非持久面。
+**决定**：身份 profile 变更的影响面 MUST 按「唯一 id 工厂产出的全部前缀 × 是否进入持久面」的矩阵枚举，MUST NOT 按 `ses_`/`thr_` 字面后缀匹配。`IdentifierPrefix`（`app/core/identifier.py`）实测为 33 个前缀的闭合 `Literal`；逐前缀判定见下表。本 change 不重写历史 ID；矩阵用于说明 profile 收紧会影响哪些持久载体，并约束任何未来另行授权的重写。判定口径：进入目录叶名、文件名、SQLite 主键或列、JSONL 或 JSON 字段者记为持久面，只在进程内内存/事件总线中使用者记为非持久面。
 
 | 前缀 | 主要产出点（具名） | 持久面 | 载体证据 |
 |---|---|---|---|
@@ -262,8 +262,8 @@
 
 ## 风险与权衡
 
-- **迁移面广**：id 内嵌进 rollout JSONL、message_stream、trace、llm_request 等持久文件，且是目录叶名与 SQLite 主键；一次性迁移需要完整账本与备份，中断恢复是主要风险。缓解：复用 `session_catalog_migration.py` 的 staging + journal + 隔离区 fail-closed 先例，禁止扫盘吸收。
-- **content_hash / 幂等键**：若某些 hash 或幂等键把 id 作为输入，重编号会改变其值。需在实施时审计（列为待确认项）。
+- **迁移面广**：id 内嵌进 rollout JSONL、message_stream、trace、llm_request 等持久文件，且是目录叶名与 SQLite 主键；任意在线重编号会破坏引用和权威边界。运行时只拒绝非法 ID 并保留原始数据供显式处理，不自动扫描、隔离或重写。
+- **content_hash / 幂等键**：若未来另立 change 重写持久 ID，hash 和幂等键也可能需要同步处置；D9 的影响审计已完成，本 change 不重写历史 ID。
 - **依赖提升**：把 `uuid-utils` 从传递依赖变为直接依赖，需确保锁定版本与 cp311–cp314 wheel 覆盖；缺失即 fail-closed，不会静默降级。
 - **跨实现单调性差异**：Bun 与 Node 的原生/非原生方案单调性不同，本 capability 只对 Python 唯一工厂给强保证，避免过度承诺。
 - **时钟回拨**：钳制是本地进程内保护，跨进程不保证；若未来出现多进程竞争同一毫秒，需要重新评估（当前 id 由后端进程生成，无此面）。
@@ -272,13 +272,13 @@
 
 1. **准备**：把 `uuid-utils>=0.16` 提升为 `pyproject.toml` 显式直接依赖；把唯一 id 工厂切到 `uuid_utils.uuid7()`；校验器正名为单一 v7 profile。
 2. **分桶自校验**：在 locator 校验中加入「`sessions/YYYY/MM/DD` 日期 == id 内嵌 48 bit 时间戳的 UTC 日期」断言（先以校验模式落地，再切换为强制）。
-3. **存量处置**：**无运行时开关**；启动/迁移路径遇到 v4 canonical id MUST fail-closed 隔离并产出可操作的显式报告（被隔离 id、物理路径、原因、建议动作），MUST NOT 回退 v4、MUST NOT 双读、MUST NOT 扫盘重建；无法归属者隔离到既有隔离惯例（`.boxteam/orphaned/`）。
-4. **收敛**：迁移完成后把校验器收紧为只接受 v7；删除任何过渡读取路径；确认无 v4 生成点残留（除 D7 豁免的非 canonical id）。
-5. **验证**：`openspec validate --strict --all`、工厂/校验器单测、迁移中断恢复测试、分桶一致性负向测试。
+3. **存量拒绝**：canonical 校验器始终只接受 v7；旧 UUIDv4 Session Catalog 不提供 importer。只有旧 JSON 索引而缺少 SQLite catalog 时 resolver MUST 明确失败并保留 JSON 与物理数据，MUST NOT 初始化空 catalog、双读、扫盘、隔离或重编号。
+4. **收敛**：删除旧 Session Catalog 迁移入口、实现与专用测试；保留 session creation/deletion 各自归属的隔离语义；确认无运行时 profile 开关、旧 ID path alias 或 v4 canonical 生成点（D7 明确豁免的非 canonical id 除外）。
+5. **验证**：`openspec validate --strict --all`、工厂/校验器单测、旧 JSON-only catalog 与损坏 SQLite 的 fail-closed 测试、分桶一致性负向测试。
 
-**阻断顺序（D9/D10 的落点）**：步骤 3 之前 MUST 先完成 D9 的哈希/幂等键阻断审计并落定处置，以及 D10 的控制面逐表分类；审计未落定前步骤 3 MUST NOT 开工。
+**D9/D10 的适用边界**：哈希/幂等键审计与控制面逐表分类已完成，作为未来身份重写的影响盘点留档。当前步骤 3 只实施 v7-only 拒绝与旧 JSON-only catalog 的 fail-closed，不执行任何身份重写、导入或隔离，因此不依赖未来重写的实施机制。
 
-## 待确认问题
+## 后续身份重写边界
 
-1. **审计任务的具体命中清单**：D9 已给出已实测部分（`context_plan_hash` / `context_request_hash` / `compute_thread_creation_preimage_hash` 命中；`content_hash` / `contribution_content_hash` / session_creation preimage 未命中），但全量 idempotency-key / 去重键清点与负向证据仍需在实施期落成；缺「审计执行结果」才能定最终处置清单。
-2. **控制面各表的最终分类**：D10 已定分类语义与 `user_access_lease` 的默认归 `migrate`，但每张表的实际归类（`migrate` / `explicitly_invalidated` / `not_affected`）需实测判定；缺「逐表实测结论」才能定。
+1. D9 的哈希/幂等键命中清单、处置与负向证据已记录在 tasks §5A；若未来另立身份重写 change，必须复核其实现范围并重新证明处置完整。
+2. D10 的控制面表分类已记录在 tasks §5B；当前 change 不按分类重写或失效任何 Gateway 数据。

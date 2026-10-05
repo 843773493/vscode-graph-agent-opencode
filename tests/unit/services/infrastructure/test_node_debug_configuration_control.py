@@ -29,6 +29,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from tests.support.node_debug_dependencies import (
+    TEST_THREAD_ID,
     permissive_node_debug_session_admission,
 )
 
@@ -44,6 +45,12 @@ class _SessionCatalogResolverStub:
         path = self._session_root / session_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def get_node(self, node_id: str) -> object:
+        raise KeyError(node_id)
+
+    def main_thread_id(self, session_id: str) -> str:
+        return TEST_THREAD_ID
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
         path = self._session_root / session_id / "threads" / thread_id
@@ -77,14 +84,14 @@ def _running_runtime(
 ) -> NodeDebugRuntime:
     runtime = NodeDebugRuntime(
         session_id=session_id,
-        thread_id="main",
+        thread_id=TEST_THREAD_ID,
         configuration_id=configuration_id,
         workspace_root=service._workspace_root,
         script_path=service._workspace_root / "entry.mjs",
         relative_script_path="entry.mjs",
         status="running",
     )
-    service._runtimes[(session_id, "main")] = runtime
+    service._runtimes[(session_id, TEST_THREAD_ID)] = runtime
     return runtime
 
 
@@ -116,7 +123,7 @@ async def test_import_configuration_without_activate_leaves_nothing_active(
     state = await service.import_configuration(
         _SESSION_ID,
         _portable_configuration(),
-        thread_id="main",
+        thread_id=TEST_THREAD_ID,
         activate=False,
     )
     assert [item.name for item in state.configurations] == ["可导入方案"]
@@ -137,7 +144,7 @@ async def test_import_configuration_activate_syncs_active_selection(
     state = await service.import_configuration(
         _SESSION_ID,
         _portable_configuration("激活方案"),
-        thread_id="main",
+        thread_id=TEST_THREAD_ID,
         activate=True,
     )
     assert state.active_configuration_name == "激活方案"
@@ -146,7 +153,7 @@ async def test_import_configuration_activate_syncs_active_selection(
     # 激活导入必须把方案断点同步为待安装断点；漏掉 sync_active_configuration
     # 时这里会得到空断点，变异因此变红。
     assert [(item.path, item.line) for item in state.breakpoints] == [("entry.mjs", 1)]
-    reloaded = await service.get_state(_SESSION_ID, "main")
+    reloaded = await service.get_state(_SESSION_ID, TEST_THREAD_ID)
     assert reloaded.active_configuration_name == "激活方案"
     assert [(item.path, item.line) for item in reloaded.breakpoints] == [
         ("entry.mjs", 1)
@@ -161,7 +168,7 @@ async def test_create_configuration_activate_is_blocked_while_target_runs(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=TEST_THREAD_ID,
             name="运行中方案",
             script_path="entry.mjs",
         )
@@ -176,7 +183,7 @@ async def test_create_configuration_activate_is_blocked_while_target_runs(
         await service.create_configuration(
             NodeDebugConfigurationCreateRequest(
                 session_id=_SESSION_ID,
-                thread_id="main",
+                thread_id=TEST_THREAD_ID,
                 name="被阻断方案",
                 script_path="entry.mjs",
                 activate=True,
@@ -192,7 +199,7 @@ async def test_update_and_delete_running_configuration_are_blocked(
     created = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=TEST_THREAD_ID,
             name="运行中方案",
             script_path="entry.mjs",
         )
@@ -208,7 +215,7 @@ async def test_update_and_delete_running_configuration_are_blocked(
             configuration_id,
             NodeDebugConfigurationUpdateRequest(
                 session_id=_SESSION_ID,
-                thread_id="main",
+                thread_id=TEST_THREAD_ID,
                 name="改名失败",
                 script_path="entry.mjs",
             ),
@@ -216,7 +223,7 @@ async def test_update_and_delete_running_configuration_are_blocked(
 
     with pytest.raises(RuntimeError, match="目标程序运行中，不能修改或删除当前调试方案"):
         await service.delete_configuration(
-            _SESSION_ID, configuration_id, thread_id="main"
+            _SESSION_ID, configuration_id, thread_id=TEST_THREAD_ID
         )
 
 
@@ -228,7 +235,7 @@ async def test_copy_configuration_activate_is_blocked_while_target_runs(
     source = await service.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=_SESSION_ID,
-            thread_id="main",
+            thread_id=TEST_THREAD_ID,
             name="来源方案",
             script_path="entry.mjs",
         )
@@ -246,7 +253,7 @@ async def test_copy_configuration_activate_is_blocked_while_target_runs(
             source_session_id=_SESSION_ID,
             target_session_id=_OTHER_SESSION_ID,
             configuration_id=source_id,
-            source_thread_id="main",
-            target_thread_id="main",
+            source_thread_id=TEST_THREAD_ID,
+            target_thread_id=TEST_THREAD_ID,
             activate=True,
         )

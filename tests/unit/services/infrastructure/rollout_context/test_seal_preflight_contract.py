@@ -8,7 +8,6 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     BaseDeltaRole,
     CanonicalItemStatus,
@@ -21,8 +20,9 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
@@ -145,7 +145,12 @@ def _entry(
         content_length=ref.content_length,
         content_hash=ref.content_hash,
         detail_ref=(
-            DetailRef(session_id="s1", assembly_id="assembly-1", detail_id=ref.ref_id)
+            DetailRef(
+                session_id="s1",
+                thread_id="thread-1",
+                assembly_id="assembly-1",
+                detail_id=ref.ref_id,
+            )
             if ref.ref_type == "request_only"
             else None
         ),
@@ -166,6 +171,7 @@ def _snapshot(
     return ContextAssemblySnapshot(
         assembly_id="assembly-1",
         session_id="s1",
+        thread_id="thread-1",
         turn_id="t1",
         execution_id="e1",
         plan_id="p1",

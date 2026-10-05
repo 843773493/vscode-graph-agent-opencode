@@ -1,9 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from app.core.session_catalog_store import validate_thread_id
+
+
+def _canonical_thread_id(value: object) -> str:
+    try:
+        validate_thread_id(value)
+    except TypeError as error:
+        raise ValueError(str(error)) from error
+    return cast(str, value)
+
+
+CanonicalThreadId = Annotated[str, BeforeValidator(_canonical_thread_id)]
 
 NodeDebugStatus = Literal[
     "idle",
@@ -89,7 +102,7 @@ class NodeDebugEvaluateParams(BaseModel):
 
 class _NodeDebugActionRequestBase(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -142,7 +155,7 @@ class NodeDebugBreakpointRequest(NodeDebugSetBreakpointParams):
 
 class NodeDebugStartRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
     configuration_id: str | None = Field(default=None, min_length=1)
     path: str = Field(min_length=1)
     working_directory: str | None = None
@@ -241,7 +254,7 @@ class NodeDebugActionRecordDTO(BaseModel):
     action_id: str
     session_id: str
     #: 动作审计必须显式携带实际 SessionThread 归属，不提供隐式默认值。
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId
     action: str
     message: str
     actor: Literal["human", "ai", "system"] = "human"
@@ -303,7 +316,7 @@ class NodeDebugConfigurationDTO(BaseModel):
 class NodeDebugStateDTO(BaseModel):
     session_id: str
     #: 运行状态必须显式携带实际 SessionThread 归属，不提供隐式默认值。
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId
     status: NodeDebugStatus
     active_configuration_id: str | None = None
     active_configuration_name: str | None = None
@@ -335,7 +348,7 @@ class NodeDebugSessionManifestDTO(BaseModel):
     schema_version: Literal[1] = 1
     session_id: str
     #: manifest 必须显式记录实际 SessionThread owner，不提供隐式默认值。
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId
     active_configuration_id: str | None = None
     # 方案文件由 owner manifest 显式登记。fork source capture 只读取这份清单，
     # 不得通过扫描 configurations/ 目录猜测未登记文件。
@@ -372,7 +385,7 @@ class NodeDebugLaunchClaimDTO(BaseModel):
 
     schema_version: Literal[1] = 1
     session_id: str
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId
     process_instance_id: str = Field(min_length=1)
     nonce: str = Field(min_length=1)
     phase: NodeDebugLaunchPhase
@@ -389,7 +402,7 @@ class NodeDebugLaunchClaimDTO(BaseModel):
 
 class NodeDebugConfigurationCreateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -404,7 +417,7 @@ class NodeDebugConfigurationCreateRequest(BaseModel):
 
 class NodeDebugConfigurationUpdateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
     name: str = Field(min_length=1, max_length=80)
     script_path: str | None = None
     working_directory: str = ""
@@ -418,20 +431,20 @@ class NodeDebugConfigurationUpdateRequest(BaseModel):
 
 class NodeDebugConfigurationActivateRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
 
 
 class NodeDebugConfigurationImportRequest(BaseModel):
     session_id: str = Field(min_length=1)
-    thread_id: str = Field(min_length=1)
+    thread_id: CanonicalThreadId | None = None
     configuration: NodeDebugConfigurationDTO
     activate: bool = False
 
 
 class NodeDebugConfigurationCopyRequest(BaseModel):
     source_session_id: str = Field(min_length=1)
-    source_thread_id: str = Field(min_length=1)
+    source_thread_id: CanonicalThreadId | None = None
     target_session_id: str = Field(min_length=1)
-    target_thread_id: str = Field(min_length=1)
+    target_thread_id: CanonicalThreadId | None = None
     name: str | None = Field(default=None, min_length=1, max_length=80)
     activate: bool = False

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import MessageRole
@@ -15,6 +16,7 @@ from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:
     return JobDispatchSnapshotDTO(
         session_id=session_id,
+        thread_id=f"thr_{session_id}",
         job_id=job_id,
         job_status="running",
         active_job_id=job_id,
@@ -42,7 +44,7 @@ class _FakeSession:
         # main_thread_id，绝不用 session_id 冒充；替身默认给可区分的 thr_ 前缀，
         # 使「误用 session_id」的变异能被 thread_id 断言杀掉。
         self.thread_id = f"thr_{session_id}" if thread_id is _UNSET else thread_id
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(UTC)
         self.updated_at = self.created_at
 
 
@@ -75,8 +77,8 @@ class _FakeMessageService:
             role=message_create.role,
             content=message_create.content,
             metadata=message_create.metadata,
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
 
 
@@ -129,6 +131,8 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
 
 @pytest.mark.asyncio
 async def test_orchestrator_preserves_reminder_metadata_without_changing_user_role():
+    captured: dict[str, object] = {}
+
     class _FakeJobService:
         def assert_accepting_jobs(self):
             return None
@@ -137,6 +141,7 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
             return await operation()
 
         async def start_job(self, session_id, *args, **kwargs):
+            captured.update(kwargs)
             return _running_dispatch(session_id, "job_system_reminder")
 
     message_service = _FakeMessageService()
@@ -163,6 +168,19 @@ async def test_orchestrator_preserves_reminder_metadata_without_changing_user_ro
     assert created.metadata["simulate_user"] is False
     assert created.metadata["sender_session_id"] == "ses_sender"
     assert created.metadata["structured_prompt_kind"] == "checkpoint_reminder"
+    execution_binding = captured["execution_binding"]
+    assert isinstance(execution_binding, InternalExecutionIntent)
+    assert execution_binding.message_id == "msg_test"
+    assert (
+        len(
+            {
+                execution_binding.message_id,
+                execution_binding.execution_id,
+                execution_binding.admission_idempotency_key,
+            }
+        )
+        == 3
+    )
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import session_navigation as nav
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_navigation_actor,
+    set_current_gateway_id,
+    set_current_navigation_actor,
+)
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
     NavigationMutationEnqueueResultDTO,
@@ -44,6 +50,7 @@ class _StubService:
         self.workspace_id = "11111111-1111-4111-8111-111111111111"
         self.error = error
         self.enqueue_scope_calls = 0
+        self.scopes = []
         # 计数而非仅抛错：空转断言（如「某个恒真表达式」）无法区分
         # 「cursor 解码失败后短路返回」与「仍继续调用 events 服务」。
         self.decode_cursor_calls = 0
@@ -51,6 +58,7 @@ class _StubService:
 
     async def submit_operation_batch(self, request, scope):
         self.enqueue_scope_calls += 1
+        self.scopes.append(scope)
         assert scope.workspace_id == self.workspace_id
         if self.error is not None:
             raise self.error
@@ -59,6 +67,7 @@ class _StubService:
         )
 
     def operation_status(self, operation_ids, scope):
+        self.scopes.append(scope)
         assert scope.workspace_id == self.workspace_id
         if self.error is not None:
             raise self.error
@@ -84,6 +93,17 @@ class _StubService:
         raise ValueError(f"navigation 事件 cursor 无效: {cursor!r}")
 
 
+@pytest.fixture(autouse=True)
+def _gateway_authenticated_scope():
+    gateway_token = set_current_gateway_id("gateway_test")
+    actor_token = set_current_navigation_actor("user:test-user")
+    try:
+        yield
+    finally:
+        reset_current_navigation_actor(actor_token)
+        reset_current_gateway_id(gateway_token)
+
+
 @pytest.mark.asyncio
 async def test_enqueue_maps_backpressure_to_retryable_503() -> None:
     """队列积压是可重试背压，必须是 503 而不是 4xx/5xx 静默丢弃。"""
@@ -98,6 +118,8 @@ async def test_enqueue_maps_backpressure_to_retryable_503() -> None:
         )
 
     assert captured.value.status_code == 503
+    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].actor == "user:test-user"
 
 
 @pytest.mark.asyncio
@@ -129,6 +151,8 @@ async def test_enqueue_maps_conflict_to_409() -> None:
         )
 
     assert captured.value.status_code == 409
+    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].actor == "user:test-user"
 
 
 @pytest.mark.asyncio
@@ -146,6 +170,18 @@ async def test_operation_status_reports_unknown_ids_without_error() -> None:
     assert response.data is not None
     assert response.data.unknown_operation_ids == ["op_" + "b" * 32]
     assert response.request_id == "req_status"
+    assert service.scopes[0].gateway_id == "gateway_test"
+    assert service.scopes[0].actor == "user:test-user"
+
+
+def test_navigation_scope_fails_closed_without_authenticated_actor() -> None:
+    service = _StubService()
+    actor_token = set_current_navigation_actor(None)
+    try:
+        with pytest.raises(RuntimeError, match="navigation actor"):
+            nav._navigation_scope(service)
+    finally:
+        reset_current_navigation_actor(actor_token)
 
 
 @pytest.mark.asyncio

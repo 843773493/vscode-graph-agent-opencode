@@ -189,6 +189,12 @@
   cursor: pointer;
 }
 
+.session-resource-pending-state {
+  color: var(--vscode-descriptionForeground, #888);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .session-resource-label.workspace-label {
   font-weight: 650;
 }

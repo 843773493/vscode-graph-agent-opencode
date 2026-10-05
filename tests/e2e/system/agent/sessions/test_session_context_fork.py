@@ -72,6 +72,7 @@ async def test_fork_context_creates_child_without_copying_session_side_data(
     )
     checkpointer.finalize_turn(
         session_id=source_session_id,
+        thread_id=checkpointer._storage.main_thread_id(source_session_id),
         turn_id="turn-orbit-1",
         final_message_id="msg_orbit_assistant",
     )

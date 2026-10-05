@@ -15,15 +15,6 @@ from app.domain.itemized.enums import (
     TurnScope,
     TurnStatus,
 )
-from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
-from app.domain.itemized.hashing import (
-    canonical_json_bytes,
-    content_hash,
-    contribution_content_hash,
-    sha256_jcs,
-    validate_hash_token,
-)
-from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.epoch.prefix_epoch import (
     PENDING_TRANSITION_REASONS,
     REBUILD_EPOCH_REASONS,
@@ -51,19 +42,6 @@ from app.domain.itemized.epoch.prefix_epoch import (
     toolset_compatibility_key,
     verify_stable_prefix,
 )
-from app.domain.itemized.records import (
-    CanonicalItemRecord,
-    ProducerRef,
-)
-from app.domain.itemized.identity.refs import (
-    ContextRef,
-    ToolSetRef,
-    ref_identity,
-    require_manifest_token,
-    selection_ref_identity,
-    unique_ref_identities,
-)
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.epoch.root_compilation import (
     CompiledRootItem,
     CompiledRootSourceProvenance,
@@ -78,11 +56,42 @@ from app.domain.itemized.epoch.root_compilation import (
     resolve_source_wire_role,
     validate_epoch_root_uniqueness,
 )
+from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    ExecutionOrigin,
+    InternalExecutionIntent,
+)
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    content_hash,
+    contribution_content_hash,
+    sha256_jcs,
+    validate_hash_token,
+)
+from app.domain.itemized.identity.refs import (
+    ContextRef,
+    ToolSetRef,
+    ref_identity,
+    require_manifest_token,
+    selection_ref_identity,
+    unique_ref_identities,
+)
+from app.domain.itemized.parts import ContentPart, ContentPartAnchor
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    InternalDisplayPart,
+    InternalDisplayProvenance,
+    ProducerRef,
+    RuntimeNoticePayload,
+)
+from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.runtime import (
     ExecutionRecord,
     ItemDraft,
     ModelCallRecord,
     ProvenanceEdge,
+    TurnExecutionLink,
     TurnRecord,
 )
 from app.domain.itemized.schema import (
@@ -116,9 +125,14 @@ __all__ = [
     "DetailProtection",
     "EpochContractError",
     "EpochReason",
+    "ExecutionAdmission",
+    "ExecutionOrigin",
     "ExecutionRecord",
     "FormatDispatchError",
     "IncludedReason",
+    "InternalDisplayPart",
+    "InternalDisplayProvenance",
+    "InternalExecutionIntent",
     "ItemDraft",
     "ItemSchemaError",
     "ModelCallRecord",
@@ -136,6 +150,7 @@ __all__ = [
     "RootCompileConflictError",
     "RootPlacement",
     "RootPlacementViolationError",
+    "RuntimeNoticePayload",
     "SealedPrefixAssembly",
     "SelectionKind",
     "SemanticKind",
@@ -144,6 +159,7 @@ __all__ = [
     "StablePrefixViolationError",
     "ToolSetRebaseRequiredError",
     "ToolSetRef",
+    "TurnExecutionLink",
     "TurnRecord",
     "TurnScope",
     "TurnStatus",

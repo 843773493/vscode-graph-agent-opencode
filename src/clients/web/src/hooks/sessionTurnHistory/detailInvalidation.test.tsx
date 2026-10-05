@@ -7,6 +7,7 @@ import {
   WORKSPACE_ID,
   appState,
   bootstrap,
+  emptyHistoryPageResponse,
   installWindow,
   originalFetch,
   restoreTurnHistoryTestGlobals,
@@ -131,7 +132,7 @@ describe("useSessionTurnHistory detail invalidation", () => {
     let detailCalls = 0;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
-        const [input] = args;
+        const [input, init] = args;
         const path = new URL(String(input), `http://127.0.0.1:${apiPort}`).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({
@@ -150,6 +151,12 @@ describe("useSessionTurnHistory detail invalidation", () => {
           });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            direction?: string;
+          };
+          if (request.direction === "tail") {
+            return emptyHistoryPageResponse("req_initial_history_future");
+          }
           detailCalls += 1;
           await wait(10);
           return Response.json({
@@ -290,10 +297,8 @@ describe("useSessionTurnHistory detail invalidation", () => {
     let bootstrapCalls = 0;
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
-        const path = new URL(
-          String(args[0]),
-          `http://127.0.0.1:${apiPort}`,
-        ).pathname;
+        const [input, init] = args;
+        const path = new URL(String(input), `http://127.0.0.1:${apiPort}`).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "turn-history-stale-detail-token" } });
         }
@@ -307,6 +312,12 @@ describe("useSessionTurnHistory detail invalidation", () => {
           });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
+          const request = JSON.parse(String(init?.body ?? "{}")) as {
+            direction?: string;
+          };
+          if (request.direction === "tail") {
+            return emptyHistoryPageResponse("req_initial_history_stale_detail");
+          }
           historyCalls += 1;
           return Response.json(
             {

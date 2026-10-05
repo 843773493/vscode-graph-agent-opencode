@@ -71,11 +71,13 @@ class SessionResourceProviderRegistry:
         kind: SessionResourceKind,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO:
         return await self.get(kind).control(
             session_id=session_id,
             resource_id=resource_id,
             action=action,
+            operation_id=operation_id,
         )
 
     async def cleanup_session(self, session_id: str) -> dict[SessionResourceKind, int]:

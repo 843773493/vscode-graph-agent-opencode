@@ -48,15 +48,16 @@ def prepare_default_test_workspace(
     template_root: Path,
     shared_skill_root: Path | None = None,
 ) -> Path:
-    """完整复制默认只读模板，创建文件级隔离工作区。"""
+    """完整复制只读模板，创建文件级隔离工作区。"""
 
     template_items = tuple(item.name for item in template_root.iterdir())
-    return prepare_test_workspace(
+    prepared_root = prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
         template_items=template_items,
         shared_skill_root=shared_skill_root,
     )
+    return prepared_root
 
 
 def install_test_workspace_config(

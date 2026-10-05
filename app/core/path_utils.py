@@ -1,15 +1,106 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from app.core.exceptions import ForbiddenError
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_creation import SessionCreationService
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.core.workspace_identity import load_or_create_workspace_id
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    validate_workspace_id,
+)
+
+_WORKSPACE_CONTEXT: ContextVar[tuple[str, Path] | None] = ContextVar(
+    "boxteam_workspace_context",
+    default=None,
+)
+
+
+@dataclass(slots=True)
+class SessionCatalogComponents:
+    """由显式生命周期 owner 持有的同一组 catalog 组件。"""
+
+    sessions_root: Path
+    resolver: SessionCatalogPathResolver
+    creation_service: SessionCreationService
+    _closed: bool = False
+
+    def get_catalog_components(
+        self, sessions_root: Path, workspace_id: str
+    ) -> SessionCatalogComponents:
+        if self._closed:
+            raise RuntimeError("Session catalog owner 已关闭，禁止重新打开")
+        if (
+            sessions_root != self.sessions_root
+            or workspace_id != self.resolver.workspace_id
+        ):
+            raise RuntimeError(
+                "Session catalog 与请求工作区不一致: "
+                f"requested={workspace_id}:{sessions_root}, "
+                f"owned={self.resolver.workspace_id}:{self.sessions_root}"
+            )
+        return self
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.resolver.catalog_store.close()
+
+
+class SessionCatalogProvider(Protocol):
+    def get_catalog_components(
+        self, sessions_root: Path, workspace_id: str
+    ) -> SessionCatalogComponents: ...
+
+
+_CATALOG_PROVIDER: ContextVar[SessionCatalogProvider | None] = ContextVar(
+    "boxteam_session_catalog_provider", default=None
+)
+
+
+@contextmanager
+def catalog_provider_scope(provider: SessionCatalogProvider) -> Iterator[None]:
+    """只委派当前显式 owner，不创建或缓存第二套组件。"""
+    token = _CATALOG_PROVIDER.set(provider)
+    try:
+        yield
+    finally:
+        _CATALOG_PROVIDER.reset(token)
+
+
+@contextmanager
+def workspace_context(
+    workspace_id: str,
+    workspace_root: Path,
+    *,
+    session_catalog: SessionCatalogComponents | None = None,
+) -> Iterator[None]:
+    """在当前请求/任务上下文中绑定已解析的工作区身份与根目录。"""
+
+    binding = (
+        validate_workspace_id(workspace_id),
+        workspace_root.expanduser().resolve(strict=True),
+    )
+    token: Token[tuple[str, Path] | None] = _WORKSPACE_CONTEXT.set(binding)
+    try:
+        if session_catalog is None:
+            yield
+        else:
+            session_catalog.get_catalog_components(
+                binding[1] / ".boxteam" / "sessions", binding[0]
+            )
+            with catalog_provider_scope(session_catalog):
+                yield
+    finally:
+        _WORKSPACE_CONTEXT.reset(token)
 
 
 def resolve_boxteam_home(home: Path | None = None) -> Path:
@@ -88,15 +179,21 @@ def get_gateway_root() -> Path:
 
 
 def get_workspace_root() -> Path:
-    """获取工作区根目录。
+    """取得显式寻址请求绑定的工作区根目录，不读取进程环境默认值。"""
 
-    优先从 WORKSPACE_ROOT 环境变量读取，未设置时回退到用户级持久工作区根目录。
-    """
-    workspace_root = os.environ.get("WORKSPACE_ROOT")
-    if not workspace_root:
-        return get_user_workspace_root()
+    binding = _WORKSPACE_CONTEXT.get()
+    if binding is None:
+        raise RuntimeError("工作区根目录解析必须位于显式 workspace_id 请求上下文中")
+    return binding[1]
 
-    return Path(workspace_root).resolve()
+
+def get_workspace_id() -> str:
+    """取得显式寻址请求绑定的 workspace UUID。"""
+
+    binding = _WORKSPACE_CONTEXT.get()
+    if binding is None:
+        raise RuntimeError("workspace_id 解析必须位于显式工作区请求上下文中")
+    return binding[0]
 
 
 def get_boxteam_root() -> Path:
@@ -107,9 +204,10 @@ def get_sessions_dir() -> Path:
     return get_boxteam_root() / "sessions"
 
 
-def _build_session_catalog_components(
+def build_session_catalog_components(
     sessions_root: Path,
-) -> tuple[SessionCatalogPathResolver, SessionCreationService]:
+    workspace_id: str,
+) -> SessionCatalogComponents:
     """构造 SQLite catalog 的 resolver 与原子创建服务（共享同一 store）。
 
     探测逻辑（同一工作区单数据源，不做双读）：
@@ -118,17 +216,17 @@ def _build_session_catalog_components(
       fail-closed 校验 ``user_version``）→ creation/delete service → 新
       resolver；
     - SQLite catalog 不存在且旧 ``navigation/session-catalog-index.json``
-      存在 → ``RuntimeError``（提示先经 ``SessionCatalogMigrator`` 维护
-      操作完成一次性迁移，拒绝双读旧 JSON）；
+      存在 → ``RuntimeError``（拒绝忽略旧权威索引并初始化空 catalog；此版本
+      不提供旧 Session Catalog 迁移，也不双读旧 JSON）；
     - 两者都不存在（全新工作区）→ store 初始化建空 catalog → services →
       新 resolver。
 
     workspace_id 取自 ``app/core/workspace_identity.py`` 的
     ``load_or_create_workspace_id``（与 container 装配使用同一份
     ``.boxteam/workspace-identity.json``，保证同一工作区后端 UUID 一致）。
-    store 的 SQLite 连接随 lru_cache 的 resolver 实例常开，进程生命周期
-    内复用，不提供单独关闭入口。
+    返回的组件必须由显式 owner 持有并关闭；路径 helper 只委派 owner。
     """
+    sessions_root = sessions_root.expanduser().resolve()
     if sessions_root.name == "sessions":
         navigation_root = sessions_root.parent / "navigation"
         if sessions_root.parent.name == ".boxteam":
@@ -150,55 +248,120 @@ def _build_session_catalog_components(
     if not database_path.is_file() and legacy_index_path.is_file():
         raise RuntimeError(
             "检测到旧形态会话目录权威索引但 SQLite session catalog 缺失，"
-            "拒绝双读旧 JSON；请先通过 SessionCatalogMigrator 维护"
-            f"操作完成一次性迁移: legacy_index={legacy_index_path}, "
+            "拒绝忽略旧数据并初始化空 catalog；此版本不提供旧 Session Catalog "
+            "迁移，请从当前格式工作区恢复或人工处理旧数据: "
+            f"legacy_index={legacy_index_path}, "
             f"catalog={database_path}"
         )
     # catalog 已存在时打开并 fail-closed 校验 user_version；全新工作区则
     # 建表初始化空 catalog（store 构造即完成建表与版本检查）。
+    workspace_id = validate_workspace_id(workspace_id)
+    actual_workspace_id = load_or_create_workspace_id(workspace_root)
+    if actual_workspace_id != workspace_id:
+        raise RuntimeError(
+            "会话 catalog workspace UUID 与工作区身份文件不一致: "
+            f"expected={workspace_id}, actual={actual_workspace_id}"
+        )
     store = SessionCatalogStore(database_path, sessions_root)
-    workspace_id = load_or_create_workspace_id(workspace_root)
-    creation_service = SessionCreationService(
-        store=store,
-        sessions_root=sessions_root,
-        workspace_id=workspace_id,
-    )
-    delete_service = SessionSubtreeDeleteService(
-        store=store,
-        sessions_root=sessions_root,
-        workspace_id=workspace_id,
-    )
-    resolver = SessionCatalogPathResolver(
-        store=store,
-        sessions_root=sessions_root,
-        workspace_id=workspace_id,
-        delete_service=delete_service,
-    )
-    return resolver, creation_service
+    try:
+        creation_service = SessionCreationService(
+            store=store,
+            sessions_root=sessions_root,
+            workspace_id=workspace_id,
+        )
+        delete_service = SessionSubtreeDeleteService(
+            store=store,
+            sessions_root=sessions_root,
+            workspace_id=workspace_id,
+        )
+        resolver = SessionCatalogPathResolver(
+            store=store,
+            sessions_root=sessions_root,
+            workspace_id=workspace_id,
+            delete_service=delete_service,
+        )
+        return SessionCatalogComponents(sessions_root, resolver, creation_service)
+    except BaseException as error:
+        try:
+            store.close()
+        except Exception as close_error:  # noqa: BLE001 - 关闭失败须与原始失败一起暴露。
+            raise BaseExceptionGroup(
+                "Session catalog 构造失败且关闭失败", [error, close_error]
+            ) from None
+        raise
 
 
-@lru_cache(maxsize=32)
-def _cached_session_catalog_components(
-    sessions_root: str,
-) -> tuple[SessionCatalogPathResolver, SessionCreationService]:
-    """按会话根目录缓存共享的 catalog resolver 与创建服务。"""
-    return _build_session_catalog_components(Path(sessions_root))
+def _resolve_session_scope(
+    sessions_root: Path | None,
+    workspace_id: str | None,
+) -> tuple[Path, str]:
+    if sessions_root is None:
+        binding = _WORKSPACE_CONTEXT.get()
+        if binding is None:
+            raise RuntimeError(
+                "获取 Session catalog 必须传入 sessions_root 或位于显式工作区请求上下文中"
+            )
+        root = binding[1] / ".boxteam" / "sessions"
+        resolved_workspace_id = binding[0]
+    else:
+        root = sessions_root.expanduser().resolve()
+        if root.name == "sessions" and root.parent.name == ".boxteam":
+            workspace_root = root.parent.parent
+        else:
+            # TODO: 测试与嵌入式调用仍允许传入任意 sessions 根目录；统一工作区
+            # 根目录约定后删除该分支。
+            workspace_root = root.parent
+        resolved_workspace_id = workspace_id or load_or_create_workspace_id(
+            workspace_root
+        )
+    if workspace_id is not None:
+        explicit_id = validate_workspace_id(workspace_id)
+        if explicit_id != resolved_workspace_id:
+            raise RuntimeError(
+                "Session catalog 显式 workspace UUID 与上下文身份不一致: "
+                f"explicit={explicit_id}, context={resolved_workspace_id}"
+            )
+    return root.resolve(), validate_workspace_id(resolved_workspace_id)
+
+
+
+def get_session_catalog_components(
+    sessions_root: Path | None = None,
+    *,
+    workspace_id: str | None = None,
+) -> SessionCatalogComponents:
+    resolved_root, resolved_workspace_id = _resolve_session_scope(
+        sessions_root, workspace_id
+    )
+    provider = _CATALOG_PROVIDER.get()
+    if provider is None:
+        raise RuntimeError(
+            "获取 Session catalog 必须绑定显式生命周期 owner: "
+            f"workspace_id={resolved_workspace_id}, sessions_root={resolved_root}"
+        )
+    return provider.get_catalog_components(resolved_root, resolved_workspace_id)
 
 
 def get_session_path_resolver(
     sessions_root: Path | None = None,
+    *,
+    workspace_id: str | None = None,
 ) -> SessionCatalogPathResolver:
-    """获取会话路径解析器；SQLite catalog 是唯一权威数据源。"""
-    resolved_root = (sessions_root or get_sessions_dir()).resolve()
-    return _cached_session_catalog_components(str(resolved_root))[0]
+    """从当前 owner 取得唯一 SQLite catalog 路径解析器。"""
+    return get_session_catalog_components(
+        sessions_root, workspace_id=workspace_id
+    ).resolver
 
 
 def get_session_creation_service(
     sessions_root: Path | None = None,
+    *,
+    workspace_id: str | None = None,
 ) -> SessionCreationService:
-    """获取与路径解析器共享 store 的原子 Session 创建服务。"""
-    resolved_root = (sessions_root or get_sessions_dir()).resolve()
-    return _cached_session_catalog_components(str(resolved_root))[1]
+    """从当前 owner 取得与 resolver 共用 store 的原子创建服务。"""
+    return get_session_catalog_components(
+        sessions_root, workspace_id=workspace_id
+    ).creation_service
 
 
 def get_logs_dir() -> Path:
@@ -218,14 +381,17 @@ def get_session_changes_dir(session_id: str) -> Path:
     return get_session_path(session_id) / "changes"
 
 
-def initialize_directories() -> None:
-    """初始化当前工作区运行时所需的目录与 SQLite catalog。"""
-    get_boxteam_root().mkdir(exist_ok=True, parents=True)
-    get_sessions_dir().mkdir(exist_ok=True, parents=True)
-    get_logs_dir().mkdir(exist_ok=True, parents=True)
-    get_artifacts_dir().mkdir(exist_ok=True, parents=True)
-    get_cache_dir().mkdir(exist_ok=True, parents=True)
-    get_session_path_resolver().initialize()
+def initialize_directories(workspace_id: str, workspace_root: Path) -> None:
+    """初始化 mount 集合中一个显式工作区的业务数据目录与 catalog。"""
+    resolved_root = workspace_root.expanduser().resolve(strict=True)
+    boxteam_root = resolved_root / ".boxteam"
+    (boxteam_root / "sessions").mkdir(exist_ok=True, parents=True)
+    for name in ("logs", "artifacts", "cache"):
+        (boxteam_root / name).mkdir(exist_ok=True, parents=True)
+    get_session_path_resolver(
+        boxteam_root / "sessions",
+        workspace_id=workspace_id,
+    ).initialize()
 
 
 def safe_join(base_path: Path, *paths: str) -> Path:

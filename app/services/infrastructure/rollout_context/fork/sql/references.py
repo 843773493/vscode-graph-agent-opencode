@@ -42,6 +42,31 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
                 f"expected={expected}, actual={result.rowcount}"
             )
 
+    def rewrite_overlay_column(column: str, old: object, new: object) -> None:
+        if old is None:
+            return
+        owner = (state.target_session_id, state.target_thread_id)
+        count_row = connection.execute(
+            f"SELECT COUNT(*) FROM source_overlays WHERE {column} = ? "
+            "AND session_id = ? AND thread_id = ?",
+            (old, *owner),
+        ).fetchone()
+        if count_row is None:
+            raise RuntimeError(f"无法读取 remap 行数: source_overlays.{column}")
+        expected = non_negative_int(
+            count_row[0], field=f"source_overlays.{column}.match_count"
+        )
+        result = connection.execute(
+            f"UPDATE source_overlays SET {column} = ? WHERE {column} = ? "
+            "AND session_id = ? AND thread_id = ?",
+            (new, old, *owner),
+        )
+        if result.rowcount != expected:
+            raise RuntimeError(
+                "full_rollout_copy source overlay reference remap 行数不一致: "
+                f"column={column}, expected={expected}, actual={result.rowcount}"
+            )
+
     for old_id, new_id in maps.get("item", {}).items():
         for table, column in (
             ("item_projections", "item_id"),
@@ -83,6 +108,8 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("executions", "replay_of_execution_id"),
             ("executions", "initial_execution_id"),
             ("executions", "last_execution_id"),
+            ("item_catalog", "execution_id"),
+            ("messages", "execution_id"),
             ("model_calls", "execution_id"),
             ("turn_execution_links", "execution_id"),
             ("context_assemblies", "execution_id"),
@@ -95,6 +122,8 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
         for table, column in (
             ("model_calls", "model_call_id"),
             ("model_calls", "retry_of_model_call_id"),
+            ("executions", "first_model_call_id"),
+            ("executions", "last_model_call_id"),
             ("context_assemblies", "model_call_id"),
         ):
             rewrite_column(table, column, old_id, new_id)
@@ -170,12 +199,14 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             "supersedes_overlay_id",
             "materializes_overlay_id",
         ):
-            rewrite_column("source_overlays", column, old_id, new_id)
+            rewrite_overlay_column(column, old_id, new_id)
 
     for source_epoch, target_epoch in overlay_epoch_map.items():
+        owner = (state.target_session_id, state.target_thread_id)
         count_row = connection.execute(
-            "SELECT COUNT(*) FROM source_overlays WHERE source_overlay_epoch = ?",
-            (source_epoch,),
+            "SELECT COUNT(*) FROM source_overlays WHERE source_overlay_epoch = ? "
+            "AND session_id = ? AND thread_id = ?",
+            (source_epoch, *owner),
         ).fetchone()
         if count_row is None:
             raise RuntimeError("full_rollout_copy source overlay epoch 行数读取失败")
@@ -183,8 +214,9 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             count_row[0], field="source_overlays.source_overlay_epoch.match_count"
         )
         result = connection.execute(
-            "UPDATE source_overlays SET source_overlay_epoch = ? WHERE source_overlay_epoch = ?",
-            (target_epoch, source_epoch),
+            "UPDATE source_overlays SET source_overlay_epoch = ? "
+            "WHERE source_overlay_epoch = ? AND session_id = ? AND thread_id = ?",
+            (target_epoch, source_epoch, *owner),
         )
         if result.rowcount != expected:
             raise RuntimeError(
@@ -198,7 +230,10 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("source_overlays", "base_ref"),
             ("source_overlays", "delta_ref"),
         ):
-            rewrite_column(table, column, old_id, new_id)
+            if table == "source_overlays":
+                rewrite_overlay_column(column, old_id, new_id)
+            else:
+                rewrite_column(table, column, old_id, new_id)
 
     for old_id, new_id in maps.get("tool_set", {}).items():
         rewrite_column("context_assembly_selections", "ref_id", old_id, new_id)

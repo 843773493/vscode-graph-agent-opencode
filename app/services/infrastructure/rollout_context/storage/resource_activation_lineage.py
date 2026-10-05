@@ -36,6 +36,7 @@ class ActivationLineageBodyStore:
         self,
         *,
         owner_session_id: str,
+        owner_thread_id: str,
         activation_snapshot_id: str,
         checkpoint_ns: str,
         manifest: Mapping[str, object],
@@ -51,6 +52,7 @@ class ActivationLineageBodyStore:
             )
         record = self._detail_store.write(
             session_id=owner_session_id,
+            thread_id=owner_thread_id,
             assembly_id=activation_snapshot_id,
             detail_kind=LINEAGE_DETAIL_KIND,
             retention_class=LINEAGE_RETENTION_CLASS,
@@ -71,6 +73,7 @@ class ActivationLineageBodyStore:
     ) -> Mapping[str, object]:
         raw = self._storage.get_context_plan_detail(
             detail_ref.session_id,
+            detail_ref.thread_id,
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
         )
@@ -81,6 +84,7 @@ class ActivationLineageBodyStore:
             )
         payload = self._detail_store.read(
             session_id=detail_ref.session_id,
+            thread_id=detail_ref.thread_id,
             record=record,
             include_sensitive=True,
         )

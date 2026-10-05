@@ -7,13 +7,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from app.services.infrastructure.rollout_context.migration.store import (
+    LegacyMigrationStorage,
+)
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
-)
-from app.services.infrastructure.rollout_context.migration.store import (
-    LegacyMigrationStorage,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
@@ -22,10 +22,7 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 
 
 def prepare_migration_workspace(request: pytest.FixtureRequest) -> Path:
-    from app.core.path_utils import _cached_session_catalog_components
-
     # 每个 case 重建同一正式 workspace；旧实例不能跨 case 保留目录索引。
-    _cached_session_catalog_components.cache_clear()
     context = TestRunContext.from_test_file(Path(request.node.path))
     return prepare_default_test_workspace(
         workspace_root=context.workspace_root,

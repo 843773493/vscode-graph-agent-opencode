@@ -7,22 +7,29 @@ context owner、checkpoint persistence 与 storage ports。
 from __future__ import annotations
 
 import asyncio
+import json
+import tempfile
 from collections.abc import Mapping
+from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.session_catalog_store import SessionCreationRecord
+from app.core.session_control_primitives import CONTROL_DATABASE_NAME
+from app.core.session_control_store import SessionControlStore
+from app.core.session_creation import ForkCompletionProof
 from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.node_debug.session.fork import (
     NodeDebugSourceCopySnapshot,
     capture_source_copy_snapshot,
-)
-from app.services.infrastructure.node_debug.session.thread_owner import (
-    MAIN_THREAD_ID,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.preflight import (
     read_source_format,
@@ -31,8 +38,13 @@ from app.services.infrastructure.rollout_context.fork.node_debug_materialization
     prepare_node_debug_fork,
     publish_node_debug_fork,
 )
+from app.services.infrastructure.rollout_context.fork.source_snapshot import (
+    ForkSourceSnapshot,
+    capture_fork_rollout_snapshot,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutTurnAnchor,
+    _RolloutFileLock,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
@@ -42,20 +54,219 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 @dataclass(frozen=True, slots=True)
 class RolloutForkResult:
-    """Saver 完成一次 fork 数据物化后返回的来源定位。"""
+    """Saver 完成并收敛 target fork journal 后返回的 completion facts。"""
 
     source_checkpoint_id: str | None
     source_view_id: str | None
+    fork_id: str | None = None
+    materialization_id: str | None = None
+    journal_state: str | None = None
+    source_snapshot_sha256: str | None = None
 
 
 class ForkCompactionMixin:
-    async def _capture_fork_debug_snapshot(
+    def resolve_main_thread_owner(self, session_id: str) -> MutationIntentOwner:
+        """从 Session catalog 与 per-session thread catalog 解析 main owner。"""
+        resolver = self._storage._path_resolver
+        node = resolver.catalog_store.get_node(session_id)
+        if node.kind != "session" or node.main_thread_id is None:
+            raise RuntimeError(
+                "fork owner 必须是含 canonical main_thread_id 的 Session: "
+                f"session_id={session_id!r}, kind={node.kind!r}, "
+                f"main_thread_id={node.main_thread_id!r}"
+            )
+        thread_id = node.main_thread_id
+        session_path = resolver.resolve_session_node(session_id)
+        thread_path = resolver.resolve_thread_node(session_id, thread_id)
+        if thread_path != session_path:
+            raise RuntimeError(
+                "fork main thread 必须折叠到 Session 根目录: "
+                f"session_id={session_id}, thread_id={thread_id}, path={thread_path}"
+            )
+        control_path = session_path / CONTROL_DATABASE_NAME
+        if not control_path.is_file() or control_path.is_symlink():
+            raise RuntimeError(
+                "fork owner 缺少普通文件形式的 per-session thread catalog: "
+                f"session_id={session_id}, path={control_path}"
+            )
+        control_store = SessionControlStore(control_path)
+        try:
+            control_store.verify_matches_catalog_main_thread(thread_id)
+        finally:
+            control_store.close()
+        return MutationIntentOwner(session_id=session_id, thread_id=thread_id)
+
+    def resolve_prepared_main_thread_owner(
+        self,
+        record: SessionCreationRecord,
+    ) -> MutationIntentOwner:
+        """仅凭 fork 创建 record capability 解析未发布 target main owner。"""
+        resolver = self._storage._path_resolver
+        session_path = resolver.resolve_prepared_session_node(record)
+        thread_id = record.main_thread_id
+        thread_path = resolver.resolve_prepared_thread_node(record, thread_id)
+        if thread_path != session_path:
+            raise RuntimeError(
+                "prepared fork main thread 必须折叠到 Session 根目录: "
+                f"session_id={record.session_id}, thread_id={thread_id}, "
+                f"path={thread_path}"
+            )
+        control_path = session_path / CONTROL_DATABASE_NAME
+        if not control_path.is_file() or control_path.is_symlink():
+            raise RuntimeError(
+                "prepared fork target 缺少普通文件形式的 per-session thread "
+                f"catalog: session_id={record.session_id}, path={control_path}"
+            )
+        control_store = SessionControlStore(control_path)
+        try:
+            control_store.verify_matches_catalog_main_thread(thread_id)
+        finally:
+            control_store.close()
+        return MutationIntentOwner(session_id=record.session_id, thread_id=thread_id)
+
+    def begin_pinned_fork_retention_claim(
+        self,
+        *,
+        fork_id: str,
+        source_session_id: str,
+        target_session_id: str,
+    ) -> int:
+        """用 source 的真实 lifecycle generation 建立 capture 前 claim。"""
+        storage = self._storage
+        generation = storage._source_lifecycle_generation(source_session_id)
+        storage.begin_pinned_fork_retention_claim(
+            claim_id=fork_id,
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            source_lifecycle_generation=generation,
+        )
+        return generation
+
+    def release_prepared_fork_retentions(
+        self,
+        record: SessionCreationRecord,
+    ) -> None:
+        """在 abort/quarantine 前按 prepared target capability 释放所有引用。"""
+        with self._storage.prepared_fork_target_scope(record):
+            self._storage.release_fork_retentions(record.session_id)
+
+    def read_committed_fork_completion_proof(
+        self,
+        *,
+        record: SessionCreationRecord,
+        source_session_id: str,
+        source_owner: MutationIntentOwner,
+        result: RolloutForkResult,
+        mode: str,
+        relationship: str,
+        checkpoint_ns: str,
+    ) -> ForkCompletionProof:
+        """只从 target 的 committed journal 构造 provider 可接受的窄证明。"""
+        if (
+            result.fork_id is None
+            or result.materialization_id is None
+            or result.source_snapshot_sha256 is None
+        ):
+            raise RuntimeError("fork 物化结果缺少 committed journal identity/hash")
+        with self._storage.prepared_fork_target_scope(record):
+            target_owner = self.resolve_prepared_main_thread_owner(record)
+            materialization_id, fork_id = (
+                self._storage.read_committed_fork_materialization(
+                    target_session_id=record.session_id,
+                    source_session_id=source_session_id,
+                    source_thread_id=source_owner.thread_id,
+                    target_thread_id=target_owner.thread_id,
+                    source_checkpoint_id=result.source_checkpoint_id,
+                    source_view_id=result.source_view_id,
+                    fork_mode=mode,
+                    relationship=relationship,
+                    checkpoint_ns=checkpoint_ns,
+                    fork_id=result.fork_id,
+                    materialization_id=result.materialization_id,
+                    source_snapshot_sha256=result.source_snapshot_sha256,
+                )
+            )
+        return ForkCompletionProof(
+            target_session_id=record.session_id,
+            fork_id=fork_id,
+            materialization_id=materialization_id,
+        )
+
+    async def recover_prepared_fork_completion(
+        self, record: SessionCreationRecord,
+    ) -> ForkCompletionProof | None:
+        """只按 creation capability 定点恢复；prepared 不能发布，committed 补证明。"""
+        with self._storage.prepared_fork_target_scope(record):
+            target_owner = self.resolve_prepared_main_thread_owner(record)
+            if not self._storage.index_path(record.session_id,
+                                            thread_id=target_owner.thread_id).is_file():
+                return None
+            with self._storage._connect(target_owner.thread_id, session_id=record.session_id,
+                                        read_only=True) as connection:
+                rows = connection.execute(
+                    "SELECT materialization_id, fork_id, source_session_id, source_checkpoint_id, "
+                    "source_view_id, fork_mode, relationship, checkpoint_ns, source_thread_id, "
+                    "target_thread_id, source_snapshot_sha256, status FROM fork_materializations"
+                ).fetchall()
+            if not rows:
+                return None
+            if len(rows) != 1:
+                raise RuntimeError("prepared fork 必须只有一条 materialization journal")
+            (materialization_id, fork_id, source_session_id, source_checkpoint_id,
+             source_view_id, mode, relationship, checkpoint_ns, source_thread_id,
+             target_thread_id, snapshot_sha256, status) = rows[0]
+            metadata = json.loads(record.session_metadata_json)
+            if metadata["context_source_session_id"] != source_session_id:
+                raise RuntimeError("prepared fork recovery source 与冻结 creation record 不一致")
+            if target_thread_id != target_owner.thread_id:
+                raise RuntimeError("prepared fork recovery target owner 不一致")
+            if status in {"prepared", "aborted"}:
+                self._storage.abort_fork_materialization(
+                    materialization_id, target_session_id=record.session_id,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                return None
+            if status not in {"target_committed", "committed"}:
+                raise RuntimeError(f"prepared fork recovery journal 状态非法: {status}")
+            self._storage._active_fork_materializations.discard(
+                (record.session_id, target_owner.thread_id, checkpoint_ns)
+            )
+            await asyncio.to_thread(self._storage.initialize, record.session_id,
+                                    checkpoint_ns, thread_id=target_owner.thread_id)
+            return self.read_committed_fork_completion_proof(
+                record=record, source_session_id=source_session_id,
+                source_owner=MutationIntentOwner(session_id=source_session_id,
+                                                 thread_id=source_thread_id),
+                result=RolloutForkResult(source_checkpoint_id=source_checkpoint_id,
+                                        source_view_id=source_view_id, fork_id=fork_id,
+                                        materialization_id=materialization_id,
+                                        source_snapshot_sha256=snapshot_sha256),
+                mode=mode, relationship=relationship, checkpoint_ns=checkpoint_ns,
+            )
+
+    def _require_main_thread_owner(
+        self,
+        session_id: str,
+        owner: MutationIntentOwner | None,
+    ) -> MutationIntentOwner:
+        canonical_owner = self.resolve_main_thread_owner(session_id)
+        if owner is not None and owner != canonical_owner:
+            raise RuntimeError(
+                "fork 调用方提供的 SessionThread owner 与 catalog 不匹配: "
+                f"provided={owner!r}, catalog={canonical_owner!r}"
+            )
+        return canonical_owner
+
+    def _capture_fork_debug_snapshot(
         self, source_session_id: str, mode: str
     ) -> NodeDebugSourceCopySnapshot | None:
         if mode == "history_prefix_fork":
             return None
+        source_thread_id = self._node_debug_store.path_resolver.main_thread_id(
+            source_session_id
+        )
         _payload, manifest = self._node_debug_store.read_manifest_payload(
-            source_session_id, MAIN_THREAD_ID
+            source_session_id, source_thread_id
         )
         if manifest is None:
             return None
@@ -64,22 +275,70 @@ class ForkCompactionMixin:
                 "source 存在调试方案，但 RolloutCheckpointSaver 未注入 Workspace debug 配置"
             )
         workspace_config = self._node_debug_workspace_config()
+        return capture_source_copy_snapshot(
+            self._node_debug_store,
+            session_id=source_session_id,
+            thread_id=source_thread_id,
+            capture_mode=mode,
+            workspace_config_revision=workspace_config.revision,
+            workspace_config_hash=workspace_config.content_hash,
+            workspace_id=workspace_config.workspace_id,
+        )
+
+    async def _capture_fork_source_snapshot(
+        self,
+        *,
+        source_session_id: str,
+        source_owner: MutationIntentOwner,
+        mode: str,
+        checkpoint_ns: str,
+        snapshot_root: Path,
+    ) -> ForkSourceSnapshot:
+        """在 source lifecycle guard 与 rollout shared lock 内冻结全部 source facts。"""
         gate = SessionLifecycleGate(self._storage.sessions_dir)
         async with gate.shared(source_session_id):
-            return capture_source_copy_snapshot(
-                self._node_debug_store,
-                session_id=source_session_id,
-                thread_id=MAIN_THREAD_ID,
-                capture_mode=mode,
-                workspace_config_revision=workspace_config.revision,
-                workspace_config_hash=workspace_config.content_hash,
-                workspace_id=workspace_config.workspace_id,
+            source_rollout = self._storage.root(
+                source_session_id,
+                checkpoint_ns,
+                thread_id=source_owner.thread_id,
             )
+            rollout_lock = _RolloutFileLock(
+                source_rollout.parent / ".rollout.write.lock",
+                exclusive=False,
+            )
+            rollout_lock.acquire()
+            try:
+                debug_snapshot = self._capture_fork_debug_snapshot(
+                    source_session_id, mode
+                )
+                request_only_content = self._capture_request_only_content_for_fork(
+                    source_session_id=source_session_id,
+                    source_thread_id=source_owner.thread_id,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                rollout_snapshot = await asyncio.to_thread(
+                    capture_fork_rollout_snapshot,
+                    self._storage,
+                    source_session_id=source_session_id,
+                    source_thread_id=source_owner.thread_id,
+                    snapshot_session_node=snapshot_root / source_session_id,
+                    snapshot_id=uuid4().hex,
+                    detail_capability=self._detail_store.fork_detail_capability(),
+                    rollout_lock_held=True,
+                )
+            finally:
+                rollout_lock.release()
+        return ForkSourceSnapshot(
+            rollout=rollout_snapshot,
+            request_only_content=request_only_content,
+            node_debug_snapshot=debug_snapshot,
+        )
 
     async def preflight_fork(
         self,
         *,
         source_session_id: str,
+        source_owner: MutationIntentOwner | None = None,
         mode: str = "context_fork",
         turn_id: str | None = None,
         anchor_mode: str = "inclusive",
@@ -93,20 +352,26 @@ class ForkCompactionMixin:
         session catalog/物理节点创建之前；该入口只读取 source，不建立
         target journal，也不产生 target-local identity。
         """
-        (
-            source_checkpoint,
-            source_checkpoint_id,
-            source_view_id,
-            turn_anchor,
-        ) = await self._resolve_fork_source(
-            source_session_id=source_session_id,
-            mode=mode,
-            turn_id=turn_id,
-            anchor_mode=anchor_mode,
-            checkpoint_id=checkpoint_id,
-            anchor=anchor,
-            checkpoint_ns=checkpoint_ns,
-        )
+        source_owner = self._require_main_thread_owner(source_session_id, source_owner)
+        with session_thread_owner_scope(
+            source_owner,
+            langgraph_thread_id=source_owner.thread_id,
+        ):
+            (
+                source_checkpoint,
+                source_checkpoint_id,
+                source_view_id,
+                turn_anchor,
+            ) = await self._resolve_fork_source(
+                source_session_id=source_session_id,
+                source_thread_id=source_owner.thread_id,
+                mode=mode,
+                turn_id=turn_id,
+                anchor_mode=anchor_mode,
+                checkpoint_id=checkpoint_id,
+                anchor=anchor,
+                checkpoint_ns=checkpoint_ns,
+            )
         if mode != "full_rollout_copy" and (
             source_checkpoint is None or source_checkpoint_id is None
         ):
@@ -117,6 +382,13 @@ class ForkCompactionMixin:
                 turn_anchor=turn_anchor,
                 source_checkpoint=source_checkpoint,
                 checkpoint_ns=checkpoint_ns,
+            )
+
+        if source_view_id is None:
+            source_view_id = self._storage._fork_source_view_id(
+                source_session_id,
+                source_checkpoint_id,
+                checkpoint_ns,
             )
 
         return RolloutForkResult(
@@ -158,6 +430,7 @@ class ForkCompactionMixin:
         self,
         *,
         source_session_id: str,
+        source_thread_id: str,
         mode: str,
         turn_id: str | None,
         anchor_mode: str,
@@ -189,30 +462,10 @@ class ForkCompactionMixin:
         if turn_id is not None and (checkpoint_id is not None or anchor is not None):
             raise ValueError("fork 只能传 turn_id，不能同时传 checkpoint_id 或 anchor")
 
-        # full_rollout_copy 对 v1 source 的唯一合法入口是显式 migration
-        # staging。这里不能让正常 v2 anchor/history reader 先打开 v1；完整
-        # copy 会在 clone_rollout 内把整个 source 导入 target v2，再继续
-        # target-local materialization。v1 没有可靠的 v2 checkpoint/view
-        # 边界，因此不接受 selector，避免把 legacy message_sequence 冒充
-        # 新 runtime 的 checkpoint identity。
         if mode == "full_rollout_copy":
-            source_format_version = read_source_format(
-                self._storage, source_session_id, checkpoint_ns
-            )
-            if source_format_version == 1:
-                if (
-                    turn_id is not None
-                    or checkpoint_id is not None
-                    or anchor is not None
-                ):
-                    raise ValueError(
-                        "v1 full_rollout_copy 只能迁移完整 source，不能使用 v2 selector"
-                    )
-                return None, None, None, None
-
+            if read_source_format(self._storage, source_session_id, checkpoint_ns) != 2:
+                raise ValueError("full_rollout_copy 只接受真实 v2 source，不提供旧格式 runtime")
             if turn_id is None and checkpoint_id is None and anchor is None:
-                # full 描述全部历史，不能用最近 completed Turn 把运行态尾部裁掉。
-                # 具体 active view 由 clone 的只读 source snapshot 决定。
                 return None, None, None, None
 
         turn_anchor = None
@@ -221,7 +474,7 @@ class ForkCompactionMixin:
         )
         if implicit_latest_turn:
             turn_anchor = await self.aresolve_latest_completed_turn_anchor(
-                build_checkpoint_config(source_session_id, checkpoint_ns=checkpoint_ns),
+                build_checkpoint_config(source_thread_id, checkpoint_ns=checkpoint_ns),
                 anchor_mode=anchor_mode,
             )
             if turn_anchor is None and mode in {"context_fork", "history_prefix_fork"}:
@@ -232,7 +485,7 @@ class ForkCompactionMixin:
                 turn_id = turn_anchor.turn_id
         if turn_anchor is None and turn_id is not None:
             turn_anchor = await self.aresolve_turn_anchor(
-                build_checkpoint_config(source_session_id, checkpoint_ns=checkpoint_ns),
+                build_checkpoint_config(source_thread_id, checkpoint_ns=checkpoint_ns),
                 turn_id=turn_id,
                 anchor_mode=anchor_mode,
                 require_completed=True,
@@ -240,7 +493,7 @@ class ForkCompactionMixin:
         if turn_anchor is not None:
             source_checkpoint = await self.aget_tuple(
                 build_checkpoint_config(
-                    source_session_id,
+                    source_thread_id,
                     checkpoint_ns=checkpoint_ns,
                     checkpoint_id=turn_anchor.checkpoint_id,
                 )
@@ -248,6 +501,7 @@ class ForkCompactionMixin:
         else:
             source_checkpoint = await self._resolve_fork_checkpoint(
                 source_session_id,
+                source_thread_id=source_thread_id,
                 checkpoint_id=checkpoint_id,
                 anchor=anchor,
                 checkpoint_ns=checkpoint_ns,
@@ -267,6 +521,11 @@ class ForkCompactionMixin:
         *,
         source_session_id: str,
         target_session_id: str,
+        source_owner: MutationIntentOwner | None = None,
+        target_owner: MutationIntentOwner | None = None,
+        creation_record: SessionCreationRecord | None = None,
+        fork_id: str | None = None,
+        materialization_id: str | None = None,
         mode: str = "context_fork",
         turn_id: str | None = None,
         anchor_mode: str = "inclusive",
@@ -275,28 +534,133 @@ class ForkCompactionMixin:
         relationship: str = "detached",
         checkpoint_ns: str = "",
     ) -> RolloutForkResult:
-        """统一物化三种 fork 的 rollout、checkpoint 和 SQLite 状态。"""
-        (
-            source_checkpoint,
-            source_checkpoint_id,
-            source_view_id,
-            turn_anchor,
-        ) = await self._resolve_fork_source(
-            source_session_id=source_session_id,
-            mode=mode,
-            turn_id=turn_id,
-            anchor_mode=anchor_mode,
-            checkpoint_id=checkpoint_id,
-            anchor=anchor,
-            checkpoint_ns=checkpoint_ns,
+        """先冻结全部 source facts，再只从私有快照物化 target。"""
+        source_owner = self._require_main_thread_owner(source_session_id, source_owner)
+        if creation_record is None:
+            target_owner = self._require_main_thread_owner(
+                target_session_id, target_owner
+            )
+        else:
+            if creation_record.session_id != target_session_id:
+                raise RuntimeError("prepared fork creation record target 不匹配")
+            prepared_owner = self.resolve_prepared_main_thread_owner(creation_record)
+            if target_owner is not None and target_owner != prepared_owner:
+                raise RuntimeError(
+                    "fork prepared target owner 与 creation record 不匹配"
+                )
+            target_owner = prepared_owner
+        fork_id = uuid4().hex if fork_id is None else strict_text(
+            fork_id, field="fork_id"
         )
-        if turn_anchor is None and turn_id is not None:
-            turn_anchor = await self.aresolve_turn_anchor(
-                build_checkpoint_config(source_session_id, checkpoint_ns=checkpoint_ns),
+        materialization_id = (
+            uuid4().hex
+            if materialization_id is None
+            else strict_text(materialization_id, field="materialization_id")
+        )
+        target_scope = (
+            self._storage.prepared_fork_target_scope(creation_record)
+            if creation_record is not None else nullcontext()
+        )
+        with target_scope, tempfile.TemporaryDirectory(
+            prefix=".fork-source-snapshot-", dir=self._storage.sessions_dir.parent,
+        ) as temporary:
+            source_snapshot = await self._capture_fork_source_snapshot(
+                source_session_id=source_session_id,
+                source_owner=source_owner,
+                mode=mode,
+                checkpoint_ns=checkpoint_ns,
+                snapshot_root=Path(temporary),
+            )
+            with self._storage.fork_source_snapshot_scope(
+                session_id=source_session_id,
+                thread_id=source_owner.thread_id,
+                session_node=source_snapshot.session_node,
+            ):
+                result = await self._afork_from_snapshot(
+                    source_session_id=source_session_id,
+                    target_session_id=target_session_id,
+                    source_owner=source_owner,
+                    target_owner=target_owner,
+                    source_snapshot=source_snapshot,
+                    fork_id=fork_id,
+                    materialization_id=materialization_id,
+                    mode=mode,
+                    turn_id=turn_id,
+                    anchor_mode=anchor_mode,
+                    checkpoint_id=checkpoint_id,
+                    anchor=anchor,
+                    relationship=relationship,
+                    checkpoint_ns=checkpoint_ns,
+                )
+            await asyncio.to_thread(
+                self._storage.complete_fork_materialization,
+                materialization_id=materialization_id,
+                target_session_id=target_session_id,
+                target_thread_id=target_owner.thread_id,
+                checkpoint_ns=checkpoint_ns,
+            )
+            return replace(result, journal_state="committed")
+
+    async def _afork_from_snapshot(
+        self,
+        *,
+        source_session_id: str,
+        target_session_id: str,
+        source_owner: MutationIntentOwner,
+        target_owner: MutationIntentOwner,
+        source_snapshot: ForkSourceSnapshot,
+        fork_id: str,
+        materialization_id: str,
+        mode: str,
+        turn_id: str | None,
+        anchor_mode: str,
+        checkpoint_id: str | None,
+        anchor: str | None,
+        relationship: str,
+        checkpoint_ns: str,
+    ) -> RolloutForkResult:
+        """所有 source 读取都经由已冻结的 rollout snapshot scope。"""
+        if relationship == "pinned":
+            claim = self._storage._catalog_store().get_fork_retention_claim(fork_id)
+            if (claim.source_session_id, claim.target_session_id,
+                claim.source_lifecycle_generation, claim.state) != (
+                source_session_id, target_session_id,
+                source_snapshot.rollout.source_lifecycle_generation, "preparing",
+            ):
+                raise RuntimeError("fork source snapshot 与 capture 前 pinned claim 不一致")
+        with session_thread_owner_scope(
+            source_owner,
+            langgraph_thread_id=source_owner.thread_id,
+        ):
+            (
+                source_checkpoint,
+                source_checkpoint_id,
+                source_view_id,
+                turn_anchor,
+            ) = await self._resolve_fork_source(
+                source_session_id=source_session_id,
+                source_thread_id=source_owner.thread_id,
+                mode=mode,
                 turn_id=turn_id,
                 anchor_mode=anchor_mode,
-                require_completed=True,
+                checkpoint_id=checkpoint_id,
+                anchor=anchor,
+                checkpoint_ns=checkpoint_ns,
             )
+        if turn_anchor is None and turn_id is not None:
+            with session_thread_owner_scope(
+                source_owner,
+                langgraph_thread_id=source_owner.thread_id,
+            ):
+                turn_anchor = await self.aresolve_turn_anchor(
+                    build_checkpoint_config(
+                        source_owner.thread_id,
+                        checkpoint_ns=checkpoint_ns,
+                    ),
+                    turn_id=turn_id,
+                    anchor_mode=anchor_mode,
+                    require_completed=True,
+                )
 
         if mode in {"context_fork", "history_prefix_fork"}:
             # 冲突必须发生在 begin_fork_materialization（target staging）
@@ -308,68 +672,71 @@ class ForkCompactionMixin:
                 checkpoint_ns=checkpoint_ns,
             )
 
-        debug_snapshot: NodeDebugSourceCopySnapshot | None = None
-        if mode != "full_rollout_copy" or read_source_format(
-            self._storage, source_session_id, checkpoint_ns
-        ) != 1:
-            debug_snapshot = await self._capture_fork_debug_snapshot(
-                source_session_id, mode
+        if source_view_id is None:
+            source_view_id = self._storage._fork_source_view_id(
+                source_session_id,
+                source_checkpoint_id,
+                checkpoint_ns,
             )
+
+        debug_snapshot = source_snapshot.node_debug_snapshot
 
         if mode == "full_rollout_copy":
-            source_format = read_source_format(
-                self._storage, source_session_id, checkpoint_ns
+            from app.services.infrastructure.rollout_context.fork.full_copy.operation import (
+                full_rollout_copy,
             )
-            if source_format == 1:
-                # 保留已有显式 v1 import 入口；typed/protected staging 不解析旧格式。
-                source_view_id = self.clone_rollout(
-                    source_thread_id=source_session_id,
-                    target_thread_id=target_session_id,
-                    checkpoint_ns=checkpoint_ns,
-                    source_checkpoint_id=source_checkpoint_id,
-                )
-            else:
-                from app.services.infrastructure.rollout_context.fork.full_copy.operation import (
-                    full_rollout_copy,
-                )
 
-                source_view_id, _fork_id = full_rollout_copy(
-                    self._storage,
+            source_view_id, _fork_id = full_rollout_copy(
+                self._storage,
+                source_session_id=source_session_id,
+                target_session_id=target_session_id,
+                checkpoint_ns=checkpoint_ns,
+                source_checkpoint_id=source_checkpoint_id,
+                relationship=relationship,
+                detail_capability=self._detail_store.fork_detail_capability(
+                    source_snapshots=source_snapshot.rollout.detail_snapshots
+                ),
+                debug_snapshot=debug_snapshot,
+                debug_workspace_config=self._node_debug_workspace_config,
+                fork_id=fork_id,
+                materialization_id=materialization_id,
+                source_snapshot_sha256=source_snapshot.snapshot_sha256,
+                defer_completion=True,
+            )
+            if turn_anchor is not None:
+                # full copy 先完成 target-local 安装；cutoff 必须随后使用
+                # identity mapping 得到的 target Turn，不能把 source ID
+                # 直接交给 rewind/dispatch。
+                target_turn_id = self._storage.fork_target_identity(
+                    target_session_id,
+                    fork_id=_fork_id,
                     source_session_id=source_session_id,
-                    target_session_id=target_session_id,
+                    entity_type="turn",
+                    source_local_id=turn_anchor.turn_id,
                     checkpoint_ns=checkpoint_ns,
-                    source_checkpoint_id=source_checkpoint_id,
-                    relationship=relationship,
-                    detail_capability=self._detail_store.fork_detail_capability(),
-                    debug_snapshot=debug_snapshot,
-                    debug_workspace_config=self._node_debug_workspace_config,
                 )
-                if turn_anchor is not None:
-                    # full copy 先完成 target-local 安装；cutoff 必须随后使用
-                    # identity mapping 得到的 target Turn，不能把 source ID
-                    # 直接交给 rewind/dispatch。
-                    target_turn_id = (
-                        self._storage.fork_target_identity(
-                            target_session_id,
-                            fork_id=_fork_id,
-                            source_session_id=source_session_id,
-                            entity_type="turn",
-                            source_local_id=turn_anchor.turn_id,
-                            checkpoint_ns=checkpoint_ns,
-                        )
-                        or turn_anchor.turn_id
-                    )
+                if target_turn_id is None:
+                    raise RuntimeError("full copy cutoff 缺少真实 target Turn mapping")
+                with session_thread_owner_scope(
+                    target_owner,
+                    langgraph_thread_id=target_owner.thread_id,
+                ):
                     self.rewind_to_turn(
                         build_checkpoint_config(
-                            target_session_id, checkpoint_ns=checkpoint_ns
+                            target_owner.thread_id,
+                            checkpoint_ns=checkpoint_ns,
                         ),
                         turn_id=target_turn_id,
                         anchor_mode=anchor_mode,
                     )
-                return RolloutForkResult(
-                    source_checkpoint_id=source_checkpoint_id,
-                    source_view_id=source_view_id,
-                )
+            return RolloutForkResult(
+                source_checkpoint_id=source_checkpoint_id,
+                source_view_id=source_view_id,
+                fork_id=fork_id,
+                materialization_id=materialization_id,
+                journal_state="target_committed",
+                source_snapshot_sha256=source_snapshot.snapshot_sha256,
+            )
 
         materialization_id, fork_id = self._storage.begin_fork_materialization(
             target_session_id=target_session_id,
@@ -379,6 +746,11 @@ class ForkCompactionMixin:
             fork_mode=mode,
             relationship=relationship,
             checkpoint_ns=checkpoint_ns,
+            source_thread_id=source_owner.thread_id,
+            target_thread_id=target_owner.thread_id,
+            source_snapshot_sha256=source_snapshot.snapshot_sha256,
+            fork_id=fork_id,
+            materialization_id=materialization_id,
         )
         debug_staged = prepare_node_debug_fork(
             self._storage,
@@ -390,50 +762,64 @@ class ForkCompactionMixin:
             checkpoint_ns=checkpoint_ns,
         )
 
+        if source_checkpoint is not None:
+            source_messages = source_checkpoint.checkpoint.get("channel_values", {}).get("messages", [])
+            if turn_anchor is not None:
+                with session_thread_owner_scope(source_owner, langgraph_thread_id=source_owner.thread_id):
+                    _resolved, source_messages = await self.amaterialize_turn_anchor(
+                        build_checkpoint_config(source_owner.thread_id, checkpoint_ns=checkpoint_ns),
+                        turn_id=turn_anchor.turn_id, anchor_mode=anchor_mode,
+                    )
+            await asyncio.to_thread(
+                self._storage.copy_v2_items_for_fork,
+                source_session_id=source_session_id, source_thread_id=source_owner.thread_id,
+                target_session_id=target_session_id, target_thread_id=target_owner.thread_id,
+                checkpoint_ns=checkpoint_ns, fork_id=fork_id,
+                materialization_id=materialization_id,
+                source_message_ids=tuple(self._storage._codec().message_id(message, index)
+                                         for index, message in enumerate(source_messages)),
+            )
+
         if mode != "full_rollout_copy" and source_checkpoint is not None:
             if mode == "history_prefix_fork" and turn_anchor is None:
                 await self._copy_history_prefix(
                     source_session_id,
                     target_session_id,
+                    source_owner=source_owner,
+                    target_owner=target_owner,
                     source_checkpoint_id=source_checkpoint_id,
                     checkpoint_ns=checkpoint_ns,
+                    materialization_id=materialization_id,
                 )
             else:
                 messages_override = None
                 if turn_anchor is not None:
-                    _resolved, messages_override = await self.amaterialize_turn_anchor(
-                        build_checkpoint_config(
-                            source_session_id, checkpoint_ns=checkpoint_ns
-                        ),
-                        turn_id=turn_anchor.turn_id,
-                        anchor_mode=anchor_mode,
-                    )
+                    with session_thread_owner_scope(
+                        source_owner,
+                        langgraph_thread_id=source_owner.thread_id,
+                    ):
+                        _resolved, messages_override = (
+                            await self.amaterialize_turn_anchor(
+                                build_checkpoint_config(
+                                    source_owner.thread_id,
+                                    checkpoint_ns=checkpoint_ns,
+                                ),
+                                turn_id=turn_anchor.turn_id,
+                                anchor_mode=anchor_mode,
+                            )
+                        )
                 await self._copy_fork_checkpoint(
                     source_checkpoint.checkpoint,
                     source_session_id,
                     target_session_id,
+                    source_owner=source_owner,
+                    target_owner=target_owner,
                     fork_mode=mode,
                     anchor=turn_id or anchor,
                     messages_override=messages_override,
                     checkpoint_ns=checkpoint_ns,
+                    materialization_id=materialization_id,
                 )
-        if (
-            mode in {"context_fork", "history_prefix_fork"}
-            and source_checkpoint is not None
-        ):
-            # checkpoint message channel 不覆盖没有 LangChain message 的
-            # provider block/tool/reasoning item；先完成 message view，再由
-            # storage 按 target 已物化 Turn 补齐 canonical item，避免 target
-            # 运行时回读 source JSONL。history_prefix_fork 会复制多个 checkpoint，
-            # 也必须在所有 channel 写完后执行一次。
-            await asyncio.to_thread(
-                self._storage.copy_v2_items_for_fork,
-                source_thread_id=source_session_id,
-                target_thread_id=target_session_id,
-                checkpoint_ns=checkpoint_ns,
-                fork_id=fork_id,
-            )
-
         if debug_snapshot is not None and debug_staged is not None:
             publish_node_debug_fork(
                 self._storage,
@@ -454,40 +840,30 @@ class ForkCompactionMixin:
             fork_mode=mode,
             relationship=relationship,
             checkpoint_ns=checkpoint_ns,
+            source_thread_id=source_owner.thread_id,
+            target_thread_id=target_owner.thread_id,
+            source_snapshot_sha256=source_snapshot.snapshot_sha256,
+            defer_completion=True,
         )
-        if mode == "full_rollout_copy" and turn_anchor is not None:
-            # full copy 的 v2 identity 在 commit 事务中才会映射到 target；
-            # rewind 必须使用 mapping 之后的 target Turn，不能把 source
-            # turn_id 当作 target-local dispatch identity。
-            target_turn_id = (
-                self._storage.fork_target_identity(
-                    target_session_id,
-                    fork_id=fork_id,
-                    source_session_id=source_session_id,
-                    entity_type="turn",
-                    source_local_id=turn_anchor.turn_id,
-                    checkpoint_ns=checkpoint_ns,
-                )
-                or turn_anchor.turn_id
-            )
-            self.rewind_to_turn(
-                build_checkpoint_config(target_session_id, checkpoint_ns=checkpoint_ns),
-                turn_id=target_turn_id,
-                anchor_mode=anchor_mode,
-            )
         self._copy_request_only_context_for_fork(
             source_session_id=source_session_id,
+            source_thread_id=source_owner.thread_id,
             target_session_id=target_session_id,
+            target_thread_id=target_owner.thread_id,
             fork_id=fork_id,
             checkpoint_ns=checkpoint_ns,
+            source_content_snapshot=source_snapshot.request_only_content,
         )
+        target_thread_id = target_owner.thread_id
         with self._context_reader.open_snapshot(
             target_session_id,
+            target_thread_id,
             checkpoint_ns,
         ) as target_snapshot:
             target_history_revision = target_snapshot.manifest.history_view_revision
         self.reconcile_context(
             target_session_id,
+            target_thread_id,
             operation="fork",
             checkpoint_ns=checkpoint_ns,
             history_view_revision=target_history_revision,
@@ -495,31 +871,43 @@ class ForkCompactionMixin:
         return RolloutForkResult(
             source_checkpoint_id=source_checkpoint_id,
             source_view_id=source_view_id,
+            fork_id=fork_id,
+            materialization_id=materialization_id,
+            journal_state="target_committed",
+            source_snapshot_sha256=source_snapshot.snapshot_sha256,
         )
 
     async def _resolve_fork_checkpoint(
         self,
         source_session_id: str,
         *,
+        source_thread_id: str,
         checkpoint_id: str | None,
         anchor: str | None,
         checkpoint_ns: str = "",
     ) -> CheckpointTuple | None:
+        thread_id = source_thread_id
+        owner = MutationIntentOwner(
+            session_id=source_session_id,
+            thread_id=source_thread_id,
+        )
         if checkpoint_id is not None or anchor is None:
-            return await self.aget_tuple(
-                build_checkpoint_config(
-                    source_session_id,
-                    checkpoint_ns=checkpoint_ns,
-                    checkpoint_id=checkpoint_id,
+            with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+                return await self.aget_tuple(
+                    build_checkpoint_config(
+                        thread_id,
+                        checkpoint_ns=checkpoint_ns,
+                        checkpoint_id=checkpoint_id,
+                    )
                 )
-            )
 
-        checkpoints = [
-            item
-            async for item in self.alist(
-                build_checkpoint_config(source_session_id, checkpoint_ns=checkpoint_ns)
-            )
-        ]
+        with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+            checkpoints = [
+                item
+                async for item in self.alist(
+                    build_checkpoint_config(thread_id, checkpoint_ns=checkpoint_ns)
+                )
+            ]
         candidate: CheckpointTuple | None = None
         for item in reversed(checkpoints):
             messages = self._checkpoint_messages(item.checkpoint)
@@ -546,16 +934,33 @@ class ForkCompactionMixin:
             raise KeyError(f"源 rollout 不存在 anchor: {anchor}")
         return candidate
 
+    def _fork_id_for_materialization(
+        self, target_session_id: str, target_thread_id: str,
+        materialization_id: str, checkpoint_ns: str,
+    ) -> str:
+        with self._storage._connect(target_thread_id, checkpoint_ns,
+                                    session_id=target_session_id, read_only=True) as connection:
+            row = connection.execute(
+                "SELECT fork_id FROM fork_materializations WHERE materialization_id = ? AND status = 'prepared'",
+                (materialization_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("fork checkpoint 缺少 prepared materialization journal")
+        return strict_text(row[0], field="fork.fork_id")
+
     async def _copy_fork_checkpoint(
         self,
         source_checkpoint: Checkpoint,
         source_session_id: str,
         target_session_id: str,
         *,
+        source_owner: MutationIntentOwner,
+        target_owner: MutationIntentOwner,
         fork_mode: str,
         anchor: str | None,
         messages_override: list[BaseMessage] | None,
         checkpoint_ns: str = "",
+        materialization_id: str,
     ) -> None:
         checkpoint = deepcopy(source_checkpoint)
         channel_values = checkpoint.get("channel_values")
@@ -570,42 +975,49 @@ class ForkCompactionMixin:
             raise ValueError(f"源会话 checkpoint 状态通道缺少版本: {missing_text}")
         if messages_override is not None:
             channel_values["messages"] = messages_override
-        self._mark_forked_messages(
-            channel_values=channel_values,
-            source_session_id=source_session_id,
-        )
         source_checkpoint_id = strict_text(
             checkpoint.get("id"),
             field="fork.source_checkpoint.id",
         )
         checkpoint["id"] = str(uuid4())
         checkpoint["updated_channels"] = list(channel_values)
-        child_config = await self.aput(
-            config=build_checkpoint_config(
-                target_session_id, checkpoint_ns=checkpoint_ns
-            ),
-            checkpoint=checkpoint,
-            metadata={
-                "source": "fork",
-                "step": -1,
-                "parents": {},
-                "fork_mode": fork_mode,
-                "source_session_id": source_session_id,
-                "source_anchor": anchor,
-            },
-            new_versions=channel_versions,
+        target_items = self._storage.read_items(
+            target_session_id, target_owner.thread_id, checkpoint_ns=checkpoint_ns,
         )
-        target_configurable = child_config.get("configurable")
-        if not isinstance(target_configurable, Mapping):
-            raise TypeError("fork target checkpoint config 缺少 configurable")
-        target_checkpoint_id = strict_text(
-            target_configurable.get("checkpoint_id"),
-            field="fork.target_checkpoint_id",
+        fork_id = self._fork_id_for_materialization(
+            target_session_id, target_owner.thread_id, materialization_id, checkpoint_ns,
         )
+        target_messages = []
+        for index, message in enumerate(channel_values.get("messages", [])):
+            source_message_id = self._storage._codec().message_id(message, index)
+            target_message_id = self._storage.fork_target_identity(
+                target_session_id, source_session_id=source_session_id,
+                fork_id=fork_id,
+                entity_type="message", source_local_id=source_message_id, checkpoint_ns=checkpoint_ns,
+            )
+            if target_message_id is None:
+                raise RuntimeError(f"fork checkpoint 缺少 target message mapping: {source_message_id}")
+            group = tuple(item for item in target_items if item.message_group_id == f"message-{target_message_id}")
+            if not group:
+                raise RuntimeError(f"fork checkpoint 缺少 target canonical message group: {target_message_id}")
+            target_messages.append(self._storage._codec().from_dict(self._storage._codec().project_message(group)))
+        channel_values["messages"] = target_messages
+        with session_thread_owner_scope(target_owner, langgraph_thread_id=target_owner.thread_id):
+            self._storage.materialize_fork_checkpoint(
+                materialization_id=materialization_id, target_session_id=target_session_id,
+                target_thread_id=target_owner.thread_id, checkpoint_ns=checkpoint_ns,
+                checkpoint=checkpoint,
+                metadata={"source": "fork", "step": -1, "parents": {}, "fork_mode": fork_mode,
+                          "source_session_id": source_session_id, "source_anchor": anchor},
+                current_messages=target_messages,
+            )
+        target_checkpoint_id = checkpoint["id"]
         self.copy_pending_writes(
-            source_thread_id=source_session_id,
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+            source_thread_id=source_owner.thread_id,
             source_checkpoint_id=source_checkpoint_id,
-            target_thread_id=target_session_id,
+            target_thread_id=target_owner.thread_id,
             target_checkpoint_id=target_checkpoint_id,
             checkpoint_ns=checkpoint_ns,
         )
@@ -615,19 +1027,29 @@ class ForkCompactionMixin:
         source_session_id: str,
         target_session_id: str,
         *,
+        source_owner: MutationIntentOwner,
+        target_owner: MutationIntentOwner,
         source_checkpoint_id: str | None,
         checkpoint_ns: str = "",
+        materialization_id: str,
     ) -> None:
         source_checkpoint_id = strict_text(
             source_checkpoint_id,
             field="history_prefix_fork.source_checkpoint_id",
         )
-        tuples = [
-            item
-            async for item in self.alist(
-                build_checkpoint_config(source_session_id, checkpoint_ns=checkpoint_ns)
-            )
-        ]
+        with session_thread_owner_scope(
+            source_owner,
+            langgraph_thread_id=source_owner.thread_id,
+        ):
+            tuples = [
+                item
+                async for item in self.alist(
+                    build_checkpoint_config(
+                        source_owner.thread_id,
+                        checkpoint_ns=checkpoint_ns,
+                    )
+                )
+            ]
         anchor_index = next(
             (
                 index
@@ -643,10 +1065,13 @@ class ForkCompactionMixin:
                 item.checkpoint,
                 source_session_id,
                 target_session_id,
+                source_owner=source_owner,
+                target_owner=target_owner,
                 fork_mode="history_prefix_fork",
                 anchor=source_checkpoint_id,
                 messages_override=None,
                 checkpoint_ns=checkpoint_ns,
+                materialization_id=materialization_id,
             )
 
     @staticmethod
@@ -669,10 +1094,10 @@ class ForkCompactionMixin:
         if response_metadata.get("message_id") == anchor:
             return True
         message_metadata = response_metadata.get("message_metadata")
-        return isinstance(message_metadata, Mapping) and anchor in {
-            message_metadata.get("turn_id"),
-            message_metadata.get("job_id"),
-        }
+        return (
+            isinstance(message_metadata, Mapping)
+            and message_metadata.get("turn_id") == anchor
+        )
 
     @staticmethod
     def _message_is_internal(message: BaseMessage) -> bool:

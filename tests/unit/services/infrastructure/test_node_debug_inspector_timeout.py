@@ -16,6 +16,7 @@ from app.services.infrastructure.node_debug.process.inspector import (
     NodeDebugInspector,
 )
 from app.services.infrastructure.node_debug.runtime_state import NodeDebugRuntime
+from tests.support.node_debug_dependencies import TEST_THREAD_ID
 
 
 class _SilentSocket:
@@ -28,7 +29,7 @@ class _SilentSocket:
 def _runtime() -> NodeDebugRuntime:
     runtime = NodeDebugRuntime(
         session_id="ses_019bf141964978208ce9100774167f90",
-        thread_id="main",
+        thread_id=TEST_THREAD_ID,
         configuration_id="dbgcfg_" + "1" * 32,
         workspace_root=Path("/tmp"),
         script_path=Path("/tmp/entry.mjs"),

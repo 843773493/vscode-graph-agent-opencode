@@ -21,6 +21,7 @@ class IndexedTurnSpan:
     first_sequence: int
     last_sequence: int
     ordinal: int
+    root_logical_item_ordinal: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,13 +61,14 @@ class IndexedHistorySnapshots:
     def read(
         self,
         session_id: str,
+        thread_id: str,
     ) -> IndexedHistory:
         # 历史读取必须保持纯只读：open_snapshot() 持有 rollout 的共享文件锁，
         # 而 repair_active_context_view() 会申请同一个文件的独占写锁。若调用方
         # 已经持有读快照（例如历史分页或异常回收路径），先 repair 会在 Linux
         # 的 flock 上自锁。索引修复属于显式维护/写入边界，不能塞进读取入口；
         # 这里只读取一个固定快照，异常也由下面的 finally 路径关闭它。
-        snapshot = self._context_reader.open_snapshot(session_id)
+        snapshot = self._context_reader.open_snapshot(session_id, thread_id)
         try:
             return self._read_indexed_history_snapshot(session_id, snapshot)
         except Exception:

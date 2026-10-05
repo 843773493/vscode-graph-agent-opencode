@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypeVar
@@ -16,9 +16,15 @@ from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.shielded_cleanup import run_cleanup_shielded
 from app.core.trace_middleware import (
     get_current_gateway_id,
     get_current_request_id,
+)
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
 )
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import (
@@ -71,6 +77,7 @@ class JobStartupTimeoutError(TimeoutError):
 class JobDrainBlocker:
     job_id: str
     session_id: str
+    thread_id: str
     status: JobStatus
     phase: str | None
     tool_names: tuple[str, ...]
@@ -80,9 +87,11 @@ class JobDrainBlocker:
 class JobState:
     job_id: str
     session_id: str
+    thread_id: str
     message: str
     message_id: str
     message_created_at: str
+    execution_binding: ExecutionBinding
     agent_id: str
     status: JobStatus
     message_metadata: dict[str, object] = field(default_factory=dict)
@@ -143,6 +152,8 @@ class JobService:
         ):
             raise ValueError("execution_cancel_timeout_seconds 必须大于 0")
         self._jobs: dict[str, JobState] = {}
+        self._finalization_tasks: set[asyncio.Task[object]] = set()
+        self._finalization_error: BaseException | None = None
         self._bus: JobEventBusProtocol | None = job_event_bus
         self._session_current_job: dict[str, str] = {}
         self._pending_queue = JobPendingQueue()
@@ -213,9 +224,53 @@ class JobService:
     def open_admission(self) -> None:
         self._accepting_jobs = True
 
+    def _spawn_finalization(self, coroutine: Coroutine[object, object, object]) -> None:
+        task = asyncio.create_task(coroutine)
+        self._finalization_tasks.add(task)
+        task.add_done_callback(self._on_finalization_done)
+
+    def _on_finalization_done(self, task: asyncio.Task[object]) -> None:
+        self._finalization_tasks.discard(task)
+        try:
+            task.result()
+        except BaseException as error:
+            if self._finalization_error is None:
+                self._finalization_error = error
+            logger.error("Job 后台终态收尾失败", exc_info=error)
+
+    async def drain_finalizations(self) -> None:
+        """收完执行根及其 done callback 派生的 writer 和终态事件。"""
+        tasks = tuple(job.task for job in self._jobs.values() if job.task is not None)
+        if tasks:
+            # gather 等待已完成任务时也会让其先登记的 done callback 执行，
+            # 避免任务体前取消的收尾还没加入集合就误判排空。
+            await asyncio.gather(*tasks, return_exceptions=True)
+        while self._finalization_tasks:
+            await asyncio.gather(
+                *tuple(self._finalization_tasks), return_exceptions=True
+            )
+        if self._finalization_error is not None:
+            raise BaseExceptionGroup(
+                "Job 后台终态收尾失败", [self._finalization_error]
+            )
+
     @property
     def accepting_jobs(self) -> bool:
         return self._accepting_jobs
+
+    @staticmethod
+    def reserve_user_execution_identity() -> UserExecutionIdentity:
+        """为普通 Job 一次性分配独立的 Job、Turn 与 admission identity。"""
+        return UserExecutionIdentity(
+            job_id=create_prefixed_id("job"),
+            turn_id=create_prefixed_id("turn"),
+            admission_idempotency_key=create_prefixed_id("adm"),
+        )
+
+    @staticmethod
+    def reserve_internal_job_id() -> str:
+        """为 Turn-less internal Job 预分配可由业务账本持久化的 Job ID。"""
+        return create_prefixed_id("job")
 
     async def drain_blockers(self) -> list[JobDrainBlocker]:
         async with self._dispatch_lock:
@@ -229,6 +284,7 @@ class JobService:
                 JobDrainBlocker(
                     job_id=job.job_id,
                     session_id=job.session_id,
+                    thread_id=job.thread_id,
                     status=job.status,
                     phase=interrupt_state.phase,
                     tool_names=interrupt_state.active_tool_names,
@@ -337,6 +393,7 @@ class JobService:
                     job_id=job.job_id,
                     message_id=job.message_id,
                     session_id=job.session_id,
+                    thread_id=job.thread_id,
                     mode=RunMode.single_agent,
                     status=job.status,
                     entry_agent=job.agent_id,
@@ -359,6 +416,7 @@ class JobService:
             job_id=job.job_id,
             message_id=job.message_id,
             session_id=job.session_id,
+            thread_id=job.thread_id,
             mode=RunMode.single_agent,
             status=job.status,
             entry_agent=job.agent_id,
@@ -370,6 +428,12 @@ class JobService:
             updated_at=job.updated_at,
             ended_at=job.ended_at
         )
+
+    def get_execution_binding(self, job_id: str) -> ExecutionBinding:
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(f"Job execution binding 不存在: {job_id}")
+        return job.execution_binding
 
     async def run_session_idle_operation(
         self,
@@ -641,7 +705,9 @@ class JobService:
         session_id: str,
         message: str,
         *,
-        job_id: str | None = None,
+        thread_id: str,
+        execution_binding: ExecutionBinding | None = None,
+        reserved_job_id: str | None = None,
         agent_id: str = "default",
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
@@ -649,11 +715,18 @@ class JobService:
         message_metadata: dict[str, object] | None = None,
         delivery_policy: DeliveryPolicy = "after_turn",
     ) -> JobDispatchSnapshotDTO:
+        if reserved_job_id is not None and (
+            not isinstance(reserved_job_id, str) or not reserved_job_id.strip()
+        ):
+            raise ValueError("预留 Job ID 必须是非空字符串")
+
         async def start_prepared() -> JobDispatchSnapshotDTO:
             return await self._start_job_prepared(
                 session_id,
                 message,
-                job_id=job_id,
+                thread_id=thread_id,
+                execution_binding=execution_binding,
+                reserved_job_id=reserved_job_id,
                 agent_id=agent_id,
                 message_id=message_id,
                 attachments=attachments,
@@ -669,7 +742,9 @@ class JobService:
         session_id: str,
         message: str,
         *,
-        job_id: str | None = None,
+        thread_id: str,
+        execution_binding: ExecutionBinding | None = None,
+        reserved_job_id: str | None = None,
         agent_id: str = "default",
         message_id: str,
         attachments: list[AttachmentRef] | None = None,
@@ -696,8 +771,29 @@ class JobService:
             raise ValueError("创建 Job 时必须传入已持久化的用户 message_id")
         if not message_created_at:
             raise ValueError("创建 Job 时必须传入用户消息的 message_created_at")
+        if not isinstance(thread_id, str) or not thread_id:
+            raise ValueError("创建 Job 时必须传入权威 thread_id")
         await self._ensure_pending_loaded(session_id)
-        resolved_job_id = job_id or create_prefixed_id("job")
+        if execution_binding is None:
+            if reserved_job_id is not None:
+                raise ValueError(
+                    "未预留 execution binding 时不得单独预留 Job ID"
+                )
+            execution_binding = self.reserve_user_execution_identity()
+        if isinstance(execution_binding, UserExecutionIdentity):
+            if reserved_job_id is not None:
+                raise ValueError("普通用户 Job 的 Job ID 必须来自完整 execution identity")
+            resolved_job_id = execution_binding.job_id
+        elif isinstance(execution_binding, InternalExecutionIntent):
+            if execution_binding.message_id != message_id:
+                raise ValueError("internal execution intent 与当前消息 identity 不一致")
+            resolved_job_id = (
+                self.reserve_internal_job_id()
+                if reserved_job_id is None
+                else reserved_job_id
+            )
+        else:
+            raise TypeError("Job execution binding 必须是 UserExecutionIdentity 或 InternalExecutionIntent")
         logger.info(
             "[job_service] start_job assigned id: job_id=%s",
             resolved_job_id,
@@ -707,7 +803,9 @@ class JobService:
         if existing_job is not None:
             if (
                 existing_job.session_id != session_id
+                or existing_job.thread_id != thread_id
                 or existing_job.message_id != message_id
+                or existing_job.execution_binding != execution_binding
             ):
                 raise RuntimeError(
                     "预留 Job ID 已被其它消息占用: "
@@ -719,10 +817,12 @@ class JobService:
         job = JobState(
             job_id=resolved_job_id,
             session_id=session_id,
+            thread_id=thread_id,
             message=message,
             message_id=message_id,
             attachments=list(attachments or []),
             message_created_at=message_created_at,
+            execution_binding=execution_binding,
             agent_id=agent_id,
             status=JobStatus.queued,
             message_metadata=dict(message_metadata or {}),
@@ -767,6 +867,7 @@ class JobService:
             event_type=EventType.JOB_CREATED,
             payload={
                 "session_id": session_id,
+                "thread_id": thread_id,
                 "message": message,
                 "agent_id": agent_id,
                 "message_id": message_id,
@@ -809,6 +910,7 @@ class JobService:
             active_job_id = self._session_current_job.get(job.session_id)
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
+                thread_id=job.thread_id,
                 job_id=job.job_id,
                 job_status="queued",
                 active_job_id=active_job_id,
@@ -827,6 +929,7 @@ class JobService:
             )
         return JobDispatchSnapshotDTO(
             session_id=job.session_id,
+            thread_id=job.thread_id,
             job_id=job.job_id,
             job_status="running",
             active_job_id=job.job_id,
@@ -841,7 +944,7 @@ class JobService:
     def _is_terminal_status(self, status: JobStatus) -> bool:
         return status in TERMINAL_JOB_STATUSES
 
-    async def _persist_terminal_turn_status(
+    async def _persist_terminal_execution_status(
         self,
         job: JobState,
         status: str,
@@ -849,20 +952,18 @@ class JobService:
         writer = self._terminal_status_writer
         if writer is None:
             return False
-        try:
-            return await asyncio.to_thread(
-                writer.mark_turn_terminal_status,
-                session_id=job.session_id,
-                turn_id=job.job_id,
-                status=status,
+        persisted = False
+
+        async def converge() -> None:
+            nonlocal persisted
+            persisted = await asyncio.to_thread(
+                writer.mark_job_terminal_status,
+                session_id=job.session_id, thread_id=job.thread_id,
+                job_id=job.job_id, status=status,
             )
-        except Exception:
-            logger.exception(
-                "Job 终态未能同步到持久化 Turn: job_id=%s status=%s",
-                job.job_id,
-                status,
-            )
-            return False
+
+        await run_cleanup_shielded(converge)
+        return persisted
 
     def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
@@ -885,7 +986,7 @@ class JobService:
                 if not self._is_terminal_status(job.status):
                     transition_job_status(job, JobStatus.failed, error_message=str(e))
                 if self._bus is not None:
-                    asyncio.get_event_loop().create_task(
+                    self._spawn_finalization(
                         self._bus.publish(
                             job_id=job.job_id,
                             event_type=EventType.JOB_FAILED,
@@ -936,13 +1037,13 @@ class JobService:
             job.job_id,
             job.session_id,
         )
-        asyncio.get_event_loop().create_task(
+        self._spawn_finalization(
             self._finalize_cancelled_without_task_body(job)
         )
 
     async def _finalize_cancelled_without_task_body(self, job: JobState) -> None:
         """补齐权威写入点在取消路径上会做的收尾：Turn 终态、事件、交还会话。"""
-        await self._persist_terminal_turn_status(job, "cancelled")
+        await self._persist_terminal_execution_status(job, "cancelled")
         if self._bus is not None:
             await self._bus.publish(
                 job_id=job.job_id,
@@ -980,6 +1081,7 @@ class JobService:
             queued_index = queued_ids.index(job.job_id)
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
+                thread_id=job.thread_id,
                 job_id=job.job_id,
                 job_status="queued",
                 active_job_id=current_job_id,
@@ -1090,7 +1192,7 @@ class JobService:
             await self._pending_requests.list(session_id)
         )
         for job in jobs:
-            await self._persist_terminal_turn_status(job, "failed")
+            await self._persist_terminal_execution_status(job, "failed")
             if self._bus is not None:
                 await self._bus.publish(
                     job_id=job.job_id,
@@ -1134,6 +1236,7 @@ class JobService:
                     event_type=EventType.JOB_STARTED,
                     payload={
                         "session_id": session_id,
+                        "thread_id": job.thread_id,
                         "agent_id": job.agent_id,
                         "message": message,
                         "attachments": [
@@ -1147,11 +1250,13 @@ class JobService:
             runtime_state = JobRuntimeState(
                 job_id=job.job_id,
                 session_id=job.session_id,
+                thread_id=job.thread_id,
                 message=job.message,
                 agent_id=job.agent_id,
                 message_id=job.message_id,
                 attachments=list(job.attachments),
                 message_created_at=job.message_created_at,
+                execution_binding=job.execution_binding,
                 message_metadata=dict(job.message_metadata),
                 gateway_id=job.gateway_id,
                 request_id=job.request_id,
@@ -1220,6 +1325,7 @@ class JobService:
                         execution_task,
                         reason="job_startup_timeout",
                         job_id=job.job_id,
+                        protected_operations_settled=runtime_state.protected_operations_settled,
                     )
                     raise JobStartupTimeoutError(
                         "Job 启动超过等待 AgentLoop 的上限: "
@@ -1241,12 +1347,14 @@ class JobService:
                             job,
                             job_timeout_seconds=job_timeout_seconds,
                             finalization_grace_seconds=finalization_grace_seconds,
+                            protected_operations_settled=runtime_state.protected_operations_settled,
                         )
                 else:
                     await self._cancel_execution_task(
                         execution_task,
                         reason="job_timeout",
                         job_id=job.job_id,
+                        protected_operations_settled=runtime_state.protected_operations_settled,
                     )
                     raise JobExecutionTimeoutError(
                         "Job 执行超过总超时上限: "
@@ -1259,6 +1367,7 @@ class JobService:
                         execution_task,
                         reason="job_cancelled",
                         job_id=job.job_id,
+                        protected_operations_settled=runtime_state.protected_operations_settled,
                     )
                 raise
             finally:
@@ -1283,12 +1392,12 @@ class JobService:
                     error_message="任务已暂停",
                 )
             else:
+                await self._persist_terminal_execution_status(job, "cancelled")
                 transition_job_status(
                     job,
                     JobStatus.cancelled,
                     error_message=job.cancellation_reason or "任务被用户取消",
                 )
-                await self._persist_terminal_turn_status(job, "cancelled")
                 if self._bus is not None:
                     await self._bus.publish(
                         job_id=job_id,
@@ -1297,13 +1406,13 @@ class JobService:
                         agent_id="job_service",
                     )
         except (JobExecutionTimeoutError, JobStartupTimeoutError) as error:
+            await self._persist_terminal_execution_status(job, "timed_out")
             transition_job_status(
                 job,
                 JobStatus.timed_out,
                 error_message=str(error),
             )
             job.current_step = None
-            await self._persist_terminal_turn_status(job, "timed_out")
             if self._bus is not None:
                 await self._bus.publish(
                     job_id=job_id,
@@ -1325,8 +1434,8 @@ class JobService:
                     agent_id="job_service",
                 )
         except Exception as error:  # noqa: BLE001
+            await self._persist_terminal_execution_status(job, "failed")
             transition_job_status(job, JobStatus.failed, error_message=str(error))
-            await self._persist_terminal_turn_status(job, "failed")
             if self._bus is not None:
                 payload: dict[str, object] = {"error": str(error)}
                 payload["session_id"] = session_id
@@ -1347,10 +1456,13 @@ class JobService:
                     agent_id="job_service",
                 )
         finally:
-            if heartbeat_task is not None:
-                heartbeat_task.cancel()
-                await asyncio.gather(heartbeat_task, return_exceptions=True)
-            await self._schedule_next_job_if_needed(job)
+            async def release_job() -> None:
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+                await self._schedule_next_job_if_needed(job)
+
+            await run_cleanup_shielded(release_job)
 
     async def _await_finalizing_execution(
         self,
@@ -1359,6 +1471,7 @@ class JobService:
         *,
         job_timeout_seconds: float,
         finalization_grace_seconds: float,
+        protected_operations_settled: asyncio.Event,
     ) -> object:
         """给已启动 AgentLoop 的任务一个有限收尾窗口。
 
@@ -1396,6 +1509,7 @@ class JobService:
             execution_task,
             reason="job_timeout",
             job_id=job.job_id,
+            protected_operations_settled=protected_operations_settled,
         )
         raise JobExecutionTimeoutError(
             "Job 执行超过总超时上限（含最终响应收尾窗口）: "
@@ -1410,38 +1524,49 @@ class JobService:
         *,
         reason: str,
         job_id: str,
+        protected_operations_settled: asyncio.Event,
     ) -> bool:
-        """在有限窗口内取消执行器，避免终态依赖不合作任务的收尾。"""
-        if execution_task.done():
-            return True
+        """普通执行器两轮有界取消；真实 writer/cleanup 未排空时保留运行槽。"""
+        async def cancel_and_wait() -> bool:
+            if execution_task.done():
+                return True
+            for cancellation_reason in (reason, f"{reason}:force"):
+                execution_task.cancel(cancellation_reason)
+                done, _ = await asyncio.wait(
+                    {execution_task}, timeout=self._execution_cancel_timeout_seconds,
+                )
+                if execution_task in done:
+                    return True
+            if not protected_operations_settled.is_set():
+                logger.warning(
+                    "Job 取消正在等待真实持久化或清理完成: job_id=%s reason=%s",
+                    job_id, reason,
+                )
+                settlement_task = asyncio.create_task(protected_operations_settled.wait())
+                try:
+                    await asyncio.wait(
+                        {execution_task, settlement_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    settlement_task.cancel()
+                    await asyncio.gather(settlement_task, return_exceptions=True)
+            if not execution_task.done():
+                logger.critical(
+                    "执行器在两轮取消后仍未退出；受保护操作已排空: job_id=%s reason=%s",
+                    job_id, reason,
+                )
+            return execution_task.done()
 
-        execution_task.cancel(reason)
-        done, _ = await asyncio.wait(
-            {execution_task},
-            timeout=self._execution_cancel_timeout_seconds,
-        )
-        if execution_task in done:
-            return True
+        cancellation_task = asyncio.create_task(cancel_and_wait())
+        try:
+            return await asyncio.shield(cancellation_task)
+        except asyncio.CancelledError:
+            async def settle_cancellation() -> None:
+                await cancellation_task
 
-        logger.error(
-            "[job_service] execution task ignored cancellation; forcing a second "
-            "cancel and closing the Job independently: job_id=%s reason=%s "
-            "wait_seconds=%s",
-            job_id,
-            reason,
-            self._execution_cancel_timeout_seconds,
-        )
-        execution_task.cancel(f"{reason}:force")
-        done, _ = await asyncio.wait(
-            {execution_task},
-            timeout=self._execution_cancel_timeout_seconds,
-        )
-        if execution_task not in done:
-            logger.critical(
-                "[job_service] execution task remained pending after forced "
-                "cancellation; Job terminal state is authoritative",
-            )
-        return execution_task in done
+            await run_cleanup_shielded(settle_cancellation)
+            raise
 
     @staticmethod
     async def _touch_active_job(
@@ -1479,9 +1604,11 @@ class JobService:
                     self._jobs[record.job_id] = JobState(
                         job_id=record.job_id,
                         session_id=record.session_id,
+                        thread_id=record.thread_id,
                         message=record.content,
                         message_id=record.message_id,
                         message_created_at=record.message_created_at,
+                        execution_binding=record.execution_binding,
                         agent_id=record.agent_id,
                         # 恢复的 Job 沿用创建时持久化的真实 gateway_id（独立执行根，
                         # MUST 显式携带），使重启后队首 Job 在 gateway 层可解析；

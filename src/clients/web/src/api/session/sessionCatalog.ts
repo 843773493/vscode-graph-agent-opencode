@@ -1,10 +1,11 @@
 import type {
   APIResponse,
-  Session,
+  SessionCatalogBreadcrumb,
   SessionCatalogNode,
   SessionCatalogPage,
 } from "../../types/backend";
-import { requestJson, unwrapApiData, workspaceHeader } from "../http";
+import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData } from "../http";
+import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
 /**
  * 会话目录节点数组的唯一合法性校验：node_id 必须是非空字符串且在同一数组内唯一。
@@ -33,7 +34,7 @@ function assertSessionCatalogNodes(
 
 export async function listSessionCatalogChildren(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   parentNodeId?: string | null,
   cursor?: string | null,
 ): Promise<SessionCatalogPage> {
@@ -43,7 +44,7 @@ export async function listSessionCatalogChildren(
   const page = unwrapApiData(await requestJson<APIResponse<SessionCatalogPage>>(
     port,
     `/api/v1/session-catalog/children?${query.toString()}`,
-    { headers: workspaceHeader(workspaceId) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
   ));
   assertSessionCatalogNodes(page.items, "会话目录子节点");
   return page;
@@ -51,132 +52,26 @@ export async function listSessionCatalogChildren(
 
 export async function refreshSessionCatalog(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
 ): Promise<SessionCatalogPage> {
   const page = unwrapApiData(await requestJson<APIResponse<SessionCatalogPage>>(
     port,
     "/api/v1/session-catalog/refresh",
-    { method: "POST", headers: workspaceHeader(workspaceId) },
+    { method: "POST", headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
   ));
   assertSessionCatalogNodes(page.items, "会话目录刷新");
   return page;
 }
 
-export async function createSessionCatalogFolder(
-  port: number,
-  workspaceId: string,
-  name: string,
-  parentFolderId?: string | null,
-): Promise<void> {
-  await requestJson<APIResponse<unknown>>(port, "/api/v1/session-catalog/folders", {
-    method: "POST",
-    headers: workspaceHeader(workspaceId),
-    body: JSON.stringify({ name, parent_folder_id: parentFolderId ?? null }),
-  });
-}
-
-async function patchCatalogFolder(
-  port: number,
-  workspaceId: string,
-  folderId: string,
-  body: Record<string, unknown>,
-): Promise<void> {
-  await requestJson<APIResponse<unknown>>(
-    port,
-    `/api/v1/session-catalog/folders/${encodeURIComponent(folderId)}`,
-    { method: "PATCH", headers: workspaceHeader(workspaceId), body: JSON.stringify(body) },
-  );
-}
-
-export function renameSessionCatalogFolder(
-  port: number,
-  workspaceId: string,
-  folderId: string,
-  name: string,
-): Promise<void> {
-  return patchCatalogFolder(port, workspaceId, folderId, { name });
-}
-
-export function moveSessionCatalogFolder(
-  port: number,
-  workspaceId: string,
-  folderId: string,
-  parentFolderId?: string | null,
-): Promise<void> {
-  return patchCatalogFolder(port, workspaceId, folderId, {
-    parent_folder_id: parentFolderId ?? null,
-  });
-}
-
-export async function deleteSessionCatalogFolder(
-  port: number,
-  workspaceId: string,
-  folderId: string,
-): Promise<void> {
-  await requestJson<unknown>(
-    port,
-    `/api/v1/session-catalog/folders/${encodeURIComponent(folderId)}?recursive=true`,
-    { method: "DELETE", headers: workspaceHeader(workspaceId) },
-  );
-}
-
-export async function assignSessionCatalogFolder(
-  port: number,
-  workspaceId: string,
-  sessionId: string,
-  folderId?: string | null,
-): Promise<void> {
-  await requestJson<APIResponse<unknown>>(
-    port,
-    `/api/v1/session-catalog/sessions/${encodeURIComponent(sessionId)}/folder`,
-    {
-      method: "PUT",
-      headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ folder_id: folderId ?? null }),
-    },
-  );
-}
-
-export async function moveSessionCatalogNode(
-  port: number,
-  workspaceId: string,
-  nodeId: string,
-  parentNodeId: string | null,
-): Promise<void> {
-  await requestJson<APIResponse<unknown>>(
-    port,
-    `/api/v1/session-catalog/nodes/${encodeURIComponent(nodeId)}/parent`,
-    {
-      method: "PATCH",
-      headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ parent_node_id: parentNodeId }),
-    },
-  );
-}
-
-export async function moveSessionParent(
-  port: number,
-  workspaceId: string,
-  sessionId: string,
-  parentNodeId: string | null,
-): Promise<Session> {
-  await moveSessionCatalogNode(port, workspaceId, sessionId, parentNodeId);
-  return unwrapApiData(await requestJson<APIResponse<Session>>(
-    port,
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-    { headers: workspaceHeader(workspaceId) },
-  ));
-}
-
 export async function getSessionCatalogBreadcrumb(
   port: number,
-  workspaceId: string,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
   nodeId: string,
-): Promise<{ items: SessionCatalogNode[] }> {
-  const breadcrumb = unwrapApiData(await requestJson<APIResponse<{ items: SessionCatalogNode[] }>>(
+): Promise<SessionCatalogBreadcrumb> {
+  const breadcrumb = unwrapApiData(await requestJson<APIResponse<SessionCatalogBreadcrumb>>(
     port,
     `/api/v1/session-catalog/breadcrumb/${encodeURIComponent(nodeId)}`,
-    { headers: workspaceHeader(workspaceId) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
   ));
   assertSessionCatalogNodes(breadcrumb.items, "会话目录面包屑");
   return breadcrumb;

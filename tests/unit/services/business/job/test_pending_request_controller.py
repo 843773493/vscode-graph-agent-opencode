@@ -1,6 +1,10 @@
 import pytest
 
 from app.core.job_event_bus import JobEventBus
+from app.domain.itemized.execution_admission import (
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.prompting import PromptSection, internal_message_factory
 from app.services.business.job.service import JobService
 
@@ -41,12 +45,14 @@ async def test_pending_controls_edit_policy_remove_without_reordering(
     await service.start_job(
         session_id,
         "active",
+        thread_id=f"thr_{session_id}",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
         "queued",
+        thread_id=f"thr_{session_id}",
         message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
         delivery_policy="after_turn",
@@ -54,6 +60,7 @@ async def test_pending_controls_edit_policy_remove_without_reordering(
     tail = await service.start_job(
         session_id,
         "tail",
+        thread_id=f"thr_{session_id}",
         message_id="msg_tail",
         message_created_at="2026-07-17T00:00:02+00:00",
         delivery_policy="after_interrupt",
@@ -104,6 +111,197 @@ async def test_pending_controls_edit_policy_remove_without_reordering(
 
 
 @pytest.mark.asyncio
+async def test_job_service_returns_frozen_execution_binding(
+    monkeypatch, session_lifecycle_guard
+):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    user_job = await service.start_job(
+        "session_execution_binding",
+        "user turn",
+        thread_id="thr_session_execution_binding",
+        message_id="msg_user_binding",
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+    user_binding = service.get_execution_binding(user_job.job_id)
+    assert isinstance(user_binding, UserExecutionIdentity)
+    assert user_binding.job_id == user_job.job_id
+    assert user_binding.turn_id
+    assert user_binding.admission_idempotency_key
+    assert (
+        len(
+            {
+                user_binding.job_id,
+                user_binding.turn_id,
+                user_binding.admission_idempotency_key,
+            }
+        )
+        == 3
+    )
+
+    internal_binding = InternalExecutionIntent(
+        message_id="msg_internal_binding",
+        execution_id="intr_execution_binding",
+        admission_idempotency_key="adm_execution_binding",
+    )
+    internal_job = await service.start_job(
+        "session_execution_binding",
+        "internal message",
+        thread_id="thr_session_execution_binding",
+        execution_binding=internal_binding,
+        message_id=internal_binding.message_id,
+        message_created_at="2026-07-17T00:00:01+00:00",
+    )
+    assert service.get_execution_binding(internal_job.job_id) is internal_binding
+
+    with pytest.raises(KeyError, match="execution binding 不存在"):
+        service.get_execution_binding("job_missing")
+
+
+@pytest.mark.asyncio
+async def test_internal_job_allocates_one_id_when_reservation_is_absent(
+    monkeypatch, session_lifecycle_guard
+):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    reservations: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "reserve_internal_job_id",
+        lambda: reservations.append("allocated") or "job_allocated_once",
+    )
+    execution_binding = InternalExecutionIntent(
+        message_id="msg_internal_allocation",
+        execution_id="intr_internal_allocation",
+        admission_idempotency_key="adm_internal_allocation",
+    )
+
+    dispatch = await service.start_job(
+        "session_internal_allocation",
+        "internal message",
+        thread_id="thr_session_internal_allocation",
+        execution_binding=execution_binding,
+        message_id=execution_binding.message_id,
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+
+    assert dispatch.job_id == "job_allocated_once"
+    assert reservations == ["allocated"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reserved_job_id", ["", " \t\n"])
+async def test_blank_reserved_internal_job_id_fails_before_preparation(
+    reserved_job_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    session_lifecycle_guard,
+) -> None:
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    session_id = "session_blank_reserved_internal_job_id"
+    reservations: list[str] = []
+    starts: list[str] = []
+    preparations: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "reserve_internal_job_id",
+        lambda: reservations.append("allocated") or "job_unexpected",
+    )
+    monkeypatch.setattr(service, "_start_job_task", lambda job: starts.append(job.job_id))
+    original_start_job_prepared = service._start_job_prepared
+
+    async def tracked_start_job_prepared(*args, **kwargs):
+        preparations.append("called")
+        return await original_start_job_prepared(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_start_job_prepared", tracked_start_job_prepared)
+    execution_binding = InternalExecutionIntent(
+        message_id="msg_blank_reserved_internal_job_id",
+        execution_id="intr_blank_reserved_internal_job_id",
+        admission_idempotency_key="adm_blank_reserved_internal_job_id",
+    )
+
+    with pytest.raises(ValueError, match="预留 Job ID 必须是非空字符串"):
+        await service.start_job(
+            session_id,
+            "internal message",
+            thread_id=f"thr_{session_id}",
+            execution_binding=execution_binding,
+            reserved_job_id=reserved_job_id,
+            message_id=execution_binding.message_id,
+            message_created_at="2026-07-17T00:00:00+00:00",
+        )
+
+    assert reservations == []
+    assert preparations == []
+    assert starts == []
+    assert service._jobs == {}
+    assert service._pending_queue.ids(session_id) == ()
+
+
+@pytest.mark.asyncio
+async def test_pending_request_projects_nullable_turn_id_from_execution_binding(
+    monkeypatch, session_lifecycle_guard
+):
+    service = _service(monkeypatch, session_lifecycle_guard=session_lifecycle_guard)
+    session_id = "session_pending_turn_projection"
+    await service.start_job(
+        session_id,
+        "active",
+        thread_id=f"thr_{session_id}",
+        message_id="msg_active_turn_projection",
+        message_created_at="2026-07-17T00:00:00+00:00",
+    )
+    user_job = await service.start_job(
+        session_id,
+        "queued user message",
+        thread_id=f"thr_{session_id}",
+        message_id="msg_user_turn_projection",
+        message_created_at="2026-07-17T00:00:01+00:00",
+    )
+    internal_binding = InternalExecutionIntent(
+        message_id="msg_internal_turn_projection",
+        execution_id="intr_turn_projection",
+        admission_idempotency_key="adm_turn_projection",
+    )
+    internal_job = await service.start_job(
+        session_id,
+        "queued internal message",
+        thread_id=f"thr_{session_id}",
+        message_id=internal_binding.message_id,
+        message_created_at="2026-07-17T00:00:02+00:00",
+        execution_binding=internal_binding,
+    )
+
+    snapshot = await service.list_pending(session_id)
+    user_request = next(
+        item for item in snapshot.requests if item.job_id == user_job.job_id
+    )
+    internal_request = next(
+        item for item in snapshot.requests if item.job_id == internal_job.job_id
+    )
+    user_binding = service.get_execution_binding(user_job.job_id)
+
+    assert isinstance(user_binding, UserExecutionIdentity)
+    assert user_request.turn_id == user_binding.turn_id
+    assert user_request.turn_id != user_job.job_id
+    assert internal_request.turn_id is None
+
+
+def test_execution_bindings_reject_reused_identity_values():
+    with pytest.raises(ValueError, match="彼此独立"):
+        UserExecutionIdentity(
+            job_id="job_same",
+            turn_id="job_same",
+            admission_idempotency_key="adm_other",
+        )
+
+    with pytest.raises(ValueError, match="彼此独立"):
+        InternalExecutionIntent(
+            message_id="msg_same",
+            execution_id="intr_same",
+            admission_idempotency_key="intr_same",
+        )
+
+
+@pytest.mark.asyncio
 async def test_pending_request_uses_safe_display_content(
     monkeypatch, session_lifecycle_guard
 ):
@@ -112,6 +310,7 @@ async def test_pending_request_uses_safe_display_content(
     await service.start_job(
         session_id,
         "active",
+        thread_id=f"thr_{session_id}",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
@@ -128,6 +327,7 @@ async def test_pending_request_uses_safe_display_content(
     await service.start_job(
         session_id,
         prepared.content,
+        thread_id=f"thr_{session_id}",
         message_id="msg_internal",
         message_created_at="2026-07-17T00:00:01+00:00",
         message_metadata=prepared.metadata,
@@ -150,12 +350,14 @@ async def test_stale_policy_update_is_rejected(monkeypatch, session_lifecycle_gu
     await service.start_job(
         session_id,
         "active",
+        thread_id=f"thr_{session_id}",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
         "queued",
+        thread_id=f"thr_{session_id}",
         message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
     )
@@ -185,12 +387,14 @@ async def test_promoted_pending_head_exposes_no_waiting_reason(
     await service.start_job(
         session_id,
         "active",
+        thread_id=f"thr_{session_id}",
         message_id="msg_active",
         message_created_at="2026-07-17T00:00:00+00:00",
     )
     await service.start_job(
         session_id,
         "queued",
+        thread_id=f"thr_{session_id}",
         message_id="msg_queued",
         message_created_at="2026-07-17T00:00:01+00:00",
         delivery_policy="after_turn",
@@ -198,6 +402,7 @@ async def test_promoted_pending_head_exposes_no_waiting_reason(
     await service.start_job(
         session_id,
         "tail",
+        thread_id=f"thr_{session_id}",
         message_id="msg_tail",
         message_created_at="2026-07-17T00:00:02+00:00",
         delivery_policy="after_turn",

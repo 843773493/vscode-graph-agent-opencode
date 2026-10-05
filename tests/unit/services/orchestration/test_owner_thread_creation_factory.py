@@ -16,6 +16,7 @@ from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 SESSION_ID = "ses_019bfb6b5f3c72178c7e8393ce89e7a6"
 
@@ -58,10 +59,12 @@ async def _create_sessions(sessions_root: Path, count: int) -> list[str]:
     )
     session_ids: list[str] = []
     for index in range(count):
-        result = await creation.create(
+        record = await creation.prepare(
             idempotency_key=f"owner-key-{index}",
             title="owner",
+            purpose="normal",
             parent_node_id=None,
+            graph_binding=TEST_THREAD_GRAPH_BINDING,
             session_metadata={
                 "kind": "normal",
                 "delegation": None,
@@ -71,6 +74,7 @@ async def _create_sessions(sessions_root: Path, count: int) -> list[str]:
                 "context_source_session_id": None,
             },
         )
+        result = await creation.publish_prepared(record)
         session_ids.append(result.session_id)
     catalog.close()
     return session_ids

@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
+from typing import Self
 
+import httpx
 import pytest
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -14,6 +16,7 @@ from app.gateway.runtime.local_workspace import (
     _adopt_workspace_backend,
     restart_managed_workspace_backend,
     start_managed_local_workspace_runtime,
+    wait_for_workspace_health,
     workspace_config_proof_expectation,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
@@ -42,6 +45,65 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
+    async def workspace_ready(*_: object, **__: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.resolve_backend_workspace_id",
+        lambda *_: "00000000-0000-4000-8000-000000000001",
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_workspace_health",
+        workspace_ready,
+    )
+
+
+@pytest.mark.asyncio
+async def test_workspace_health_rejects_uuid_mismatch_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class Client:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 2
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            assert url == "http://127.0.0.1:41000/api/v1/health"
+            assert headers["X-BoxTeam-Workspace-Id"] == (
+                "00000000-0000-4000-8000-000000000001"
+            )
+            return httpx.Response(
+                200,
+                json={"workspace_id": "00000000-0000-4000-8000-000000000002"},
+            )
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.httpx.AsyncClient",
+        Client,
+    )
+
+    with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
+        await wait_for_workspace_health(
+            "http://127.0.0.1:41000/api/v1/health",
+            "00000000-0000-4000-8000-000000000001",
+        )
+
+    assert calls == 1
+
 
 @pytest.mark.asyncio
 async def test_reconnect_managed_local_workspace_keeps_stable_id(
@@ -55,6 +117,7 @@ async def test_reconnect_managed_local_workspace_keeps_stable_id(
         root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
         connection_error="旧连接失败",
     )
@@ -106,6 +169,7 @@ async def test_runtime_controller_rejects_restart_for_external_backend(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:8010",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=False,
         ),
         runtime=WorkspaceRuntime(
@@ -160,6 +224,7 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
             removable=False,
             system_default=True,
@@ -175,6 +240,7 @@ async def test_runtime_controller_starts_and_stops_optional_workspace(
             root_path=str(tmp_path),
             backend_url="",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         activate=False,
@@ -271,6 +337,7 @@ async def test_runtime_controller_blocks_stop_for_gateway_proxy_stream(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=WorkspaceRuntime(
@@ -319,6 +386,7 @@ async def test_runtime_controller_serializes_managed_restarts(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:41000",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         ),
         runtime=WorkspaceRuntime(
@@ -393,6 +461,7 @@ async def test_runtime_controller_records_restart_failure_after_old_runtime_reco
         root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     runtime = WorkspaceRuntime(
@@ -481,6 +550,7 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(
             captured["health_headers"] = headers
             return _Response(
                 {
+                    "workspace_id": "00000000-0000-4000-8000-000000000001",
                     "config_proof": {
                         "config_domain": "workspace",
                         "loaded_source": "pending",
@@ -508,7 +578,14 @@ async def test_runtime_controller_resolves_pending_after_candidate_restart(
     )
 
     await controller._resolve_pending_restart(
-        "http://127.0.0.1:42000",
+        WorkspaceTarget(
+            workspace_id="gw_candidate",
+            name="Candidate",
+            root_path=str(tmp_path),
+            backend_url="http://127.0.0.1:42000",
+            connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        ),
         candidate_ref="candidate-ref",
         request_id="request-id",
     )
@@ -541,6 +618,7 @@ async def test_runtime_controller_enters_recovery_when_old_runtime_cannot_resume
         root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     runtime = WorkspaceRuntime(
@@ -600,6 +678,182 @@ class _RuntimeProcess:
         self.detached = True
 
 
+@pytest.mark.asyncio
+async def test_managed_runtime_rejects_terminal_wrong_uuid_before_backend_and_closes_owned_handles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adopted_terminal = _RuntimeProcess()
+    new_browser = _RuntimeProcess()
+    started_services: list[str] = []
+    backend_starts: list[dict[str, object]] = []
+    browser_health_checks: list[str] = []
+
+    async def adopt_terminal(**_: object) -> _RuntimeProcess:
+        return adopted_terminal
+
+    def start_node_service(**kwargs: object) -> _RuntimeProcess:
+        started_services.append(str(kwargs["service"]))
+        return new_browser
+
+    def start_backend(**kwargs: object) -> _RuntimeProcess:
+        backend_starts.append(kwargs)
+        raise AssertionError("Terminal UUID 不匹配时不得启动 Workspace backend")
+
+    class Response:
+        status_code = 200
+        text = "ok"
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"workspace_id": "00000000-0000-4000-8000-000000000002"}
+
+    class Client:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 2
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+        ) -> Response:
+            assert url == "http://127.0.0.1:42001/health"
+            assert headers["X-BoxTeam-Workspace-Id"] == (
+                "00000000-0000-4000-8000-000000000001"
+            )
+            return Response()
+
+    async def browser_ready(url: str, *_: object, **__: object) -> None:
+        browser_health_checks.append(url)
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.allocate_local_port",
+        iter([41000, 41002]).__next__,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace._adopt_terminal_manager",
+        adopt_terminal,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_node_service_process",
+        start_node_service,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_backend_process",
+        start_backend,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_workspace_health",
+        wait_for_workspace_health,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        browser_ready,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.httpx.AsyncClient",
+        Client,
+    )
+
+    with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
+        await start_managed_local_workspace_runtime(
+            project_root=tmp_path,
+            workspace_root=tmp_path,
+            log_dir=tmp_path / "logs",
+            reusable_service_urls={
+                "terminal_manager": "http://127.0.0.1:42001",
+            },
+        )
+
+    assert started_services == ["browser"]
+    assert backend_starts == []
+    assert browser_health_checks == []
+    assert adopted_terminal.closed is True
+    assert adopted_terminal.terminate_requested is True
+    assert new_browser.closed is True
+    assert new_browser.terminate_requested is True
+
+
+@pytest.mark.asyncio
+async def test_candidate_runtime_start_failure_detaches_adopted_and_closes_new_processes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adopted_terminal = _RuntimeProcess()
+    new_browser = _RuntimeProcess()
+    new_backend = _RuntimeProcess()
+    startup_error = RuntimeError("candidate backend health proof failed")
+
+    async def adopt_terminal(**_: object) -> _RuntimeProcess:
+        return adopted_terminal
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.allocate_local_port",
+        iter([41000, 41001]).__next__,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace._adopt_terminal_manager",
+        adopt_terminal,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_node_service_process",
+        lambda **_: new_browser,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.start_local_backend_process",
+        lambda **_: new_backend,
+    )
+
+    async def manager_ready(*_: object, **__: object) -> None:
+        return None
+
+    workspace_health_checks = 0
+
+    async def candidate_backend_failed(*_: object, **__: object) -> None:
+        nonlocal workspace_health_checks
+        workspace_health_checks += 1
+        if workspace_health_checks == 1:
+            return
+        raise startup_error
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        manager_ready,
+    )
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.wait_for_workspace_health",
+        candidate_backend_failed,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await start_managed_local_workspace_runtime(
+            project_root=tmp_path,
+            workspace_root=tmp_path,
+            log_dir=tmp_path / "logs",
+            reusable_service_urls={
+                "terminal_manager": "http://127.0.0.1:42001",
+            },
+            preserve_adopted_processes_on_failure=True,
+        )
+
+    assert raised.value is startup_error
+    assert workspace_health_checks == 2
+    assert adopted_terminal.detached is True
+    assert adopted_terminal.closed is False
+    assert adopted_terminal.terminate_requested is False
+    assert new_browser.closed is True
+    assert new_backend.closed is True
+    assert new_browser.terminate_requested is True
+    assert new_backend.terminate_requested is True
+
+
 def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
     expectation = workspace_config_proof_expectation(
         {
@@ -629,6 +883,7 @@ def test_runtime_replacement_hands_off_reused_browser_manager(tmp_path: Path) ->
         root_path=str(tmp_path),
         backend_url="http://127.0.0.1:41000",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     old_backend = _RuntimeProcess()
@@ -751,7 +1006,7 @@ async def test_backend_restart_failure_keeps_old_generation(
         raise RuntimeError("candidate backend unhealthy")
 
     monkeypatch.setattr(
-        "app.gateway.runtime.local_workspace.wait_for_http_ok",
+        "app.gateway.runtime.local_workspace.wait_for_workspace_health",
         not_ready,
     )
 
@@ -923,7 +1178,6 @@ async def test_gateway_rejects_persisted_browser_manager_url_without_port(
 
 @pytest.mark.asyncio
 async def test_gateway_adopts_matching_terminal_manager(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Response:
@@ -935,7 +1189,7 @@ async def test_gateway_adopts_matching_terminal_manager(
             return {
                 "ok": True,
                 "process_id": 43211,
-                "workspace_root": str(tmp_path.resolve()),
+                "workspace_id": "00000000-0000-4000-8000-000000000001",
             }
 
     class Client:
@@ -959,11 +1213,67 @@ async def test_gateway_adopts_matching_terminal_manager(
 
     adopted = await _adopt_terminal_manager(
         service_url="http://127.0.0.1:42001",
-        workspace_root=tmp_path,
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
     assert adopted is not None
     assert adopted.pid == 43211
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch",
+    ["wrong-backend-uuid", "missing-backend-uuid", "malformed-backend-uuid"],
+)
+async def test_gateway_rejects_mismatched_terminal_manager_without_adoption(
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+) -> None:
+    requested_urls: list[str] = []
+    health_payload: dict[str, object] = {
+        "process_id": 43211,
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+    }
+    if mismatch == "wrong-backend-uuid":
+        health_payload["workspace_id"] = "00000000-0000-4000-8000-000000000002"
+    elif mismatch == "missing-backend-uuid":
+        health_payload.pop("workspace_id")
+    else:
+        health_payload["workspace_id"] = "not-a-uuid"
+
+    class Response:
+        status_code = 200
+        text = "ok"
+
+        def json(self) -> dict[str, object]:
+            return health_payload
+
+    class Client:
+        def __init__(self, *, timeout: int) -> None:
+            assert timeout == 2
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def get(self, url: str) -> Response:
+            requested_urls.append(url)
+            return Response()
+
+    monkeypatch.setattr(
+        "app.gateway.runtime.local_workspace.httpx.AsyncClient",
+        Client,
+    )
+
+    with pytest.raises(RuntimeError):
+        await _adopt_terminal_manager(
+            service_url="http://127.0.0.1:42001",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        )
+
+    assert requested_urls == ["http://127.0.0.1:42001/health"]
 
 
 @pytest.mark.asyncio
@@ -980,7 +1290,7 @@ async def test_gateway_adopts_matching_workspace_backend(
             return {
                 "status": "ok",
                 "process_id": 43212,
-                "workspace_root": str(tmp_path.resolve()),
+                "workspace_id": "00000000-0000-4000-8000-000000000001",
             }
 
     class Client:
@@ -993,8 +1303,11 @@ async def test_gateway_adopts_matching_workspace_backend(
         async def __aexit__(self, *_: object) -> None:
             return None
 
-        async def get(self, url: str) -> Response:
+        async def get(self, url: str, *, headers: dict[str, str]) -> Response:
             assert url == "http://127.0.0.1:42003/api/v1/health"
+            assert headers["X-BoxTeam-Workspace-Id"] == (
+                "00000000-0000-4000-8000-000000000001"
+            )
             return Response()
 
     monkeypatch.setattr(
@@ -1004,7 +1317,7 @@ async def test_gateway_adopts_matching_workspace_backend(
 
     adopted = await _adopt_workspace_backend(
         service_url="http://127.0.0.1:42003",
-        workspace_root=tmp_path,
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
     assert adopted is not None
@@ -1154,7 +1467,7 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
     ports = iter([42000, 42001, 42002])
     stale_backend = _RuntimeProcess()
     fresh_backend = _RuntimeProcess()
-    started_services: list[str] = []
+    started_services: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         "app.gateway.runtime.local_workspace.allocate_local_port",
@@ -1170,7 +1483,9 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
     )
 
     def start_node(**kwargs: object) -> _RuntimeProcess:
-        started_services.append(str(kwargs["service"]))
+        started_services.append(
+            (str(kwargs["service"]), str(kwargs.get("terminal_workspace_id")))
+        )
         return _RuntimeProcess()
 
     monkeypatch.setattr(
@@ -1199,13 +1514,17 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
     )
 
     assert stale_backend.closed is True
-    assert started_services == ["terminal", "browser"]
+    assert started_services[0] == (
+        "terminal",
+        "00000000-0000-4000-8000-000000000001",
+    )
+    assert started_services[1] == ("browser", "None")
     assert runtime.service_urls["workspace_api"] == "http://127.0.0.1:42000"
     assert runtime.processes["workspace_api"] is fresh_backend
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_migrates_default_backend_to_preferred_port(
+async def test_managed_runtime_replaces_default_backend_when_adoption_is_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1273,6 +1592,7 @@ async def test_managed_runtime_migrates_default_backend_to_preferred_port(
         log_dir=tmp_path / "logs",
         preferred_backend_port=8010,
         reusable_backend_url="http://127.0.0.1:41999",
+        adopt_existing_backend=False,
     )
 
     assert stale_backend.closed is True

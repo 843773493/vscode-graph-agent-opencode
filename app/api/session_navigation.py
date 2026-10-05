@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.abstractions.state_conflict import ClientStateConflictError
-from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
     get_request_id,
     get_session_catalog_service,
@@ -16,16 +15,16 @@ from app.api.errors import (
     state_conflict_error,
     state_conflict_http_error,
 )
+from app.core.trace_middleware import (
+    require_current_gateway_id,
+    require_current_navigation_actor,
+)
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
     SessionCatalogExportDTO,
-    SessionCatalogNodeMoveRequest,
     SessionCatalogPageDTO,
     SessionCatalogSearchResultsDTO,
-    SessionFolderAssignmentRequest,
-    SessionFolderCreateRequest,
-    SessionFolderUpdateRequest,
     SessionGenerationCapabilitiesDTO,
     SessionGenerationExecuteRequest,
     SessionGenerationExecuteResultDTO,
@@ -41,7 +40,6 @@ from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.operations_service import (
     NavigationAuthScope,
-    local_navigation_scope,
 )
 from app.services.business.session_navigation.queue_store import (
     NavigationBackpressureError,
@@ -53,22 +51,12 @@ router = APIRouter(tags=["session-navigation"])
 
 
 def _navigation_scope(service: SessionCatalogService) -> NavigationAuthScope:
-    """构造导航 operation 的认证 scope（gateway/actor 取后端本地身份）。
-
-    工作区后端只被同机 Gateway 以本地 token 访问，且 Gateway 代理时已剥离
-    ``X-BoxTeam-Workspace-Id``/``X-Local-Token``，故不接受客户端自报 gateway/actor；
-    workspace 取后端自身身份（永不信任请求体）。联邦/多主体接入后由认证层传入。
-    """
-    return local_navigation_scope(service.workspace_id)
-
-
-def _folder_mutation_http_error(error: Exception) -> HTTPException:
-    """folder 目录变更统一失败分类：KeyError（未知节点）→ 404，其余 → 409。"""
-    if isinstance(error, KeyError):
-        return not_found_http_error(error)
-    if isinstance(error, NavigationQueueOwnerError):
-        return HTTPException(status_code=503, detail=str(error))
-    return state_conflict_http_error(error)
+    """构造导航 operation scope：Gateway/actor 来自已认证代理上下文。"""
+    return NavigationAuthScope(
+        gateway_id=require_current_gateway_id("Session catalog navigation operation"),
+        workspace_id=service.workspace_id,
+        actor=require_current_navigation_actor("Session catalog navigation operation"),
+    )
 
 
 @router.post(
@@ -307,95 +295,6 @@ async def search_session_catalog(
         result = await service.search(query=query, limit=limit, cursor=cursor)
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.post(
-    "/session-catalog/folders",
-    response_model=APIResponse[SessionCatalogBreadcrumbDTO],
-)
-async def create_session_folder(
-    payload: SessionFolderCreateRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
-):
-    try:
-        result = await service.create_folder(payload)
-    except (KeyError, ValueError, RuntimeError) as error:
-        # 未知父节点（404）与形态/语义/在途冲突（409）：与同族三入口同一分类。
-        raise _folder_mutation_http_error(error) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.patch(
-    "/session-catalog/folders/{folder_id}",
-    response_model=APIResponse[SessionCatalogBreadcrumbDTO],
-)
-async def update_session_folder(
-    folder_id: str,
-    payload: SessionFolderUpdateRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
-):
-    try:
-        result = await service.update_folder(folder_id, payload)
-    except (KeyError, ValueError, RuntimeError) as error:
-        # 与 create/delete/assign/move 同族入口同一分类：未知节点 404、形态/
-        # 语义/在途导航冲突 409。改前这里把语义冲突落成 400，且 detail 走裸
-        # str() 会带上 Python repr 引号，与同族入口的纯文本消息不一致。
-        raise _folder_mutation_http_error(error) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.delete("/session-catalog/folders/{folder_id}", status_code=204)
-async def delete_session_folder(
-    folder_id: str,
-    recursive: bool = Query(default=False),
-    _: str = Depends(verify_local_token),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
-) -> Response:
-    try:
-        await service.delete_folder(folder_id, recursive=recursive)
-    except (KeyError, ValueError, RuntimeError) as error:
-        raise _folder_mutation_http_error(error) from error
-    return Response(status_code=204)
-
-
-@router.put(
-    "/session-catalog/sessions/{session_id}/folder",
-    response_model=APIResponse[SessionCatalogBreadcrumbDTO],
-)
-async def assign_session_folder(
-    session_id: CanonicalSessionId,
-    payload: SessionFolderAssignmentRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
-):
-    try:
-        result = await service.assign_session(session_id, payload.folder_id)
-    except (KeyError, ValueError, RuntimeError) as error:
-        raise _folder_mutation_http_error(error) from error
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.patch(
-    "/session-catalog/nodes/{node_id}/parent",
-    response_model=APIResponse[SessionCatalogBreadcrumbDTO],
-)
-async def move_session_catalog_node(
-    node_id: str,
-    payload: SessionCatalogNodeMoveRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    service: SessionCatalogService = Depends(get_session_catalog_service),
-):
-    try:
-        result = await service.move_node(node_id, payload.parent_node_id)
-    except (KeyError, ValueError, RuntimeError) as error:
-        raise _folder_mutation_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

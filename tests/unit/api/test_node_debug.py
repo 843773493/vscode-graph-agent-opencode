@@ -24,6 +24,8 @@ from app.schemas.internal_v2.node_debug import (
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
 
+_MAIN_THREAD_ID = "thr_00000000700070008000000000000001"
+
 
 @pytest.fixture
 def node_debug_service() -> MagicMock:
@@ -44,7 +46,7 @@ def node_debug_service() -> MagicMock:
     service.start = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id="ses_test",
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             status="running",
             script_path="fixtures/debug.mjs",
             launch_profile_name="node-test",
@@ -54,7 +56,7 @@ def node_debug_service() -> MagicMock:
     service.create_configuration = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id="ses_test",
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             status="idle",
             active_configuration_id="dbgcfg_11111111111111111111111111111111",
         )
@@ -62,7 +64,7 @@ def node_debug_service() -> MagicMock:
     service.activate_configuration = AsyncMock(
         return_value=NodeDebugStateDTO(
             session_id="ses_test",
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
             status="idle",
         )
     )
@@ -98,7 +100,7 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
 ) -> None:
     payload = NodeDebugStartRequest(
         session_id="ses_test",
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
         path="fixtures/debug.mjs",
         working_directory="fixtures",
         launch_profile_name="node-test",
@@ -115,7 +117,7 @@ async def test_start_endpoint_forwards_profile_and_working_directory(
     assert response.request_id == "req_start"
     node_debug_service.start.assert_awaited_once_with(
         session_id="ses_test",
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
         configuration_id=None,
         path="fixtures/debug.mjs",
         args=["23"],
@@ -131,7 +133,7 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
 ) -> None:
     create_payload = NodeDebugConfigurationCreateRequest(
         session_id="ses_test",
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
         name="测试方案",
         script_path="fixtures/debug.mjs",
     )
@@ -149,7 +151,7 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
         configuration_id=configuration_id,
         payload=NodeDebugConfigurationActivateRequest(
             session_id="ses_test",
-            thread_id="main",
+            thread_id=_MAIN_THREAD_ID,
         ),
         _="local-token",
         request_id="req_activate",
@@ -158,16 +160,16 @@ async def test_configuration_endpoints_forward_session_and_portable_payload(
     node_debug_service.activate_configuration.assert_awaited_once_with(
         "ses_test",
         configuration_id,
-        thread_id="main",
+        thread_id=_MAIN_THREAD_ID,
     )
 
     copied = await copy_node_debug_configuration(
         configuration_id=configuration_id,
         payload=NodeDebugConfigurationCopyRequest(
             source_session_id="ses_test",
-            source_thread_id="main",
+            source_thread_id=_MAIN_THREAD_ID,
             target_session_id="ses_target",
-            target_thread_id="main",
+            target_thread_id=_MAIN_THREAD_ID,
         ),
         _="local-token",
         request_id="req_copy",

@@ -35,12 +35,14 @@ class ContextDetailKeyStore:
         if info is None or not stat.S_ISDIR(info.st_mode):
             raise DetailUnavailableError(f"{label} 不是安全普通目录: {path}")
 
-    def get(self, session_id: str, *, create: bool) -> bytes:
+    def get(self, session_id: str, thread_id: str, *, create: bool) -> bytes:
         if not isinstance(session_id, str) or not session_id or "\x00" in session_id:
             raise ValueError("session_id 必须是非空且不含 NUL 的字符串")
-        session_root = self._resolver.resolve_session_node_for_runtime(session_id)
-        self._require_directory(session_root, label="session node")
-        rollout = session_root / "rollout"
+        if not isinstance(thread_id, str) or not thread_id or "\x00" in thread_id:
+            raise ValueError("thread_id 必须是非空且不含 NUL 的字符串")
+        thread_root = self._resolver.resolve_thread_node(session_id, thread_id)
+        self._require_directory(thread_root, label="thread node")
+        rollout = thread_root / "rollout"
         rollout_info = self._lstat_no_follow(rollout, label="rollout detail 父目录")
         if rollout_info is None:
             if not create:
@@ -56,7 +58,7 @@ class ContextDetailKeyStore:
         if rollout_info is None or not stat.S_ISDIR(rollout_info.st_mode):
             raise DetailUnavailableError("rollout detail 父目录不是安全普通目录")
         try:
-            rollout.resolve(strict=True).relative_to(session_root.resolve(strict=True))
+            rollout.resolve(strict=True).relative_to(thread_root.resolve(strict=True))
         except ValueError as error:
             raise DetailUnavailableError(
                 "redaction key 路径越出 session node"
@@ -89,7 +91,7 @@ class ContextDetailKeyStore:
                 0o600,
             )
         except FileExistsError:
-            return self.get(session_id, create=False)
+            return self.get(session_id, thread_id, create=False)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(key)
             stream.flush()

@@ -4,12 +4,22 @@ from typing import Protocol
 
 
 class TurnTerminalStatusWriter(Protocol):
-    """把持久化 Turn 的终态写入端口，供启动恢复与 Job 终态同步共用。"""
+    """把已准入 execution 的控制终态交给唯一 convergence owner。"""
+
+    def mark_job_terminal_status(
+        self,
+        *,
+        session_id: str,
+        thread_id: str,
+        job_id: str,
+        status: str,
+    ) -> bool: ...
 
     def mark_turn_terminal_status(
         self,
         *,
         session_id: str,
+        thread_id: str,
         turn_id: str,
         status: str,
     ) -> bool: ...

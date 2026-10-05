@@ -117,6 +117,7 @@ class ResourceActivationBodyStore(Protocol):
         self,
         *,
         owner_session_id: str,
+        owner_thread_id: str,
         activation_snapshot_id: str,
         resource_id: str,
         activation_ordinal: int,

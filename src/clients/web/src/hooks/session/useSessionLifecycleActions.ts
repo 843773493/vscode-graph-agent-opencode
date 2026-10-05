@@ -2,15 +2,14 @@ import { useCallback } from "react";
 import {
   createSession as apiCreateSession,
   DEFAULT_SESSION_TITLE,
-  deleteSession as apiDeleteSession,
   forkSessionContext as apiForkSessionContext,
   getSession as apiGetSession,
+  getSessionCatalogBreadcrumb,
   listAgents as apiListAgents,
+  listSessionCatalogChildren,
   listSessions as apiListSessions,
-  moveSessionParent as apiMoveSessionParent,
   setWorkspaceDefaultAgent as apiSetWorkspaceDefaultAgent,
   setWorkspaceDefaultProvider as apiSetWorkspaceDefaultProvider,
-  updateSession as apiUpdateSession,
   updateSessionAgent as apiUpdateSessionAgent,
   updateSessionProvider as apiUpdateSessionProvider,
 } from "../../api";
@@ -28,6 +27,17 @@ import { resetSessionScopedFields } from "./sessionScopedState";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { errorMessage } from "../../utils/errorMessage";
+import {
+  requireGatewayWorkspaceRequestTarget,
+  type GatewayWorkspaceRequestTarget,
+} from "../../api/workspaceIdentity";
+import type { GatewayUserAccess } from "../../types/backend";
+import {
+  catalogOutboxOperationIsTerminal,
+  type CatalogOutboxIntent,
+  type CatalogOutboxOperation,
+} from "../../state/session/sessionCatalogOutbox";
+import type { SessionCatalogOutboxRuntime } from "./sessionCatalogOutboxRuntime";
 
 function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();
@@ -37,10 +47,7 @@ function normalizeSessionTitle(title: string): string {
   return trimmed;
 }
 
-/** 移除一条已消失会话的全部会话级附属缓存。删除会话的抢占分支与列表收敛
- * 分支共用这一份：之前两处各写一串 delete，键集互不相同（收敛分支漏了
- * 时间线与 Trace 历史，抢占分支漏了事件队列、未读与工作区归属），被删会话
- * 的缓存因此留成幽灵条目。 */
+/** 从会话镜像收敛时，移除已消失会话的全部会话级附属缓存。 */
 function purgeSessionScopedCaches(
   state: AppState,
   sessionId: string,
@@ -217,6 +224,9 @@ export function useSessionLifecycleActions({
   setState,
   abortCurrentStream,
   invalidateAgentState,
+  sessionCatalogOutboxRuntime,
+  gatewayUserAccess,
+  workspaceRequestTargets,
 }: {
   apiPort: number;
   currentSession: Session | null;
@@ -227,7 +237,63 @@ export function useSessionLifecycleActions({
   setState: SetAppState;
   abortCurrentStream: () => void;
   invalidateAgentState: () => void;
+  sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
+  gatewayUserAccess?: GatewayUserAccess | null;
+  workspaceRequestTargets: readonly GatewayWorkspaceRequestTarget[];
 }) {
+  const workspaceRequestTarget = useCallback(
+    (workspaceId: string) => requireGatewayWorkspaceRequestTarget(workspaceRequestTargets, workspaceId),
+    [workspaceRequestTargets],
+  );
+
+  const submitCatalogMutation = useCallback(async (
+    workspaceId: string,
+    intent: CatalogOutboxIntent,
+    baseCatalogRevision: number,
+    expectedRevision?: number,
+  ) => {
+    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+      throw new Error("Gateway 认证状态尚未就绪，不能修改会话目录");
+    }
+    const { handle, operationId, dispatchOutcome } = await sessionCatalogOutboxRuntime.submit(
+      workspaceRequestTarget(workspaceId),
+      gatewayUserAccess,
+      intent,
+      {
+        baseCatalogRevision,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      },
+    );
+    if (dispatchOutcome === "accepted") {
+      setState((prev) => ({ ...prev, status: "会话目录操作已持久受理，等待提交" }));
+    } else if (dispatchOutcome === "unknown") {
+      setState((prev) => ({ ...prev, status: "会话目录操作状态待确认，保留本地待同步变更" }));
+    }
+    return { handle, operationId };
+  }, [gatewayUserAccess, sessionCatalogOutboxRuntime, setState, workspaceRequestTarget]);
+
+  const commitCatalogMutation = useCallback(async (
+    workspaceId: string,
+    intent: CatalogOutboxIntent,
+    baseCatalogRevision: number,
+    expectedRevision?: number,
+  ) => {
+    if (!sessionCatalogOutboxRuntime) {
+      throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+    }
+    const submitted = await submitCatalogMutation(
+      workspaceId,
+      intent,
+      baseCatalogRevision,
+      expectedRevision,
+    );
+    const operation = await sessionCatalogOutboxRuntime.waitForTerminal(
+      submitted.handle,
+      submitted.operationId,
+    );
+    return { ...submitted, operation };
+  }, [sessionCatalogOutboxRuntime, submitCatalogMutation]);
+
   const selectSession = useCallback(
     (sessionId: string) => {
       if (
@@ -460,6 +526,7 @@ export function useSessionLifecycleActions({
         const childSession = await apiForkSessionContext(
           apiPort,
           sourceSessionId,
+          true,
           workspaceId,
         );
         abortCurrentStream();
@@ -541,14 +608,31 @@ export function useSessionLifecycleActions({
     async (sessionId: string, title: string, workspaceId?: string | null) => {
       const workspaceIdForRequest =
         workspaceId ?? currentSessionGatewayWorkspaceId;
-      setState((prev) => ({ ...prev, status: "正在命名会话" }));
-
       try {
-        // 与 createSession 同域：校验放在 try 内，空标题必须走统一失败上报。
         const normalizedTitle = normalizeSessionTitle(title);
-        const updatedSession = await apiUpdateSession(apiPort, sessionId, {
-          title: normalizedTitle,
-        }, workspaceIdForRequest);
+        if (!workspaceIdForRequest) {
+          throw new Error("重命名会话缺少 Gateway workspace route ID");
+        }
+        const breadcrumb = await getSessionCatalogBreadcrumb(
+          apiPort,
+          workspaceRequestTarget(workspaceIdForRequest),
+          sessionId,
+        );
+        const node = breadcrumb.items.find((item) => item.node_id === sessionId);
+        if (!node || node.kind !== "session" || node.session_id !== sessionId) {
+          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+        }
+        await commitCatalogMutation(
+          workspaceIdForRequest,
+          { kind: "rename_node", targetNodeId: node.node_id, name: normalizedTitle },
+          breadcrumb.catalog_revision,
+          node.node_revision,
+        );
+        const updatedSession = await apiGetSession(
+          apiPort,
+          sessionId,
+          workspaceIdForRequest,
+        );
         setState((prev) => {
           const next = replaceSessionMetadata(
             prev,
@@ -581,31 +665,19 @@ export function useSessionLifecycleActions({
           return next;
         });
       } catch (error) {
-        let message = errorMessage(error);
-        // 失败后重取会话校准：重命名可能已生效（如响应超时），本地镜像必须
-        // 以后端返回的权威标题为准，而不是停在乐观假设上。
-        try {
-          const refreshed = await apiGetSession(
-            apiPort,
-            sessionId,
-            workspaceIdForRequest,
-          );
-          setState((prev) => {
-            const next = replaceSessionMetadata(prev, refreshed, workspaceIdForRequest);
-            next.currentSessionWorkspaceId =
-              workspaceIdForRequest ?? next.currentSessionWorkspaceId;
-            next.status = `会话命名失败: ${message}`;
-            return next;
-          });
-        } catch (reconciliationError) {
-          const reconciliationMessage = errorMessage(reconciliationError);
-          message = `${message}；重新读取会话也失败: ${reconciliationMessage}`;
-          setState((prev) => ({ ...prev, status: `会话命名失败: ${message}` }));
-        }
+        const message = errorMessage(error);
+        setState((prev) => ({ ...prev, status: `会话命名失败: ${message}` }));
         throw error;
       }
     },
-    [apiPort, currentSessionCacheKey, currentSessionGatewayWorkspaceId, setState],
+    [
+      apiPort,
+      commitCatalogMutation,
+      currentSessionCacheKey,
+      currentSessionGatewayWorkspaceId,
+      setState,
+      workspaceRequestTarget,
+    ],
   );
 
   const setSessionParent = useCallback(
@@ -616,16 +688,30 @@ export function useSessionLifecycleActions({
     ) => {
       setState((prev) => ({
         ...prev,
-        status: parentSessionId ? "正在绑定子会话" : "正在解除会话绑定",
+        status: parentSessionId ? "正在提交子会话关系" : "正在提交父会话解除",
       }));
 
       try {
-        const updatedSession = await apiMoveSessionParent(
+        const breadcrumb = await getSessionCatalogBreadcrumb(
           apiPort,
-          workspaceId,
+          workspaceRequestTarget(workspaceId),
           sessionId,
-          parentSessionId,
         );
+        const node = breadcrumb.items.find((item) => item.node_id === sessionId);
+        if (!node || node.kind !== "session" || node.session_id !== sessionId) {
+          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+        }
+        await commitCatalogMutation(
+          workspaceId,
+          {
+            kind: "move_node",
+            targetNodeId: node.node_id,
+            parentNodeId: parentSessionId,
+          },
+          breadcrumb.catalog_revision,
+          node.node_revision,
+        );
+        const updatedSession = await apiGetSession(apiPort, sessionId, workspaceId);
         setState((prev) => {
           const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
           next.status = parentSessionId
@@ -635,172 +721,146 @@ export function useSessionLifecycleActions({
         });
       } catch (error) {
         const message = errorMessage(error);
-        // 同 forkSessionContext：补偿重取失败必须保留原始错误语义。
-        try {
-          const refreshed = await apiListSessions(apiPort, workspaceId);
-          setState((prev) => {
-            const next = cloneMaps(prev);
-            next.sessionsByWorkspace.set(workspaceId, refreshed.items);
-            if (prev.activeGatewayWorkspaceId === workspaceId) {
-              next.sessions = refreshed.items;
-              const currentId = prev.currentSession?.session_id;
-              next.currentSession = currentId
-                ? refreshed.items.find((item) => item.session_id === currentId) ?? null
-                : null;
-            }
-            next.status = `更新会话树失败: ${message}`;
-            return next;
-          });
-        } catch (reconciliationError) {
-          const reconciliationMessage = errorMessage(reconciliationError);
-          setState((prev) => ({
-            ...prev,
-            status: `更新会话树失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`,
-          }));
-        }
+        setState((prev) => ({ ...prev, status: `更新会话树失败: ${message}` }));
         throw error;
       }
     },
-    [apiPort, setState],
+    [apiPort, commitCatalogMutation, setState, workspaceRequestTarget],
   );
 
   const deleteSession = useCallback(
     async (sessionId: string, workspaceId?: string | null) => {
-      const deletingCurrent = currentSession?.session_id === sessionId;
       const workspaceIdForRequest =
         workspaceId ?? currentSessionGatewayWorkspaceId ?? activeGatewayWorkspaceId;
-      if (deletingCurrent) {
-        abortCurrentStream();
-        invalidateAgentState();
-        // 先切走当前会话，再等待删除请求完成。否则删除期间历史、Goal、
-        // 资源等 effect 仍会继续请求即将消失的 session，最终把 404/500
-        // 写回页面并覆盖用户刚选中的会话。
-        setState((previous) => {
-          if (previous.currentSession?.session_id !== sessionId) {
-            return previous;
-          }
-          const next = cloneMaps(previous);
-          const workspaceSessions = workspaceIdForRequest
-            ? previous.sessionsByWorkspace.get(workspaceIdForRequest) ?? previous.sessions
-            : previous.sessions;
-          // 抢占分支同样按删除闭包收敛：级联删除会带走整棵子会话树，若只过滤
-          // 被删会话本身，新的当前会话可能选中一个即将消失的后代（幽灵会话）。
-          const doomed = localSessionDeletionClosure(workspaceSessions, sessionId);
-          const nextSession = workspaceSessions.find(
-            (candidate) => !doomed.has(candidate.session_id),
-          ) ?? null;
-          next.currentSession = nextSession;
-          next.currentSessionWorkspaceId = nextSession ? workspaceIdForRequest : null;
-          next.sessions = workspaceSessions.filter(
-            (candidate) => !doomed.has(candidate.session_id),
-          );
-          if (workspaceIdForRequest) {
-            next.sessionsByWorkspace.set(workspaceIdForRequest, next.sessions);
-          }
-          const cacheKey = workspaceIdForRequest
-            ? sessionScopeKey(workspaceIdForRequest, sessionId)
-            : sessionId;
-          purgeSessionScopedCaches(next, sessionId, cacheKey);
-          next.traceEvents = [];
-          next.llmRequestLogs = [];
-          next.llmRequestLogsLoadedAt = null;
-          next.sessionResources = [];
-          next.sessionResourcesLoadedAt = null;
-          next.sessionHistoryReloadNonce = previous.sessionHistoryReloadNonce + 1;
-          next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
-          next.currentGoal = null;
-          next.currentGoalSessionId = nextSession?.session_id ?? null;
-          next.goalLoading = Boolean(nextSession);
-          next.goalError = null;
-          Object.assign(next, resetAgentStateFields(next));
-          if (nextSession) writeLastSessionId(nextSession.session_id);
-          else clearLastSessionId();
-          return next;
-        });
-      }
-
-      setState((prev) => ({ ...prev, status: "正在删除会话" }));
-
-      let result: Awaited<ReturnType<typeof apiDeleteSession>>;
+      let catalogRefreshFailure: string | null = null;
       try {
-        result = await apiDeleteSession(
+        if (!workspaceIdForRequest) {
+          throw new Error("删除会话缺少 Gateway workspace route ID");
+        }
+        setState((prev) => ({ ...prev, status: "正在提交会话删除" }));
+        const breadcrumb = await getSessionCatalogBreadcrumb(
           apiPort,
+          workspaceRequestTarget(workspaceIdForRequest),
           sessionId,
-          workspaceIdForRequest,
-          true,
         );
+        const nodeIndex = breadcrumb.items.findIndex((item) => item.node_id === sessionId);
+        const node = breadcrumb.items[nodeIndex];
+        if (!node || node.kind !== "session" || node.session_id !== sessionId) {
+          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+        }
+        const parentNodeId = nodeIndex > 0
+          ? breadcrumb.items[nodeIndex - 1]!.node_id
+          : null;
+        if (!sessionCatalogOutboxRuntime) {
+          throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+        }
+        const { handle, operationId } = await submitCatalogMutation(
+          workspaceIdForRequest,
+          { kind: "delete_session", targetNodeId: node.node_id },
+          breadcrumb.catalog_revision,
+          node.node_revision,
+        );
+        let terminalError: unknown = null;
+        let operation: CatalogOutboxOperation | null = null;
+        try {
+          operation = await sessionCatalogOutboxRuntime.waitForTerminal(handle, operationId);
+        } catch (error: unknown) {
+          terminalError = error;
+        }
+        // 拒绝时 waitForTerminal 保持原有抛错契约；只在该失败路径读取本地终态详情。
+        if (operation === null && terminalError !== null) {
+          operation = handle.driver.current().operations.find(
+            (candidate) => candidate.client_operation_id === operationId,
+          ) ?? null;
+        }
+        if (!operation || !catalogOutboxOperationIsTerminal(operation)) {
+          throw terminalError ?? new Error(
+            `会话目录删除未产生可核对的终态回执: ${operationId}`,
+          );
+        }
+        try {
+          const page = await listSessionCatalogChildren(
+            apiPort,
+            workspaceRequestTarget(workspaceIdForRequest),
+            parentNodeId,
+          );
+          const committedRevision = operation.committed_catalog_revision;
+          if (operation.state === "committed" && committedRevision === null) {
+            throw new Error(
+              `已提交的会话删除缺少 committed_catalog_revision: ${operation.client_operation_id}`,
+            );
+          }
+          if (!Number.isSafeInteger(page.catalog_revision)
+            || (committedRevision !== null && page.catalog_revision < committedRevision)) {
+            throw new Error(
+              `会话目录分支 revision 尚未追上删除回执 ${operation.client_operation_id}: `
+              + `需要至少 ${committedRevision ?? "有效 revision"}，实际 ${page.catalog_revision}`,
+            );
+          }
+          await handle.driver.prune(
+            page.catalog_revision,
+            [operation.client_operation_id],
+          );
+        } catch (error) {
+          catalogRefreshFailure = errorMessage(error);
+          sessionCatalogOutboxRuntime?.reportError(
+            `会话目录操作 ${operation.client_operation_id} 已到终态但目录分支刷新失败: `
+            + catalogRefreshFailure,
+          );
+        }
+        if (operation.state !== "committed") {
+          throw terminalError ?? new Error(
+            `会话目录删除被 ${operation.state}: `
+            + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim(),
+          );
+        }
+        if (terminalError && !catalogRefreshFailure) {
+          sessionCatalogOutboxRuntime.reportError(
+            `会话目录操作 ${operationId} 已提交且分支已刷新，但终态确认异常: `
+            + errorMessage(terminalError),
+          );
+        }
       } catch (error) {
         const message = errorMessage(error);
-        // 失败后主动从后端重取列表校准本地镜像（AGENTS.md 前端状态管理第 4 条）：
-        // 删除可能实际已在后端生效（如响应超时），本地必须以后端为准。
-        let reconciled: Session[] | null = null;
-        let reconciliationFailure: string | null = null;
-        try {
-          reconciled = (
-            await apiListSessions(apiPort, workspaceIdForRequest)
-          ).items;
-        } catch (reconciliationError) {
-          reconciliationFailure = errorMessage(reconciliationError);
-        }
-        setState((prev) => {
-          const resolvedWorkspaceId =
-            workspaceIdForRequest ??
-            prev.activeGatewayWorkspaceId ??
-            "workspace";
-          // 补偿重取成功时，删除可能已在后端生效（响应超时/丢失）：后端权威列表里
-          // 当前会话可能已被级联删除，必须与成功路径同样切走 currentSession，
-          // 否则它会悬空指向一个已不在 sessions 里的幽灵会话。
-          const converged = reconciled
-            ? convergeAfterSessionRemoval(prev, resolvedWorkspaceId, reconciled, {
-                reloadHistoryAfterSwitch: true,
-              })
-            : prev;
-          return {
-            ...converged,
-            status: reconciliationFailure
-              ? `删除会话失败: ${message}；重新读取会话列表也失败: ${reconciliationFailure}`
-              : `删除会话失败: ${message}`,
-          };
-        });
+        const refreshDetail = catalogRefreshFailure
+          ? `；目录分支刷新失败: ${catalogRefreshFailure}`
+          : "";
+        setState((prev) => ({
+          ...prev,
+          status: `删除会话失败: ${message}${refreshDetail}`,
+        }));
         throw error;
       }
 
+      const resolvedWorkspaceId = workspaceIdForRequest;
       setState((prev) => {
-        const workspaceId =
-          workspaceIdForRequest ??
-          prev.activeGatewayWorkspaceId ??
-          "workspace";
-        const previousSessions =
-          prev.sessionsByWorkspace.get(workspaceId) ?? prev.sessions;
-        // 删除成功路径不再重拉会话列表（§10.3 前端半边）：该 operation 已 committed，
-        // 前端直接按本地已知的删除闭包收敛镜像即可。后端已成功事实由上面的 DELETE
-        // 响应给出，无需用一次全量列表请求再次确认；全量重取只在失败/冲突时作为
-        // 显式可观测的校验兜底（见上面的 catch 分支）。
+        const previousSessions = prev.sessionsByWorkspace.get(resolvedWorkspaceId)
+          ?? prev.sessions;
         const doomed = localSessionDeletionClosure(previousSessions, sessionId);
         const remainingSessions = previousSessions.filter(
           (session) => !doomed.has(session.session_id),
         );
-        // 删除非当前会话时，级联删除可能移除了当前会话；这时才需要为新选中的
-        // 会话触发一次历史加载（删除当前会话时上面已先行切走）。
         const next = convergeAfterSessionRemoval(
           prev,
-          workspaceId,
+          resolvedWorkspaceId,
           remainingSessions,
-          { reloadHistoryAfterSwitch: !deletingCurrent },
+          { reloadHistoryAfterSwitch: true },
         );
 
-        next.status = `已删除会话: ${result.session_id}`;
+        next.status = catalogRefreshFailure
+          ? `已删除会话: ${sessionId}；会话目录分支刷新失败: ${catalogRefreshFailure}`
+          : `已删除会话: ${sessionId}`;
         return next;
       });
     },
     [
-      abortCurrentStream,
       activeGatewayWorkspaceId,
       apiPort,
-      currentSession?.session_id,
       currentSessionGatewayWorkspaceId,
-      invalidateAgentState,
+      sessionCatalogOutboxRuntime,
+      submitCatalogMutation,
       setState,
+      workspaceRequestTarget,
     ],
   );
 

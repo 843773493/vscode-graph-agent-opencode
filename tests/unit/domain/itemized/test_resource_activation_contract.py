@@ -11,8 +11,8 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
     ResourceActivationSnapshotRef,
@@ -54,7 +54,7 @@ def binding(
         activation_ordinal=ordinal,
         effective_boundary=boundary,
         captured_registry_generation=3,
-        snapshot_ref=DetailRef("ses_a", "asm_1", "snap_1"),
+        snapshot_ref=DetailRef("ses_a", "thr_b", "asm_1", "snap_1"),
     )
 
 
@@ -305,8 +305,8 @@ def test_binding_requires_exactly_one_typed_snapshot_or_detail_ref() -> None:
     with pytest.raises(ResourceActivationContractError) as excinfo:
         replace(
             binding(),
-            snapshot_ref=DetailRef("ses_a", "asm_1", "snap_1"),
-            detail_ref=DetailRef("ses_a", "asm_1", "detail_1"),
+            snapshot_ref=DetailRef("ses_a", "thr_b", "asm_1", "snap_1"),
+            detail_ref=DetailRef("ses_a", "thr_b", "asm_1", "detail_1"),
         )
     assert excinfo.value.code == "resource-activation-schema-invalid"
     with pytest.raises(ResourceActivationContractError) as excinfo:

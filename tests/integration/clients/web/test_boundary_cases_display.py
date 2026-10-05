@@ -12,8 +12,10 @@ import commentjson
 import httpx
 import pytest
 
-from app.core.session_catalog_migration import migrate_workspace_session_catalog
 from tests.integration.stubs.http_stubs import openai_chat_stub
+from tests.support.custom_tool_test_workspace import (
+    prepare_custom_tool_test_workspace,
+)
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -23,8 +25,6 @@ from tests.support.gateway_processes import (
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import close_backend_process, start_backend_process
-from tests.support.web_boundary_seeding import seed_boundary_cases
-from tests.support.workspaces import prepare_default_test_workspace
 
 BOUNDARY_CASES = (
     ("ses_019bf985d867717182fe710be0f6adae", "boundary-turn-0001", "completed"),
@@ -45,15 +45,11 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         project_root=project_root,
     )
     reset_gateway_persistent_state(workspace_root=output_root / "workspace")
-    workspace_root = prepare_default_test_workspace(
+    workspace_root = prepare_custom_tool_test_workspace(
         workspace_root=output_root / "workspace",
         template_root=project_root / "tests" / "fixtures" / "workspaces" / "custom_tool_test_workspace",
         shared_skill_root=project_root / "resources" / "skills",
     )
-    # 模板 rollout 是 schema-4 之前的旧格式；先完成一次性 catalog 迁移，
-    # 再在副本上以当前 Saver 重写 schema-4 边界数据。
-    asyncio.run(migrate_workspace_session_catalog(workspace_root=workspace_root))
-    seed_boundary_cases(workspace_root)
     return str(workspace_root)
 
 

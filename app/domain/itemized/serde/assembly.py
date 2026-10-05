@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.registry import (
@@ -33,6 +33,7 @@ def context_assembly_snapshot_from_dict(
     required = {
         "assembly_id",
         "session_id",
+        "thread_id",
         "turn_id",
         "execution_id",
         "plan_id",
@@ -145,6 +146,7 @@ def context_assembly_snapshot_from_dict(
             # 此分支只解析 selection 自带的 identity，不能查工具 registry 或正文。
             identity_fields = {
                 "session_id",
+                "thread_id",
                 "ref_type", "ref_id", "plan_id", "assembly_id", "source_revision",
                 "tool_set_schema", "tool_set_schema_version", "tool_policy_version",
                 "content_length", "content_hash", "redacted_stable_digest",
@@ -251,7 +253,8 @@ def context_assembly_snapshot_from_dict(
     return cls(
         assembly_id=_required_string(value["assembly_id"], "assembly_id"),
         session_id=_required_string(value["session_id"], "session_id"),
-        turn_id=_required_string(value["turn_id"], "turn_id"),
+        thread_id=_required_string(value["thread_id"], "thread_id"),
+        turn_id=_optional_string(value, "turn_id", "turn_id"),
         execution_id=_required_string(value["execution_id"], "execution_id"),
         plan_id=_required_string(value["plan_id"], "plan_id"),
         plan_hash=_required_string(value["plan_hash"], "plan_hash"),

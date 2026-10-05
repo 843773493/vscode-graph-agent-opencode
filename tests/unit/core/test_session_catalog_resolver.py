@@ -37,6 +37,10 @@ from tests.support.canonical_id_at import (
     thread_id_at,
     thread_id_for_name_at,
 )
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 WORKSPACE_ID = "ws-resolver"
 
@@ -93,7 +97,7 @@ def publish_child_thread(
             idempotency_key=key,
             initial_state="idle",
             preimage_hash="a" * 64,
-            graph_binding=json.dumps({"graph_id": "resolver"}),
+            graph_binding=TEST_THREAD_GRAPH_BINDING_JSON,
             capability_profile=json.dumps({}),
             created_at=created_at,
             thread_id=thread_id,
@@ -137,12 +141,15 @@ async def allocated_session(
         workspace_id=WORKSPACE_ID,
         gate=NavigationTopologyGate(resolver.sessions_root),
     )
-    result = await service.create(
+    record = await service.prepare(
         idempotency_key=f"resolver-test-{uuid.uuid4().hex}",
         title=title,
+        purpose="normal",
         parent_node_id=parent_node_id,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata=metadata,
     )
+    result = await service.publish_prepared(record)
     return result.session_id, resolver.resolve_session_node(result.session_id)
 
 
@@ -296,12 +303,15 @@ class TestInitializeAndProperties:
         with pytest.raises(RuntimeError, match="循环"):
             resolver.initialize()
 
-    def test_revision_sums_and_bumps_after_rename(
+    def test_revision_tracks_node_changes_but_not_queue_writes(
         self, resolver: SessionCatalogPathResolver
     ) -> None:
         folder = resolver.create_folder(name="目录", parent_node_id=None)
         before = resolver.revision
-        assert before == 1  # folder 初始 revision=1，sum 即 1。
+        assert before == 1
+        with resolver.catalog_store.write_transaction():
+            pass
+        assert resolver.revision == before
         resolver.update_node_name(folder.node_id, "新名")
         assert resolver.revision == before + 1
 
@@ -938,6 +948,9 @@ class TestStoreCreationRecordHonorsSessionId:
             "workspace_id": WORKSPACE_ID,
             "parent_node_id": None,
             "display_name": "指定ID会话",
+            "purpose": "normal",
+            "session_metadata_json": "{}",
+            "graph_binding": TEST_THREAD_GRAPH_BINDING,
             "created_at": created_at,
             "preimage_hash": "preimage-" + uuid.uuid4().hex,
             "session_id": session_id_for_name_at(idempotency_key, created_at),
@@ -962,6 +975,23 @@ class TestStoreCreationRecordHonorsSessionId:
         # locator 叶名 == 传入 ID（日期桶按 record.created_at 冻结）。
         assert record.storage_relative_locator.endswith(f"/{session_id}")
         assert record.state == "preparing"
+
+    def test_prepared_resolver_uses_record_without_publishing_node(
+        self,
+        store: SessionCatalogStore,
+        resolver: SessionCatalogPathResolver,
+        sessions_root: Path,
+    ) -> None:
+        record = store.create_or_get_creation_record(**self._create_kwargs())
+        staging = sessions_root / ".staging" / record.session_id
+        staging.mkdir(parents=True)
+
+        assert resolver.resolve_prepared_session_node(record) == staging
+        assert resolver.resolve_prepared_thread_node(record, "main") == staging
+        with pytest.raises(KeyError):
+            resolver.resolve_session_node(record.session_id)
+        with pytest.raises(KeyError, match="尚无目标 child thread"):
+            resolver.resolve_prepared_thread_node(record, make_thread_id())
 
     def test_rejects_non_canonical_session_id(
         self, store: SessionCatalogStore

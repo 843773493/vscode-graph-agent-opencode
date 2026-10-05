@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -24,15 +25,21 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.agent_factory import build_model_from_provider
 from app.agents.provider_api_mode import parse_provider_api_mode
+from app.container import WorkspaceContainerRegistry
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.path_utils import get_session_path_resolver
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+from app.core.path_utils import catalog_provider_scope, get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.mapping.itemized.provider_history import visible_text
 
-SESSION_ID = "ses_8128d7f0a4b64aa0b3f1c9e7d2a65018"
+SESSION_ID = "ses_019c27f816b17ee394a67f9312bb669e"
 
 
 def _load_running_provider_keys(environment_names: set[str]) -> None:
@@ -85,34 +92,34 @@ def _session_manifest(
     *,
     current_provider_id: str = "primary",
 ) -> None:
-    session_dir.joinpath("session.json").write_text(
-        "{\n"
-        '  "created_at": "2026-08-17T00:00:00+00:00",\n'
-        '  "updated_at": "2026-08-17T00:00:00+00:00",\n'
-        f'  "session_id": "{session_id}",\n'
-        '  "workspace_id": "ws_local",\n'
-        '  "title": "真实模型 128 Turn checkpoint 压测",\n'
-        '  "title_source": "user",\n'
-        '  "current_agent_id": "default",\n'
-        f'  "current_provider_id": "{current_provider_id}",\n'
-        '  "parent_session_id": null,\n'
-        '  "context_source_session_id": null,\n'
-        '  "kind": "normal",\n'
-        '  "delegation": null,\n'
-        '  "generation_origin": null\n'
-        "}\n",
+    manifest_path = session_dir / "session.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update({
+        "session_id": session_id,
+        "title": "真实模型 128 Turn checkpoint 压测",
+        "title_source": "user",
+        "current_agent_id": "default",
+        "current_provider_id": current_provider_id,
+    })
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
 def _restore_generation_backup(workspace_root: Path) -> None:
     """恢复真实模型 fixture 的唯一未完成替换备份。"""
-    session_dir = (
-        workspace_root
-        / ".boxteam"
-        / "sessions"
-        / SESSION_ID
+    registry = WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([
+            MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
+        ]),
+        project_root=Path.cwd(),
     )
+    with registry, catalog_provider_scope(registry):
+        resolver = get_session_path_resolver(workspace_root / ".boxteam" / "sessions")
+        session_dir = resolver.resolve_thread_node(
+            SESSION_ID, resolver.main_thread_id(SESSION_ID)
+        )
     backups = sorted(session_dir.glob(".rollout-backup-*/"))
     if not backups:
         return
@@ -277,241 +284,272 @@ def generate(
     _load_running_provider_keys(
         _configured_environment_names((inline_config_path, override_config_path))
     )
-    sessions_dir = workspace_root / ".boxteam" / "sessions"
-    resolver = get_session_path_resolver(sessions_dir)
-    resolver.initialize()
-    session_dir = resolver.resolve_session_node(SESSION_ID)
-    rollout_dir = session_dir / "rollout"
-    previous_rollout_backup: Path | None = None
-    if start_turn == 1 and rollout_dir.exists():
-        # 该脚本只替换明确指定的常驻真实模型会话，不触碰其它测试会话。
-        if require_mixed_provider:
-            previous_rollout_backup = session_dir / f".rollout-backup-{uuid4().hex}"
-            shutil.copytree(rollout_dir, previous_rollout_backup)
-        shutil.rmtree(rollout_dir)
-    _session_manifest(session_dir, SESSION_ID)
-
-    config_service = ConfigService(
-        workspace_root=workspace_root,
-        inline_config_path=inline_config_path,
-        config_path=override_config_path,
+    registry = WorkspaceContainerRegistry(
+        mounted_workspaces=MountedWorkspaceRegistry([
+            MountedWorkspace(load_or_create_workspace_id(workspace_root), workspace_root)
+        ]),
+        project_root=Path.cwd(),
     )
-    config_service.validate_workspace_config()
-    runtime_config = config_service.get_agent_runtime_config("default")
-    configured_providers = {
-        str(provider["id"]): provider
-        for provider in runtime_config["providers"]
-        if isinstance(provider, dict) and isinstance(provider.get("id"), str)
-    }
-    configured_provider_ids = tuple(configured_providers)
-    provider_ids = requested_provider_ids or requested_provider_sequence or configured_provider_ids
-    if requested_provider_sequence:
-        provider_ids = tuple(dict.fromkeys(requested_provider_sequence))
-    unknown_provider_ids = sorted(set(provider_ids) - set(configured_provider_ids))
-    if unknown_provider_ids:
-        raise ValueError(f"请求的 provider 不在 default agent 配置中: {unknown_provider_ids}")
-    if len(provider_ids) < 2:
-        raise RuntimeError(
-            "真实模型 fixture 至少需要两个配置 provider，才能验证模型切换"
-        )
-    models: dict[str, Any] = {}
-    provider_specs: dict[str, dict[str, Any]] = {}
-    for provider_id in provider_ids:
-        provider = configured_providers[provider_id]
-        runtime = config_service.get_agent_runtime_config(
-            "default",
-            preferred_provider_id=provider_id,
-        )
-        models[provider_id] = build_model_from_provider(provider, runtime)
-        provider_specs[provider_id] = provider
+    with registry, catalog_provider_scope(registry):
+        sessions_dir = workspace_root / ".boxteam" / "sessions"
+        resolver = get_session_path_resolver(sessions_dir)
+        resolver.initialize()
+        session_dir = resolver.resolve_session_node(SESSION_ID)
+        thread_id = resolver.main_thread_id(SESSION_ID)
+        rollout_dir = resolver.resolve_thread_node(SESSION_ID, thread_id) / "rollout"
+        previous_rollout_backup: Path | None = None
+        if start_turn == 1 and rollout_dir.exists():
+            # 该脚本只替换明确指定的常驻真实模型会话，不触碰其它测试会话。
+            if require_mixed_provider:
+                previous_rollout_backup = session_dir / f".rollout-backup-{uuid4().hex}"
+                shutil.copytree(rollout_dir, previous_rollout_backup)
+            shutil.rmtree(rollout_dir)
+        _session_manifest(session_dir, SESSION_ID)
 
-    provider_ids = tuple(models)
-    if len(provider_ids) < 2:
-        raise RuntimeError("真实模型 fixture 实际只能构建一个 provider，无法验证切换")
-
-    saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config(SESSION_ID)
-    messages: list[object] = []
-    last_provider_id = provider_ids[0]
-    observed_provider_ids: set[str] = set()
-    provider_available = {provider_id: True for provider_id in provider_ids}
-    for turn in range(start_turn, end_turn + 1):
-        requested_provider_id = (
-            requested_provider_sequence[(turn - 1) % len(requested_provider_sequence)]
-            if requested_provider_sequence
-            else _provider_id_for_turn(turn, provider_ids)
+        config_service = ConfigService(
+            workspace_root=workspace_root,
+            inline_config_path=inline_config_path,
+            config_path=override_config_path,
         )
-        turn_id = f"real-turn-{turn:04d}"
-        user = HumanMessage(
-            id=f"real-user-{turn:04d}",
-            content=(
-                f"这是第 {turn} 轮真实模型回归。本轮请求使用“{requested_provider_id}”模型；"
-                "如果上游发生模型切换，请明确说明实际使用的模型。请用简短中文回答，"
-                f"并总结上一轮上下文中的一个事实。第 {turn} 轮需要检查 fixture/{turn:04d}.json。"
-                + (
-                    "请调用 inspect_fixture 工具后再回答。"
-                    if tool_every > 0 and turn % tool_every == 0
-                    else ""
-                )
-            ),
-            response_metadata={
-                "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
-                "model_provider": requested_provider_id,
-            },
-        )
-        messages.append(user)
-        response, provider_id = _invoke_with_provider_fallback(
-            models,
-            provider_ids,
-            requested_provider_id,
-            messages,
-            provider_available=provider_available,
-            use_tools=tool_every > 0 and turn % tool_every == 0,
-            allow_fallback=not strict_provider_sequence,
-            require_visible_output=True,
-        )
-        if strict_provider_sequence and provider_id != requested_provider_id:
+        config_service.validate_workspace_config()
+        runtime_config = config_service.get_agent_runtime_config("default")
+        configured_providers = {
+            str(provider["id"]): provider
+            for provider in runtime_config["providers"]
+            if isinstance(provider, dict) and isinstance(provider.get("id"), str)
+        }
+        configured_provider_ids = tuple(configured_providers)
+        provider_ids = requested_provider_ids or requested_provider_sequence or configured_provider_ids
+        if requested_provider_sequence:
+            provider_ids = tuple(dict.fromkeys(requested_provider_sequence))
+        unknown_provider_ids = sorted(set(provider_ids) - set(configured_provider_ids))
+        if unknown_provider_ids:
+            raise ValueError(f"请求的 provider 不在 default agent 配置中: {unknown_provider_ids}")
+        if len(provider_ids) < 2:
             raise RuntimeError(
-                "真实模型 fixture 未按要求使用 provider: "
-                f"turn={turn} requested={requested_provider_id} actual={provider_id}"
+                "真实模型 fixture 至少需要两个配置 provider，才能验证模型切换"
             )
-        last_provider_id = provider_id
-        observed_provider_ids.add(provider_id)
-        response = _ensure_message_id(response, turn, "tool-or-first")
-        response = _stamp_actual_provider(
-            response,
-            provider_id,
-            provider_specs[provider_id],
-        )
-        messages.append(response)
-        if response.tool_calls:
-            for call in response.tool_calls:
-                args = call.get("args")
-                if not isinstance(args, dict):
-                    tool_result = (
-                        "inspect_fixture 工具调用参数校验失败：参数必须是对象，"
-                        f"实际类型为 {type(args).__name__}。"
+        models: dict[str, Any] = {}
+        provider_specs: dict[str, dict[str, Any]] = {}
+        for provider_id in provider_ids:
+            provider = configured_providers[provider_id]
+            runtime = config_service.get_agent_runtime_config(
+                "default",
+                preferred_provider_id=provider_id,
+            )
+            models[provider_id] = build_model_from_provider(provider, runtime)
+            provider_specs[provider_id] = provider
+
+        provider_ids = tuple(models)
+        if len(provider_ids) < 2:
+            raise RuntimeError("真实模型 fixture 实际只能构建一个 provider，无法验证切换")
+
+        saver = RolloutCheckpointSaver(sessions_dir)
+        config = build_checkpoint_config(thread_id)
+        messages: list[object] = []
+        last_provider_id = provider_ids[0]
+        observed_provider_ids: set[str] = set()
+        provider_available = {provider_id: True for provider_id in provider_ids}
+        for turn in range(start_turn, end_turn + 1):
+            requested_provider_id = (
+                requested_provider_sequence[(turn - 1) % len(requested_provider_sequence)]
+                if requested_provider_sequence
+                else _provider_id_for_turn(turn, provider_ids)
+            )
+            turn_id = f"real-turn-{turn:04d}"
+            user = HumanMessage(
+                id=f"real-user-{turn:04d}",
+                content=(
+                    f"这是第 {turn} 轮真实模型回归。本轮请求使用“{requested_provider_id}”模型；"
+                    "如果上游发生模型切换，请明确说明实际使用的模型。请用简短中文回答，"
+                    f"并总结上一轮上下文中的一个事实。第 {turn} 轮需要检查 fixture/{turn:04d}.json。"
+                    + (
+                        "请调用 inspect_fixture 工具后再回答。"
+                        if tool_every > 0 and turn % tool_every == 0
+                        else ""
                     )
-                else:
-                    try:
-                        tool_result = str(inspect_fixture.invoke(args))
-                    except (TypeError, ValueError, ValidationError) as error:
-                        tool_result = (
-                            "inspect_fixture 工具调用参数校验失败："
-                            f"{type(error).__name__}: {error}"
-                        )
-                        print(
-                            "tool validation error: "
-                            f"turn={turn} error={type(error).__name__}",
-                            file=sys.stderr,
-                        )
-                messages.append(
-                    ToolMessage(
-                        id=f"real-tool-result-{turn:04d}-{call['id']}",
-                        content=str(tool_result),
-                        name=str(call.get("name") or "inspect_fixture"),
-                        tool_call_id=str(call["id"]),
-                        response_metadata={
-                            "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
-                            "model_provider": provider_id,
-                        },
-                    )
-                )
-            final_response, final_provider_id = _invoke_with_provider_fallback(
+                ),
+                response_metadata={
+                    "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+                    "model_provider": requested_provider_id,
+                },
+            )
+            accepted = saver.accept_turn(
+                SESSION_ID,
+                thread_id=thread_id,
+                accepted_ingress_id=f"real-ingress-{turn:04d}",
+                acceptance_idempotency_key=f"real-acceptance-{turn:04d}",
+                job_id=f"real-job-{turn:04d}",
+                admission_idempotency_key=f"real-admission-{turn:04d}",
+                payload=user.content,
+                turn_id=turn_id,
+                root_item_id=f"item-{user.id}",
+                initial_execution_id=f"real-execution-{turn:04d}",
+            )
+            admission = saver.execution_admission(
+                SESSION_ID, thread_id=thread_id,
+                execution_id=str(accepted["initial_execution_id"]),
+            )
+            messages.append(user)
+            response, provider_id = _invoke_with_provider_fallback(
                 models,
                 provider_ids,
-                provider_id,
+                requested_provider_id,
                 messages,
                 provider_available=provider_available,
-                use_tools=False,
+                use_tools=tool_every > 0 and turn % tool_every == 0,
                 allow_fallback=not strict_provider_sequence,
                 require_visible_output=True,
             )
-            if strict_provider_sequence and final_provider_id != requested_provider_id:
+            if strict_provider_sequence and provider_id != requested_provider_id:
                 raise RuntimeError(
-                    "真实模型 fixture 的工具后最终响应切换了 provider: "
-                    f"turn={turn} requested={requested_provider_id} actual={final_provider_id}"
+                    "真实模型 fixture 未按要求使用 provider: "
+                    f"turn={turn} requested={requested_provider_id} actual={provider_id}"
                 )
-            provider_id = final_provider_id
-            observed_provider_ids.add(provider_id)
             last_provider_id = provider_id
-            final_response = _ensure_message_id(final_response, turn, "final")
-            final_response = _stamp_actual_provider(
-                final_response,
+            observed_provider_ids.add(provider_id)
+            response = _ensure_message_id(response, turn, "tool-or-first")
+            response = _stamp_actual_provider(
+                response,
                 provider_id,
                 provider_specs[provider_id],
             )
-            messages.append(final_response)
-        else:
-            final_response = response
-        config = saver.put(
-            config,
-            _checkpoint(f"real-checkpoint-{turn:04d}", messages, provider_id, turn),
-            {
-                "source": "real-model-rollout-fixture",
-                "turn": turn,
-                "requested_provider_id": requested_provider_id,
-                "provider_id": provider_id,
-                "model": provider_specs[provider_id].get("model"),
-                "api_mode": parse_provider_api_mode(
-                    provider_specs[provider_id]
-                ).protocol,
-                "model_switch": provider_id != requested_provider_id,
-            },
-            {
-                "messages": str(turn),
-                "model_provider": str(turn),
-                "turn_count": str(turn),
-            },
-        )
-        if not isinstance(final_response.id, str) or not final_response.id:
-            raise RuntimeError(f"真实模型最终消息缺少 ID: turn={turn}")
-        saver.finalize_turn(
-            session_id=SESSION_ID,
-            turn_id=turn_id,
-            final_message_id=final_response.id,
-        )
-        if turn % 8 == 0 or turn in {1, 64, 65, 96, 97, 128}:
-            print(
-                "real rollout progress: "
-                f"turn={turn} requested={requested_provider_id} provider={provider_id}"
+            messages.append(response)
+            if response.tool_calls:
+                for call in response.tool_calls:
+                    args = call.get("args")
+                    if not isinstance(args, dict):
+                        tool_result = (
+                            "inspect_fixture 工具调用参数校验失败：参数必须是对象，"
+                            f"实际类型为 {type(args).__name__}。"
+                        )
+                    else:
+                        try:
+                            tool_result = str(inspect_fixture.invoke(args))
+                        except (TypeError, ValueError, ValidationError) as error:
+                            tool_result = (
+                                "inspect_fixture 工具调用参数校验失败："
+                                f"{type(error).__name__}: {error}"
+                            )
+                            print(
+                                "tool validation error: "
+                                f"turn={turn} error={type(error).__name__}",
+                                file=sys.stderr,
+                            )
+                    messages.append(
+                        ToolMessage(
+                            id=f"real-tool-result-{turn:04d}-{call['id']}",
+                            content=str(tool_result),
+                            name=str(call.get("name") or "inspect_fixture"),
+                            tool_call_id=str(call["id"]),
+                            response_metadata={
+                                "message_metadata": {"turn_id": turn_id, "job_id": turn_id},
+                                "model_provider": provider_id,
+                            },
+                        )
+                    )
+                final_response, final_provider_id = _invoke_with_provider_fallback(
+                    models,
+                    provider_ids,
+                    provider_id,
+                    messages,
+                    provider_available=provider_available,
+                    use_tools=False,
+                    allow_fallback=not strict_provider_sequence,
+                    require_visible_output=True,
+                )
+                if strict_provider_sequence and final_provider_id != requested_provider_id:
+                    raise RuntimeError(
+                        "真实模型 fixture 的工具后最终响应切换了 provider: "
+                        f"turn={turn} requested={requested_provider_id} actual={final_provider_id}"
+                    )
+                provider_id = final_provider_id
+                observed_provider_ids.add(provider_id)
+                last_provider_id = provider_id
+                final_response = _ensure_message_id(final_response, turn, "final")
+                final_response = _stamp_actual_provider(
+                    final_response,
+                    provider_id,
+                    provider_specs[provider_id],
+                )
+                messages.append(final_response)
+            else:
+                final_response = response
+            with (
+                session_thread_owner_scope(
+                    MutationIntentOwner(SESSION_ID, thread_id),
+                    langgraph_thread_id=thread_id,
+                ),
+                execution_admission_scope(admission, langgraph_thread_id=thread_id),
+            ):
+                config = saver.put(
+                    config,
+                    _checkpoint(f"real-checkpoint-{turn:04d}", messages, provider_id, turn),
+                    {
+                        "source": "real-model-rollout-fixture",
+                        "turn": turn,
+                        "requested_provider_id": requested_provider_id,
+                        "provider_id": provider_id,
+                        "model": provider_specs[provider_id].get("model"),
+                        "api_mode": parse_provider_api_mode(
+                            provider_specs[provider_id]
+                        ).protocol,
+                        "model_switch": provider_id != requested_provider_id,
+                    },
+                    {
+                        "messages": str(turn),
+                        "model_provider": str(turn),
+                        "turn_count": str(turn),
+                    },
+                )
+            if not isinstance(final_response.id, str) or not final_response.id:
+                raise RuntimeError(f"真实模型最终消息缺少 ID: turn={turn}")
+            saver.finalize_turn(
+                session_id=SESSION_ID,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                final_message_id=final_response.id,
             )
+            if turn % 8 == 0 or turn in {1, 64, 65, 96, 97, 128}:
+                print(
+                    "real rollout progress: "
+                    f"turn={turn} requested={requested_provider_id} provider={provider_id}"
+                )
 
-    rollout_dir = session_dir / "rollout"
-    with sqlite3.connect(rollout_dir / "index.sqlite") as connection:
-        reasoning_carriers = {
-            row[0]
-            for row in connection.execute(
-                "SELECT DISTINCT carrier_type FROM reasoning_blocks"
+        with sqlite3.connect(rollout_dir / "index.sqlite") as connection:
+            reasoning_carriers = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT carrier_type FROM reasoning_blocks"
+                )
+            }
+        if require_mixed_provider and len(observed_provider_ids) < 2:
+            if previous_rollout_backup is not None:
+                shutil.rmtree(rollout_dir, ignore_errors=True)
+                os.replace(previous_rollout_backup, rollout_dir)
+            raise RuntimeError(
+                "真实模型 fixture 未同时成功使用两个 provider: "
+                f"observed={sorted(observed_provider_ids)}"
             )
-        }
-    if require_mixed_provider and len(observed_provider_ids) < 2:
+        if require_reasoning_mix and not {
+            "reasoning",
+            "summary",
+            "encrypted",
+        }.issubset(reasoning_carriers):
+            if previous_rollout_backup is not None:
+                shutil.rmtree(rollout_dir, ignore_errors=True)
+                os.replace(previous_rollout_backup, rollout_dir)
+            raise RuntimeError(
+                "真实模型 fixture 未同时形成 reasoning、summary、encrypted reasoning: "
+                f"carriers={sorted(reasoning_carriers)}"
+            )
         if previous_rollout_backup is not None:
-            shutil.rmtree(rollout_dir, ignore_errors=True)
-            os.replace(previous_rollout_backup, rollout_dir)
-        raise RuntimeError(
-            "真实模型 fixture 未同时成功使用两个 provider: "
-            f"observed={sorted(observed_provider_ids)}"
+            shutil.rmtree(previous_rollout_backup)
+        _session_manifest(
+            session_dir,
+            SESSION_ID,
+            current_provider_id=last_provider_id,
         )
-    if require_reasoning_mix and not {
-        "reasoning",
-        "summary",
-        "encrypted",
-    }.issubset(reasoning_carriers):
-        if previous_rollout_backup is not None:
-            shutil.rmtree(rollout_dir, ignore_errors=True)
-            os.replace(previous_rollout_backup, rollout_dir)
-        raise RuntimeError(
-            "真实模型 fixture 未同时形成 reasoning、summary、encrypted reasoning: "
-            f"carriers={sorted(reasoning_carriers)}"
-        )
-    if previous_rollout_backup is not None:
-        shutil.rmtree(previous_rollout_backup)
-    _session_manifest(
-        session_dir,
-        SESSION_ID,
-        current_provider_id=last_provider_id,
-    )
 
 
 def main() -> None:

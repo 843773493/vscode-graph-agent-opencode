@@ -10,7 +10,8 @@ mixin + 五个本包 mixin）、连接生命周期方法（`__init__`/`connectio
 本包承载的族：thread creation record（`thread_creation_record.py`）、创建发布与终结
 （`thread_creation_publish.py`）、初始 execution intent（`execution_intent.py`）、
 collaboration 成员账本（`collaboration.py`）、schema 初始化与版本升级
-（`_schema.py`），以及共享 SQL 常量 `sql.py`。thread catalog/fence、operation lease、
+（`_schema.py`）、共享 SQL 常量 `sql.py`，以及稳定的 `ThreadGraphBindingRecord`
+值对象（`contracts.py`）。thread catalog/fence、operation lease、
 owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承载，不在本包重复实现。
 
 # 可修改内容
@@ -19,6 +20,7 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
   `SCHEMA_VERSION` 与 `__all__`/再导出面。
 - 可以维护各方法族 mixin 文件中的方法体、族内私有静态方法与族专属的行投影 dataclass。
 - 可以维护 `sql.py` 中收敛同语义重复的 SQL 常量；新增共享常量时落在该模块，不在各族复制。
+- 可以维护 `contracts.py` 中跨 catalog writer/reader 共用的纯行值对象；不得在这里新增 GraphBinding 的第二份持久化 authority。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/` 下。
 
@@ -44,7 +46,7 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
 - 各 mixin 只依赖宿主类提供的 `database_path`、`_connection`、`_closed`、`_ensure_open()`、
   `_begin_immediate()` 与 `_write_transaction()`；不得假设其它族的私有方法存在，跨族调用须
   经由定义该方法的 mixin 提供的公开/受保护接口。
-- 表 DDL 与列清单常量的唯一定义点在其所属族模块；`_schema.py` 只编排建表顺序，不复制 DDL。
+- 表 DDL 与列清单常量的唯一定义点在其所属族模块；`_schema.py` 只编排建表顺序，不复制 DDL。GraphBinding 的唯一运行时 authority 是 thread_catalog 四字段，旧 JSON 不读、不迁移。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动
   或语义冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
 - 修改本目录后运行 `uv run ruff check app/core/session_control_store/` 与带进程外保护地跑

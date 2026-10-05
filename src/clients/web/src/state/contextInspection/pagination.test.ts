@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { SessionContextReadResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { appendInspectionPage, emptyInspectionPage, type ContextItem } from "./pagination";
 
-const resource = "boxteam://session/ses_test#assembly=assembly-test";
+const resource = { session_id: "ses_test", resource_identity: "test-session-identity",
+  vrn: "boxteam://workspace/00000000-0000-0000-0000-000000000001/resources/session/ses_test", scope: "workspace" };
 function item(text: string): ContextItem {
-  return { kind: "message", locator: resource, text, tool_summary: [], tool_calls: [], tool_results: [] };
+  return { kind: "message", resource_identity: resource.resource_identity, vrn: resource.vrn, scope: resource.scope, text, tool_summary: [], tool_calls: [], tool_results: [] };
 }
 function page(items: ContextItem[], changes: Partial<SessionContextReadResultDTO> = {}): SessionContextReadResultDTO {
-  return { resource, view: "assembly", revision: "sealed", items, partial_errors: [], has_more: false, ...changes };
+  return { resource_identity: resource.resource_identity, vrn: resource.vrn, scope: resource.scope, view: "assembly", revision: "sealed", items, partial_errors: [], has_more: false, ...changes };
 }
 
 describe("冻结上下文只拼接服务端分页", () => {
@@ -30,7 +31,7 @@ describe("冻结上下文只拼接服务端分页", () => {
     expect(last.items).toEqual([source]);
   });
   test("跨 resource 的迟到响应拒绝", () => {
-    expect(() => appendInspectionPage(emptyInspectionPage(), page([]), "another-session")).toThrow("resource");
+    expect(() => appendInspectionPage(emptyInspectionPage(), page([]), { ...resource, resource_identity: "another-session" })).toThrow("resource");
   });
   test("跨 revision 拒绝", () => {
     const first = appendInspectionPage(emptyInspectionPage(), page([]), resource);
@@ -46,6 +47,6 @@ describe("冻结上下文只拼接服务端分页", () => {
     }]), resource)).toThrow("未完成");
   });
   test("partial errors 不当作完整快照", () => {
-    expect(() => appendInspectionPage(emptyInspectionPage(), page([], { partial_errors: [{ resource, error: "missing" }] }), resource)).toThrow("不完整");
+    expect(() => appendInspectionPage(emptyInspectionPage(), page([], { partial_errors: [{ resource_identity: resource.resource_identity, error: "missing" }] }), resource)).toThrow("不完整");
   });
 });

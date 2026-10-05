@@ -5,18 +5,27 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from app.domain.itemized.execution_admission import ExecutionBinding
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef
+
+
+def _settled_event() -> asyncio.Event:
+    event = asyncio.Event()
+    event.set()
+    return event
 
 
 @dataclass
 class JobRuntimeState:
     job_id: str
     session_id: str
+    thread_id: str
     message: str
     agent_id: str
     message_id: str
     message_created_at: str
+    execution_binding: ExecutionBinding
     message_metadata: dict[str, object] = field(default_factory=dict)
     attachments: list[AttachmentRef] = field(default_factory=list)
     # 请求级注入的真实 gateway_id（``X-BoxTeam-Gateway-Id``）：job 是独立执行根，
@@ -35,3 +44,5 @@ class JobRuntimeState:
     ended_at: datetime | None = None
     task: asyncio.Task | None = None
     progress_reporter: Callable[[str], None] | None = None
+    # 只覆盖本次 run 的持久化与清理，不把不合作 Agent 的执行期变成无界等待。
+    protected_operations_settled: asyncio.Event = field(default_factory=_settled_event)

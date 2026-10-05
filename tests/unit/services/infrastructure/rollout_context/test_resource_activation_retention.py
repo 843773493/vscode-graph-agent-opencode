@@ -23,9 +23,14 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.checkpoint_config import build_checkpoint_config
-from app.domain.itemized.identity.detail_ref import DetailRef
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_prefixed_id, create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -51,7 +56,6 @@ from app.services.infrastructure.rollout_context.storage.service import RolloutS
 
 SESSION_ID = "ses_019c0fd1773c7b198a60f53aeeee17eb"
 PROTECTED_KEY = bytes(range(32))
-TURN_ID = "turn-1"
 
 
 def _checkpoint(checkpoint_id: str, messages: list[object]) -> dict[str, object]:
@@ -74,11 +78,21 @@ def _saver(sessions_dir: Path) -> RolloutCheckpointSaver:
     )
 
 
-def _activation_snapshot(saver: RolloutCheckpointSaver, *, turn_id: str) -> ResourceActivationSnapshotRef:
+def _main_thread_id(saver: RolloutCheckpointSaver, session_id: str = SESSION_ID) -> str:
+    return saver._storage.main_thread_id(session_id)
+
+
+def _activation_snapshot(
+    saver: RolloutCheckpointSaver,
+    *,
+    binding: ThreadRuntimeBinding,
+    turn_id: str,
+) -> ResourceActivationSnapshotRef:
     """写入逐资源正文 detail 并返回引用它的 turn snapshot。"""
-    snapshot_id = f"turn:{SESSION_ID}:main:{turn_id}"
+    snapshot_id = f"turn:{binding.session_id}:{binding.thread_id}:{turn_id}"
     body_record = saver._detail_store.write(
-        session_id=SESSION_ID,
+        session_id=binding.session_id,
+        thread_id=binding.thread_id,
         assembly_id=snapshot_id,
         detail_kind="resource_body",
         retention_class="resource_body",
@@ -100,8 +114,8 @@ def _activation_snapshot(saver: RolloutCheckpointSaver, *, turn_id: str) -> Reso
         activation_policy_revision="resource-activation-policy:v1:abc",
         activation_policy_hash="sha256:jcs:v1:" + "1" * 64,
         registry_generation=3,
-        owner_session_id=SESSION_ID,
-        owner_thread_id="main",
+        owner_session_id=binding.session_id,
+        owner_thread_id=binding.thread_id,
         turn_id=turn_id,
         captured_at="2026-09-24T00:00:00+00:00",
         bindings=(
@@ -127,10 +141,69 @@ def _activation_snapshot(saver: RolloutCheckpointSaver, *, turn_id: str) -> Reso
     )
 
 
+def _write_accepted_checkpoint(
+    saver: RolloutCheckpointSaver,
+) -> tuple[ThreadRuntimeBinding, str, str]:
+    """通过正式 acceptance 与 LangGraph owner 写入一条真实 Turn root。"""
+    binding = ThreadRuntimeBinding(
+        session_id=SESSION_ID,
+        thread_id=saver._storage.main_thread_id(SESSION_ID),
+    )
+    accepted_ingress_id = create_prefixed_id("evt")
+    acceptance_key = f"activation-test:{create_uuid_hex()}:accept"
+    execution_id = f"execution-{create_uuid_hex()}"
+    job_id = create_prefixed_id("job")
+    user_message_id = f"user-{create_uuid_hex()}"
+    accepted = saver.accept_turn(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        accepted_ingress_id=accepted_ingress_id,
+        acceptance_idempotency_key=acceptance_key,
+        job_id=job_id,
+        admission_idempotency_key=f"activation-test:{create_uuid_hex()}:admission",
+        payload="问题",
+        turn_id=None,
+        root_item_id=f"item-{user_message_id}",
+        initial_execution_id=execution_id,
+    )
+    turn_id = accepted["turn_id"]
+    accepted_execution_id = accepted["execution_id"]
+    if not isinstance(turn_id, str) or not isinstance(accepted_execution_id, str):
+        raise TypeError("accept_turn 未返回完整 Turn/execution identity")
+    admission = saver.execution_admission(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        execution_id=accepted_execution_id,
+    )
+    owner = MutationIntentOwner(
+        session_id=binding.session_id,
+        thread_id=binding.thread_id,
+    )
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=binding.thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=binding.thread_id),
+    ):
+        saver.put(
+            build_checkpoint_config(binding.thread_id),
+            _checkpoint(
+                "cp-1",
+                [HumanMessage(content="问题", id=user_message_id)],
+            ),
+            {"source": "resource-activation-test"},
+            {"messages": "1"},
+        )
+    return binding, turn_id, accepted_execution_id
+
+
 def _sealed_with_activation(sessions_dir: Path):
     """建立一个带 sealed activation binding 的真实会话。"""
     saver = _saver(sessions_dir)
-    saver._storage.initialize(SESSION_ID, validate_jsonl_items=False)
+    binding, turn_id, execution_id = _write_accepted_checkpoint(saver)
+    saver._storage.initialize(
+        binding.session_id,
+        thread_id=binding.thread_id,
+        validate_jsonl_items=False,
+    )
     saver.attach_resource_activation_store(
         ResourceActivationStore(
             saver._storage,
@@ -138,31 +211,24 @@ def _sealed_with_activation(sessions_dir: Path):
         )
     )
     saver.bootstrap_resource_activation_schema(SESSION_ID)
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        _checkpoint(
-            "cp-1",
-            [
-                HumanMessage(
-                    content="问题",
-                    id="user-1",
-                    response_metadata={"turn_id": TURN_ID},
-                )
-            ],
-        ),
-        {"source": "test"},
-        {"messages": "1"},
+    snapshot = _activation_snapshot(
+        saver,
+        binding=binding,
+        turn_id=turn_id,
     )
-    turn_id = TURN_ID
-    snapshot = _activation_snapshot(saver, turn_id=turn_id)
-    plan = saver.compose_committed_context_plan(SESSION_ID, plan_id="plan-1")
+    plan = saver.compose_committed_context_plan(
+        binding.session_id,
+        binding.thread_id,
+        plan_id="plan-1",
+    )
     plan = replace(plan, plan_creation_idempotency_key="activation-retention-create")
-    saver.create_context_plan(SESSION_ID, plan)
+    saver.create_context_plan(binding.session_id, plan)
     sealed = saver.seal_context_plan(
-        SESSION_ID,
+        binding.session_id,
+        binding.thread_id,
         plan,
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(SESSION_ID, turn_id=turn_id),
+        execution_id=execution_id,
         provider_version="activation-retention-test",
         seal_idempotency_key="activation-retention-seal",
         activation_snapshot=snapshot,
@@ -175,7 +241,10 @@ def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bu
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver, snapshot, _sealed = _sealed_with_activation(sessions_dir)
 
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    thread_id = _main_thread_id(saver)
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         lineage_key = connection.execute(
             "SELECT lineage_detail_ref FROM resource_activation_snapshots"
         ).fetchone()[0]
@@ -185,6 +254,7 @@ def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bu
     # 正文可读回并逐字节重算 hash。
     restored = saver.load_sealed_resource_activation(
         SESSION_ID,
+        thread_id=thread_id,
         assembly_id=_sealed.assembly_id,
         plan_hash=_sealed.plan_hash,
         request_hash=_sealed.request_hash,
@@ -192,7 +262,9 @@ def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bu
     assert restored.to_dict() == snapshot.to_dict()
 
     past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         # lineage detail 的 assembly 段是 activation snapshot id，无法被
         # context_assemblies 连接命中；retention 必须独立保护它。
         connection.execute(
@@ -204,18 +276,22 @@ def test_retention_protects_sealed_activation_lineage(tmp_path: Path, session_bu
     # GC 候选包含这两条，但它们被 sealed activation catalog 引用，必须保护。
     assert saver._storage.context_assembly_references_detail(
         SESSION_ID,
+        thread_id,
         assembly_id=snapshot.activation_snapshot_id,
         detail_ref=DetailRef.from_dict(json.loads(lineage_key)),
     )
     with pytest.raises(RuntimeError, match="detail-retention-protected"):
         saver._storage.mark_context_plan_details_unavailable(
             SESSION_ID,
+            thread_id,
             detail_refs=(
                 DetailRef.from_dict(json.loads(lineage_key)),
                 DetailRef.from_dict(json.loads(body_key)),
             ),
         )
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         statuses = {
             row[0]
             for row in connection.execute(
@@ -231,7 +307,10 @@ def test_missing_lineage_body_returns_explicit_loss(tmp_path: Path, session_bund
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver, _snapshot, sealed = _sealed_with_activation(sessions_dir)
 
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    thread_id = _main_thread_id(saver)
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         lineage_key = connection.execute(
             "SELECT lineage_detail_ref FROM resource_activation_snapshots"
         ).fetchone()[0]
@@ -245,6 +324,7 @@ def test_missing_lineage_body_returns_explicit_loss(tmp_path: Path, session_bund
     with pytest.raises(ResourceActivationStoreError) as error:
         saver.load_sealed_resource_activation(
             SESSION_ID,
+            thread_id=thread_id,
             assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash,
             request_hash=sealed.request_hash,
@@ -258,37 +338,25 @@ def test_restore_without_activation_store_is_lazy(tmp_path: Path, session_bundle
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = _saver(sessions_dir)
-    saver._storage.initialize(SESSION_ID, validate_jsonl_items=False)
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        _checkpoint(
-            "cp-1",
-            [
-                HumanMessage(
-                    content="问题",
-                    id="user-1",
-                    response_metadata={"turn_id": TURN_ID},
-                )
-            ],
-        ),
-        {"source": "test"},
-        {"messages": "1"},
+    binding, turn_id, execution_id = _write_accepted_checkpoint(saver)
+    plan = saver.compose_committed_context_plan(
+        binding.session_id, binding.thread_id, plan_id="plan-1"
     )
-    turn_id = TURN_ID
-    plan = saver.compose_committed_context_plan(SESSION_ID, plan_id="plan-1")
     plan = replace(plan, plan_creation_idempotency_key="lazy-create")
-    saver.create_context_plan(SESSION_ID, plan)
+    saver.create_context_plan(binding.session_id, plan)
     sealed = saver.seal_context_plan(
-        SESSION_ID,
+        binding.session_id,
+        binding.thread_id,
         plan,
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(SESSION_ID, turn_id=turn_id),
+        execution_id=execution_id,
         provider_version="no-activation",
         seal_idempotency_key="lazy-seal",
     )
     assert (
         saver.read_sealed_resource_activation(
-            SESSION_ID,
+            binding.session_id,
+            thread_id=binding.thread_id,
             assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash,
             request_hash=sealed.request_hash,
@@ -304,7 +372,8 @@ def test_restore_without_activation_store_is_lazy(tmp_path: Path, session_bundle
     )
     with pytest.raises(RuntimeError, match="resource-activation-unavailable"):
         saver.read_sealed_resource_activation(
-            SESSION_ID,
+            binding.session_id,
+            thread_id=binding.thread_id,
             assembly_id=sealed.assembly_id,
             plan_hash=sealed.plan_hash,
             request_hash=sealed.request_hash,
@@ -315,11 +384,14 @@ def test_rewind_control_payload_keeps_activation_ref(tmp_path: Path, session_bun
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver, snapshot, _sealed = _sealed_with_activation(sessions_dir)
+    thread_id = _main_thread_id(saver)
 
     saver._storage.rewind_to_checkpoint(
-        thread_id=SESSION_ID, checkpoint_id="cp-1", anchor_mode="inclusive"
+        thread_id=thread_id, checkpoint_id="cp-1", anchor_mode="inclusive"
     )
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         payload = json.loads(
             connection.execute(
                 "SELECT payload_json FROM control_events WHERE control_kind = 'rewind'"
@@ -344,26 +416,17 @@ def test_rewind_payload_omits_key_without_activation(tmp_path: Path, session_bun
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = _saver(sessions_dir)
-    saver._storage.initialize(SESSION_ID, validate_jsonl_items=False)
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        _checkpoint(
-            "cp-1",
-            [
-                HumanMessage(
-                    content="问题",
-                    id="user-1",
-                    response_metadata={"turn_id": TURN_ID},
-                )
-            ],
-        ),
-        {"source": "test"},
-        {"messages": "1"},
-    )
+    binding, _turn_id, _execution_id = _write_accepted_checkpoint(saver)
     saver._storage.rewind_to_checkpoint(
-        thread_id=SESSION_ID, checkpoint_id="cp-1", anchor_mode="inclusive"
+        thread_id=binding.thread_id, checkpoint_id="cp-1", anchor_mode="inclusive"
     )
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    with closing(
+        sqlite3.connect(
+            saver._storage.index_path(
+                binding.session_id, "", thread_id=binding.thread_id
+            )
+        )
+    ) as connection:
         payload = json.loads(
             connection.execute(
                 "SELECT payload_json FROM control_events WHERE control_kind = 'rewind'"
@@ -376,13 +439,18 @@ def test_retention_lineage_detail_manifest_is_registered(tmp_path: Path, session
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver, _snapshot, _sealed = _sealed_with_activation(sessions_dir)
-    with closing(sqlite3.connect(saver._storage.index_path(SESSION_ID, ""))) as connection:
+    thread_id = _main_thread_id(saver)
+    with closing(
+        sqlite3.connect(saver._storage.index_path(SESSION_ID, "", thread_id=thread_id))
+    ) as connection:
         lineage_key = connection.execute(
             "SELECT lineage_detail_ref FROM resource_activation_snapshots"
         ).fetchone()[0]
     record = detail_record_from_mapping(
         saver._storage.get_context_plan_detail(
-            SESSION_ID, detail_ref=DetailRef.from_dict(json.loads(lineage_key))
+            SESSION_ID,
+            thread_id,
+            detail_ref=DetailRef.from_dict(json.loads(lineage_key)),
         )
     )
     assert record.detail_kind == "resource_activation_lineage"

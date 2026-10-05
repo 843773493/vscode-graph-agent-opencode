@@ -76,6 +76,8 @@ export interface CatalogOutboxOperation {
   client_ref: string | null;
   /** 后端分配的 canonical Folder ID（create_folder 才有）。 */
   created_node_id: string | null;
+  /** committed receipt 对应的目录 revision；receipt_revision 只表示回执版本。 */
+  committed_catalog_revision: number | null;
   queue_seq: number | null;
   receipt_revision: number | null;
   error_code: string | null;
@@ -240,6 +242,7 @@ export function addCatalogOutboxIntent(
     // canonical node ID（后端分配后写入 created_node_id 并清空 client_ref）。
     client_ref: intent.kind === "create_folder" ? clientOperationId : null,
     created_node_id: null,
+    committed_catalog_revision: null,
     queue_seq: null,
     receipt_revision: null,
     error_code: null,
@@ -330,11 +333,13 @@ export function markCatalogOutboxOperationPersisted(
 export function normalizeRestoredCatalogOutbox(outbox: CatalogOutbox): CatalogOutbox {
   return {
     ...outbox,
-    operations: outbox.operations.map((operation) =>
-      operation.state === "pending_local" && operation.client_sequence !== null
-        ? { ...operation, state: "persisted" }
-        : operation,
-    ),
+    operations: outbox.operations.map((operation) => ({
+      ...operation,
+      committed_catalog_revision: operation.committed_catalog_revision ?? null,
+      ...(operation.state === "pending_local" && operation.client_sequence !== null
+        ? { state: "persisted" as const }
+        : {}),
+    })),
   };
 }
 
@@ -504,6 +509,7 @@ export function applyCatalogOutboxReceipts(
       receipt_revision: receipt.receipt_revision,
       created_node_id: receipt.created_node_id ?? existing.created_node_id,
       client_ref: receipt.created_node_id ? null : existing.client_ref,
+      committed_catalog_revision: receipt.committed_catalog_revision,
       error_code: receipt.error_code,
       error_detail: receipt.error_detail,
     };
@@ -586,16 +592,35 @@ export function resolveCatalogOutboxFailures(
 export function pruneReconciledCatalogOutbox(
   outbox: CatalogOutbox,
   reconciledCatalogRevision: number,
+  operationIds?: readonly string[],
 ): CatalogOutbox {
   if (!Number.isInteger(reconciledCatalogRevision) || reconciledCatalogRevision < 0) {
     throw new Error(`对账 catalog revision 必须是非负整数: ${reconciledCatalogRevision}`);
   }
+  const selectedOperationIds = operationIds === undefined
+    ? null
+    : new Set(operationIds);
   return {
     ...outbox,
     operations: outbox.operations.filter((operation) => {
+      if (selectedOperationIds && !selectedOperationIds.has(operation.client_operation_id)) {
+        return true;
+      }
       if (!catalogOutboxOperationIsTerminal(operation)) return true;
-      if (operation.receipt_revision === null) return true;
-      return operation.receipt_revision > reconciledCatalogRevision;
+      // committed Folder 是后继跨批依赖的 durable 前置；即使 catalog revision 已追上，
+      // 也要保留到所有引用者进入终态，否则 prune 会删掉 planner 唯一可见的 acceptance。
+      const hasUnsettledDependent = outbox.operations.some((dependent) =>
+        !catalogOutboxOperationIsTerminal(dependent)
+        && (dependent.depends_on.includes(operation.client_operation_id)
+          || dependent.created_by_operation_id === operation.client_operation_id),
+      );
+      if (hasUnsettledDependent) return true;
+      if (operation.committed_catalog_revision === null) {
+        return operation.state !== "rejected"
+          && operation.state !== "cancelled"
+          && operation.state !== "dependency_failed";
+      }
+      return operation.committed_catalog_revision > reconciledCatalogRevision;
     }),
   };
 }

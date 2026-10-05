@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
+
 from app.core.session_catalog_store import validate_thread_id
 from app.core.session_control_primitives import (
     SHA256_HEX_PATTERN,
@@ -110,9 +112,7 @@ class ThreadCreationPublishMixin:
                     idempotency_key,
                 ),
             )
-            updated = self._fetch_thread_creation_record(
-                connection, idempotency_key
-            )
+            updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。
                 raise RuntimeError(
@@ -130,9 +130,7 @@ class ThreadCreationPublishMixin:
         self._ensure_open()
         row = self._fetch_thread_creation_record(self._connection, idempotency_key)
         if row is None:
-            raise KeyError(
-                f"thread creation record 不存在: key={idempotency_key!r}"
-            )
+            raise KeyError(f"thread creation record 不存在: key={idempotency_key!r}")
         return self._thread_creation_record_from_row(row)
 
     def publish_thread_creation_record(
@@ -205,9 +203,7 @@ class ThreadCreationPublishMixin:
                     f"key={idempotency_key!r}"
                 )
             # CAS 1：owner fence 仍为捕获的 active generation。
-            fence_row = read_fence_row(
-                connection, database_path=self.database_path
-            )
+            fence_row = read_fence_row(connection, database_path=self.database_path)
             expected_generation = int(row["owner_session_lifecycle_generation"])
             if str(fence_row["state"]) == "deleting":
                 # 2.3-D：local fence 已 deleting → 统一删除中错误合同。
@@ -233,9 +229,7 @@ class ThreadCreationPublishMixin:
             # frozen > actual 才 fail closed；精确相等会误伤合法并发发布
             # （跨进程文件锁使该交错成为真实合同而非偶然串行化产物）。
             actual_revision = int(
-                connection.execute(
-                    SELECT_THREAD_CATALOG_ROW_COUNT
-                ).fetchone()[0]
+                connection.execute(SELECT_THREAD_CATALOG_ROW_COUNT).fetchone()[0]
             )
             frozen_revision = int(row["catalog_precondition_revision"])
             if actual_revision < frozen_revision:
@@ -260,9 +254,9 @@ class ThreadCreationPublishMixin:
                 )
             if row["collaboration_precondition_revision"] is not None:
                 actual_collaboration_revision = int(
-                    connection.execute(
-                        SELECT_COLLABORATION_LEDGER_REVISION
-                    ).fetchone()[0]
+                    connection.execute(SELECT_COLLABORATION_LEDGER_REVISION).fetchone()[
+                        0
+                    ]
                 )
                 frozen_collaboration_revision = int(
                     row["collaboration_precondition_revision"]
@@ -283,8 +277,7 @@ class ThreadCreationPublishMixin:
                         f"actual_revision={actual_collaboration_revision}"
                     )
                 member_row = connection.execute(
-                    "SELECT state FROM collaboration_members "
-                    "WHERE delegation_id = ?",
+                    "SELECT state FROM collaboration_members WHERE delegation_id = ?",
                     (str(row["delegation_id"]),),
                 ).fetchone()
                 if member_row is None:
@@ -312,10 +305,18 @@ class ThreadCreationPublishMixin:
                 )
             # 唯一可见性提交点：thread_catalog child row 插入 + record
             # → published 同一事务；record 状态变化本身不构成可见性。
+            graph_binding = ThreadGraphBindingRecord.from_creation_json(
+                str(row["graph_binding"])
+            )
             connection.execute(
-                "INSERT INTO thread_catalog (thread_id, kind, created_at) "
-                "VALUES (?, 'child', ?)",
-                (child_thread_id, child_created_at_text),
+                "INSERT INTO thread_catalog (thread_id, kind, created_at, "
+                "graph_id, graph_revision, graph_schema_hash, "
+                "capability_profile_hash) VALUES (?, 'child', ?, ?, ?, ?, ?)",
+                (
+                    child_thread_id,
+                    child_created_at_text,
+                    *graph_binding.as_tuple(),
+                ),
             )
             connection.execute(
                 "UPDATE thread_creation_records "
@@ -347,9 +348,7 @@ class ThreadCreationPublishMixin:
                         str(row["delegation_id"]),
                     ),
                 )
-            updated = self._fetch_thread_creation_record(
-                connection, idempotency_key
-            )
+            updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。
                 raise RuntimeError(
@@ -383,8 +382,7 @@ class ThreadCreationPublishMixin:
             state = str(row["state"])
             if state == "published":
                 raise RuntimeError(
-                    "thread creation record 已发布，不可撤销: "
-                    f"key={idempotency_key!r}"
+                    f"thread creation record 已发布，不可撤销: key={idempotency_key!r}"
                 )
             if state == "aborted":
                 return self._thread_creation_record_from_row(row)
@@ -406,9 +404,7 @@ class ThreadCreationPublishMixin:
                     "WHERE delegation_id = ? AND state = 'registering'",
                     (datetime.now(UTC).isoformat(), str(row["delegation_id"])),
                 )
-            updated = self._fetch_thread_creation_record(
-                connection, idempotency_key
-            )
+            updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。
                 raise RuntimeError(
@@ -434,9 +430,7 @@ class ThreadCreationPublishMixin:
         self._ensure_open()
         row = self._fetch_thread_creation_record(self._connection, idempotency_key)
         if row is None:
-            raise KeyError(
-                f"thread creation record 不存在: key={idempotency_key!r}"
-            )
+            raise KeyError(f"thread creation record 不存在: key={idempotency_key!r}")
         state = str(row["state"])
         if state == "preparing":
             raise RuntimeError(

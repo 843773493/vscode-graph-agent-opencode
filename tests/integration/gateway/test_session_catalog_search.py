@@ -14,7 +14,12 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
+from tests.support.session_navigation_http import submit_navigation_operation
 
 
 @pytest.mark.asyncio
@@ -38,43 +43,55 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
     try:
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{primary_backend.port}",
-            headers=LOCAL_TOKEN_HEADERS,
+            headers={
+                **LOCAL_TOKEN_HEADERS,
+                "X-BoxTeam-Workspace-Id": primary_backend.workspace_id,
+            },
             timeout=30,
         ) as client:
-            folder_response = await client.post(
-                "/api/v1/session-catalog/folders",
-                json={"name": "主工作区报告"},
+            folder_receipt = await submit_navigation_operation(
+                client,
+                "create_folder",
+                name="主工作区报告",
             )
-            assert folder_response.status_code == 200, folder_response.text
-            primary_folder_id = folder_response.json()["data"]["items"][-1][
-                "folder_id"
-            ]
+            assert folder_receipt["state"] == "committed"
+            primary_folder_id = str(folder_receipt["created_node_id"])
             session_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "Shared Catalog Needle Primary"},
             )
             assert session_response.status_code == 200, session_response.text
             primary_session_id = session_response.json()["data"]["session_id"]
-            assign_response = await client.put(
-                f"/api/v1/session-catalog/sessions/{primary_session_id}/folder",
-                json={"folder_id": primary_folder_id},
+            assign_receipt = await submit_navigation_operation(
+                client,
+                "move_node",
+                target_node_id=primary_session_id,
+                parent_node_id=primary_folder_id,
             )
-            assert assign_response.status_code == 200, assign_response.text
-            primary_storage_relative_path = assign_response.json()["data"]["items"][
-                -1
-            ]["storage_relative_path"]
+            assert assign_receipt["state"] == "committed"
+            export_response = await client.get("/api/v1/session-catalog/export")
+            assert export_response.status_code == 200, export_response.text
+            primary_session = next(
+                item
+                for item in export_response.json()["data"]["items"]
+                if item["node_id"] == primary_session_id
+            )
+            primary_storage_relative_path = str(
+                primary_session["storage_relative_path"]
+            )
     finally:
         close_backend_process(primary_backend)
 
     secondary_port = port_block.port(1)
     secondary_folder_id = "folder_secondary_reports"
     secondary_session_id = "ses_secondary_needle"
-    secondary_folder_storage = (
-        f"次工作区报告--{secondary_folder_id[-8:]}"
-    )
+    secondary_folder_storage = f"次工作区报告--{secondary_folder_id[-8:]}"
     secondary_session_storage = (
         f"{secondary_folder_storage}/"
         f"Shared Catalog Needle Secondary--{secondary_session_id[-8:]}"
+    )
+    secondary_backend_workspace_id = workspace_backend_id_for_root(
+        secondary_workspace
     )
     secondary_catalog_items = [
         {
@@ -85,10 +102,11 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": None,
             "folder_id": secondary_folder_id,
             "has_children": True,
-                "storage_relative_path": secondary_folder_storage,
-                "created_at": None,
-                "updated_at": None,
-                "session": None,
+            "state": "active",
+            "storage_relative_path": secondary_folder_storage,
+            "created_at": None,
+            "updated_at": None,
+            "session": None,
         },
         {
             "node_id": secondary_session_id,
@@ -98,21 +116,23 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": secondary_session_id,
             "folder_id": None,
             "has_children": False,
-                "storage_relative_path": secondary_session_storage,
-                "created_at": None,
-                "updated_at": None,
-                "session": None,
+            "state": "active",
+            "storage_relative_path": secondary_session_storage,
+            "created_at": None,
+            "updated_at": None,
+            "session": None,
         },
     ]
     with generation_target_stub(
         secondary_port,
         output_workspace_id="gw_stub_secondary",
+        backend_workspace_id=secondary_backend_workspace_id,
         catalog_items=secondary_catalog_items,
         catalog_revision="rev_secondary_export_e2e",
     ) as secondary_state:
         gateway = start_gateway_process(
             workspace_root=primary_workspace,
-            default_backend_url="http://127.0.0.1:9",
+            default_backend_url=None,
             port=port_block.port(2),
         )
         try:
@@ -140,6 +160,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     for item in add_response.json()["data"]["items"]
                     if Path(item["root_path"]).resolve() == secondary_workspace
                 )
+                assert secondary_workspace_id != secondary_backend_workspace_id
 
                 aggregate_response = await client.get(
                     "/api/gateway/session-catalog/search",
@@ -151,12 +172,11 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 assert aggregate_response.status_code == 200, aggregate_response.text
                 aggregate = aggregate_response.json()["data"]
                 assert aggregate["total"] == 2
-                assert {
-                    item["workspace_id"] for item in aggregate["items"]
-                } == {primary_workspace_id, secondary_workspace_id}
-                assert {
-                    item["relative_path"] for item in aggregate["items"]
-                } == {
+                assert {item["workspace_id"] for item in aggregate["items"]} == {
+                    primary_workspace_id,
+                    secondary_workspace_id,
+                }
+                assert {item["relative_path"] for item in aggregate["items"]} == {
                     "主工作区报告/Shared Catalog Needle Primary",
                     "次工作区报告/Shared Catalog Needle Secondary",
                 }
@@ -168,9 +188,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     primary_workspace_id: primary_storage_relative_path,
                     secondary_workspace_id: secondary_session_storage,
                 }
-                assert primary_storage_relative_path != (
-                    f"{primary_session_id}"
-                )
+                assert primary_storage_relative_path != (f"{primary_session_id}")
                 assert all(
                     status["status"] == "available"
                     for status in aggregate["workspaces"]
@@ -181,9 +199,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                 )
                 assert export_requests
                 assert not any(
-                    str(record["path"]).startswith(
-                        "/api/v1/session-catalog/search"
-                    )
+                    str(record["path"]).startswith("/api/v1/session-catalog/search")
                     for record in secondary_state.requests
                 )
 
@@ -246,9 +262,10 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
                     break
                 await asyncio.sleep(0.1)
             assert offline is not None
-            assert {
-                item["workspace_id"] for item in offline["items"]
-            } == {primary_workspace_id, secondary_workspace_id}
+            assert {item["workspace_id"] for item in offline["items"]} == {
+                primary_workspace_id,
+                secondary_workspace_id,
+            }
             assert {
                 item["workspace_id"]: item["storage_relative_path"]
                 for item in offline["items"]

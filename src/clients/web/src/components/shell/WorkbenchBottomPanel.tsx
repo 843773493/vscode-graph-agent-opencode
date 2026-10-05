@@ -4,7 +4,8 @@ import AutomationPanel from "../panels/bottomPanel/AutomationPanel";
 import PortForwardPanel from "../panels/bottomPanel/PortForwardPanel";
 import TerminalPanel from "../panels/bottomPanel/TerminalPanel";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
-import type { GatewayExtensionResourceEntry } from "../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import type { WorkspaceTerminalController } from "../../hooks/workspace/useWorkspaceTerminalResources";
+import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { WorkspaceBottomPanelState } from "../../state/workspaceBottomPanel";
 import type { GatewayWorkspace } from "../../types/backend";
 
@@ -16,14 +17,13 @@ interface WorkbenchBottomPanelProps {
   workspace: GatewayWorkspace | null;
   workspaceName: string;
   currentSessionId: string;
-  terminalEntries: GatewayExtensionResourceEntry[];
-  terminalLoading: boolean;
+  terminalController: WorkspaceTerminalController;
+  terminalThread: ResourceThreadRef | null;
   generatorResources: SessionGeneratorResourcesController;
   workspaces: GatewayWorkspace[];
   onUpdateState: (patch: Partial<WorkspaceBottomPanelState>) => void;
   onStartResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResetHeight: () => void;
-  onRefreshTerminals: () => void;
   onOpenConnectionManager: () => void;
   onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
@@ -42,14 +42,13 @@ export default function WorkbenchBottomPanel({
   workspace,
   workspaceName,
   currentSessionId,
-  terminalEntries,
-  terminalLoading,
+  terminalController,
+  terminalThread,
   generatorResources,
   workspaces,
   onUpdateState,
   onStartResize,
   onResetHeight,
-  onRefreshTerminals,
   onOpenConnectionManager,
   onReconnectWorkspace,
   onStartWorkspace,
@@ -76,17 +75,16 @@ export default function WorkbenchBottomPanel({
       />
       {state.tab === "terminal" ? (
         <TerminalPanel
-          entries={terminalEntries}
+          controller={terminalController}
+          currentThread={terminalThread}
           workspaceId={workspaceId}
           workspaceName={workspaceName}
           selectedTerminalId={state.terminalId}
           height={state.height}
-          loading={terminalLoading}
           onSelectTerminal={(terminalId) => onUpdateState({
             tab: "terminal",
             terminalId,
           })}
-          onRefresh={onRefreshTerminals}
           onSwitchToOutput={() => switchTab("output")}
           onSwitchToPorts={() => switchTab("ports")}
           onSwitchToAutomation={() => switchTab("automation")}

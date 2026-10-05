@@ -20,8 +20,10 @@ class ContextDispatchOwnerMixin:
     def prepare_context_for_provider(
         self,
         session_id: str,
+        thread_id: str,
         *,
-        turn_id: str,
+        turn_id: str | None,
+        execution_id: str,
         plan_creation_idempotency_key: str,
         seal_idempotency_key: str,
         request_messages: Sequence[BaseMessage] = (),
@@ -35,7 +37,9 @@ class ContextDispatchOwnerMixin:
         return prepare_registered_context(
             self,
             session_id,
+            thread_id,
             turn_id=turn_id,
+            execution_id=execution_id,
             plan_creation_idempotency_key=plan_creation_idempotency_key,
             seal_idempotency_key=seal_idempotency_key,
             request_messages=request_messages,
@@ -49,14 +53,15 @@ class ContextDispatchOwnerMixin:
     def consume_prepared_context_for_dispatch(
         self,
         session_id: str,
+        thread_id: str,
         *,
-        turn_id: str,
+        execution_id: str,
         checkpoint_ns: str = "",
     ) -> dict[str, object] | None:
         """把下一个已 sealed pre-dispatch plan 绑定到 model-call event。"""
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         with self._lock:
-            key = (session_id, checkpoint_ns, turn_id)
+            key = (session_id, thread_id, checkpoint_ns, execution_id)
             pending = self._prepared_dispatches.get(key)
             if not pending:
                 return None
@@ -68,15 +73,16 @@ class ContextDispatchOwnerMixin:
     def discard_prepared_context_for_dispatch(
         self,
         session_id: str,
+        thread_id: str,
         *,
-        turn_id: str,
+        execution_id: str,
         assembly_id: str,
         checkpoint_ns: str = "",
     ) -> None:
         """清除尚未被 model-start event 消费的短生命周期 pending handle。"""
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
         with self._lock:
-            key = (session_id, checkpoint_ns, turn_id)
+            key = (session_id, thread_id, checkpoint_ns, execution_id)
             pending = self._prepared_dispatches.get(key)
             if not pending:
                 return

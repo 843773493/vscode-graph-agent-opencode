@@ -102,7 +102,10 @@ def imported_registration_hash(
     """显式 import 的唯一 hash preimage；runtime 的 sealed_hash 合同不变。"""
     provenance = _provenance(origin, source_provenance)
     sources = parse_source_manifest(
-        source_manifest, session_id=snapshot.session_id, plan_id=snapshot.plan_id
+        source_manifest,
+        session_id=snapshot.session_id,
+        thread_id=snapshot.thread_id,
+        plan_id=snapshot.plan_id,
     )
     validate_source_bindings(snapshot, sources)
     if origin == "schema3_import" and (
@@ -174,13 +177,17 @@ def _validate_fork_evidence(
 
 
 def _assembly(
-    connection: sqlite3.Connection, session_id: str, plan_id: str, assembly_id: str
+    connection: sqlite3.Connection,
+    session_id: str,
+    thread_id: str,
+    plan_id: str,
+    assembly_id: str,
 ) -> tuple[ContextAssemblySnapshot, str | None]:
     rows = connection.execute(
         "SELECT snapshot_json, detail_ref, status, assembly_id, turn_id, execution_id, "
         "plan_hash, request_hash, history_view_revision, source_overlay_epoch "
-        "FROM context_assemblies WHERE session_id = ? AND plan_id = ?",
-        (session_id, plan_id),
+        "FROM context_assemblies WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        (session_id, thread_id, plan_id),
     ).fetchall()
     if len(rows) != 1 or rows[0][2] not in {"sealed", "terminal"}:
         raise ValueError(
@@ -188,8 +195,9 @@ def _assembly(
         )
     row = rows[0]
     snapshot = _snapshot(row[0])
-    if (snapshot.session_id, snapshot.plan_id, snapshot.assembly_id) != (
+    if (snapshot.session_id, snapshot.thread_id, snapshot.plan_id, snapshot.assembly_id) != (
         session_id,
+        thread_id,
         plan_id,
         assembly_id,
     ) or row[3:] != (
@@ -203,7 +211,7 @@ def _assembly(
     ):
         raise ValueError("source-mismatch: imported assembly header 与 snapshot 不一致")
     if row[1] is not None:
-        detail_ref_from_key(row[1]).require_owner(session_id, assembly_id)
+        detail_ref_from_key(row[1]).require_owner(session_id, thread_id, assembly_id)
     return snapshot, row[1]
 
 
@@ -225,17 +233,24 @@ def write_imported_registration(
         raise ValueError(
             "source-mismatch: imported snapshot 不得包含 inline contribution body"
         )
-    require_owner(connection, snapshot.session_id)
+    require_owner(connection, snapshot.session_id, snapshot.thread_id)
     provenance = _provenance(origin, source_provenance)
     if not isinstance(seal_idempotency_key, str) or not seal_idempotency_key.strip():
         raise ValueError("assembly-idempotency-conflict: import seal key 必须非空")
     # 重新解析 frozen dataclass 内可能被修改的嵌套值，不读取任何 source 正文。
     checked = _snapshot(json_text(snapshot.to_dict()))
     sources = parse_source_manifest(
-        source_manifest, session_id=checked.session_id, plan_id=checked.plan_id
+        source_manifest,
+        session_id=checked.session_id,
+        thread_id=checked.thread_id,
+        plan_id=checked.plan_id,
     )
     stored, stored_detail = _assembly(
-        connection, checked.session_id, checked.plan_id, checked.assembly_id
+        connection,
+        checked.session_id,
+        checked.thread_id,
+        checked.plan_id,
+        checked.assembly_id,
     )
     if stored_detail != detail_key or sealed_hash(stored, stored_detail) != sealed_hash(
         checked, detail_key
@@ -246,9 +261,10 @@ def write_imported_registration(
         source_manifest=sources.manifest,
     )
     _validate_fork_evidence(connection, checked, origin, provenance)
-    identity = (checked.session_id, checked.plan_id)
+    identity = (checked.session_id, checked.thread_id, checked.plan_id)
     if connection.execute(
-        "SELECT 1 FROM context_plans WHERE session_id = ? AND plan_id = ?", identity
+        "SELECT 1 FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        identity,
     ).fetchone():
         existing = read_imported_registration(connection, *identity)
         if (
@@ -264,9 +280,9 @@ def write_imported_registration(
         return
     timestamp = datetime.now(UTC).isoformat()
     connection.execute(
-        "INSERT INTO context_plans(session_id, plan_id, registration_origin, source_provenance_json, source_manifest_json, "
+        "INSERT INTO context_plans(session_id, thread_id, plan_id, registration_origin, source_provenance_json, source_manifest_json, "
         "revision, plan_state, assembly_id, seal_idempotency_key, seal_hash, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, 0, 'sealed', ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 'sealed', ?, ?, ?, ?, ?)",
         (
             *identity,
             origin,
@@ -284,16 +300,19 @@ def write_imported_registration(
 
 
 def read_imported_registration(
-    connection: sqlite3.Connection, session: str, plan: str
+    connection: sqlite3.Connection,
+    session: str,
+    thread: str,
+    plan: str,
 ) -> ContextPlanRegistration:
     """只读验证已导入 sealed header、原始 snapshot 与三类完整索引。"""
-    require_owner(connection, session)
+    require_owner(connection, session, thread)
     row = connection.execute(
         "SELECT registration_origin, source_provenance_json, revision, plan_state, "
         "assembly_id, seal_idempotency_key, seal_hash, plan_creation_idempotency_key, "
         "creation_hash, creation_json, draft_json, draft_hash, seal_input_hash, source_manifest_json FROM context_plans "
-        "WHERE session_id = ? AND plan_id = ?",
-        (session, plan),
+        "WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        (session, thread, plan),
     ).fetchone()
     if row is None:
         raise KeyError("imported context plan 不存在")
@@ -311,8 +330,10 @@ def read_imported_registration(
     provenance = _provenance(row[0], json.loads(row[1]))
     if row[1] != json_text(provenance):
         raise ValueError("source-mismatch: import provenance 不是规范 JCS")
-    snapshot, detail_key = _assembly(connection, session, plan, row[4])
-    sources = read_source_manifest(row[13], session_id=session, plan_id=plan)
+    snapshot, detail_key = _assembly(connection, session, thread, plan, row[4])
+    sources = read_source_manifest(
+        row[13], session_id=session, thread_id=thread, plan_id=plan
+    )
     if row[6] != imported_registration_hash(
         snapshot, detail_key=detail_key, origin=row[0], source_provenance=provenance,
         source_manifest=sources.manifest,
@@ -321,6 +342,8 @@ def read_imported_registration(
     _validate_fork_evidence(connection, snapshot, row[0], provenance)
     validate_imported_rows(connection, snapshot, sources=sources)
     return ContextPlanRegistration(
+        session_id=session,
+        thread_id=thread,
         draft=None,
         creation_hash=None,
         revision=0,

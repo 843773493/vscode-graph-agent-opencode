@@ -13,6 +13,7 @@ class ContextReconciliationMixin:
     def reconcile_context(
         self,
         session_id: str,
+        thread_id: str,
         *,
         operation: str,
         checkpoint_ns: str = "",
@@ -33,10 +34,13 @@ class ContextReconciliationMixin:
             raise ValueError("reconcile_context 缺少 session_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("reconcile_context checkpoint namespace 必须是字符串")
-        with self._context_reader.open_snapshot(session_id, checkpoint_ns) as snapshot:
+        with self._context_reader.open_snapshot(
+            session_id, thread_id, checkpoint_ns
+        ) as snapshot:
             manifest = snapshot.manifest
             committed_overlays = self._storage.list_source_overlays(
                 session_id,
+                thread_id,
                 checkpoint_ns=checkpoint_ns,
                 snapshot=snapshot,
             )
@@ -59,7 +63,7 @@ class ContextReconciliationMixin:
             if overlay["delta_ref"] is not None
         )
         source_revisions = tuple(overlay["source_revision"] for overlay in active)
-        key = (session_id, checkpoint_ns)
+        key = (session_id, thread_id, checkpoint_ns)
         with self._lock:
             current = self._context_reconciliations.get(key)
             if current is None:
@@ -130,17 +134,19 @@ class ContextReconciliationMixin:
     def get_context_reconciliation(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str = "",
     ) -> ContextReconciliation:
         """返回当前进程的实时 context reconciliation metadata。"""
-        key = (session_id, checkpoint_ns)
+        key = (session_id, thread_id, checkpoint_ns)
         with self._lock:
             cached = self._context_reconciliations.get(key)
         if cached is not None:
             return cached
         return self.reconcile_context(
             session_id,
+            thread_id=thread_id,
             operation="checkpoint_restore",
             checkpoint_ns=checkpoint_ns,
         )

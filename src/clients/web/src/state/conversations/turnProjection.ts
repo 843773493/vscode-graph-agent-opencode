@@ -85,7 +85,9 @@ function conversationFromTurn(turn: TurnRecord): ConversationView {
     displayMode: "history",
     turnId: turn.turn_id,
     turnRevision: turn.revision,
+    turnOrdinal: turn.ordinal,
     turnItemsView: isTurnDetail(turn) ? "full" : "summary",
+    rootLogicalItemOrdinal: turn.root_logical_item_ordinal,
     turnStatus: turn.status as ConversationView["turnStatus"],
     activityStats: turn.activity_stats
       ? {

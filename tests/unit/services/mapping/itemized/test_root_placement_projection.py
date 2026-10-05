@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -61,12 +61,15 @@ def _sealed_plan(contribution: ContextContribution) -> ContextRequestPlan:
         visibility=request_ref.visibility,
         protection=request_ref.protection,
         availability=request_ref.availability,
-        detail_ref=DetailRef(SESSION, ASSEMBLY, "detail-root-placement-probe"),
+        detail_ref=DetailRef(
+            SESSION, "thread-1", ASSEMBLY, "detail-root-placement-probe"
+        ),
         contribution_id=contribution.contribution_id,
         contribution_ordinal=0,
     )
     return ContextRequestPlan(
         session_id=SESSION,
+        thread_id="thread-1",
         plan_id=PLAN,
         refs=(request_ref,),
         contributions=(contribution,),

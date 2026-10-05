@@ -16,6 +16,7 @@ class _Registry:
             root_path="/tmp/gw_test",
             backend_url="http://workspace.test",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
     def resolve(self, workspace_id: str) -> WorkspaceTarget:

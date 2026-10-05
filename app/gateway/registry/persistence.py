@@ -46,10 +46,10 @@ class RegistryPersistenceMixin:
         self._runtime_generation = runtime_generation
         raw_remote_connections = payload.get("remote_gateway_connections", [])
         if not isinstance(raw_remote_connections, list):
-            raise ValueError("Gateway registry remote_gateway_connections 必须是数组")
+            raise ValueError("Gateway registry remote_gateway_connections 必须是数组")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
         for item in raw_remote_connections:
             if not isinstance(item, dict):
-                raise ValueError("Gateway registry 远程 Gateway 连接必须是对象")
+                raise ValueError("Gateway registry 远程 Gateway 连接必须是对象")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
             source_owner = item.get("source_owner")
             if source_owner not in {"config", "manual"}:
                 raise ValueError(
@@ -92,14 +92,14 @@ class RegistryPersistenceMixin:
             self._remote_gateway_connections[connection.connection_id] = connection
         targets = payload.get("targets", [])
         if not isinstance(targets, list):
-            raise ValueError(f"Gateway registry targets 必须是数组: {self._storage_path}")
+            raise ValueError(f"Gateway registry targets 必须是数组: {self._storage_path}")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
         persisted_active_id = payload.get("active_workspace_id")
         workspace_id_remap: dict[str, str] = {}
         parent_workspace_ids: dict[str, str | None] = {}
         migrated = schema_version < _REGISTRY_SCHEMA_VERSION
         for item in targets:
             if not isinstance(item, dict):
-                raise ValueError(f"Gateway registry target 必须是对象: {self._storage_path}")
+                raise ValueError(f"Gateway registry target 必须是对象: {self._storage_path}")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
             original_workspace_id = str(item["workspace_id"])
             root_path = str(item["root_path"])
             backend_url = str(item["backend_url"])
@@ -168,6 +168,14 @@ class RegistryPersistenceMixin:
             ):
                 raise ValueError(
                     "Gateway registry local_service_urls 必须是字符串映射: "
+                    f"workspace_id={original_workspace_id}"
+                )
+            raw_backend_workspace_id = item.get("backend_workspace_id")
+            if raw_backend_workspace_id is not None and not isinstance(
+                raw_backend_workspace_id, str
+            ):
+                raise ValueError(
+                    "Gateway registry backend_workspace_id 必须是字符串或 null: "
                     f"workspace_id={original_workspace_id}"
                 )
             target = WorkspaceTarget(
@@ -243,6 +251,9 @@ class RegistryPersistenceMixin:
                     str(item["connection_error"])
                     if item.get("connection_error") is not None
                     else None
+                ),
+                backend_workspace_id=(
+                    raw_backend_workspace_id
                 ),
             )
             self._validate_target_identity(target)

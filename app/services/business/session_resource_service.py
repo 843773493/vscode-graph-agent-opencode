@@ -46,6 +46,7 @@ class SessionResourceService:
         kind: SessionResourceKind,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO:
         await self._session_service.get(session_id)
         return await self._provider_registry.control(
@@ -53,6 +54,7 @@ class SessionResourceService:
             kind=kind,
             resource_id=resource_id,
             action=action,
+            operation_id=operation_id,
         )
 
     async def cleanup_session(self, session_id: str) -> None:

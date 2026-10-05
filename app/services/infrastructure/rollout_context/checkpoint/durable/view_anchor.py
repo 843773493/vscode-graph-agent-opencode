@@ -106,7 +106,7 @@ class RolloutViewAnchorMixin:
                 f"context view 引用了不存在的 message: view_id={view_id}"
             )
         turn_by_sequence = {
-            strict_non_negative_int(sequence, field="messages.message_sequence"): strict_text(
+            strict_non_negative_int(sequence, field="messages.message_sequence"): strict_optional_text(
                 turn_id, field="messages.turn_id"
             )
             for sequence, turn_id in message_rows
@@ -124,8 +124,6 @@ class RolloutViewAnchorMixin:
                 (value,),
             ).fetchone()
             if row is None:
-                if value.startswith("internal-"):
-                    continue
                 raise RuntimeError(f"message Turn projection 缺失: {value}")
             turn_kind = strict_text(row[0], field=f"turns.turn_kind: {value}")
             first_sequence = strict_non_negative_int(
@@ -358,22 +356,69 @@ class RolloutViewAnchorMixin:
                 strict_text(item_id, field="item_catalog.item_id")
                 for (item_id,) in block_items
             )
+        display_only_item_ids: set[str] = set()
+        if parent_view_id is not None and view_kind == "checkpoint":
+            display_rows = connection.execute(
+                "SELECT item_id FROM context_view_items "
+                "WHERE view_id = ? AND visible = 1 AND source_kind = 'display_only'",
+                (parent_view_id,),
+            ).fetchall()
+            display_only_item_ids = {
+                strict_text(row[0], field="context_view_items.item_id")
+                for row in display_rows
+            }
+            candidate_item_ids.update(display_only_item_ids)
         if candidate_item_ids:
             placeholders = ",".join("?" for _ in candidate_item_ids)
             ordered_item_rows = connection.execute(
-                f"SELECT item_id FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence, item_id",
+                "SELECT item_id, semantic_kind, turn_id, turn_scope, execution_id "
+                f"FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence, item_id",
                 tuple(candidate_item_ids),
             ).fetchall()
-            for logical_item_ordinal, (item_id,) in enumerate(ordered_item_rows):
+            logical_item_ordinal = 0
+            for item_id, semantic_kind, turn_id, turn_scope, execution_id in ordered_item_rows:
                 item_id = strict_text(item_id, field="item_catalog.item_id")
+                semantic_kind = strict_text(
+                    semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
+                )
+                turn_id = strict_optional_text(
+                    turn_id, field=f"item_catalog.turn_id:{item_id}"
+                )
+                turn_scope = strict_optional_text(
+                    turn_scope, field=f"item_catalog.turn_scope:{item_id}"
+                )
+                execution_id = strict_optional_text(
+                    execution_id, field=f"item_catalog.execution_id:{item_id}"
+                )
+                source_kind = (
+                    "display_only"
+                    if item_id in display_only_item_ids
+                    else "canonical"
+                )
+                if source_kind == "display_only":
+                    if (
+                        semantic_kind != "runtime_notice"
+                        or turn_id is not None
+                        or execution_id is None
+                        or turn_scope not in {"ambient", "pending_next_turn"}
+                    ):
+                        raise RuntimeError(
+                            "父 context view 的 display_only membership 指向非法 runtime item: "
+                            f"view_id={parent_view_id}, item_id={item_id}"
+                        )
+                elif turn_scope not in {"turn_root", "turn_member"}:
+                    # Turn-less internal checkpoint message 不会因为进入
+                    # LangGraph messages channel 而变成 canonical history。
+                    continue
                 item_cursor = connection.execute(
-                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) VALUES (?, ?, ?, 1, 'canonical')",
-                    (view_id, item_id, logical_item_ordinal),
+                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) VALUES (?, ?, ?, 1, ?)",
+                    (view_id, item_id, logical_item_ordinal, source_kind),
                 )
                 if item_cursor.rowcount != 1:
                     raise RuntimeError(
                         f"context view item 插入失败: {view_id}/{item_id}"
                     )
+                logical_item_ordinal += 1
         return view_id
 
     def read_items_for_view(
@@ -392,6 +437,7 @@ class RolloutViewAnchorMixin:
             strict_text(row[0], field="context_view_items.item_id") for row in rows
         )
         items = self.read_items(
+            snapshot.session_id,
             snapshot.thread_id,
             checkpoint_ns=snapshot.checkpoint_ns,
             item_ids=item_ids,
@@ -684,6 +730,7 @@ class RolloutViewAnchorMixin:
             if sequence <= anchor.cutoff_message_sequence
         ]
         values = self._read_messages(
+            snapshot.session_id,
             snapshot.thread_id,
             snapshot.checkpoint_ns,
             selected,

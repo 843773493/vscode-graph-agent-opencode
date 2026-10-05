@@ -1,5 +1,6 @@
 import type { CreatableSessionConnectionKind } from "../../types/frontend";
 import { requestJson } from "../http";
+import { createWorkspaceTerminal } from "../workspaceResources";
 
 export interface CreatedSessionConnection {
   kind: CreatableSessionConnectionKind;
@@ -18,18 +19,9 @@ interface SessionConnectionCreateRequest {
 }
 
 const SESSION_CONNECTION_CREATE_REQUESTS: Record<
-  CreatableSessionConnectionKind,
+  "browser",
   (sessionId: string) => SessionConnectionCreateRequest
 > = {
-  terminal: (sessionId) => ({
-    service: "terminal-manager",
-    path: "api/terminals",
-    payload: {
-      session_id: sessionId,
-      title: "用户终端",
-    },
-    idField: "terminal_id",
-  }),
   browser: (sessionId) => ({
     service: "browser-manager",
     path: "api/browsers",
@@ -49,6 +41,10 @@ export async function createSessionConnection(
   sessionId: string,
   kind: CreatableSessionConnectionKind,
 ): Promise<CreatedSessionConnection> {
+  if (kind === "terminal") {
+    const resource = await createWorkspaceTerminal(port, workspaceId, sessionId);
+    return { kind, resourceId: resource.resource_id };
+  }
   const encodedWorkspaceId = encodeURIComponent(workspaceId);
   const request = SESSION_CONNECTION_CREATE_REQUESTS[kind](sessionId);
   const response = await requestJson<ManagerResourceResponse>(

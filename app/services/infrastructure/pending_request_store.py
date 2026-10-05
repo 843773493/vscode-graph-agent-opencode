@@ -15,7 +15,7 @@ from app.schemas.internal_v2.pending_request import (
     PendingRequestSummaryListDTO,
 )
 
-_PENDING_HEADER_VERSION = 2
+_PENDING_HEADER_VERSION = 4
 _PENDING_HEADER_MAX_BYTES = 64 * 1024
 _PENDING_SUMMARY_LIMIT = 8
 
@@ -136,6 +136,7 @@ class PendingRequestStore:
                 PendingRequestSummaryDTO(
                     job_id=item.job_id,
                     message_id=item.message_id,
+                    thread_id=item.thread_id,
                     enqueue_sequence=item.enqueue_sequence,
                     delivery_policy=item.delivery_policy,
                     status=item.status,

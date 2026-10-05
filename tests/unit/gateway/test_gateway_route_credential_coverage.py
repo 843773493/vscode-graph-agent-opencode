@@ -37,6 +37,7 @@ def _build_app(tmp_path: Path) -> FastAPI:
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:9",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             owner="system",
             managed=False,
             system_default=True,

@@ -2,41 +2,46 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.messages import AIMessage
 
-from app.domain.itemized.records import CanonicalItemRecord
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 
 
-@pytest.fixture
-def final_item() -> CanonicalItemRecord:
-    return CanonicalItemRecord.create(
-        item_sequence=2,
-        item_id="item-msg_final",
-        semantic_kind="assistant_output",
-        payload_kind="text",
-        status="completed",
-        producer_ref={"producer_kind": "provider", "producer_id": "model_1"},
-        payload="最终回答",
+@pytest.fixture(autouse=True)
+def admission_context():
+    admission = ExecutionAdmission(
+        session_id="session_1",
+        thread_id="thread_1",
+        execution_id="execution_1",
+        job_id="job_1",
+        admission_idempotency_key="admission_1",
+        execution_origin="user_turn",
         turn_id="turn_1",
-        turn_scope="turn_member",
     )
+    owner = MutationIntentOwner(session_id="session_1", thread_id="thread_1")
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id="thread_1"),
+        execution_admission_scope(admission, langgraph_thread_id="thread_1"),
+    ):
+        yield admission
 
 
 @pytest.fixture
-def saver(final_item: CanonicalItemRecord) -> MagicMock:
+def saver() -> MagicMock:
     port = MagicMock(
         spec=[
-            "get_canonical_item", "execution_for_turn", "converge_execution", "append_items",
+            "converge_execution", "append_items",
             "register_model_call", "consume_prepared_context_for_dispatch",
             "update_model_call_outcome",
         ]
     )
-    port.get_canonical_item.return_value = final_item
-    port.execution_for_turn.return_value = "execution_1"
     port.consume_prepared_context_for_dispatch.return_value = {
         "assembly_id": "assembly_1", "execution_id": "execution_1",
     }
@@ -48,55 +53,49 @@ def adapter(saver: MagicMock) -> StepModelCallAdapter:
     return StepModelCallAdapter(
         checkpointer=saver,
         session_id="session_1",
-        turn_id="turn_1",
+        thread_id="thread_1",
+        job_id="job_1",
         checkpoint_ns="agent",
     )
 
 
 @pytest.mark.asyncio
-async def test_finalization_reuses_committed_item(
+async def test_final_message_converges_atomically_before_checkpoint(
     adapter: StepModelCallAdapter, saver: MagicMock
 ) -> None:
-    await adapter.converge_final_checkpoint("msg_final")
-
-    saver.get_canonical_item.assert_called_once_with(
-        "session_1", item_id="item-msg_final", checkpoint_ns="agent"
-    )
+    adapter.converge_final_message(AIMessage(id="msg_final", content="最终回答"))
+    final_item = saver.converge_execution.call_args.kwargs["items"][0]
+    assert final_item.item_id == "item-msg_final"
+    assert final_item.semantic_kind == "assistant_output"
+    assert final_item.status == "completed"
+    assert final_item.turn_id == "turn_1"
+    assert final_item.turn_scope == "turn_member"
+    assert final_item.producer_ref["invocation_id"] == "execution_1"
     saver.converge_execution.assert_called_once_with(
         "session_1",
         turn_id="turn_1",
+        thread_id="thread_1",
         execution_id="execution_1",
         outcome="completed",
         turn_status="completed",
+        items=(final_item,),
         final_item_id="item-msg_final",
+        assembly_id=None,
         checkpoint_ns="agent",
     )
-    saver.append_items.assert_not_called()
+    await adapter.converge_final_checkpoint("msg_final")
+    saver.converge_execution.assert_called_once()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid", ["missing", "partial", "wrong_turn", "wrong_id", "reasoning"])
-async def test_invalid_final_item_cannot_be_recreated_or_finalized(
+async def test_final_checkpoint_requires_pre_persist_atomic_convergence(
     adapter: StepModelCallAdapter,
     saver: MagicMock,
-    final_item: CanonicalItemRecord,
-    invalid: str,
 ) -> None:
-    replacements = {
-        "partial": {"status": "partial"},
-        "wrong_turn": {"turn_id": "another_turn"},
-        "wrong_id": {"item_id": "item-another_message"},
-        "reasoning": {"semantic_kind": "reasoning"},
-    }
-    saver.get_canonical_item.return_value = (
-        None if invalid == "missing" else replace(final_item, **replacements[invalid])
-    )
-
-    with pytest.raises(RuntimeError, match="同一 Turn 已提交的 assistant item"):
+    with pytest.raises(RuntimeError, match="checkpoint 写入前与 execution 原子收敛"):
         await adapter.converge_final_checkpoint("msg_final")
 
     saver.converge_execution.assert_not_called()
-    saver.execution_for_turn.assert_not_called()
     saver.append_items.assert_not_called()
 
 
@@ -106,11 +105,11 @@ async def test_empty_output_only_converges_control_state(
 ) -> None:
     await adapter.converge_final_checkpoint(None)
 
-    saver.get_canonical_item.assert_not_called()
     saver.append_items.assert_not_called()
     saver.converge_execution.assert_called_once_with(
         "session_1",
         turn_id="turn_1",
+        thread_id="thread_1",
         execution_id="execution_1",
         outcome="completed_empty",
         turn_status="completed_empty",
@@ -121,8 +120,7 @@ async def test_empty_output_only_converges_control_state(
 
 @pytest.mark.parametrize("name", [
     "register_model_call", "consume_prepared_context_for_dispatch",
-    "update_model_call_outcome", "execution_for_turn", "get_canonical_item",
-    "converge_execution",
+    "update_model_call_outcome", "converge_execution",
 ])
 @pytest.mark.parametrize("missing", [True, False])
 def test_missing_owner_port_fails_before_dispatch(
@@ -134,7 +132,11 @@ def test_missing_owner_port_fails_before_dispatch(
         setattr(saver, name, "不可调用的端口")
     with pytest.raises(TypeError, match=f"缺少可调用端口: {name}"):
         StepModelCallAdapter(
-            checkpointer=saver, session_id="session_1", turn_id="turn_1", checkpoint_ns=""
+            checkpointer=saver,
+            session_id="session_1",
+            thread_id="thread_1",
+            job_id="job_1",
+            checkpoint_ns="",
         )
     assert saver.mock_calls == []
 
@@ -145,14 +147,16 @@ async def test_registration_only_binds_prepared_assembly(
 ) -> None:
     await adapter.register("model_1", 1, "provider_1")
     saver.register_model_call.assert_called_once_with(
-        "session_1", execution_id="execution_1", model_call_id="model_1", attempt=1,
+        "session_1", thread_id="thread_1", execution_id="execution_1", model_call_id="model_1", attempt=1,
         provider="provider_1", retry_of_model_call_id=None, assembly_id="assembly_1",
         dispatch_state="dispatched", checkpoint_ns="agent",
     )
     saver.consume_prepared_context_for_dispatch.assert_called_once_with(
-        "session_1", turn_id="turn_1", checkpoint_ns="agent",
+        "session_1",
+        "thread_1",
+        execution_id="execution_1",
+        checkpoint_ns="agent",
     )
-    saver.execution_for_turn.assert_not_called()
     saver.append_items.assert_not_called()
 
 
@@ -170,7 +174,6 @@ async def test_unsealed_dispatch_cannot_be_rebuilt(
     with pytest.raises(RuntimeError, match="prepared context|assembly_id/execution_id"):
         await adapter.register("model_1", 1, "provider_1")
     saver.register_model_call.assert_not_called()
-    saver.execution_for_turn.assert_not_called()
     saver.append_items.assert_not_called()
 
 
@@ -212,6 +215,7 @@ async def test_failed_provider_attempt_reuses_sealed_binding_for_fallback(
     second_registration = saver.register_model_call.call_args_list[1]
     assert second_registration.kwargs == {
         "execution_id": "execution_1",
+        "thread_id": "thread_1",
         "model_call_id": "model_2",
         "attempt": 2,
         "provider": "provider_fallback",
@@ -278,7 +282,7 @@ async def test_outcome_uses_required_owner_port(
     await adapter.update_outcome("model_1", outcome)
     saver.update_model_call_outcome.assert_called_once_with(
         "session_1", model_call_id="model_1", outcome=outcome,
-        dispatch_state=dispatch_state, checkpoint_ns="agent",
+        thread_id="thread_1", dispatch_state=dispatch_state, checkpoint_ns="agent",
     )
 
 
@@ -289,3 +293,43 @@ async def test_outcome_commit_error_is_not_swallowed(
     saver.update_model_call_outcome.side_effect = RuntimeError("终态提交失败")
     with pytest.raises(RuntimeError, match="终态提交失败"):
         await adapter.update_outcome("model_1", "completed")
+
+
+@pytest.mark.asyncio
+async def test_internal_final_item_and_terminal_convergence_remain_turnless(
+    adapter: StepModelCallAdapter,
+    saver: MagicMock,
+) -> None:
+    admission = ExecutionAdmission(
+        session_id="session_1",
+        thread_id="thread_1",
+        execution_id="execution_1",
+        job_id="job_1",
+        admission_idempotency_key="admission_internal_1",
+        execution_origin="internal",
+        turn_id=None,
+    )
+    with execution_admission_scope(admission, langgraph_thread_id="thread_1"):
+        await adapter.register("model_1", 1, "provider_1")
+        adapter.converge_final_message(
+            AIMessage(id="msg_internal_final", content="内部执行结果")
+        )
+        await adapter.converge_final_checkpoint("msg_internal_final")
+
+    item = saver.converge_execution.call_args.kwargs["items"][0]
+    assert item.item_id == "item-msg_internal_final"
+    assert item.turn_id is None
+    assert item.turn_scope is None
+    assert item.producer_ref["invocation_id"] == "execution_1"
+    saver.converge_execution.assert_called_once_with(
+        "session_1",
+        turn_id=None,
+        thread_id="thread_1",
+        execution_id="execution_1",
+        outcome="completed",
+        turn_status=None,
+        items=(item,),
+        final_item_id=None,
+        assembly_id="assembly_1",
+        checkpoint_ns="agent",
+    )

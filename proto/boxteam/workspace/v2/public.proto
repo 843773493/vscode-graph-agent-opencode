@@ -190,6 +190,7 @@ message JobDTO {
   optional string error_message = 11;
   optional google.protobuf.Struct metadata = 12;
   optional google.protobuf.Timestamp ended_at = 13;
+  string thread_id = 14;
 }
 
 message JobDispatchSnapshotDTO {
@@ -204,6 +205,7 @@ message JobDispatchSnapshotDTO {
   optional string delivery_policy = 9;
   optional int64 enqueue_sequence = 10;
   optional int64 queue_snapshot_version = 11;
+  string thread_id = 12;
 }
 
 message JobProgressDTO {
@@ -645,6 +647,9 @@ message PendingRequestDTO {
   google.protobuf.Timestamp updated_at = 16;
   int64 snapshot_version = 17;
   optional string gateway_id = 18;
+  string thread_id = 19;
+  optional string turn_id = 20;
+  google.protobuf.Struct execution_binding = 21;
 }
 
 message PendingRequestListDTO {
@@ -845,7 +850,8 @@ message SessionCompletedExecutionEventDTO {
 
 message SessionContextItemDTO {
   string kind = 1;
-  string locator = 2;
+  reserved 2;
+  reserved "locator";
   optional string role = 3;
   optional int64 record_index = 4;
   optional string text = 5;
@@ -856,15 +862,22 @@ message SessionContextItemDTO {
   optional google.protobuf.Struct data = 10;
   optional google.protobuf.Struct raw_record = 11;
   optional bool truncated = 12;
+  optional string resource_identity = 13;
+  optional string vrn = 14;
+  optional string scope = 15;
+  optional string assembly_ref = 16;
 }
 
 message SessionContextPartialErrorDTO {
-  string resource = 1;
+  reserved 1;
+  reserved "resource";
   string error = 2;
+  string resource_identity = 3;
 }
 
 message SessionContextReadRequest {
-  string resource = 1;
+  reserved 1;
+  reserved "resource";
   optional string view = 2;
   repeated string include = 3;
   optional int64 recent_rounds = 4;
@@ -872,11 +885,17 @@ message SessionContextReadRequest {
   optional string cursor = 6;
   optional int64 limit = 7;
   optional int64 max_chars = 8;
-  optional string expected_revision = 9;
+  optional string revision = 9;
+  string resource_identity = 10;
+  string vrn = 11;
+  string scope = 12;
+  optional int64 record_index = 13;
+  optional string assembly_ref = 14;
 }
 
 message SessionContextReadResultDTO {
-  string resource = 1;
+  reserved 1;
+  reserved "resource";
   string view = 2;
   string revision = 3;
   optional bool compacted = 4;
@@ -890,20 +909,30 @@ message SessionContextReadResultDTO {
   repeated SessionContextItemDTO items = 12;
   repeated SessionContextPartialErrorDTO partial_errors = 13;
   optional int64 omitted_partial_error_count = 14;
+  string resource_identity = 15;
+  string vrn = 16;
+  string scope = 17;
+  optional int64 record_index = 18;
+  optional string assembly_ref = 19;
 }
 
 message SessionContextSearchMatchDTO {
-  string locator = 1;
+  reserved 1;
+  reserved "locator";
   string preview = 2;
   string source = 3;
   string revision = 4;
   optional int64 record_index = 5;
   int64 match_start = 6;
   int64 match_end = 7;
+  string resource_identity = 8;
+  string vrn = 9;
+  string scope = 10;
 }
 
 message SessionContextSearchRequest {
-  string resource = 1;
+  reserved 1;
+  reserved "resource";
   string query = 2;
   repeated string sources = 3;
   optional string match_mode = 4;
@@ -911,11 +940,15 @@ message SessionContextSearchRequest {
   optional int64 max_results = 6;
   optional int64 max_chars = 7;
   optional string cursor = 8;
-  optional string expected_revision = 9;
+  optional string revision = 9;
+  string resource_identity = 10;
+  string vrn = 11;
+  string scope = 12;
 }
 
 message SessionContextSearchResultDTO {
-  string resource = 1;
+  reserved 1;
+  reserved "resource";
   string query = 2;
   string match_mode = 3;
   string revision = 4;
@@ -927,6 +960,9 @@ message SessionContextSearchResultDTO {
   repeated SessionContextSearchMatchDTO matches = 10;
   repeated SessionContextPartialErrorDTO partial_errors = 11;
   optional int64 omitted_partial_error_count = 12;
+  string resource_identity = 13;
+  string vrn = 14;
+  string scope = 15;
 }
 
 message SessionControlResultDTO {
@@ -936,9 +972,11 @@ message SessionControlResultDTO {
 }
 
 message SessionCreateRequest {
+  reserved 3;
+  reserved "title_source";
+
   optional string title = 1;
   optional string agent_id = 2;
-  optional string title_source = 3;
   optional string folder_id = 4;
 }
 
@@ -957,6 +995,10 @@ message SessionDTO {
   optional string context_source_session_id = 10;
   optional string kind = 11;
   optional SessionGenerationOriginDTO generation_origin = 13;
+  string resource_identity = 14;
+  string vrn = 15;
+  string scope = 16;
+  optional string thread_id = 17;
 }
 
 message SessionErrorExecutionEventDTO {
@@ -1039,6 +1081,7 @@ message SessionForkRequest {
   optional string turn_id = 2;
   optional string anchor_mode = 3;
   optional bool pinned = 4;
+  optional bool place_under_source = 5;
 }
 
 message SessionGenerationOriginDTO {
@@ -1237,6 +1280,59 @@ message SessionResourceListDTO {
   repeated SessionResourceDTO items = 2;
 }
 
+// 工作区资源由对应领域 owner 保存；Thread 关联与客户端传输连接分别管理。
+message ResourceThreadRef {
+  string session_id = 1;
+  string thread_id = 2;
+}
+
+message WorkspaceResourceDTO {
+  string resource_id = 1;
+  string workspace_id = 2;
+  string kind = 3;
+  string retention_scope = 4;
+  ResourceThreadRef source_thread = 5;
+  repeated ResourceThreadRef thread_associations = 6;
+  uint64 owner_revision = 7;
+  string status = 8;
+  string reconciliation_status = 9;
+  optional string unattached_since = 10;
+  optional string reclaim_at = 11;
+  repeated string available_actions = 12;
+  google.protobuf.Struct metadata = 13;
+  string created_at = 14;
+  string updated_at = 15;
+  optional string error = 16;
+}
+
+message WorkspaceResourceListDTO {
+  string workspace_id = 1;
+  repeated WorkspaceResourceDTO items = 2;
+}
+
+message TerminalResourceCreateRequest {
+  string session_id = 1;
+  optional string thread_id = 2;
+  string retention_scope = 3;
+  string title = 4;
+  optional string cwd_relative = 5;
+  optional uint32 cols = 6;
+  optional uint32 rows = 7;
+}
+
+message WorkspaceResourceCommandRequest {
+  uint64 expected_revision = 1;
+  optional ResourceThreadRef thread = 2;
+}
+
+message TerminalTransportGrantDTO {
+  string resource_id = 1;
+  uint64 owner_revision = 2;
+  string grant_token = 3;
+  string expires_at = 4;
+  WorkspaceResourceDTO resource = 5;
+}
+
 message SessionStatusChangedExecutionEventDTO {
   string event_id = 1;
   string session_id = 2;
@@ -1268,10 +1364,13 @@ message SessionTurnBootstrapDTO {
 }
 
 message SessionUpdateRequest {
-  optional string title = 1;
+  reserved 1;
+  reserved 4;
+  reserved "title";
+  reserved "title_source";
+
   optional string agent_id = 2;
   optional string provider_id = 3;
-  optional string title_source = 4;
 }
 
 message StaleTurnCursorErrorDTO {
@@ -1569,6 +1668,7 @@ message TurnDetailDTO {
   optional bool detail_truncated = 22;
   optional string detail_next_cursor = 23;
   optional TurnActivityStatsDTO activity_stats = 24;
+  int64 root_logical_item_ordinal = 25;
 }
 
 message TurnHistoryLoadRequest {
@@ -1592,6 +1692,39 @@ message TurnHistoryPageDTO {
   optional bool has_after = 7;
   int64 projection_epoch = 8;
   repeated TurnSummaryDTO summaries = 9;
+  repeated InternalExecutionHistoryDTO internal_executions = 10;
+}
+
+message InternalExecutionHistoryDTO {
+  string execution_id = 1;
+  string job_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp created_at = 4;
+  repeated InternalExecutionDisplayPartDTO display_parts = 5;
+  repeated TurnResponsePartDTO response_parts = 6;
+  string session_id = 7;
+  string thread_id = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  reserved 10;
+  reserved "logical_item_ordinal";
+}
+
+message InternalExecutionDisplayPartDTO {
+  string kind = 1;
+  string text = 2;
+  string item_id = 3;
+  int64 item_sequence = 4;
+  InternalDisplayProvenanceDTO provenance = 5;
+  google.protobuf.Timestamp created_at = 6;
+  int64 logical_item_ordinal = 7;
+}
+
+message InternalDisplayProvenanceDTO {
+  optional string source_session_id = 1;
+  optional string source_thread_id = 2;
+  optional string delegation_id = 3;
+  optional string source_execution_id = 4;
+  optional string source_item_id = 5;
 }
 
 message TurnJobSummaryDTO {
@@ -1645,6 +1778,7 @@ message TurnResponseSourceDTO {
   optional int64 part_ordinal = 9;
   optional google.protobuf.Timestamp created_at = 10;
   optional int64 elapsed_ms = 11;
+  optional int64 logical_item_ordinal = 12;
 }
 
 message TurnSummaryDTO {
@@ -1673,6 +1807,7 @@ message TurnSummaryDTO {
   repeated TurnToolSummaryDTO tool_summary = 23;
   repeated TurnResponsePartDTO response_parts = 24;
   optional TurnActivityStatsDTO activity_stats = 25;
+  int64 root_logical_item_ordinal = 26;
 }
 
 message TurnThinkingBlockDTO {

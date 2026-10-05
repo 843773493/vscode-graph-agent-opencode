@@ -56,7 +56,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
     port = e2e_port_block_for_file(Path(request.node.fspath)).port(21)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
-        default_backend_url="http://127.0.0.1:9",
+        default_backend_url=None,
         port=port,
         extra_env={
             "BOXTEAM_WEB_ASSETS": str(

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.identifier import create_prefixed_id, uuid7_datetime_from_hex
 from app.core.session_control_store import SessionControlStore
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
@@ -14,7 +19,6 @@ from app.domain.itemized.mutation_intents import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
     MutationIntentConsumptionRejected,
-    MutationIntentOwnerMismatch,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -52,10 +56,15 @@ def _binding_state(saver: RolloutCheckpointSaver):
         store.close()
 
 
+def _main_thread_id(saver: RolloutCheckpointSaver) -> str:
+    return saver._storage._resolve_thread_identity(SESSION_ID, None)
+
+
 def test_producer_applies_and_increments_only_on_change(
     saver: RolloutCheckpointSaver,
 ) -> None:
-    saver._switch_tool_set_if_needed(SESSION_ID, tool_snapshot=TOOLS_A)
+    thread_id = _main_thread_id(saver)
+    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_A)
     binding = _binding_state(saver)
     assert binding is not None
     assert binding.desired_toolset_revision == 1
@@ -63,11 +72,11 @@ def test_producer_applies_and_increments_only_on_change(
     assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
 
     # 同一 desired 不重复消费，也不产生新 revision。
-    saver._switch_tool_set_if_needed(SESSION_ID, tool_snapshot=TOOLS_A)
+    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_A)
     assert _binding_state(saver).applied_toolset_revision == 1
 
     # desired 变化 → 新 intent → revision 递增。
-    saver._switch_tool_set_if_needed(SESSION_ID, tool_snapshot=TOOLS_B)
+    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_B)
     binding = _binding_state(saver)
     assert binding.applied_toolset_revision == 2
     assert binding.desired_toolset_revision == 2
@@ -77,47 +86,68 @@ def test_producer_applies_and_increments_only_on_change(
 def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
     saver: RolloutCheckpointSaver,
 ) -> None:
+    thread_id = _main_thread_id(saver)
     accepted = saver.accept_turn(
         SESSION_ID,
+        thread_id=thread_id,
         accepted_ingress_id="toolset-ingress",
         acceptance_idempotency_key="toolset-root",
+        job_id="toolset-job",
+        admission_idempotency_key="toolset-admission",
         payload="切换工具集",
         payload_kind="text",
     )
     options = {
         "turn_id": accepted["turn_id"],
+        "execution_id": accepted["initial_execution_id"],
         "provider_version": "toolset-provider",
         "target_format": "responses",
         "plan_creation_idempotency_key": "toolset-create",
         "seal_idempotency_key": "toolset-seal",
     }
-    first = saver.prepare_context_for_provider(
-        SESSION_ID, tool_snapshot=TOOLS_A, **options
+    admission = saver.execution_admission(
+        SESSION_ID,
+        thread_id=thread_id,
+        execution_id=accepted["initial_execution_id"],
     )
-    binding = _binding_state(saver)
-    assert binding.applied_toolset_revision == 1
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
-
-    # 模拟外部 desired 漂移：直连端口把 applied 推进到 B。
-    saver.consume_mutation_intent(
-        SwitchToolSetIntent(
-            owner=MutationIntentOwner(session_id=SESSION_ID, thread_id="main"),
-            desired_revision=_desired_key(TOOLS_B),
-            tool_set_snapshot_id="tool-set:" + _desired_key(TOOLS_B),
+    owner = MutationIntentOwner(session_id=SESSION_ID, thread_id=thread_id)
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        first = saver.prepare_context_for_provider(
+            SESSION_ID,
+            thread_id,
+            tool_snapshot=TOOLS_A,
+            **options,
         )
-    )
-    # 已 sealed 的在飞请求不做二次比较：同 creation key 重试复用 assembly，
-    # producer 不被再次触发，applied 不被拉回 A。
-    retry = saver.prepare_context_for_provider(
-        SESSION_ID, tool_snapshot=TOOLS_A, **options
-    )
+        binding = _binding_state(saver)
+        assert binding.applied_toolset_revision == 1
+        assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
+
+        # 模拟外部 desired 漂移：直连端口把 applied 推进到 B。
+        saver.consume_mutation_intent(
+            SwitchToolSetIntent(
+                owner=owner,
+                desired_revision=_desired_key(TOOLS_B),
+                tool_set_snapshot_id="tool-set:" + _desired_key(TOOLS_B),
+            ),
+        )
+        # 已 sealed 的在飞请求不做二次比较：同 creation key 重试复用 assembly，
+        # producer 不被再次触发，applied 不被拉回 A。
+        retry = saver.prepare_context_for_provider(
+            SESSION_ID,
+            thread_id,
+            tool_snapshot=TOOLS_A,
+            **options,
+        )
     assert retry["assembly_id"] == first["assembly_id"]
     binding = _binding_state(saver)
     assert binding.applied_toolset_revision == 2
     assert binding.toolset_compatibility_key == _desired_key(TOOLS_B)
 
 
-def test_switch_tool_set_intent_owner_mismatch_zero_side_effect(
+def test_unregistered_thread_cannot_receive_toolset_binding(
     saver: RolloutCheckpointSaver,
 ) -> None:
     intent = SwitchToolSetIntent(
@@ -125,9 +155,8 @@ def test_switch_tool_set_intent_owner_mismatch_zero_side_effect(
         desired_revision="rev-x",
         tool_set_snapshot_id="tool-set:rev-x",
     )
-    with pytest.raises(MutationIntentOwnerMismatch) as exc_info:
+    with pytest.raises(RuntimeError, match="thread_id"):
         saver.consume_mutation_intent(intent)
-    assert exc_info.value.code == "mutation-intent-owner-mismatch"
     assert _binding_state(saver) is None
 
 
@@ -135,7 +164,10 @@ def test_switch_tool_set_intent_replay_keeps_revision(
     saver: RolloutCheckpointSaver,
 ) -> None:
     intent = SwitchToolSetIntent(
-        owner=MutationIntentOwner(session_id=SESSION_ID, thread_id="main"),
+        owner=MutationIntentOwner(
+            session_id=SESSION_ID,
+            thread_id=_main_thread_id(saver),
+        ),
         desired_revision="rev-1",
         tool_set_snapshot_id="tool-set:rev-1",
     )
@@ -147,6 +179,52 @@ def test_switch_tool_set_intent_replay_keeps_revision(
     assert binding.toolset_compatibility_key == "rev-1"
 
 
+def test_producer_applies_toolset_to_explicit_child_thread(
+    saver: RolloutCheckpointSaver,
+) -> None:
+    child_thread_id = create_prefixed_id("thr")
+    session_dir = saver._storage._path_resolver.resolve_session_node(SESSION_ID)
+    control = SessionControlStore(session_dir / "session-control.sqlite")
+    try:
+        control.create_or_get_thread_creation_record(
+            idempotency_key=f"toolset-child-{child_thread_id}",
+            initial_state="idle",
+            preimage_hash="b" * 64,
+            graph_binding=json.dumps({"graph_id": "toolset-child-test"}),
+            capability_profile="{}",
+            created_at=uuid7_datetime_from_hex(child_thread_id[4:]),
+            thread_id=child_thread_id,
+        )
+        artifact_manifest = "{}"
+        control.freeze_thread_creation_artifact_manifest(
+            f"toolset-child-{child_thread_id}",
+            artifact_manifest=artifact_manifest,
+            artifact_manifest_hash=hashlib.sha256(
+                artifact_manifest.encode("utf-8")
+            ).hexdigest(),
+        )
+        published = control.publish_thread_creation_record(
+            f"toolset-child-{child_thread_id}"
+        )
+        (session_dir / published.final_relative_locator).mkdir(parents=True)
+    finally:
+        control.close()
+
+    saver._switch_tool_set_if_needed(
+        SESSION_ID,
+        child_thread_id,
+        tool_snapshot=TOOLS_A,
+    )
+
+    store = SessionControlStore(session_dir / "session-control.sqlite")
+    try:
+        binding = store.get_thread_owner_binding(child_thread_id)
+    finally:
+        store.close()
+    assert binding.applied_toolset_revision == 1
+    assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
+
+
 def test_producer_failure_keeps_zero_half_state_and_retry(
     saver: RolloutCheckpointSaver,
     monkeypatch: pytest.MonkeyPatch,
@@ -156,7 +234,11 @@ def test_producer_failure_keeps_zero_half_state_and_retry(
 
     monkeypatch.setattr(SessionControlStore, "update_thread_owner_binding", _fail)
     with pytest.raises(MutationIntentConsumptionRejected) as exc_info:
-        saver._switch_tool_set_if_needed(SESSION_ID, tool_snapshot=TOOLS_A)
+        saver._switch_tool_set_if_needed(
+            SESSION_ID,
+            _main_thread_id(saver),
+            tool_snapshot=TOOLS_A,
+        )
     assert exc_info.value.code == "mutation-intent-rejected"
     assert exc_info.value.failure_outcome == "keep_applied_toolset"
     monkeypatch.undo()
@@ -165,7 +247,11 @@ def test_producer_failure_keeps_zero_half_state_and_retry(
     binding = _binding_state(saver)
     assert binding is None or binding.toolset_compatibility_key is None
 
-    saver._switch_tool_set_if_needed(SESSION_ID, tool_snapshot=TOOLS_A)
+    saver._switch_tool_set_if_needed(
+        SESSION_ID,
+        _main_thread_id(saver),
+        tool_snapshot=TOOLS_A,
+    )
     binding = _binding_state(saver)
     assert binding.applied_toolset_revision == 1
     assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)

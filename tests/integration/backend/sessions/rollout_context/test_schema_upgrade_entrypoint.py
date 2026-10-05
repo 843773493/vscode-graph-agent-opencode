@@ -201,7 +201,8 @@ RolloutCheckpointSaver(sys.argv[1]).upgrade_rollout_schema(sys.argv[2])
     with pytest.raises(RuntimeError, match="schema-upgrade-required"):
         source.saver.accept_turn(
             source.session_id, accepted_ingress_id="pending-audit-ingress",
-            acceptance_idempotency_key="pending-audit-key", payload="不能在审计前写入",
+            acceptance_idempotency_key="pending-audit-key", job_id="pending-audit-job",
+            admission_idempotency_key="pending-audit-admission", payload="不能在审计前写入",
         )
     source.saver.upgrade_rollout_schema(source.session_id)
     assert (source.root / "rollout.jsonl").read_bytes() == before

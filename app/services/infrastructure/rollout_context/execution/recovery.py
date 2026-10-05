@@ -12,9 +12,9 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
 from app.domain.itemized.validation import validate_turn_transition
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    load_committed_idempotency_commit,
     load_committed_storage_commit,
     strict_non_negative_int,
     strict_optional_text,
@@ -25,276 +25,160 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 class RolloutExecutionRecoveryMixin:
     """只拥有 execution resume 与 execution-lost 的恢复状态机。"""
 
-    def resume_turn(
-        self,
-        thread_id: str,
-        *,
-        turn_id: str,
-        checkpoint_ns: str = "",
-    ) -> dict[str, object]:
+    def resume_turn(self, session_id: str, *, thread_id: str, job_id: str, turn_id: str, checkpoint_ns: str='') -> dict[str, object]:
         """显式恢复 interrupted/执行丢失 Turn；cancelled 永久不可恢复。"""
-        strict_text(thread_id, field="session_id")
-        strict_text(turn_id, field="turn_id")
-        strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        strict_text(session_id, field='session_id')
+        strict_text(turn_id, field='turn_id')
+        strict_text(checkpoint_ns, field='checkpoint_ns', allow_empty=True)
+        job_id = strict_text(job_id, field='job_id')
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            with self._connect(owner_thread_id, checkpoint_ns, session_id=session_id) as connection:
                 self._require_v2_runtime(connection)
-                row = connection.execute(
-                    "SELECT status FROM turn_records WHERE turn_id = ?",
-                    (turn_id,),
-                ).fetchone()
+                row = connection.execute('SELECT status, accepted_ingress_id FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()
                 if row is None:
-                    raise KeyError(f"Turn 不存在: {turn_id}")
-                current_status = strict_text(row[0], field="turn_records.status")
-                if current_status not in {"interrupted", "unknown"}:
-                    raise ValueError("turn_not_resumable")
+                    raise KeyError(f'Turn 不存在: {turn_id}')
+                current_status = strict_text(row[0], field='turn_records.status')
+                if current_status not in {'interrupted', 'unknown'}:
+                    raise ValueError('turn_not_resumable')
                 execution_lost = False
-                if current_status == "unknown":
-                    lost_commit = connection.execute(
-                        "SELECT commit_id, outcome, status FROM storage_commits "
-                        "WHERE commit_kind = 'terminal_convergence' AND subject_id = ? "
-                        "ORDER BY commit_id DESC LIMIT 1",
-                        (turn_id,),
-                    ).fetchone()
+                if current_status == 'unknown':
+                    lost_commit = connection.execute("SELECT commit_id, outcome, status FROM storage_commits WHERE commit_kind = 'terminal_convergence' AND subject_id = ? ORDER BY commit_id DESC LIMIT 1", (turn_id,)).fetchone()
                     if lost_commit is not None:
-                        lost_commit_id = strict_non_negative_int(
-                            lost_commit[0], field="storage_commits.commit_id"
-                        )
-                        lost_outcome = strict_text(
-                            lost_commit[1], field="storage_commits.outcome"
-                        )
-                        lost_status = strict_text(
-                            lost_commit[2], field="storage_commits.status"
-                        )
-                        execution_lost = (
-                            lost_outcome == ControlOutcome.EXECUTION_LOST.value
-                            and lost_status == "committed"
-                        )
+                        lost_commit_id = strict_non_negative_int(lost_commit[0], field='storage_commits.commit_id')
+                        lost_outcome = strict_text(lost_commit[1], field='storage_commits.outcome')
+                        lost_status = strict_text(lost_commit[2], field='storage_commits.status')
+                        execution_lost = lost_outcome == ControlOutcome.EXECUTION_LOST.value and lost_status == 'committed'
                         if execution_lost:
-                            load_committed_storage_commit(
-                                connection,
-                                commit_id=lost_commit_id,
-                            )
+                            load_committed_storage_commit(connection, commit_id=lost_commit_id)
                     if not execution_lost:
-                        raise ValueError("turn_not_resumable")
+                        raise ValueError('turn_not_resumable')
                 try:
-                    validate_turn_transition(
-                        current_status,
-                        TurnStatus.ACTIVE.value,
-                        explicit_resume=True,
-                        execution_lost=execution_lost,
-                    )
+                    validate_turn_transition(current_status, TurnStatus.ACTIVE.value, explicit_resume=True, execution_lost=execution_lost)
                 except ItemSchemaError as error:
-                    raise ValueError("turn_not_resumable") from error
-                execution_id = "execution-" + uuid4().hex
-                attempt = strict_non_negative_int(
-                    connection.execute(
-                        "SELECT COALESCE(MAX(attempt), 0) + 1 FROM executions WHERE turn_id = ?",
-                        (turn_id,),
-                    ).fetchone()[0],
-                    field="executions.attempt",
-                )
-                previous = connection.execute(
-                    "SELECT execution_id FROM executions WHERE turn_id = ? ORDER BY attempt DESC LIMIT 1",
-                    (turn_id,),
-                ).fetchone()
-                connection.execute("BEGIN IMMEDIATE")
-                _commit_id, _commit_offset = self._append_v2_records_transaction(
-                    connection,
-                    thread_id,
-                    checkpoint_ns,
-                    (),
-                    commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    outcome=ControlOutcome.UNKNOWN.value,
-                    subject_id=turn_id,
-                    idempotency_key=f"resume:{turn_id}:{execution_id}",
-                    metadata={
-                        "phase": "resume_started",
-                        "execution_id": execution_id,
-                        "previous_execution_id": previous[0] if previous else None,
-                    },
-                    begin_transaction=False,
-                )
-                connection.execute(
-                    "INSERT INTO executions(execution_id, turn_id, attempt, execution_ordinal, outcome, resumed_from_execution_id, replay_of_execution_id, created_at) VALUES (?, ?, ?, ?, 'unknown', ?, NULL, ?)",
-                    (
-                        execution_id,
-                        turn_id,
-                        attempt,
-                        attempt,
-                    strict_optional_text(
-                        previous[0], field="executions.execution_id"
-                    )
-                    if previous
-                    else None,
-                        _now(),
-                    ),
-                )
-                connection.execute(
-                    "INSERT INTO turn_execution_links(turn_id, execution_id, execution_role, execution_ordinal, link_idempotency_key, created_at) VALUES (?, ?, 'resume', ?, ?, ?)",
-                    (
-                        turn_id,
-                        execution_id,
-                        attempt,
-                        f"{turn_id}:resume:{execution_id}",
-                        _now(),
-                    ),
-                )
-                connection.execute(
-                    "UPDATE turn_records SET status = 'active', last_execution_id = ?, updated_at = ? WHERE turn_id = ?",
-                    (execution_id, _now(), turn_id),
-                )
+                    raise ValueError('turn_not_resumable') from error
+                execution_id = 'execution-' + uuid4().hex
+                attempt = strict_non_negative_int(connection.execute('SELECT COALESCE(MAX(attempt), 0) + 1 FROM executions WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()[0], field='executions.attempt')
+                previous = connection.execute('SELECT execution_id, job_id FROM executions WHERE session_id = ? AND thread_id = ? AND turn_id = ? ORDER BY attempt DESC LIMIT 1', (session_id, owner_thread_id, turn_id)).fetchone()
+                if previous is None:
+                    raise RuntimeError(f'可恢复 Turn 缺少前序 execution: {turn_id}')
+                previous_execution_id = strict_text(previous[0], field='executions.execution_id')
+                previous_job_id = strict_text(previous[1], field='executions.job_id')
+                fork_copied = connection.execute("SELECT 1 FROM turn_execution_links WHERE session_id = ? AND thread_id = ? AND turn_id = ? AND execution_role = 'fork_copied' LIMIT 1", (session_id, owner_thread_id, turn_id)).fetchone() is not None
+                if fork_copied and (job_id is None or job_id == previous_job_id):
+                    raise ValueError(f'fork-copied history resume requires a new target Job ID: turn_id={turn_id}')
+                resumed_job_id = job_id
+                accepted_ingress_id = strict_text(row[1], field='turn_records.accepted_ingress_id')
+                acceptance = connection.execute('SELECT accepted_ingress_id, payload_hash FROM turn_acceptances WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()
+                if acceptance is None or acceptance[0] != accepted_ingress_id:
+                    raise RuntimeError(f'可恢复 Turn 缺少匹配 owner acceptance: {turn_id}')
+                payload_hash = strict_text(acceptance[1], field='turn_acceptances.payload_hash')
+                connection.execute('BEGIN IMMEDIATE')
+                _commit_id, _commit_offset = self._append_v2_records_transaction(connection, owner_thread_id, checkpoint_ns, (), session_id=session_id, commit_kind=CommitKind.TERMINAL_CONVERGENCE.value, commit_mode=CommitMode.METADATA_ONLY.value, outcome=ControlOutcome.UNKNOWN.value, subject_id=turn_id, idempotency_key=f'resume:{turn_id}:{execution_id}', metadata={'phase': 'resume_started', 'execution_id': execution_id, 'previous_execution_id': previous_execution_id}, begin_transaction=False)
+                admission_key = f'resume:{turn_id}:{execution_id}'
+                admission_hash = user_turn_admission_payload_hash(session_id=session_id, thread_id=owner_thread_id, turn_id=turn_id, execution_id=execution_id, job_id=resumed_job_id, accepted_ingress_id=accepted_ingress_id, admission_idempotency_key=admission_key, payload_hash=payload_hash)
+                timestamp = _now()
+                connection.execute("INSERT INTO executions(execution_id, session_id, thread_id, turn_id, execution_origin, job_id, admission_idempotency_key, admission_payload_hash, attempt, execution_ordinal, accepted_ingress_id, outcome, resumed_from_execution_id, replay_of_execution_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'user_turn', ?, ?, ?, ?, ?, ?, 'unknown', ?, NULL, ?, ?)", (execution_id, session_id, owner_thread_id, turn_id, resumed_job_id, admission_key, admission_hash, attempt, attempt, accepted_ingress_id, previous_execution_id, timestamp, timestamp))
+                connection.execute("INSERT INTO turn_execution_links(session_id, thread_id, turn_id, execution_id, execution_role, execution_ordinal, link_idempotency_key, created_at) VALUES (?, ?, ?, ?, 'resume', ?, ?, ?)", (session_id, owner_thread_id, turn_id, execution_id, attempt, f'{turn_id}:resume:{execution_id}', timestamp))
+                connection.execute("UPDATE turn_records SET status = 'active', last_execution_id = ?, updated_at = ? WHERE session_id = ? AND thread_id = ? AND turn_id = ?", (execution_id, timestamp, session_id, owner_thread_id, turn_id))
                 self._commit_connection(connection)
-                return {
-                    "turn_id": turn_id,
-                    "execution_id": execution_id,
-                    "attempt": attempt,
-                }
+                return {'turn_id': turn_id, 'execution_id': execution_id, 'job_id': resumed_job_id, 'admission_idempotency_key': admission_key, 'attempt': attempt}
 
     def mark_execution_lost(
         self,
-        thread_id: str,
+        session_id: str,
         *,
-        turn_id: str,
+        turn_id: str | None,
+        thread_id: str,
         execution_id: str | None = None,
         checkpoint_ns: str = "",
         reason: str = "provider_result_commit_missing",
     ) -> dict[str, object]:
         """把 dispatch 后、terminal commit 前丢失的 execution 收敛为 unknown。"""
-        strict_text(thread_id, field="session_id")
-        strict_text(turn_id, field="turn_id")
+        session_id = strict_text(session_id, field="session_id")
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
+        turn_id = strict_optional_text(turn_id, field="turn_id")
         strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         strict_text(reason, field="execution lost reason")
         execution_id = strict_optional_text(execution_id, field="execution_id")
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
-                self._require_v2_runtime(connection)
+        if turn_id is None:
+            if execution_id is None:
+                raise ValueError("Turn-less execution lost 必须指定 execution_id")
+            self.converge_execution(
+                session_id,
+                thread_id=owner_thread_id,
+                turn_id=None,
+                execution_id=execution_id,
+                outcome=ControlOutcome.EXECUTION_LOST.value,
+                turn_status=None,
+                checkpoint_ns=checkpoint_ns,
+            )
+            return {
+                "execution_id": execution_id,
+                "status": ControlOutcome.EXECUTION_LOST.value,
+                "outcome": ControlOutcome.EXECUTION_LOST.value,
+                "reason": reason,
+            }
+        with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
+            target_execution = execution_id or self.execution_for_turn(
+                session_id, thread_id=owner_thread_id,
+                turn_id=turn_id, checkpoint_ns=checkpoint_ns,
+            )
+            admission = self.execution_admission(
+                session_id, thread_id=owner_thread_id,
+                execution_id=target_execution, checkpoint_ns=checkpoint_ns,
+            )
+            if admission.turn_id != turn_id:
+                raise KeyError(f"execution 不存在或不属于 Turn: {target_execution}")
+            with self._connect(
+                owner_thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 turn = connection.execute(
-                    "SELECT status, last_execution_id FROM turn_records WHERE turn_id = ?",
-                    (turn_id,),
+                    "SELECT status FROM turn_records "
+                    "WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
+                    (session_id, owner_thread_id, turn_id),
                 ).fetchone()
                 if turn is None:
                     raise KeyError(f"Turn 不存在: {turn_id}")
-                current_turn_status = strict_text(
-                    turn[0], field="turn_records.status"
-                )
-                target_execution = execution_id or strict_optional_text(
-                    turn[1], field="turn_records.last_execution_id"
-                )
-                if target_execution is None:
-                    raise KeyError(f"Turn 没有可标记 execution: {turn_id}")
-                execution = connection.execute(
-                    "SELECT execution_id, outcome FROM executions WHERE execution_id = ? AND turn_id = ?",
-                    (target_execution, turn_id),
-                ).fetchone()
-                if execution is None:
-                    raise KeyError(
-                        f"execution 不存在或不属于 Turn: {target_execution}"
-                    )
-                current_status = current_turn_status
+                current_status = strict_text(turn[0], field="turn_records.status")
                 execution_outcome = strict_text(
-                    execution[1], field="executions.outcome"
+                    connection.execute(
+                        "SELECT outcome FROM executions WHERE execution_id = ?",
+                        (target_execution,),
+                    ).fetchone()[0],
+                    field="executions.outcome",
                 )
-                if current_status in {
-                    TurnStatus.COMPLETED.value,
-                    TurnStatus.COMPLETED_EMPTY.value,
-                    TurnStatus.FAILED.value,
-                    TurnStatus.CANCELLED.value,
-                }:
-                    return {
-                        "turn_id": turn_id,
-                        "execution_id": target_execution,
-                        "status": current_status,
-                        "outcome": execution_outcome,
-                    }
-                if (
-                    current_status == TurnStatus.UNKNOWN.value
-                    and execution_outcome == ControlOutcome.EXECUTION_LOST.value
-                ):
-                    existing_commit = load_committed_idempotency_commit(
-                        connection,
-                        commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                        subject_id=turn_id,
-                        idempotency_key=f"execution-lost:{turn_id}:{target_execution}",
-                        commit_mode=CommitMode.METADATA_ONLY.value,
-                        outcome=ControlOutcome.EXECUTION_LOST.value,
-                        metadata={
-                            "execution_id": target_execution,
-                            "reason": reason,
-                        },
-                        item_count=0,
-                    )
-                    if existing_commit is None:
-                        raise RuntimeError(
-                            "Turn 已是 execution_lost/unknown，但 terminal commit 缺失"
-                        )
-                    return {
-                        "turn_id": turn_id,
-                        "execution_id": target_execution,
-                        "status": TurnStatus.UNKNOWN.value,
-                        "outcome": ControlOutcome.EXECUTION_LOST.value,
-                        "commit_id": existing_commit.commit_id,
-                        "idempotent": True,
-                    }
-                if current_status != TurnStatus.UNKNOWN.value:
-                    try:
-                        validate_turn_transition(
-                            current_status,
-                            TurnStatus.UNKNOWN.value,
-                        )
-                    except ItemSchemaError as error:
-                        raise ValueError(
-                            f"非法 execution_lost Turn.status 转移: {current_status}->unknown"
-                        ) from error
-                connection.execute("BEGIN IMMEDIATE")
-                commit_id, _offset = self._append_v2_records_transaction(
-                    connection,
-                    thread_id,
-                    checkpoint_ns,
-                    (),
-                    commit_kind=CommitKind.TERMINAL_CONVERGENCE.value,
-                    commit_mode=CommitMode.METADATA_ONLY.value,
-                    outcome=ControlOutcome.EXECUTION_LOST.value,
-                    subject_id=turn_id,
-                    idempotency_key=f"execution-lost:{turn_id}:{target_execution}",
-                    metadata={
-                        "execution_id": target_execution,
-                        "reason": reason,
-                    },
-                    begin_transaction=False,
-                )
-                timestamp = _now()
-                connection.execute(
-                    "UPDATE executions SET outcome = 'execution_lost' WHERE execution_id = ? AND turn_id = ?",
-                    (target_execution, turn_id),
-                )
-                connection.execute(
-                    "UPDATE model_calls SET outcome = 'unknown', dispatch_state = 'unknown' WHERE execution_id = ?",
-                    (target_execution,),
-                )
-                connection.execute(
-                    "UPDATE context_assemblies SET status = 'terminal', outcome = 'execution_lost', terminal_at = ? WHERE turn_id = ? AND execution_id = ? AND status = 'sealed'",
-                    (timestamp, turn_id, target_execution),
-                )
-                connection.execute(
-                    "UPDATE turn_records SET status = 'unknown', updated_at = ? WHERE turn_id = ?",
-                    (timestamp, turn_id),
-                )
-                connection.execute(
-                    "UPDATE turns SET status = 'failed', updated_at = ? WHERE turn_id = ?",
-                    (timestamp, turn_id),
-                )
-                self._commit_connection(connection)
+            if current_status in {
+                TurnStatus.COMPLETED.value, TurnStatus.COMPLETED_EMPTY.value,
+                TurnStatus.FAILED.value, TurnStatus.CANCELLED.value,
+                TurnStatus.INTERRUPTED.value,
+            }:
                 return {
-                    "turn_id": turn_id,
-                    "execution_id": target_execution,
-                    "status": TurnStatus.UNKNOWN.value,
-                    "outcome": ControlOutcome.EXECUTION_LOST.value,
-                    "commit_id": commit_id,
+                    "turn_id": turn_id, "execution_id": target_execution,
+                    "status": current_status, "outcome": execution_outcome,
                 }
+            already_lost = (
+                current_status == TurnStatus.UNKNOWN.value
+                and execution_outcome == ControlOutcome.EXECUTION_LOST.value
+            )
+            commit_id = self.converge_execution(
+                session_id, thread_id=owner_thread_id,
+                turn_id=turn_id, execution_id=target_execution,
+                outcome=ControlOutcome.EXECUTION_LOST.value,
+                turn_status=TurnStatus.UNKNOWN.value, checkpoint_ns=checkpoint_ns,
+                loss_reason=reason,
+            )
+            result = {
+                "turn_id": turn_id, "execution_id": target_execution,
+                "status": TurnStatus.UNKNOWN.value,
+                "outcome": ControlOutcome.EXECUTION_LOST.value,
+                "commit_id": commit_id,
+            }
+            if already_lost:
+                result["idempotent"] = True
+            return result
 
 
 __all__ = ["RolloutExecutionRecoveryMixin"]

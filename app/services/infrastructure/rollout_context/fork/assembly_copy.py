@@ -7,8 +7,8 @@ import sqlite3
 from dataclasses import replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import payload_content_length
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import payload_content_length
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     read_registration,
 )
@@ -27,13 +27,25 @@ def validate_source_assemblies(
     service, connection: sqlite3.Connection, checkpoint_ns: str
 ) -> None:
     """复制前只读验证 source，不能重建 target manifest 掩盖原件损坏。"""
-    for session_id, plan_id in connection.execute(
-        "SELECT session_id, plan_id FROM context_plans"
+    owner = connection.execute(
+        "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+    ).fetchone()
+    if owner is None:
+        raise RuntimeError("fork source rollout 缺少 database_meta owner")
+    session_id, thread_id = owner
+    for row in connection.execute(
+        "SELECT session_id, thread_id, plan_id FROM context_plans"
     ).fetchall():
-        read_registration(connection, session_id, plan_id)
-    for raw, detail_ref in connection.execute(
-        "SELECT snapshot_json, detail_ref FROM context_assemblies"
+        if row[:2] != owner:
+            raise ValueError("source-mismatch: fork plan registry owner 不一致")
+        _, _, plan_id = row
+        read_registration(connection, session_id, thread_id, plan_id)
+    for row in connection.execute(
+        "SELECT session_id, thread_id, snapshot_json, detail_ref FROM context_assemblies"
     ).fetchall():
+        if row[:2] != owner:
+            raise ValueError("source-mismatch: fork assembly registry owner 不一致")
+        _, _, raw, detail_ref = row
         snapshot = ContextAssemblySnapshot.from_dict(json.loads(raw))
         service._validate_context_assembly_manifest(
             connection,
@@ -66,7 +78,9 @@ def refresh_copied_assemblies(state: FullCopyRemapState) -> None:
                 ),
             )
     for assembly_id, raw, detail_ref in connection.execute(
-        "SELECT assembly_id, snapshot_json, detail_ref FROM context_assemblies"
+        "SELECT assembly_id, snapshot_json, detail_ref FROM context_assemblies "
+        "WHERE session_id=? AND thread_id=?",
+        (state.target_session_id, state.target_thread_id),
     ).fetchall():
         value = localize_plan_value(state, json.loads(raw))
         snapshot = ContextAssemblySnapshot.from_dict(value)
@@ -87,11 +101,14 @@ def refresh_copied_assemblies(state: FullCopyRemapState) -> None:
         # remap coordinator 在同一事务末尾执行完整 assembly 验证。
         snapshot.validate_hashes()
         result = connection.execute(
-            "UPDATE context_assemblies SET plan_hash=?, request_hash=?, snapshot_json=? WHERE assembly_id=?",
+            "UPDATE context_assemblies SET plan_hash=?, request_hash=?, snapshot_json=? "
+            "WHERE session_id=? AND thread_id=? AND assembly_id=?",
             (
                 snapshot.plan_hash,
                 snapshot.request_hash,
                 canonical_json_text(snapshot.to_dict()),
+                state.target_session_id,
+                state.target_thread_id,
                 assembly_id,
             ),
         )

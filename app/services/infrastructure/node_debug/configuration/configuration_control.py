@@ -5,7 +5,7 @@
 由 NodeDebugService 继承（宿主必须提供 _runtimes、_session_state、
 _configuration_registry、_owner_key、_resolve_owner、_admit_mutation、
 _append_action、_assert_no_unsettled_claim、_get_typed_debug_runtime_config
-与公开入口 get_state），不反向依赖顶层 service.py。
+与已准入入口 _get_state_admitted），不反向依赖顶层 service.py。
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class NodeDebugConfigurationControlMixin:
     def list_configurations(
         self,
         session_id: str,
-        thread_id: str,
+        thread_id: str | None = None,
     ) -> list[NodeDebugConfigurationDTO]:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
         self._session_state.ensure_loaded(session_id, thread_id)
@@ -87,7 +87,7 @@ class NodeDebugConfigurationControlMixin:
         self,
         session_id: str,
         configuration_id: str,
-        thread_id: str,
+        thread_id: str | None = None,
     ) -> NodeDebugConfigurationDTO:
         session_id, thread_id = self._resolve_owner(session_id, thread_id)
         self._session_state.ensure_loaded(session_id, thread_id)
@@ -104,31 +104,32 @@ class NodeDebugConfigurationControlMixin:
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(
+        async with self._admit_mutation(
             request.session_id, request.thread_id
-        )
-        self._session_state.ensure_loaded(session_id, thread_id)
-        if request.activate:
-            self._assert_no_running_target(session_id, thread_id)
-        configuration = self._configuration_registry.create(
-            request.model_copy(
-                update={"session_id": session_id, "thread_id": thread_id}
-            ),
-        )
-        if request.activate:
-            self._session_state.sync_active_configuration(session_id, thread_id)
-            self._drop_inactive_runtime((session_id, thread_id))
-        self._record_session_action(
-            session_id,
-            "create_configuration",
-            f"已创建调试方案 {configuration.name}",
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            thread_id=thread_id,
-        )
-        self._session_state.write_session_manifest(session_id, thread_id)
-        return await self.get_state(session_id, thread_id)
+        ) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            self._session_state.ensure_loaded(session_id, thread_id)
+            if request.activate:
+                self._assert_no_running_target(session_id, thread_id)
+            configuration = self._configuration_registry.create(
+                request.model_copy(
+                    update={"session_id": session_id, "thread_id": thread_id}
+                ),
+            )
+            if request.activate:
+                self._session_state.sync_active_configuration(session_id, thread_id)
+                self._drop_inactive_runtime((session_id, thread_id))
+            self._record_session_action(
+                session_id,
+                "create_configuration",
+                f"已创建调试方案 {configuration.name}",
+                actor=actor,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                thread_id=thread_id,
+            )
+            self._session_state.write_session_manifest(session_id, thread_id)
+            return await self._get_state_admitted(session_id, thread_id)
 
     async def update_configuration(
         self,
@@ -139,141 +140,145 @@ class NodeDebugConfigurationControlMixin:
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(
+        async with self._admit_mutation(
             request.session_id, request.thread_id
-        )
-        self._session_state.ensure_loaded(session_id, thread_id)
-        self._configuration_registry.get(session_id, thread_id, configuration_id)
-        self._assert_configuration_not_running(
-            session_id, thread_id, configuration_id
-        )
-        replacement = self._configuration_registry.update(
-            configuration_id,
-            request.model_copy(
-                update={"session_id": session_id, "thread_id": thread_id}
-            ),
-        )
-        self._session_state.sync_active_configuration(session_id, thread_id)
-        self._record_session_action(
-            session_id,
-            "update_configuration",
-            f"已更新调试方案 {replacement.name}",
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            thread_id=thread_id,
-        )
-        self._session_state.write_session_manifest(session_id, thread_id)
-        return await self.get_state(session_id, thread_id)
+        ) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            self._session_state.ensure_loaded(session_id, thread_id)
+            self._configuration_registry.get(session_id, thread_id, configuration_id)
+            self._assert_configuration_not_running(
+                session_id, thread_id, configuration_id
+            )
+            replacement = self._configuration_registry.update(
+                configuration_id,
+                request.model_copy(
+                    update={"session_id": session_id, "thread_id": thread_id}
+                ),
+            )
+            self._session_state.sync_active_configuration(session_id, thread_id)
+            self._record_session_action(
+                session_id,
+                "update_configuration",
+                f"已更新调试方案 {replacement.name}",
+                actor=actor,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                thread_id=thread_id,
+            )
+            self._session_state.write_session_manifest(session_id, thread_id)
+            return await self._get_state_admitted(session_id, thread_id)
 
     async def activate_configuration(
         self,
         session_id: str,
         configuration_id: str,
         *,
-        thread_id: str,
+        thread_id: str | None = None,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        configuration = self._configuration_registry.get(
-            session_id, thread_id, configuration_id
-        )
-        self._assert_no_running_target(session_id, thread_id)
-        self._configuration_registry.activate(
-            session_id,
-            configuration_id,
-            thread_id=thread_id,
-        )
-        self._session_state.sync_active_configuration(session_id, thread_id)
-        self._drop_inactive_runtime((session_id, thread_id))
-        self._record_session_action(
-            session_id,
-            "activate_configuration",
-            f"已激活调试方案 {configuration.name}",
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            thread_id=thread_id,
-        )
-        self._session_state.write_session_manifest(session_id, thread_id)
-        return await self.get_state(session_id, thread_id)
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            self._session_state.ensure_loaded(session_id, thread_id)
+            configuration = self._configuration_registry.get(
+                session_id, thread_id, configuration_id
+            )
+            self._assert_no_running_target(session_id, thread_id)
+            self._configuration_registry.activate(
+                session_id,
+                configuration_id,
+                thread_id=thread_id,
+            )
+            self._session_state.sync_active_configuration(session_id, thread_id)
+            self._drop_inactive_runtime((session_id, thread_id))
+            self._record_session_action(
+                session_id,
+                "activate_configuration",
+                f"已激活调试方案 {configuration.name}",
+                actor=actor,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                thread_id=thread_id,
+            )
+            self._session_state.write_session_manifest(session_id, thread_id)
+            return await self._get_state_admitted(session_id, thread_id)
 
     async def delete_configuration(
         self,
         session_id: str,
         configuration_id: str,
         *,
-        thread_id: str,
+        thread_id: str | None = None,
         actor: Literal["human", "ai", "system"] = "human",
         tool_name: str | None = None,
         tool_call_id: str | None = None,
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        configuration = self._configuration_registry.get(
-            session_id, thread_id, configuration_id
-        )
-        self._assert_configuration_not_running(
-            session_id, thread_id, configuration_id
-        )
-        was_active = (
-            self._configuration_registry.active_id(session_id, thread_id)
-            == configuration_id
-        )
-        self._configuration_registry.remove(
-            session_id,
-            configuration_id,
-            thread_id,
-        )
-        if was_active:
-            self._session_state.clear_pending_breakpoints((session_id, thread_id))
-            self._drop_inactive_runtime((session_id, thread_id))
-        self._record_session_action(
-            session_id,
-            "delete_configuration",
-            f"已删除调试方案 {configuration.name}",
-            actor=actor,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            thread_id=thread_id,
-        )
-        self._session_state.write_session_manifest(session_id, thread_id)
-        return await self.get_state(session_id, thread_id)
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            self._session_state.ensure_loaded(session_id, thread_id)
+            configuration = self._configuration_registry.get(
+                session_id, thread_id, configuration_id
+            )
+            self._assert_configuration_not_running(
+                session_id, thread_id, configuration_id
+            )
+            was_active = (
+                self._configuration_registry.active_id(session_id, thread_id)
+                == configuration_id
+            )
+            self._configuration_registry.remove(
+                session_id,
+                configuration_id,
+                thread_id,
+            )
+            if was_active:
+                self._session_state.clear_pending_breakpoints((session_id, thread_id))
+                self._drop_inactive_runtime((session_id, thread_id))
+            self._record_session_action(
+                session_id,
+                "delete_configuration",
+                f"已删除调试方案 {configuration.name}",
+                actor=actor,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                thread_id=thread_id,
+            )
+            self._session_state.write_session_manifest(session_id, thread_id)
+            return await self._get_state_admitted(session_id, thread_id)
 
     async def import_configuration(
         self,
         session_id: str,
         configuration: NodeDebugConfigurationDTO,
         *,
-        thread_id: str,
+        thread_id: str | None = None,
         activate: bool = False,
         actor: Literal["human", "ai", "system"] = "human",
     ) -> NodeDebugStateDTO:
-        session_id, thread_id = await self._admit_mutation(session_id, thread_id)
-        self._session_state.ensure_loaded(session_id, thread_id)
-        if activate:
-            self._assert_no_running_target(session_id, thread_id)
-        imported = self._configuration_registry.import_configuration(
-            session_id,
-            configuration,
-            thread_id=thread_id,
-            activate=activate,
-        )
-        if activate:
-            self._session_state.sync_active_configuration(session_id, thread_id)
-            self._drop_inactive_runtime((session_id, thread_id))
-        self._record_session_action(
-            session_id,
-            "import_configuration",
-            f"已导入调试方案 {imported.name}",
-            actor=actor,
-            thread_id=thread_id,
-        )
-        self._session_state.write_session_manifest(session_id, thread_id)
-        return await self.get_state(session_id, thread_id)
+        async with self._admit_mutation(session_id, thread_id) as admitted_owner:
+            session_id, thread_id = admitted_owner
+            self._session_state.ensure_loaded(session_id, thread_id)
+            if activate:
+                self._assert_no_running_target(session_id, thread_id)
+            imported = self._configuration_registry.import_configuration(
+                session_id,
+                configuration,
+                thread_id=thread_id,
+                activate=activate,
+            )
+            if activate:
+                self._session_state.sync_active_configuration(session_id, thread_id)
+                self._drop_inactive_runtime((session_id, thread_id))
+            self._record_session_action(
+                session_id,
+                "import_configuration",
+                f"已导入调试方案 {imported.name}",
+                actor=actor,
+                thread_id=thread_id,
+            )
+            self._session_state.write_session_manifest(session_id, thread_id)
+            return await self._get_state_admitted(session_id, thread_id)
 
     async def copy_configuration(
         self,
@@ -286,23 +291,64 @@ class NodeDebugConfigurationControlMixin:
         name: str | None = None,
         activate: bool = False,
     ) -> NodeDebugConfigurationDTO:
-        source_session_id, source_thread_id = await self._admit_mutation(
+        if source_session_id == target_session_id:
+            async with self._admit_mutation(
+                source_session_id, source_thread_id
+            ) as source_owner:
+                source = self.get_configuration(
+                    source_owner[0], configuration_id, source_owner[1]
+                )
+                target_owner = (
+                    source_owner
+                    if target_thread_id == source_owner[1]
+                    else self._resolve_copy_target_owner(
+                        target_session_id, target_thread_id
+                    )
+                )
+                if target_owner != source_owner:
+                    await self._lifecycle.reconcile_persisted_claim(target_owner)
+                return self._copy_configuration_snapshot_admitted(
+                    source_owner,
+                    target_owner,
+                    source,
+                    name=name,
+                    activate=activate,
+                )
+
+        async with self._admit_mutation(
             source_session_id, source_thread_id
-        )
-        target_session_id, target_thread_id = await self._admit_mutation(
+        ) as source_owner:
+            source = self.get_configuration(
+                source_owner[0], configuration_id, source_owner[1]
+            )
+        async with self._admit_mutation(
             target_session_id, target_thread_id
-        )
+        ) as target_owner:
+            return self._copy_configuration_snapshot_admitted(
+                source_owner,
+                target_owner,
+                source,
+                name=name,
+                activate=activate,
+            )
+
+    def _copy_configuration_snapshot_admitted(
+        self,
+        source_owner: NodeDebugOwner,
+        target_owner: NodeDebugOwner,
+        source: NodeDebugConfigurationDTO,
+        *,
+        name: str | None,
+        activate: bool,
+    ) -> NodeDebugConfigurationDTO:
+        source_session_id, _source_thread_id = source_owner
+        target_session_id, target_thread_id = target_owner
         self._session_state.ensure_loaded(target_session_id, target_thread_id)
-        self.get_configuration(
-            source_session_id, configuration_id, source_thread_id
-        )
         if activate:
             self._assert_no_running_target(target_session_id, target_thread_id)
         copied = self._configuration_registry.copy_configuration(
-            source_session_id=source_session_id,
+            source_configuration=source,
             target_session_id=target_session_id,
-            configuration_id=configuration_id,
-            source_thread_id=source_thread_id,
             target_thread_id=target_thread_id,
             name=name,
             activate=activate,
@@ -319,10 +365,19 @@ class NodeDebugConfigurationControlMixin:
             actor="human",
             thread_id=target_thread_id,
         )
-        self._session_state.write_session_manifest(
-            target_session_id, target_thread_id
-        )
+        self._session_state.write_session_manifest(target_session_id, target_thread_id)
         return copied.model_copy(deep=True)
+
+    def _resolve_copy_target_owner(
+        self, session_id: str, thread_id: str
+    ) -> NodeDebugOwner:
+        try:
+            return self._resolve_owner(session_id, thread_id)
+        except KeyError as error:
+            raise FileNotFoundError(
+                "调试目标 thread 不存在: "
+                f"session_id={session_id}, thread_id={thread_id}"
+            ) from error
 
     def _record_session_action(
         self,
@@ -372,10 +427,7 @@ class NodeDebugConfigurationControlMixin:
     def _assert_no_running_target(self, session_id: str, thread_id: str) -> None:
         owner = self._owner_key(session_id, thread_id)
         runtime = self._runtimes.get(owner)
-        if (
-            runtime is not None
-            and runtime.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES
-        ):
+        if runtime is not None and runtime.status in ACTIVE_NODE_DEBUG_RUNTIME_STATUSES:
             raise RuntimeError("目标程序运行中，停止后才能切换调试方案")
         self._assert_no_unsettled_claim(owner, operation="切换调试方案")
 

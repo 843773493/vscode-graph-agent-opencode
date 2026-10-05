@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.agents.sealed_assembly_dispatch import sealed_native_projection_scope
-from app.core.job_context import get_current_job_id
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
@@ -25,15 +25,15 @@ from app.domain.itemized.request_plan import ContextContribution
 logger = logging.getLogger(__name__)
 
 
-def _runtime_session_id(request: ModelRequest[Any]) -> str:
+def _runtime_thread_id(request: ModelRequest[Any]) -> str:
     runtime = request.runtime
     if runtime is None:
         raise RuntimeError("itemized context middleware 缺少 runtime")
     execution_info = runtime.execution_info
-    session_id = getattr(execution_info, "thread_id", None)
-    if not isinstance(session_id, str) or not session_id:
+    thread_id = getattr(execution_info, "thread_id", None)
+    if not isinstance(thread_id, str) or not thread_id:
         raise RuntimeError("itemized context middleware 缺少 runtime thread_id")
-    return session_id
+    return thread_id
 
 
 def _runtime_checkpoint_ns(request: ModelRequest[Any]) -> str:
@@ -47,23 +47,11 @@ def _runtime_checkpoint_ns(request: ModelRequest[Any]) -> str:
     return checkpoint_ns
 
 
-def _request_turn_id(request: ModelRequest[Any]) -> str:
-    turn_id = get_current_job_id()
-    if turn_id:
-        return turn_id
-    runtime = request.runtime
-    execution_info = runtime.execution_info if runtime is not None else None
-    fallback = getattr(execution_info, "thread_id", None)
-    if isinstance(fallback, str) and fallback:
-        return fallback
-    raise RuntimeError("itemized context middleware 缺少当前 Turn identity")
-
-
 def _request_idempotency_keys(
     request: ModelRequest[Any],
     *,
     session_id: str,
-    turn_id: str,
+    turn_id: str | None,
     execution_id: str,
     checkpoint_ns: str,
 ) -> tuple[str, str]:
@@ -165,32 +153,49 @@ def _prompt_contributions(
 
 
 class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
-    """无状态地把 Saver sealed selection 转发给 Provider handler。"""
+    """用构建时的 SessionThread owner 转发 Saver sealed selection。"""
 
-    def __init__(self, *, checkpointer: object) -> None:
+    def __init__(
+        self, *, checkpointer: object, session_id: str, thread_id: str
+    ) -> None:
+        if not session_id or not thread_id:
+            raise ValueError("itemized context middleware 需要显式 SessionThread owner")
         self._checkpointer = checkpointer
+        self._session_id = session_id
+        self._thread_id = thread_id
 
     def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
-        session_id = _runtime_session_id(request)
+        session_id = self._session_id
+        thread_id = _runtime_thread_id(request)
+        if thread_id != self._thread_id:
+            raise RuntimeError(
+                "itemized context runtime thread 与 Agent owner 不一致: "
+                f"expected={self._thread_id!r}, actual={thread_id!r}"
+            )
         checkpoint_ns = _runtime_checkpoint_ns(request)
-        turn_id = _request_turn_id(request)
+        admission = require_current_execution_admission(
+            langgraph_thread_id=thread_id
+        )
+        if admission.session_id != session_id or admission.thread_id != thread_id:
+            raise RuntimeError("itemized context request 与当前 execution owner 不一致")
+        turn_id = admission.turn_id
         prepare = getattr(self._checkpointer, "prepare_context_for_provider", None)
         supports = getattr(self._checkpointer, "supports_itemized_context", None)
         if not callable(prepare) or not callable(supports):
             raise TypeError("itemized context 缺少必需的 Saver prepare/supports 端口")
-        if not supports(session_id, checkpoint_ns=checkpoint_ns):
+        if not supports(session_id, thread_id, checkpoint_ns=checkpoint_ns):
             raise RuntimeError("itemized context 必须使用可用的 v2 Saver owner")
-        execution_for_turn = getattr(self._checkpointer, "execution_for_turn", None)
-        if not callable(execution_for_turn):
-            raise TypeError("itemized context 缺少必需的 Saver execution_for_turn 端口")
+        if (
+            (admission.execution_origin == "user_turn" and turn_id is None)
+            or (admission.execution_origin == "internal" and turn_id is not None)
+        ):
+            raise RuntimeError("itemized context Turn 与 execution admission origin 不一致")
         creation_key, seal_key = _request_idempotency_keys(
             request,
             session_id=session_id,
             turn_id=turn_id,
             checkpoint_ns=checkpoint_ns,
-            execution_id=execution_for_turn(
-                session_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns
-            ),
+            execution_id=admission.execution_id,
         )
         model_name = getattr(request.model, "model_name", None) or getattr(
             request.model, "model", None
@@ -214,7 +219,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         )
         prepared = prepare(
             session_id,
+            thread_id,
             turn_id=turn_id,
+            execution_id=admission.execution_id,
             plan_creation_idempotency_key=creation_key,
             seal_idempotency_key=seal_key,
             request_messages=request.messages,
@@ -233,7 +240,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
                     "itemized context 缺少必需的 Saver native projector 端口"
                 )
             native = project_native(
-                session_id, prepared["plan"], checkpoint_ns=checkpoint_ns
+                session_id, thread_id, prepared["plan"], checkpoint_ns=checkpoint_ns
             )
             prepared["native_projection"] = native
             prepared["losses"] = tuple(native["losses"])
@@ -265,8 +272,10 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         if losses:
             logger.warning(
                 "itemized provider projection capability loss: session=%s turn=%s losses=%s",
-                _runtime_session_id(request),
-                _request_turn_id(request),
+                self._session_id,
+                require_current_execution_admission(
+                    langgraph_thread_id=_runtime_thread_id(request)
+                ).job_id,
                 losses,
             )
         return prepared, messages, tools

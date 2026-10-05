@@ -875,6 +875,11 @@ export declare type GatewayHealthDTO = Message<"boxteam.gateway.v1.GatewayHealth
    * @generated from field: optional bool development_restart_available = 4;
    */
   developmentRestartAvailable?: boolean | undefined;
+
+  /**
+   * @generated from field: string gateway_id = 5;
+   */
+  gatewayId: string;
 };
 
 /**
@@ -1953,6 +1958,11 @@ export declare type GatewayWorkspaceDTO = Message<"boxteam.gateway.v1.GatewayWor
    * @generated from field: string checked_at = 17;
    */
   checkedAt: string;
+
+  /**
+   * @generated from field: optional string backend_workspace_id = 18;
+   */
+  backendWorkspaceId?: string | undefined;
 };
 
 /**

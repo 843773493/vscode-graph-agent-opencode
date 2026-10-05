@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.path_utils import get_workspace_id, workspace_context
 from app.core.session_interrupt_state import SessionInterruptState
+
+pytestmark = pytest.mark.usefixtures("workspace_scope")
 
 
 def test_session_interrupt_state_can_clear_explicit_none() -> None:
@@ -157,11 +160,11 @@ def test_pre_try_default_reset_leaves_no_residue_without_clear() -> None:
             tool_name=None,
             clear_active_tools=True,
         )
-        assert session_id not in SessionInterruptState._states
+        assert (get_workspace_id(), session_id) not in SessionInterruptState._states
         # 模拟 try 之前的校验异常：finally 的 clear 不会执行。
         with pytest.raises(RuntimeError):
             raise RuntimeError("会话模型 provider id 必须是字符串")
-        assert session_id not in SessionInterruptState._states
+        assert (get_workspace_id(), session_id) not in SessionInterruptState._states
     finally:
         SessionInterruptState._states.clear()
 
@@ -171,9 +174,33 @@ def test_non_default_state_is_retained_until_clear() -> None:
     SessionInterruptState._states.clear()
     try:
         SessionInterruptState.set("ses_keep", interrupt_request_id="intr_keep")
-        assert "ses_keep" in SessionInterruptState._states
+        assert (get_workspace_id(), "ses_keep") in SessionInterruptState._states
         assert SessionInterruptState.get("ses_keep").interrupt_request_id == "intr_keep"
         SessionInterruptState.clear("ses_keep")
-        assert "ses_keep" not in SessionInterruptState._states
+        assert (get_workspace_id(), "ses_keep") not in SessionInterruptState._states
     finally:
         SessionInterruptState._states.clear()
+
+
+def test_same_session_id_isolated_between_workspaces(workspace_scope, tmp_path) -> None:
+    original_workspace_id, original_root = workspace_scope
+    second_workspace_id = "00000000-0000-4000-8000-000000000002"
+    session_id = "ses_same"
+    SessionInterruptState.set(session_id, current_text="工作区A")
+    try:
+        with workspace_context(second_workspace_id, tmp_path):
+            assert SessionInterruptState.get(session_id).current_text == ""
+            SessionInterruptState.set(session_id, current_text="工作区B")
+            assert SessionInterruptState.get(session_id).current_text == "工作区B"
+            SessionInterruptState.clear(session_id)
+        with workspace_context(original_workspace_id, original_root):
+            assert SessionInterruptState.get(session_id).current_text == "工作区A"
+    finally:
+        SessionInterruptState.clear(session_id)
+
+
+def test_interrupt_state_requires_explicit_workspace_scope() -> None:
+    from contextvars import Context
+
+    with pytest.raises(RuntimeError, match="工作区"):
+        Context().run(SessionInterruptState.get, "ses_missing_workspace")

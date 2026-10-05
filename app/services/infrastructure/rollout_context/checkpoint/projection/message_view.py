@@ -18,6 +18,7 @@ class RolloutMessageViewMixin:
 
     def _messages_for_view(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         view_id: str,
@@ -30,11 +31,13 @@ class RolloutMessageViewMixin:
             checkpoint_ns,
             view_id,
             set(),
+            session_id=session_id,
             connection=connection,
         )
         if not sequences:
             return []
         values = self._read_messages(
+            session_id,
             thread_id,
             checkpoint_ns,
             sequences,
@@ -50,16 +53,24 @@ class RolloutMessageViewMixin:
         view_id: str,
         visited: set[str],
         *,
+        session_id: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> list[int]:
         view_id = strict_text(view_id, field="context_views.view_id")
         if connection is None:
-            with self._connect(thread_id, checkpoint_ns) as owned_connection:
+            if session_id is None:
+                raise ValueError(
+                    "读取 context view message sequences 必须显式提供 session_id"
+                )
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as owned_connection:
                 return self._view_message_sequences(
                     thread_id,
                     checkpoint_ns,
                     view_id,
                     visited,
+                    session_id=session_id,
                     connection=owned_connection,
                 )
         if view_id in visited:
@@ -96,6 +107,7 @@ class RolloutMessageViewMixin:
                         checkpoint_ns,
                         source_view,
                         visited.copy(),
+                        session_id=session_id,
                         connection=connection,
                     )
                 )

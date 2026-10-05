@@ -15,22 +15,21 @@ from typing import ClassVar, Protocol
 from uuid import uuid4
 
 from app.abstractions.job_service import JobServiceProtocol
+from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.exceptions import NotFoundError
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
     SessionCatalogPathResolver,
 )
-from app.core.session_control_store import SessionControlStore
-from app.core.session_creation import SessionCreationService
+from app.core.session_catalog_store import SessionCreationPurpose, SessionCreationRecord
+from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
+from app.core.session_creation import ForkCompletionProof, SessionCreationService
 from app.core.session_lifecycle_gate import (
     NavigationTopologyGate,
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
-from app.core.workspace_identity import (
-    LEGACY_BACKEND_WORKSPACE_IDS,
-    validate_workspace_id,
-)
+from app.core.workspace_identity import validate_workspace_id
 from app.schemas.internal_v2.common import CursorPage
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
@@ -46,6 +45,10 @@ from app.schemas.internal_v2.session import (
     TitleSource,
 )
 from app.schemas.internal_v2.trace import TraceEventDTO
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_vrn,
+)
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.mapping.trace_event_mapper import TraceEventMapper
@@ -58,7 +61,13 @@ class ForkRelationshipChecker(Protocol):
 # SQLite catalog 是导航字段的唯一权威，session manifest 只保存会话业务字段。
 _MANIFEST_NAVIGATION_KEYS = ("title", "title_source", "parent_session_id")
 # 由 catalog 冻结指针派生的投影字段同样不能写回 manifest，避免出现第二权威。
-_MANIFEST_DERIVED_KEYS = (*_MANIFEST_NAVIGATION_KEYS, "thread_id")
+_MANIFEST_DERIVED_KEYS = (
+    *_MANIFEST_NAVIGATION_KEYS,
+    "thread_id",
+    "resource_identity",
+    "vrn",
+    "scope",
+)
 
 
 class SessionService:
@@ -85,7 +94,6 @@ class SessionService:
         )
         self._session_lifecycle_gate = SessionLifecycleGate(path_resolver.sessions_root)
         self._path_resolver.initialize()
-        self._migrate_legacy_workspace_ids()
         self._job_service: JobServiceProtocol | None = None
         self._change_listeners: list[Callable[[str, str], None]] = []
 
@@ -96,52 +104,6 @@ class SessionService:
     @property
     def workspace_id(self) -> str:
         return self._workspace_id
-
-    def _migrate_legacy_workspace_ids(self) -> None:
-        """把已知固定后端 ID 的历史 manifest 迁移到当前工作区 UUID。
-
-        换源后 manifest 可能是剥离形态（不含 title/title_source/
-        parent_session_id，见 _MANIFEST_NAVIGATION_KEYS），因此先用原始
-        JSON 的 workspace_id 判定是否命中旧 ID，仅对需要迁移的旧形态完整
-        manifest 做 SessionDTO 校验与重写，剥离形态在此处不参与校验。
-        """
-
-        for node in self._path_resolver.list_nodes():
-            if node.kind != "session":
-                continue
-            session_file = (
-                self._path_resolver.resolve_session_node(node.node_id)
-                / "session.json"
-            )
-            data = json.loads(session_file.read_text(encoding="utf-8"))
-            if data.get("workspace_id") not in LEGACY_BACKEND_WORKSPACE_IDS:
-                continue
-            if all(key in data for key in _MANIFEST_NAVIGATION_KEYS):
-                # 旧形态完整 manifest：按完整模型校验并重写。
-                session = SessionDTO.model_validate(data)
-                session.workspace_id = self._workspace_id
-                self._write_session_file(session_file, session)
-                continue
-            # 剥离形态：导航键由 catalog 权威承载，SessionDTO 必填的
-            # title 不在 manifest 上；只改写 workspace_id，不整体校验。
-            data["workspace_id"] = self._workspace_id
-            self._write_stripped_session_file(session_file, data)
-
-    def _write_stripped_session_file(self, path: Path, data: dict[str, object]) -> None:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.",
-            dir=path.parent,
-        )
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(data, file, ensure_ascii=False, indent=2, default=str)
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary_path, path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
 
     def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
         self._change_listeners.append(listener)
@@ -157,10 +119,7 @@ class SessionService:
     def _infer_created_title_source(
         cls,
         title: str | None,
-        explicit_source: TitleSource | None,
     ) -> TitleSource:
-        if explicit_source is not None:
-            return explicit_source
         if (title or "").strip() in cls.DEFAULT_SESSION_TITLES:
             return "default"
         return "user"
@@ -225,8 +184,8 @@ class SessionService:
     ) -> SessionDTO:
         """读取单个会话的 session.json 并按权威索引回填导航字段。
 
-        唯一从 manifest 取得、无法由目录索引提供的字段是 ``title_source``
-        与 ``updated_at``；其余字段（title/parent_session_id/thread_id）以
+        唯一从 manifest 取得、无法由目录索引提供的字段是 ``updated_at``；
+        其余字段（title/title_source/parent_session_id/thread_id）以
         resolver 权威投影为准回填，manifest 仍提供 kind/delegation/
         created_at 等。该读路径只服务**当前页**的会话，不得对全工作区逐会话
         调用（否则读取次数会随会话总数线性增长）。
@@ -246,6 +205,7 @@ class SessionService:
             await asyncio.to_thread(session_file.read_text, encoding="utf-8")
         )
         data["title"] = node.name
+        data["title_source"] = node.title_source
         # parent_session_id 沿 catalog 父链派生最近 session 祖先（不含 folder）。
         data["parent_session_id"] = self._path_resolver.nearest_session_ancestor(
             node.parent_node_id
@@ -253,6 +213,11 @@ class SessionService:
         # 普通 Session 入口只定位 main thread；身份取自 catalog 冻结指针，
         # 不接受 session_id 冒充 thread_id。
         data["thread_id"] = self._path_resolver.main_thread_id(session_id)
+        data["resource_identity"] = session_resource_identity(
+            self._workspace_id, session_id
+        )
+        data["vrn"] = session_resource_vrn(self._workspace_id, session_id)
+        data["scope"] = "workspace"
 
         session = SessionDTO.model_validate(data)
         self._assert_workspace_binding(session)
@@ -421,22 +386,25 @@ class SessionService:
     async def create(self, session: SessionCreateRequest) -> SessionDTO:
         return await self._create(
             title=session.title,
-            title_source=session.title_source,
+            title_source=self._infer_created_title_source(session.title),
             agent_id=session.agent_id,
             parent_node_id=session.folder_id,
         )
 
-    async def create_context_fork(
+    async def prepare_context_fork(
         self,
         *,
+        idempotency_key: str,
         title: str,
         agent_id: str,
         parent_session_id: str | None,
         context_source_session_id: str,
         generation_origin: SessionGenerationOriginDTO | None = None,
         parent_node_id: str | None = None,
-    ) -> SessionDTO:
-        return await self._create(
+        request_intent: dict[str, object] | None = None,
+    ) -> tuple[SessionDTO, SessionCreationRecord]:
+        record = await self._prepare_creation(
+            idempotency_key=idempotency_key,
             title=title,
             title_source="auto",
             agent_id=agent_id,
@@ -445,6 +413,39 @@ class SessionService:
             kind="context_fork",
             generation_origin=generation_origin,
             parent_node_id=parent_node_id,
+            purpose="context_fork",
+            request_intent=request_intent,
+        )
+        return self._session_data_from_record(record), record
+
+    async def publish_prepared_context_fork(
+        self,
+        record: SessionCreationRecord,
+        *,
+        fork_completion: ForkCompletionProof,
+    ) -> SessionDTO:
+        result = await self._creation_service.publish_prepared(
+            record,
+            fork_completion=fork_completion,
+        )
+        session = self._session_data_from_record(record)
+        self._notify_changed("create", result.session_id)
+        return session
+
+    async def abort_prepared_context_fork(
+        self,
+        record: SessionCreationRecord,
+        reason: str,
+    ) -> SessionCreationRecord:
+        return await self._creation_service.abort_prepared(record, reason)
+
+    def list_preparing_creation_records(
+        self,
+        *,
+        purpose: SessionCreationPurpose,
+    ) -> list[SessionCreationRecord]:
+        return self._creation_service.list_preparing_creation_records(
+            purpose=purpose
         )
 
     async def create_generated(
@@ -469,14 +470,46 @@ class SessionService:
         self,
         *,
         title: str | None,
-        title_source: TitleSource | None,
+        title_source: TitleSource,
+        agent_id: str | None,
+        parent_session_id: str | None = None,
+        generation_origin: SessionGenerationOriginDTO | None = None,
+        parent_node_id: str | None = None,
+    ) -> SessionDTO:
+        idempotency_key = f"session-{uuid4().hex}"
+        record = await self._prepare_creation(
+            idempotency_key=idempotency_key,
+            title=title,
+            title_source=title_source,
+            agent_id=agent_id,
+            parent_session_id=parent_session_id,
+            generation_origin=generation_origin,
+            parent_node_id=parent_node_id,
+        )
+        try:
+            result = await self._creation_service.publish_prepared(record)
+        except RuntimeError as error:
+            await self._creation_service.abort_prepared(record, str(error))
+            raise
+        session = self._session_data_from_record(record)
+        self._notify_changed("create", result.session_id)
+        return session
+
+    async def _prepare_creation(
+        self,
+        *,
+        idempotency_key: str,
+        title: str | None,
+        title_source: TitleSource,
         agent_id: str | None,
         parent_session_id: str | None = None,
         context_source_session_id: str | None = None,
         kind: SessionKind = "normal",
         generation_origin: SessionGenerationOriginDTO | None = None,
         parent_node_id: str | None = None,
-    ) -> SessionDTO:
+        purpose: SessionCreationPurpose = "normal",
+        request_intent: dict[str, object] | None = None,
+    ) -> SessionCreationRecord:
         if self._config_service is None:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
@@ -484,7 +517,6 @@ class SessionService:
         resolved_provider_id = config_service.resolve_new_session_provider_id(
             resolved_agent_id
         )
-        idempotency_key = f"session-{uuid4().hex}"
         await self._validate_parent_session(
             session_id=idempotency_key,
             workspace_id=self._workspace_id,
@@ -509,10 +541,16 @@ class SessionService:
             parent_session_id = physical_parent_session_id
 
         resolved_title = title or "新会话"
-        result = await self._creation_service.create(
+        return await self._creation_service.prepare(
             idempotency_key=idempotency_key,
             title=resolved_title,
+            title_source=title_source,
             parent_node_id=resolved_parent_node_id,
+            purpose=purpose,
+            graph_binding=ThreadGraphBindingRecord(
+                *DEEP_AGENT_GRAPH_BINDING.selector_fields()
+            ),
+            request_intent=request_intent,
             session_metadata={
                 "kind": kind,
                 "delegation": None,
@@ -526,27 +564,46 @@ class SessionService:
                 "context_source_session_id": context_source_session_id,
             },
         )
-        created_at = datetime.fromisoformat(result.node.created_at or "")
+
+    def _session_data_from_record(
+        self,
+        record: SessionCreationRecord,
+    ) -> SessionDTO:
+        metadata = json.loads(record.session_metadata_json)
+        if not isinstance(metadata, dict):
+            raise RuntimeError(  # noqa: TRY004 - journal 数据损坏属于语义冲突。
+                "SessionCreationRecord metadata 必须是 JSON 对象: "
+                f"session_id={record.session_id}"
+            )
+        generation_origin_data = metadata["generation_origin"]
+        generation_origin = (
+            SessionGenerationOriginDTO.model_validate(generation_origin_data)
+            if generation_origin_data is not None
+            else None
+        )
+        created_at = datetime.fromisoformat(record.created_at)
         session_data = SessionDTO(
-            session_id=result.session_id,
+            session_id=record.session_id,
             workspace_id=self._workspace_id,
-            title=resolved_title,
-            title_source=self._infer_created_title_source(
-                title,
-                title_source,
+            resource_identity=session_resource_identity(
+                self._workspace_id, record.session_id
             ),
-            current_agent_id=resolved_agent_id,
-            current_provider_id=resolved_provider_id,
-            parent_session_id=parent_session_id,
-            context_source_session_id=context_source_session_id,
-            kind=kind,
+            vrn=session_resource_vrn(self._workspace_id, record.session_id),
+            scope="workspace",
+            title=record.display_name,
+            title_source=record.title_source,
+            current_agent_id=metadata["current_agent_id"],
+            current_provider_id=metadata["current_provider_id"],
+            parent_session_id=self._path_resolver.nearest_session_ancestor(
+                record.parent_node_id
+            ),
+            context_source_session_id=metadata["context_source_session_id"],
+            kind=metadata["kind"],
             generation_origin=generation_origin,
             created_at=created_at,
             updated_at=created_at,
-            thread_id=result.main_thread_id,
+            thread_id=record.main_thread_id,
         )
-
-        self._notify_changed("create", result.session_id)
         return session_data
 
     async def update(
@@ -578,19 +635,13 @@ class SessionService:
             for key, value in update_data.items():
                 if key == "agent_id":
                     existing.current_agent_id = value
-                elif key == "title_source":
-                    existing.title_source = value
                 else:
                     setattr(existing, key, value)
-
-            if "title" in update_data and "title_source" not in update_data:
-                existing.title_source = "user"
 
             existing.updated_at = datetime.now(UTC)
 
             session_dir = self._path_resolver.resolve_session_node(session_id)
             self._write_session_file(session_dir / "session.json", existing)
-            self._path_resolver.update_node_name(session_id, existing.title)
 
         self._notify_changed("update", session_id)
         return existing

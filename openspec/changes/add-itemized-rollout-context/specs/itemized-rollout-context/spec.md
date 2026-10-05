@@ -92,15 +92,10 @@ catalog批量deleting commit之后，即使部分Session local fence尚active，
 - **WHEN** Folder包含多个Session和后代Folder，递归删除在已提交整树deleting、只隔离部分日期Session目录时退出
 - **THEN** 普通reader看不到部分存活子树；恢复只根据同库batch record中的精确目标/locator继续收敛并一次提交全部tombstone，不扫描日期桶、不遗失未隔离Session，非递归删除非空Folder仍明确拒绝
 
-#### Scenario: 旧物理导航树迁入日期桶
+#### Scenario: 旧 JSON catalog 未迁移
 
-- **WHEN** 显式迁移读取旧`session-catalog-index.json`、Folder manifest及嵌套`children/`树
-- **THEN** 迁移先冻结旧索引和完整ID/父链/locator映射，验证日期/ID/正文/SessionThread完整性，在不可见staging写入新SQLite和日期节点，再以单一可恢复切换点发布；失败保留旧数据供审计且正常新runtime不得双读旧JSON、扫盘补节点或给旧物理路径建立别名
-
-#### Scenario: 旧Session调试文件随main thread迁移
-
-- **WHEN** 旧Session节点存在`debug/node/`归属manifest或调试方案，显式SessionThread迁移准备发布该Session
-- **THEN** 共享maintenance gate/journal必须静态接线调试domain迁移步骤，按冻结Session→main thread映射定点登记并校验文件bytes/hash、方案ID/revision/lineage和目标thread归属，再将文件纳入同一staging/发布完整性门槛；失败保留旧原件且不报告完整迁移，正常runtime不读旧路径或扫盘补缺
+- **WHEN** 工作区存在旧`session-catalog-index.json`但缺少`session-catalog.sqlite`
+- **THEN** 启动明确报错并保留旧文件；系统不得初始化空 catalog、双读旧 JSON、扫描物理树或提供旧路径 alias
 
 #### Scenario: catalog 损坏或备份落后
 

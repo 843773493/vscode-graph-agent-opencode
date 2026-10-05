@@ -261,9 +261,16 @@ class RolloutProjectionMixin:
         item_ids: Iterable[str] | None = None,
     ) -> list[dict[str, object]]:
         """读取 item 级轻量 projection，不打开 JSONL 正文。"""
-        self.initialize(thread_id, checkpoint_ns, validate_jsonl_items=False)
+        session_id = thread_id
+        owner_thread_id = self.main_thread_id(session_id)
+        self.initialize(session_id, checkpoint_ns, validate_jsonl_items=False)
         values = tuple(dict.fromkeys(item_ids or ()))
-        with self._connect(thread_id, checkpoint_ns, read_only=True) as connection:
+        with self._connect(
+            owner_thread_id,
+            checkpoint_ns,
+            session_id=session_id,
+            read_only=True,
+        ) as connection:
             self._require_v2_runtime(connection)
             columns = "item_sequence, item_id, id, semantic_kind, payload_kind, status, turn_id, turn_scope, message_group_id, wire_role, content, content_length, content_truncated, has_reasoning, has_tool_calls, phase, content_hash, projection_version, created_at, updated_at"
             invalid = connection.execute(

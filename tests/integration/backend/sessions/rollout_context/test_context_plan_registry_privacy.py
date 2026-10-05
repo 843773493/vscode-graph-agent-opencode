@@ -9,8 +9,8 @@ from dataclasses import replace
 import pytest
 
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.redaction import SessionHashRedactor
 from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.redaction import SessionHashRedactor
 from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
     validate_draft_privacy,
 )
@@ -74,6 +74,7 @@ def policy_plan(draft):
         tool = ToolSetRef.from_tool_snapshot(
             snapshot_id=original.ref_id,
             session_id=draft.session_id,
+            thread_id=draft.thread_id,
             plan_id=draft.plan_id,
             source_revision=original.source_revision,
             tools=original.tools,
@@ -169,7 +170,9 @@ def test_http_credential_markers_preserve_policy_and_hash(
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         registered = create_registration(connection, plan)
-    restored = read_registration(connection, session, registered.draft.plan_id)
+    restored = read_registration(
+        connection, session, registered.draft.thread_id, registered.draft.plan_id
+    )
     assert restored.draft.tool_set_refs[0].tool_policy == policy
     assert private_value not in "\n".join(connection.iterdump())
 
@@ -291,7 +294,9 @@ def test_complete_markers_are_persisted_exactly_without_plaintext(
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         registered = create_registration(connection, plan)
-    recovered = read_registration(connection, session, plan.plan_id)
+    recovered = read_registration(
+        connection, session, plan.thread_id, plan.plan_id
+    )
     assert recovered == registered
     assert validate_draft_privacy(recovered.draft) is None
     restored = (
@@ -359,7 +364,7 @@ def test_recovery_refuses_credentials_in_current_and_initial_manifests(
             )
     before = tuple(connection.iterdump())
     with pytest.raises(ValueError, match="plan-privacy-required") as caught:
-        read_registration(connection, session, draft.plan_id)
+        read_registration(connection, session, draft.thread_id, draft.plan_id)
     assert tuple(connection.iterdump()) == before
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
@@ -400,6 +405,7 @@ def test_tool_schema_property_names_are_not_misclassified_as_credentials(draft):
     tool = ToolSetRef.from_tool_snapshot(
         snapshot_id=original.ref_id,
         session_id=draft.session_id,
+        thread_id=draft.thread_id,
         plan_id=draft.plan_id,
         source_revision=original.source_revision,
         tools=(

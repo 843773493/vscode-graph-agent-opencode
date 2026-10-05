@@ -6,14 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
-
 from app.domain.itemized.resource_activation.common import (
-    RESOURCE_ACTIVATION_SNAPSHOT_FIELDS,
-    SNAPSHOT_FIELD_ALIASES,
-    ResourceActivationContractError,
     _CODE_HASH_MISMATCH,
     _CODE_PARENT_INVALID,
     _SNAPSHOT_KINDS,
+    RESOURCE_ACTIVATION_SNAPSHOT_FIELDS,
+    SNAPSHOT_FIELD_ALIASES,
+    ResourceActivationContractError,
     _non_empty_string,
     _non_negative_int,
     _reject_forbidden_fields,

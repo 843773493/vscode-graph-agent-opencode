@@ -13,7 +13,12 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    InternalDisplayPart,
+    InternalDisplayProvenance,
+    RuntimeNoticePayload,
+)
 from app.domain.itemized.schema import validate_item_compatibility
 
 # 独立抄录规范值域；预期矩阵来自文本 fixture，不能从生产 ALLOWED_* 生成。
@@ -39,6 +44,88 @@ PAYLOADS = (
     "extension",
 )
 STATUSES = ("completed", "partial", "incomplete", "cancelled", "failed", "unknown")
+
+
+def test_runtime_notice_display_payload_round_trips_with_one_content_hash() -> None:
+    payload = RuntimeNoticePayload(
+        prompt=(
+            "<system_reminder>内部控制正文\n<generated_session_result>分支结果"
+            "</generated_session_result></system_reminder>"
+        ),
+        display_part=InternalDisplayPart(
+            kind="generated_session_result",
+            text="生成分支已结束，主会话正在处理返回结果。",
+            provenance=InternalDisplayProvenance(
+                source_session_id="session-source"
+            ),
+        ),
+    ).to_dict()
+    item = CanonicalItemRecord.create(
+        item_sequence=1,
+        item_id="item-internal-result",
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
+        payload_kind=PayloadKind.STRUCTURED_CONTENT,
+        status=CanonicalItemStatus.COMPLETED,
+        producer_ref={
+            "producer_kind": "runtime",
+            "producer_id": "message-internal-result",
+        },
+        payload=payload,
+        metadata={"internal": True},
+        turn_scope="pending_next_turn",
+        wire_role="user",
+    )
+
+    restored = CanonicalItemRecord.from_dict(
+        json.loads(canonical_json_bytes(item.to_dict()))
+    )
+
+    assert restored.payload == payload
+    assert restored.content_hash == item.content_hash
+    assert restored.turn_id is None
+    assert restored.turn_scope == "pending_next_turn"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"prompt": "<system_reminder/>", "display_part": {"kind": "unknown"}},
+        {
+            "prompt": "<system_reminder/>",
+            "display_part": {
+                "kind": "generated_session_result",
+                "text": "安全展示",
+                "provenance": {},
+                "extra": "禁止的字段",
+            },
+        },
+        {
+            "prompt": "<system_reminder/>",
+            "display_part": {
+                "kind": "generated_session_result",
+                "text": "安全展示",
+                "provenance": {"run_id": "禁止的来源推断"},
+            },
+        },
+    ],
+)
+def test_runtime_notice_display_payload_rejects_unknown_kind_and_fields(
+    payload: object,
+) -> None:
+    with pytest.raises(ItemSchemaError):
+        CanonicalItemRecord.create(
+            item_sequence=1,
+            item_id="item-invalid-internal-result",
+            semantic_kind=SemanticKind.RUNTIME_NOTICE,
+            payload_kind=PayloadKind.STRUCTURED_CONTENT,
+            status=CanonicalItemStatus.COMPLETED,
+            producer_ref={
+                "producer_kind": "runtime",
+                "producer_id": "message-invalid-internal-result",
+            },
+            payload=payload,
+            turn_scope="pending_next_turn",
+        )
 
 
 @pytest.fixture

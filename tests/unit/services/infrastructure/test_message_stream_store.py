@@ -35,9 +35,7 @@ def message_stream_store() -> tuple[MessageStreamStore, object, str]:
     if output_root.exists():
         shutil.rmtree(output_root)
     sessions_root = output_root / "workspace" / ".boxteam" / "sessions"
-    from app.core.path_utils import _cached_session_catalog_components
 
-    _cached_session_catalog_components.cache_clear()
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()
     session_id = "ses_00000000400070008000000000000011"

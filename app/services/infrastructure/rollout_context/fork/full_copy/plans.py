@@ -53,12 +53,22 @@ class CopiedPlanSource:
 
 
 def collect_plan_identities(
-    connection: sqlite3.Connection, collect: Callable[[str, Iterable[object]], None]
+    connection: sqlite3.Connection,
+    *,
+    source_session_id: str,
+    source_thread_id: str,
+    collect: Callable[[str, Iterable[object]], None],
 ) -> None:
     """覆盖未 seal 的 plan 及 initial/current 候选；不扫描或读取 source 正文。"""
-    for plan_id, initial, current, imported, session_id in connection.execute(
-        "SELECT plan_id, creation_json, draft_json, source_manifest_json, session_id FROM context_plans"
+    owner = (source_session_id, source_thread_id)
+    for row in connection.execute(
+        "SELECT session_id, thread_id, plan_id, creation_json, draft_json, source_manifest_json "
+        "FROM context_plans WHERE session_id=? AND thread_id=?",
+        owner,
     ).fetchall():
+        row_session_id, row_thread_id, plan_id, initial, current, imported = row
+        if (row_session_id, row_thread_id) != owner:
+            raise ValueError("source-mismatch: fork plan registry owner 不一致")
         collect("plan", (plan_id,))
         registries = []
         for raw in (initial, current):
@@ -68,7 +78,12 @@ def collect_plan_identities(
             registries.append((plan.refs, plan.contributions))
             collect("tool_set", (ref.ref_id for ref in plan.tool_set_refs))
         if imported is not None:
-            sources = read_source_manifest(imported, session_id=session_id, plan_id=plan_id)
+            sources = read_source_manifest(
+                imported,
+                session_id=source_session_id,
+                thread_id=source_thread_id,
+                plan_id=plan_id,
+            )
             registries.append((sources.refs, sources.contributions))
         for refs, contributions in registries:
             for ref in refs:
@@ -87,7 +102,9 @@ def collect_plan_identities(
                 if isinstance(overlay_ref, str):
                     collect("request_ref", (overlay_ref,))
     for (ref_id,) in connection.execute(
-        "SELECT ref_id FROM context_plan_refs WHERE ref_type='request_only'"
+        "SELECT ref_id FROM context_plan_refs WHERE session_id=? AND thread_id=? "
+        "AND ref_type='request_only'",
+        owner,
     ).fetchall():
         collect("request_ref", (ref_id,))
     collect(
@@ -95,7 +112,9 @@ def collect_plan_identities(
         (
             row[0]
             for row in connection.execute(
-                "SELECT contribution_id FROM context_plan_contributions"
+                "SELECT contribution_id FROM context_plan_contributions "
+                "WHERE session_id=? AND thread_id=?",
+                owner,
             ).fetchall()
         ),
     )
@@ -106,46 +125,54 @@ def detach_copied_plan_registry(state) -> None:
     connection = state.connection
     sources = []
     for row in connection.execute(
-        "SELECT session_id, plan_id, plan_state, creation_json, draft_json, revision, "
-        "assembly_id, created_at, updated_at, registration_origin, source_manifest_json FROM context_plans"
+        "SELECT session_id, thread_id, plan_id, plan_state, creation_json, draft_json, revision, "
+        "assembly_id, created_at, updated_at, registration_origin, source_manifest_json "
+        "FROM context_plans WHERE session_id=? AND thread_id=?",
+        (state.source_session_id, state.source_thread_id),
     ).fetchall():
-        if row[0] != state.source_session_id:
+        if row[:2] != (state.source_session_id, state.source_thread_id):
             raise ValueError("source-mismatch: fork plan registry source owner 不一致")
-        unsealed = row[2] == "unsealed"
+        unsealed = row[3] == "unsealed"
         snapshot = (
             None
             if unsealed
             else connection.execute(
-                "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=? AND plan_id=?",
-                (row[6], row[1]),
+                "SELECT snapshot_json FROM context_assemblies WHERE session_id=? AND thread_id=? "
+                "AND assembly_id=? AND plan_id=?",
+                (
+                    state.target_session_id,
+                    state.target_thread_id,
+                    row[7],
+                    row[2],
+                ),
             ).fetchone()
         )
         if not unsealed and snapshot is None:
             raise ValueError("source-mismatch: fork sealed plan 缺少 snapshot")
-        if row[9] == "runtime":
-            registered = unsealed_context_plan_from_dict(json.loads(row[4]))
+        if row[10] == "runtime":
+            registered = unsealed_context_plan_from_dict(json.loads(row[5]))
             source_manifest = build_source_manifest(
-                session_id=row[0], plan_id=row[1], refs=registered.refs,
+                session_id=row[0], thread_id=row[1], plan_id=row[2], refs=registered.refs,
                 contributions=registered.contributions,
             )
         else:
             source_manifest = read_source_manifest(
-                row[10], session_id=row[0], plan_id=row[1]
+                row[11], session_id=row[0], thread_id=row[1], plan_id=row[2]
             ).manifest
         sources.append(
             CopiedPlanSource(
-                plan_id=row[1],
-                initial=unsealed_context_plan_from_dict(json.loads(row[3]))
+                plan_id=row[2],
+                initial=unsealed_context_plan_from_dict(json.loads(row[4]))
                 if unsealed
                 else None,
-                draft=unsealed_context_plan_from_dict(json.loads(row[4]))
+                draft=unsealed_context_plan_from_dict(json.loads(row[5]))
                 if unsealed
                 else None,
-                revision=row[5],
-                assembly_id=row[6],
+                revision=row[6],
+                assembly_id=row[7],
                 snapshot_hash=sha256_jcs(json.loads(snapshot[0])) if snapshot else None,
-                created_at=row[7],
-                updated_at=row[8],
+                created_at=row[8],
+                updated_at=row[9],
                 source_manifest=source_manifest,
             )
         )
@@ -153,8 +180,8 @@ def detach_copied_plan_registry(state) -> None:
     state.plan_failure_rows = tuple(
         connection.execute(
             "SELECT failure_id, plan_id, revision, seal_idempotency_key, error_code, created_at "
-            "FROM context_plan_seal_failures WHERE session_id=?",
-            (state.source_session_id,),
+            "FROM context_plan_seal_failures WHERE session_id=? AND thread_id=?",
+            (state.source_session_id, state.source_thread_id),
         ).fetchall()
     )
     # 子表先移除，工具候选与真实 draft 已包含在经过验证的 initial/current 中。
@@ -165,7 +192,10 @@ def detach_copied_plan_registry(state) -> None:
         "tool_set_snapshots",
         "context_plans",
     ):
-        connection.execute(f"DELETE FROM {table}")
+        connection.execute(
+            f"DELETE FROM {table} WHERE session_id=? AND thread_id=?",
+            (state.source_session_id, state.source_thread_id),
+        )
 
 
 def _draft(state, source: ContextRequestPlan) -> ContextRequestPlan:
@@ -177,6 +207,7 @@ def _draft(state, source: ContextRequestPlan) -> ContextRequestPlan:
     return replace(
         source,
         session_id=state.target_session_id,
+        thread_id=state.target_thread_id,
         plan_id=value["plan_id"],
         refs=tuple(parse_context_ref(ref) for ref in value["refs"]),
         contributions=tuple(
@@ -202,8 +233,14 @@ def write_copied_plan_registry(state) -> None:
         if source.draft is None:
             assembly_id = state.maps["assembly"][source.assembly_id]
             raw, detail_key = connection.execute(
-                "SELECT snapshot_json, detail_ref FROM context_assemblies WHERE assembly_id=? AND plan_id=?",
-                (assembly_id, target_plan),
+                "SELECT snapshot_json, detail_ref FROM context_assemblies WHERE session_id=? "
+                "AND thread_id=? AND assembly_id=? AND plan_id=?",
+                (
+                    state.target_session_id,
+                    state.target_thread_id,
+                    assembly_id,
+                    target_plan,
+                ),
             ).fetchone()
             snapshot = ContextAssemblySnapshot.from_dict(json.loads(raw))
             provenance = {
@@ -218,7 +255,9 @@ def write_copied_plan_registry(state) -> None:
             # 来源只能是 source 已验证的真实 registry，不从 included snapshot 补造。
             sources = parse_source_manifest(
                 localize_plan_value(state, state.remap_json(source.source_manifest)),
-                session_id=state.target_session_id, plan_id=target_plan,
+                session_id=state.target_session_id,
+                thread_id=state.target_thread_id,
+                plan_id=target_plan,
             )
             write_imported_registration(
                 connection,
@@ -236,11 +275,12 @@ def write_copied_plan_registry(state) -> None:
             draft = _draft(state, source.draft)
             manifest = draft_manifest(draft)
             connection.execute(
-                "INSERT INTO context_plans(session_id, plan_id, plan_creation_idempotency_key, creation_hash, "
+                "INSERT INTO context_plans(session_id, thread_id, plan_id, plan_creation_idempotency_key, creation_hash, "
                 "creation_json, draft_json, draft_hash, revision, plan_state, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unsealed', ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unsealed', ?, ?)",
                 (
                     state.target_session_id,
+                    state.target_thread_id,
                     target_plan,
                     draft.plan_creation_idempotency_key,
                     creation_hash(initial),
@@ -265,7 +305,12 @@ def write_copied_plan_registry(state) -> None:
                     "audit_id": state.fork_id,
                 },
             )
-        read_registration(connection, state.target_session_id, target_plan)
+        read_registration(
+            connection,
+            state.target_session_id,
+            state.target_thread_id,
+            target_plan,
+        )
     for (
         failure,
         plan_id,
@@ -275,13 +320,14 @@ def write_copied_plan_registry(state) -> None:
         created_at,
     ) in state.plan_failure_rows:
         connection.execute(
-            "INSERT INTO context_plan_seal_failures(failure_id, session_id, plan_id, revision, seal_idempotency_key, error_code, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO context_plan_seal_failures(failure_id, session_id, thread_id, plan_id, revision, seal_idempotency_key, error_code, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 state.service._full_copy_identity(
                     state.fork_id, state.target_session_id, "seal_failure", failure
                 ),
                 state.target_session_id,
+                state.target_thread_id,
                 state.maps["plan"][plan_id],
                 revision,
                 state.service._full_copy_identity(

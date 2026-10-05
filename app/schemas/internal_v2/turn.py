@@ -28,6 +28,7 @@ TurnInclude = Literal[
 # 上限直接从闭集派生，避免闭集与计数两份清单漂移。
 MAX_TURN_INCLUDE_FIELDS = len(get_args(TurnInclude))
 TurnCursorDirection = Literal["head", "tail", "before", "after", "around", "older"]
+TurnCursorQueryMode = Literal["tail", "linear", "window"]
 TurnProjectionState = Literal["ready", "partial"]
 
 
@@ -87,6 +88,7 @@ class TurnResponseSourceDTO(BaseModel):
     result_message_sequence: int | None = Field(default=None, ge=1)
     item_id: str | None = Field(default=None, min_length=1, max_length=256)
     item_sequence: int | None = Field(default=None, ge=1)
+    logical_item_ordinal: int | None = Field(default=None, ge=0)
     part_ordinal: int | None = Field(default=None, ge=0)
     created_at: datetime | None = None
     elapsed_ms: int | None = Field(default=None, ge=0)
@@ -162,6 +164,7 @@ class TurnBaseDTO(BaseModel):
     job_id: str
     session_id: str
     ordinal: int = Field(ge=1)
+    root_logical_item_ordinal: int = Field(ge=0)
     revision: int = Field(ge=1)
     status: JobStatus
     created_at: datetime
@@ -213,7 +216,10 @@ class TurnDetailDTO(TurnBaseDTO):
     thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list)
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
     tool_summary_truncated: bool = False
-    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=512)
+    response_parts: list[TurnResponsePartDTO] = Field(
+        default_factory=list,
+        max_length=512,
+    )
     final_response: str = ""
     items: list[TraceEventDTO] = Field(default_factory=list)
     detail_truncated: bool = False
@@ -350,9 +356,84 @@ class TurnHistoryLoadRequest(BaseModel):
         return self
 
 
+class InternalDisplayProvenanceDTO(BaseModel):
+    """仅包含 canonical display part 已记录的 typed 来源 identity。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_session_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_thread_id: str | None = Field(default=None, min_length=1, max_length=256)
+    delegation_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_execution_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_item_id: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class InternalExecutionDisplayPartDTO(BaseModel):
+    """独立 internal execution 的安全展示文本和 canonical 定位。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["generated_session_result"]
+    text: str = Field(min_length=1, max_length=4096)
+    item_id: str = Field(min_length=1, max_length=256)
+    item_sequence: int = Field(ge=1)
+    logical_item_ordinal: int = Field(ge=0)
+    created_at: datetime
+    provenance: InternalDisplayProvenanceDTO
+
+    @model_validator(mode="after")
+    def validate_safe_text(self) -> InternalExecutionDisplayPartDTO:
+        if not self.text.strip():
+            raise ValueError("internal display text 不能为空")
+        return self
+
+
+class InternalExecutionHistoryDTO(BaseModel):
+    """Turn 之外的 standalone internal execution 历史投影。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution_id: str = Field(min_length=1, max_length=256)
+    job_id: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=256)
+    status: Literal[
+        "completed",
+        "completed_empty",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "execution_lost",
+        "unknown",
+    ]
+    created_at: datetime
+    updated_at: datetime
+    display_parts: list[InternalExecutionDisplayPartDTO] = Field(
+        max_length=256,
+    )
+    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_response_part_identity(self) -> InternalExecutionHistoryDTO:
+        for part in self.response_parts:
+            if part.source.part_ordinal is None:
+                raise ValueError(
+                    "internal execution response part 缺少 canonical part_ordinal"
+                )
+            if part.source.logical_item_ordinal is None:
+                raise ValueError(
+                    "internal execution response part 缺少 membership ordinal"
+                )
+        return self
+
+
 class TurnHistoryPageDTO(BaseModel):
     items: list[TurnDetailDTO] = Field(max_length=256)
     summaries: list[TurnSummaryDTO] = Field(default_factory=list, max_length=256)
+    internal_executions: list[InternalExecutionHistoryDTO] = Field(
+        default_factory=list,
+        max_length=256,
+    )
     # 本页历史实际读取的 thread 身份；由业务服务层按权威 main pointer 回填，
     # 内部 rollout 读取器只按 session 定位，不在此处伪造 thread 身份。
     thread_id: str | None = None
@@ -363,6 +444,27 @@ class TurnHistoryPageDTO(BaseModel):
     has_before: bool = False
     has_after: bool = False
     projection_epoch: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_internal_execution_identity(self) -> TurnHistoryPageDTO:
+        execution_ids = [entry.execution_id for entry in self.internal_executions]
+        if len(execution_ids) != len(set(execution_ids)):
+            raise ValueError("internal_executions 中 execution_id 不能重复")
+        item_ids = [
+            part.item_id
+            for entry in self.internal_executions
+            for part in entry.display_parts
+        ]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("internal_executions 中 display item_id 不能重复")
+        response_item_ids = [
+            part.part_id
+            for entry in self.internal_executions
+            for part in entry.response_parts
+        ]
+        if len(response_item_ids) != len(set(response_item_ids)):
+            raise ValueError("internal_executions 中 response part_id 不能重复")
+        return self
 
 
 class TurnJobSummaryDTO(BaseModel):
@@ -390,20 +492,76 @@ class SessionTurnBootstrapDTO(BaseModel):
 class TurnCursorDTO(BaseModel):
     """服务端编码进不透明 cursor 的稳定锚点。"""
 
-    version: Literal[1] = 1
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[2] = 2
     session_id: str
-    projection_epoch: int = Field(ge=1)
-    anchor_turn_id: str
-    include_anchor: bool = False
-    direction: TurnCursorDirection = "older"
-    stage: int = Field(default=0, ge=0)
+    thread_id: str
+    checkpoint_ns: str
+    rollout_id: str
+    projection_epoch: int = Field(ge=1, strict=True)
+    view_id: str = Field(min_length=1)
+    history_view_revision: int = Field(ge=0, strict=True)
+    turn_read_upper_bound: int | None = Field(default=None, ge=1, strict=True)
+    logical_item_read_upper_bound: int | None = Field(default=None, ge=0, strict=True)
+    direction: Literal["before", "after"]
+    query_mode: TurnCursorQueryMode
+    effective_include: tuple[TurnInclude, ...]
+    anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
+    window_before_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
+    window_after_turns: int | None = Field(default=None, ge=0, le=256, strict=True)
+    stage: int = Field(default=0, ge=0, strict=True)
+    turn_ordinal: int | None = Field(default=None, ge=1, strict=True)
+    logical_item_ordinal: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_query_binding(self) -> TurnCursorDTO:
+        if self.effective_include != tuple(sorted(set(self.effective_include))):
+            raise ValueError("历史游标 effective_include 必须排序且唯一")
+        window_values = (
+            self.anchor_turn_id,
+            self.window_before_turns,
+            self.window_after_turns,
+        )
+        if self.query_mode == "window":
+            if any(value is None for value in window_values):
+                raise ValueError("window 历史游标必须冻结 anchor 与两侧窗口")
+        elif any(value is not None for value in window_values):
+            raise ValueError("非 window 历史游标不得携带 around 窗口")
+        if (
+            self.turn_ordinal is not None
+            and self.turn_read_upper_bound is not None
+            and self.turn_ordinal > self.turn_read_upper_bound
+        ):
+            raise ValueError("历史游标 turn anchor 超过 snapshot upper bound")
+        if self.turn_read_upper_bound is None and self.turn_ordinal is not None:
+            raise ValueError("空 Turn snapshot 不得携带 turn anchor")
+        if (
+            self.logical_item_ordinal is not None
+            and self.logical_item_read_upper_bound is not None
+            and self.logical_item_ordinal > self.logical_item_read_upper_bound
+        ):
+            raise ValueError("历史游标 item anchor 超过 snapshot upper bound")
+        if (
+            self.logical_item_read_upper_bound is None
+            and self.logical_item_ordinal is not None
+        ):
+            raise ValueError("空 internal snapshot 不得携带 item anchor")
+        if "internal" not in self.effective_include and self.logical_item_ordinal is not None:
+            raise ValueError("effective_include 排除 internal 时不得携带 item anchor")
+        if self.turn_ordinal is None and self.logical_item_ordinal is None:
+            raise ValueError("已耗尽的历史 cursor 不得继续发行")
+        return self
 
 
 class StaleTurnCursorErrorDTO(BaseModel):
     code: Literal["stale_turn_cursor"] = "stale_turn_cursor"
+    reason: Literal["projection_epoch", "history_view_revision"] = "projection_epoch"
     session_id: str
     cursor_epoch: int = Field(ge=1)
     current_epoch: int = Field(ge=1)
+    cursor_history_view_revision: int | None = Field(default=None, ge=0)
+    current_history_view_revision: int | None = Field(default=None, ge=0)
     message: str
 
 

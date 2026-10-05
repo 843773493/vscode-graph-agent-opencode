@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
@@ -53,7 +53,7 @@ def _binding(
         activation_ordinal=ordinal,
         effective_boundary=boundary,
         captured_registry_generation=3,
-        snapshot_ref=DetailRef(SESSION_ID, "snap-1", f"body-{ordinal}"),
+        snapshot_ref=DetailRef(SESSION_ID, "main", "snap-1", f"body-{ordinal}"),
     )
 
 

@@ -33,7 +33,7 @@ Gateway SHALL 将共享可变功能配置、Gateway 工作区注册状态、用�
 
 ### Requirement: 配置默认值和状态数据库边界
 
-系统 SHALL 保留发行包 JSONC 默认配置和 schema 的职责；系统不得将工作区目录权威 `session-catalog-index.json` 或单会话 rollout `index.sqlite` 改造成 Gateway 全局配置存储。
+系统 SHALL 保留发行包 JSONC 默认配置和 schema 的职责；系统不得将工作区会话位置权威库 `navigation/session-catalog.sqlite` 或单会话 rollout `index.sqlite` 改造成 Gateway 全局配置存储。
 
 #### Scenario: 合并有效配置
 
@@ -230,4 +230,3 @@ promotion 必须在同一事务中更新 active snapshot、pending state、apply
 #### Scenario: Workspace 停止期间发生 source 变化
 - **WHEN** Workspace 停止时 source journal 产生多个新 generation，之后 Workspace 启动
 - **THEN** Workspace 读取 high-water mark 与自身 last-applied generation，按顺序追赶缺失事件，不能只比较当前 digest 猜测状态
-

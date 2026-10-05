@@ -10,8 +10,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
 from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -83,7 +83,8 @@ def create_schema3_artifact(
 ) -> Schema3Artifact:
     accepted = saver.accept_turn(
         session_id, accepted_ingress_id="schema3-fixture-ingress",
-        acceptance_idempotency_key="schema3-fixture-root", payload="升级不能改 canonical 输入",
+        acceptance_idempotency_key="schema3-fixture-root", job_id="schema3-fixture-job",
+        admission_idempotency_key="schema3-fixture-admission", payload="升级不能改 canonical 输入",
     )
     if empty:
         root = saver._storage.root(session_id)

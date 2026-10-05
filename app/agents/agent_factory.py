@@ -38,7 +38,7 @@ from app.agents.graph_binding import (
     GRAPH_FACTORY_REGISTRY,
     GraphBindingOwnerKey,
     GraphBindingStorePort,
-    resolve_or_persist_graph_binding,
+    resolve_graph_binding,
 )
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
@@ -78,6 +78,7 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
@@ -87,7 +88,6 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
-    ReactorCreatedCallback,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -102,14 +102,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceControlStatePort,
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.orchestration.communication.binding_lookup import (
     SessionControlStoreWaitBindingLookup,
@@ -393,19 +391,15 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
     return service.resolve_agent_id(agent_id)
 
 
-# OpenSpec 8.4：create_my_deep_agent 本体每次调用都全新执行 create_agent 并新建
-# 工具/middleware 闭包，本模块内不存在任何跨 invocation 的已编译图缓存（无
-# lru_cache、无模块级实例表）。唯一复用点 AgentExecutionService 只缓存「不含
-# Session/Thread 的 Provider 工具面定义」这一 blueprint 投影（键不含 session_id，
-# 值不捕获会话闭包，见 `_tool_face_definitions`）；调用方级复用捕获 session 闭包
-# 的已编译 agent 的旧缓存已物理删除。真实 invocation 的 session/thread 依赖由
-# 每次构建经 ThreadRuntimeBinding 注入。
+# 编译函数只装配一个 generation 的图与纯 thread 依赖；复用与释放归 tracker 所有。
+
 def create_my_deep_agent(
     *,
     model: BaseChatModel,
     system_prompt: str | SystemMessage,
     checkpointer: BaseCheckpointSaver | None = None,
     session_id: str,
+    thread_id: str,
     agent_id: str,
     model_routing_middleware: CapabilityRoutingMiddleware | None = None,
     sender_agent_id: str | None = None,
@@ -434,11 +428,12 @@ def create_my_deep_agent(
     session_subagent_service: SessionSubagentProtocol | None = None,
     team_service: TeamCoordinationProtocol | None = None,
     config_service: ConfigService | None = None,
-    terminal_manager_client: TerminalManagerClient | None = None,
+    terminal_resource_owner: TerminalResourceOwner | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
     node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol
+    | None = None,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
@@ -446,29 +441,34 @@ def create_my_deep_agent(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
-    on_reactor_created: ReactorCreatedCallback | None = None,
     workspace_root: Path,
     include_team_tools: bool = False,
-    graph_binding_store: GraphBindingStorePort | None = None,
+    owns_thread: bool = True,
 ) -> Any:
     if checkpointer is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
     if config_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
+    if session_service is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
     resolved_execution_overrides = dict(execution_overrides or {})
     resolved_model_visibility_overrides = dict(model_visibility_overrides or {})
+
     policy_resolver = config_service.get_tool_policy_resolver(agent_id)
+    thread_binding = (
+        ThreadRuntimeBinding(
+            session_id=session_id,
+            thread_id=thread_id,
+        )
+        if owns_thread
+        else None
+    )
     tool_invocation_context = ToolInvocationContext(
         tool_timeout_seconds=tool_timeout_seconds,
-        # 单会话 Agent 运行在 main thread；这里把受信 (session_id, thread_id)
-        # 交给扩展工具，按 SessionThread 隔离的调试工具不再自行猜测归属。
-        thread_binding=ThreadRuntimeBinding(
-            session_id=session_id,
-            thread_id=MAIN_THREAD_ID,
-        ),
+        thread_binding=thread_binding,
     )
 
     if background_task_registry is None:
@@ -479,8 +479,6 @@ def create_my_deep_agent(
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobEventBus")
     if message_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
-    if session_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
     if session_orchestrator is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
     if session_subagent_service is None:
@@ -522,7 +520,7 @@ def create_my_deep_agent(
     if isinstance(checkpointer, RolloutCheckpointSaver):
         candidate_owner = ContextSourceOwnerKey(
             session_id=session_id,
-            thread_id=MAIN_THREAD_ID,
+            thread_id=thread_id,
         )
         if checkpointer.context_source_control_owner_available(candidate_owner):
             context_source_owner = candidate_owner
@@ -572,8 +570,6 @@ def create_my_deep_agent(
             lifetime_scope=reactor_lifetime_scope,
             reactor_id=f"agent:{agent_id}:session:{session_id}",
         )
-        if on_reactor_created is not None:
-            on_reactor_created((session_id, agent_id), context_source_reactor)
     hidden_direct_tool_names: set[str] = set()
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
@@ -634,7 +630,7 @@ def create_my_deep_agent(
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             config_service=config_service,
-            terminal_manager_client=terminal_manager_client,
+            terminal_resource_owner=terminal_resource_owner,
             invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
             session_message_delivery_service=session_message_delivery_service,
@@ -658,7 +654,7 @@ def create_my_deep_agent(
             session_target_resolver=session_target_resolver,
             session_orchestrator=session_orchestrator,
             config_service=config_service,
-            terminal_manager_client=terminal_manager_client,
+            terminal_resource_owner=terminal_resource_owner,
             browser_manager_client=browser_manager_client,
             invocation_context=tool_invocation_context,
             node_debug_service=node_debug_service,
@@ -775,7 +771,11 @@ def create_my_deep_agent(
         catalog=None,
     )
     runtime_middleware.append(
-        SealedAssemblyDispatchBridge(checkpointer=checkpointer)
+        SealedAssemblyDispatchBridge(
+            checkpointer=checkpointer,
+            session_id=session_id,
+            thread_id=thread_id,
+        )
     )
     runtime_middleware.extend(
         list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
@@ -829,22 +829,6 @@ def create_my_deep_agent(
         cache=None,
     )
 
-    # OpenSpec 8.4：deep agent 构建路径产出 GraphBinding。持久化的是 factory
-    # selector 四元组（见 app/agents/graph_binding.py），不是 CompiledStateGraph。
-    # OpenSpec 8.4：persist/load 该精确 owner 的 GraphBinding，并 fail-fast 校验
-    # 当前 revision 仍可被 registry 解析。该 owner 从未持久化时落盘当前 binding；
-    # 已持久化时按四元组精确解析受注册 factory，解析不到该精确 revision/hash 时
-    # 抛 graph_binding_unavailable，绝不静默改用旧 binding 或回退到最新 revision。
-    # 未装配 store（合成装配/测试替身）只做 fail-fast 校验，不伪造持久化成功。
-    resolve_or_persist_graph_binding(
-        store=graph_binding_store,
-        owner=GraphBindingOwnerKey(
-            session_id=session_id,
-            thread_id=MAIN_THREAD_ID,
-        ),
-        current_binding=DEEP_AGENT_GRAPH_BINDING,
-    )
-
     if hasattr(agent, "with_config"):
         return agent.with_config(
             {
@@ -862,14 +846,15 @@ def create_my_deep_agent(
 
 # OpenSpec 8.4：代码内闭集注册 deep-agent graph family（不提供运行时可配置的
 # 注册扩展点）。resolve 命中即返回本 factory callable；进程重启后 runtime 以
-# 持久化 binding 重新解析到同一 callable，再以每次 invocation 的
-# ThreadRuntimeBinding 注入 session/thread 依赖，factory 自身不闭包捕获 thread。
+# 持久化 binding 重新解析到同一 callable，再以精确 thread generation 的
+# ThreadRuntimeBinding 注入归属；factory 不捕获 invocation admission。
 GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, create_my_deep_agent)
 
 
 def create_runtime_deep_agent_for_session(
     *,
     session_id: str,
+    thread_id: str,
     agent_id: str,
     config_service: ConfigService | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
@@ -889,11 +874,12 @@ def create_runtime_deep_agent_for_session(
     execution_overrides: Mapping[str, bool] | None = None,
     model_visibility_overrides: Mapping[str, bool] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
-    terminal_manager_client: TerminalManagerClient | None = None,
+    terminal_resource_owner: TerminalResourceOwner | None = None,
     browser_manager_client: BrowserManagerClient | None = None,
     node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol | None = None,
+    workspace_session_context_client: WorkspaceSessionContextClientProtocol
+    | None = None,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
@@ -904,10 +890,10 @@ def create_runtime_deep_agent_for_session(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
-    on_reactor_created: ReactorCreatedCallback | None = None,
     workspace_root: Path,
     include_team_tools: bool = False,
-    graph_binding_store: GraphBindingStorePort | None = None,
+    graph_binding_store: GraphBindingStorePort,
+    owns_thread: bool = True,
 ):
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
@@ -946,11 +932,22 @@ def create_runtime_deep_agent_for_session(
         path_resolver=session_service.path_resolver,
     )
 
-    return create_my_deep_agent(
+    # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
+    binding = (
+        resolve_graph_binding(
+            store=graph_binding_store,
+            owner=GraphBindingOwnerKey(session_id, thread_id),
+        )
+        if owns_thread
+        else DEEP_AGENT_GRAPH_BINDING
+    )
+    builder = GRAPH_FACTORY_REGISTRY.resolve(binding)
+    return builder(
         model=model,
         system_prompt=runtime["system_prompt"],
         checkpointer=checkpointer,
         session_id=session_id,
+        thread_id=thread_id,
         agent_id=agent_id,
         model_routing_middleware=runtime["model_routing"]
         if model_routing_enabled and override_model is None
@@ -973,7 +970,7 @@ def create_runtime_deep_agent_for_session(
         session_orchestrator=session_orchestrator,
         session_subagent_service=session_subagent_service,
         team_service=team_service,
-        terminal_manager_client=terminal_manager_client,
+        terminal_resource_owner=terminal_resource_owner,
         browser_manager_client=browser_manager_client,
         node_debug_service=node_debug_service,
         session_context_query_service=session_context_query_service,
@@ -985,11 +982,10 @@ def create_runtime_deep_agent_for_session(
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
-        on_reactor_created=on_reactor_created,
         include_team_tools=include_team_tools,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,
         workspace_root=workspace_root,
-        graph_binding_store=graph_binding_store,
+        owns_thread=owns_thread,
     )

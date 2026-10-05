@@ -14,6 +14,14 @@ from starlette.responses import Response, StreamingResponse
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server.workspace_proxy import (
+    _http_client,
+    _is_streaming_workspace_path,
+    _proxy_workspace_request,
+    _stream_proxy_body,
+    _stream_proxy_response,
+    _wait_for_workspace_runtime,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -38,16 +46,6 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
         "no_proxy",
     ):
         monkeypatch.delenv(name, raising=False)
-from app.gateway.server.workspace_proxy import (
-    _http_client,
-    _is_streaming_workspace_path,
-    _proxy_workspace_request,
-    _stream_proxy_body,
-    _stream_proxy_response,
-    _wait_for_workspace_runtime,
-)
-
-
 class _StreamingResponse:
     def __init__(self) -> None:
         self.chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -88,6 +86,7 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
     )
     return result
@@ -105,6 +104,7 @@ def test_backend_route_change_invalidates_existing_lease(
             root_path="/tmp/workspace",
             backend_url="http://127.0.0.1:41002",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )
@@ -205,6 +205,7 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
             root_path="/tmp/workspace",
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         activate=False,
     )
@@ -219,6 +220,7 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
                     root_path="/tmp/workspace",
                     backend_url="http://127.0.0.1:41002",
                     connection_kind="local",
+                    backend_workspace_id="00000000-0000-4000-8000-000000000001",
                 ),
                 activate=False,
             )
@@ -284,6 +286,7 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
             root_path="/tmp/workspace",
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41001"}
@@ -357,6 +360,7 @@ async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
                 root_path=str(workspace_root),
                 backend_url="http://127.0.0.1:41003",
                 connection_kind="local",
+                backend_workspace_id="00000000-0000-4000-8000-000000000001",
                 managed=True,
                 desired_running=True,
             ),
@@ -407,6 +411,7 @@ async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connecti
             root_path="/tmp/workspace",
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={"workspace_api": "http://127.0.0.1:41001"}
@@ -487,6 +492,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
             root_path="/tmp/workspace",
             backend_url="http://127.0.0.1:41001",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         ),
         runtime=WorkspaceRuntime(
             service_urls={
@@ -513,7 +519,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/gateway/workspaces/gw_stream/terminal-manager/api/terminals",
+            "path": "/api/gateway/workspaces/gw_stream/terminal-manager/health",
             "query_string": b"",
             "headers": [],
             "app": application,
@@ -533,7 +539,7 @@ async def test_auxiliary_proxy_also_bounds_hung_upstream_response_headers(
                 proxy_auxiliary_http(
                     workspace_id="gw_stream",
                     service_path="terminal-manager",
-                    path="api/terminals",
+                    path="health",
                     request=request,
                     auth=GatewayAuthContext(kind="local"),
                 ),

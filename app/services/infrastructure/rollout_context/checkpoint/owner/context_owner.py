@@ -13,8 +13,8 @@ from dataclasses import replace
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.owner.composition import (
     ContextPlanCompositionMixin,
@@ -56,8 +56,9 @@ class ContextOwnerMixin(
     def seal_context_for_dispatch(
         self,
         session_id: str,
+        thread_id: str,
         *,
-        turn_id: str,
+        turn_id: str | None,
         execution_id: str,
         model_call_id: str,
         provider_version: str,
@@ -81,10 +82,13 @@ class ContextOwnerMixin(
         )
         seal_key = "dispatch-seal:" + creation_key
         plan_id = f"plan-{model_call_id}"
-        registered = self._find_runtime_context_plan(session_id, plan_id, checkpoint_ns)
+        registered = self._find_runtime_context_plan(
+            session_id, thread_id, plan_id, checkpoint_ns
+        )
         if registered is None or registered.plan_state == "unsealed":
             plan = self.compose_committed_context_plan(
                 session_id,
+                thread_id,
                 plan_id=plan_id,
                 tool_snapshot=tool_snapshot,
                 checkpoint_ns=checkpoint_ns,
@@ -96,6 +100,7 @@ class ContextOwnerMixin(
             )
         snapshot = self.seal_context_plan(
             session_id,
+            thread_id,
             runtime_draft(registered),
             seal_idempotency_key=seal_key,
             turn_id=turn_id,
@@ -115,6 +120,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_messages(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -125,6 +131,7 @@ class ContextOwnerMixin(
         """把 Saver 提供的已提交 plan 临时投影成 LangChain messages。"""
         messages, _, _ = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
             include_runtime_notices=include_runtime_notices,
@@ -136,6 +143,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_history(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -151,6 +159,7 @@ class ContextOwnerMixin(
         """
         messages, _, _ = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
             include_runtime_notices=include_runtime_notices,
@@ -162,6 +171,7 @@ class ContextOwnerMixin(
     def project_context_plan_with_diagnostics(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -172,6 +182,7 @@ class ContextOwnerMixin(
         """投影消息并显式返回 provider 不支持的 item capability loss。"""
         messages, _, losses = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
             include_runtime_notices=include_runtime_notices,
@@ -184,6 +195,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_provider(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         target_format: str,
@@ -193,9 +205,10 @@ class ContextOwnerMixin(
         request_only_content: Mapping[str, object] | None = None,
     ) -> tuple[list[BaseMessage], list[dict[str, object]], tuple[str, ...]]:
         """以同一 sealed selection 同时生成消息与独立 provider tools。"""
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         return self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
             include_runtime_notices=include_runtime_notices,
@@ -208,6 +221,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_messages_with_evidence(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -218,6 +232,7 @@ class ContextOwnerMixin(
         """返回 LangChain message 与同一 Saver selection 的完整证据。"""
         messages, _, losses = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             include_runtime_notices=include_runtime_notices,
@@ -228,6 +243,7 @@ class ContextOwnerMixin(
         evidence = build_projection_evidence(
             self._committed_context_plan(
                 session_id,
+                thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             ),
@@ -239,6 +255,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_history_with_evidence(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -249,6 +266,7 @@ class ContextOwnerMixin(
         normalized_ns = self._context_owner_namespace(checkpoint_ns)
         messages, _, losses = self._project_committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=normalized_ns,
             include_runtime_notices=include_runtime_notices,
@@ -259,6 +277,7 @@ class ContextOwnerMixin(
         evidence = build_projection_evidence(
             self._committed_context_plan(
                 session_id,
+                thread_id,
                 plan,
                 checkpoint_ns=normalized_ns,
             ),
@@ -270,6 +289,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_native_with_evidence(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str = "",
@@ -277,12 +297,14 @@ class ContextOwnerMixin(
         """返回 native request 与同一 Saver selection 的完整证据。"""
         native = self.project_context_plan_to_native(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
         )
         evidence = build_projection_evidence(
             self._committed_context_plan(
                 session_id,
+                thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             ),
@@ -298,6 +320,7 @@ class ContextOwnerMixin(
     def project_context_plan_to_provider_with_evidence(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         target_format: str,
@@ -309,6 +332,7 @@ class ContextOwnerMixin(
         """返回 provider/LangChain 双 wire 与同一 selection 证据。"""
         messages, tools, losses = self.project_context_plan_to_provider(
             session_id,
+            thread_id,
             plan,
             target_format=target_format,
             checkpoint_ns=checkpoint_ns,
@@ -319,6 +343,7 @@ class ContextOwnerMixin(
         evidence = build_projection_evidence(
             self._committed_context_plan(
                 session_id,
+                thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             ),
@@ -330,6 +355,7 @@ class ContextOwnerMixin(
     def _project_committed_context_plan(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str,
@@ -349,6 +375,7 @@ class ContextOwnerMixin(
         """
         committed_plan = self._committed_context_plan(
             session_id,
+            thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
         )
@@ -362,6 +389,7 @@ class ContextOwnerMixin(
         resolved_request_content = (
             self._request_content_for_plan(
                 session_id,
+                thread_id,
                 checkpoint_ns,
                 committed_plan,
                 request_only_content,
@@ -371,6 +399,7 @@ class ContextOwnerMixin(
         )
         items = self._storage.read_items(
             session_id,
+            thread_id,
             checkpoint_ns=checkpoint_ns,
             item_ids=item_ids,
         )
@@ -405,18 +434,21 @@ class ContextOwnerMixin(
     def supports_itemized_context(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str = "",
     ) -> bool:
         """返回当前 rollout 是否已切换到 v2 item owner。"""
         return self._storage.supports_itemized_context(
             session_id,
+            thread_id,
             checkpoint_ns=checkpoint_ns,
         )
 
     def _committed_context_plan(
         self,
         session_id: str,
+        thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str,
@@ -428,11 +460,12 @@ class ContextOwnerMixin(
         必须从 storage 读回并比较 plan identity/hash/selection，不能让业务层
         以自造的 plan 旁路 SQLite manifest 或 context reader。
         """
-        self._require_context_plan_owner(session_id, plan)
+        self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             raise ValueError("context plan 未 sealed，不能进入 projector")
         persisted = self._storage.get_context_assembly(
             session_id,
+            thread_id,
             assembly_id=plan.assembly_id,
             checkpoint_ns=checkpoint_ns,
         )
@@ -450,6 +483,7 @@ class ContextOwnerMixin(
         # 这里显式失败，绝不回退当前 URI、文件或 Registry。
         self.read_sealed_resource_activation(
             session_id,
+            thread_id=thread_id,
             assembly_id=persisted.assembly_id,
             plan_hash=persisted.plan_hash,
             request_hash=persisted.request_hash,
@@ -461,12 +495,14 @@ class ContextOwnerMixin(
         self,
         session_id: str,
         *,
+        thread_id: str,
         item_id: str,
         checkpoint_ns: str = "",
     ) -> CanonicalItemRecord | None:
         """读取已提交 item，供 finalization 复用标准 checkpoint 已写入的事实。"""
         items = self._storage.read_items(
             session_id,
+            thread_id,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             item_ids=(item_id,),
         )
@@ -482,6 +518,7 @@ class ContextOwnerMixin(
         return tuple(
             self._storage.read_items(
                 session_id,
+                self._storage.main_thread_id(session_id),
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             )
         )

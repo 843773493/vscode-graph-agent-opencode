@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from app.domain.itemized.assembly_snapshot import (
     context_request_hash,
 )
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -22,8 +21,9 @@ from app.domain.itemized.hashing import (
     content_hash,
     contribution_content_hash,
 )
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -646,6 +646,7 @@ def _native_tool_plan(
         refs = (*refs, tool_set_ref)
     return ContextRequestPlan(
         session_id=session_id,
+        thread_id="thread-1",
         plan_id=plan_id,
         refs=refs,
     ).seal_for_assembly(assembly_id, selection=selection)
@@ -1041,7 +1042,7 @@ def test_content_plan_request_and_idempotency_golden_vectors(
         availability=ref.availability,
     )
     plan = ContextRequestPlan(
-        session_id="session-golden", plan_id="plan-golden", refs=(ref,)
+        session_id="session-golden", thread_id="thread-1", plan_id="plan-golden", refs=(ref,)
     ).seal_for_assembly("assembly-golden", selection=(selection,))
     assert plan.plan_hash() == vectors["core-plan"]["hash"]
     assert (
@@ -1248,13 +1249,17 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
         protection=request_ref.protection,
         availability=request_ref.availability,
         detail_ref=DetailRef(
-            "session-shared-selection", "assembly-shared-selection", "detail-shared-selection"
+            "session-shared-selection",
+            "thread-1",
+            "assembly-shared-selection",
+            "detail-shared-selection",
         ),
         contribution_id=contribution.contribution_id,
         contribution_ordinal=0,
     )
     plan = ContextRequestPlan(
         session_id="session-shared-selection",
+        thread_id="thread-1",
         plan_id="plan-shared-selection",
         refs=(item_ref, request_ref),
         contributions=(contribution,),

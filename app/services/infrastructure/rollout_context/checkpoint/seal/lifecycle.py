@@ -23,6 +23,7 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
 def seal_registered_plan(
     owner,
     session_id: str,
+    thread_id: str,
     plan: ContextRequestPlan,
     *,
     seal_idempotency_key: str,
@@ -34,7 +35,9 @@ def seal_registered_plan(
 ) -> ContextAssemblySnapshot:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     with owner._lock:
-        registered = require_registered_draft(owner, session_id, plan, checkpoint_ns)
+        registered = require_registered_draft(
+            owner, session_id, thread_id, plan, checkpoint_ns
+        )
         draft = runtime_draft(registered)
         # activation binding identity 进入 seal input preimage：重试必须复用同一
         # 冻结 snapshot，不得在同一 seal key 下换成另一个 activation 结果。
@@ -55,6 +58,8 @@ def seal_registered_plan(
         retry = committed_retry(
             owner,
             registered,
+            session_id=session_id,
+            thread_id=thread_id,
             seal_idempotency_key=seal_idempotency_key,
             input_hash=input_hash,
             checkpoint_ns=checkpoint_ns,
@@ -84,16 +89,20 @@ def seal_registered_plan(
         try:
             bound, records, detail_refs = owner._bind_request_detail_refs(
                 session_id,
+                thread_id,
                 checkpoint_ns,
                 draft,
                 assembly_id=assembly_id,
                 omitted_ref_ids=frozenset(assembly_options["omitted_ref_ids"]),
                 request_only_content=request_only_content,
             )
-            snapshot = owner._composer_for(session_id, checkpoint_ns).assembly(
+            snapshot = owner._composer_for(
+                session_id, thread_id, checkpoint_ns
+            ).assembly(
                 plan=bound,
                 assembly_id=assembly_id,
                 session_id=session_id,
+                thread_id=thread_id,
                 request_detail_refs=detail_refs,
                 **assembly_options,
             )
@@ -101,17 +110,22 @@ def seal_registered_plan(
             record_failed_seal(
                 owner,
                 session_id,
+                thread_id,
                 draft.plan_id,
                 seal_idempotency_key,
                 checkpoint_ns,
                 error,
             )
-            release_uncommitted_details(owner, session_id, checkpoint_ns, records)
+            release_uncommitted_details(
+                owner, session_id, thread_id, checkpoint_ns, records
+            )
             raise
         try:
             # 低层 owner 负责其 snapshot/header-detail 阶段的失败 control；
             # 外层只释放自己分配的 request details，避免重复记录失败。
             owner.seal_context_assembly(
+                session_id,
+                thread_id,
                 snapshot,
                 seal_idempotency_key=seal_idempotency_key,
                 seal_input_hash=input_hash,
@@ -119,8 +133,13 @@ def seal_registered_plan(
                 activation_binding=activation_binding,
             )
         except BaseException:
-            release_uncommitted_details(owner, session_id, checkpoint_ns, records)
+            release_uncommitted_details(
+                owner, session_id, thread_id, checkpoint_ns, records
+            )
             raise
         return owner._storage.get_context_assembly(
-            session_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns
+            session_id,
+            thread_id,
+            assembly_id=assembly_id,
+            checkpoint_ns=checkpoint_ns,
         )

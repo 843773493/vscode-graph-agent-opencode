@@ -40,6 +40,7 @@ def build_detail(
     messages: list[BaseMessage],
     *,
     turn_id: str,
+    root_logical_item_ordinal: int,
     message_sequences: list[int] | None = None,
     projection: Mapping[str, object] | None = None,
     response_parts: list[TurnResponsePartDTO] | None = None,
@@ -249,6 +250,7 @@ def build_detail(
         job_id=turn_id,
         session_id=session_id,
         ordinal=ordinal,
+        root_logical_item_ordinal=root_logical_item_ordinal,
         revision=1,
         status=JobStatus(
             str(projection.get("status", JobStatus.completed.value))

@@ -3,7 +3,13 @@ from __future__ import annotations
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
+from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.prompting.validation import validate_internal_message
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
@@ -40,6 +46,12 @@ class SessionOrchestrator:
         self._job_event_bus = job_event_bus
         self._idempotency_store = idempotency_store
 
+    def reserve_user_execution_identity(self) -> UserExecutionIdentity:
+        return self._job_service.reserve_user_execution_identity()
+
+    def reserve_internal_job_id(self) -> str:
+        return self._job_service.reserve_internal_job_id()
+
     async def create_and_run(
         self,
         session_id: str,
@@ -62,6 +74,7 @@ class SessionOrchestrator:
             requested_agent_id=session.current_agent_id,
             delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
+            internal=False,
         )
 
     async def create_and_run_internal(
@@ -71,6 +84,7 @@ class SessionOrchestrator:
         *,
         delivery_policy: DeliveryPolicy = "after_turn",
         idempotency_key: str | None = None,
+        thread_id: str | None = None,
     ) -> MessageRunAccepted:
         validate_internal_message(message.content, message.metadata)
         session = await self._session_service.get(session_id)
@@ -84,6 +98,8 @@ class SessionOrchestrator:
             requested_agent_id=session.current_agent_id,
             delivery_policy=delivery_policy,
             idempotency_key=idempotency_key,
+            internal=True,
+            thread_id=thread_id,
         )
 
     async def prepare_user_message(
@@ -149,7 +165,8 @@ class SessionOrchestrator:
         session_id: str,
         message: MessageDTO,
         *,
-        job_id: str,
+        execution_binding: ExecutionBinding,
+        reserved_job_id: str | None = None,
     ) -> MessageRunAccepted:
         """派发已经持久化的消息；重启恢复时保持同一个 message_id。"""
         async def dispatch() -> MessageRunAccepted:
@@ -158,7 +175,8 @@ class SessionOrchestrator:
                 session_id,
                 message,
                 requested_agent_id=session.current_agent_id,
-                job_id=job_id,
+                execution_binding=execution_binding,
+                reserved_job_id=reserved_job_id,
             )
 
         return await self._job_service.run_session_preparation(
@@ -181,6 +199,7 @@ class SessionOrchestrator:
             payload.message,
             requested_agent_id=requested_agent_id,
             delivery_policy=delivery_policy,
+            internal=False,
         )
 
     async def _create_and_dispatch(
@@ -191,6 +210,8 @@ class SessionOrchestrator:
         requested_agent_id: str | None,
         delivery_policy: DeliveryPolicy,
         idempotency_key: str | None = None,
+        internal: bool,
+        thread_id: str | None = None,
     ) -> MessageRunAccepted:
         async def prepare_and_dispatch() -> MessageRunAccepted:
             if idempotency_key is not None and self._idempotency_store is not None:
@@ -198,11 +219,20 @@ class SessionOrchestrator:
                 if existing is not None:
                     return existing
             message = await self._message_service.create(session_id, message_request)
+            execution_binding: ExecutionBinding | None = None
+            if internal:
+                execution_binding = InternalExecutionIntent(
+                    message_id=message.message_id,
+                    execution_id=create_prefixed_id("intr"),
+                    admission_idempotency_key=create_prefixed_id("adm"),
+                )
             result = await self.dispatch_prepared_message(
                 session_id,
                 message,
                 requested_agent_id=requested_agent_id,
                 delivery_policy=delivery_policy,
+                execution_binding=execution_binding,
+                thread_id=thread_id,
             )
             if idempotency_key is not None and self._idempotency_store is not None:
                 self._idempotency_store.put(session_id, idempotency_key, result)
@@ -220,7 +250,9 @@ class SessionOrchestrator:
         *,
         requested_agent_id: str | None,
         delivery_policy: DeliveryPolicy = "after_turn",
-        job_id: str | None = None,
+        execution_binding: ExecutionBinding | None = None,
+        reserved_job_id: str | None = None,
+        thread_id: str | None = None,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
@@ -228,12 +260,13 @@ class SessionOrchestrator:
         session = await self._session_service.get(session_id)
         # 普通聊天入口显式解析 main thread：执行 Turn 归属由 catalog 冻结指针
         # 决定，并由 SessionDTO 投影回响应；不得用 session_id 冒充 thread_id。
-        thread_id = session.thread_id
+        thread_id = thread_id if thread_id is not None else session.thread_id
         if thread_id is None:
             raise RuntimeError(
                 "SessionDTO 缺少权威 main thread 身份，无法派发消息（fail closed）: "
                 f"session_id={session_id}"
             )
+        self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
         if requested_agent_id is None:
             requested_agent_id = session.current_agent_id
         effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
@@ -250,7 +283,9 @@ class SessionOrchestrator:
         dispatch = await self._job_service.start_job(
             session_id,
             message.content,
-            job_id=job_id,
+            thread_id=thread_id,
+            execution_binding=execution_binding,
+            reserved_job_id=reserved_job_id,
             agent_id=effective_agent_id,
             message_id=message.message_id,
             attachments=message.attachments,

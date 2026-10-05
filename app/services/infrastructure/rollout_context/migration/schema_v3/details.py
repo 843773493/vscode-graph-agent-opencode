@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     read_regular,
     require_safe_path,
@@ -39,7 +39,7 @@ OLD_FIELDS = frozenset({
 
 
 def upgrade_detail(
-    row: dict[str, object], *, rollout_root: Path, session_id: str,
+    row: dict[str, object], *, rollout_root: Path, session_id: str, thread_id: str,
     checkpoint_ns: str, purpose: tuple[str, str, str],
     detail_capability: SchemaV3DetailCapability | None,
 ) -> DetailUpgrade:
@@ -48,7 +48,9 @@ def upgrade_detail(
     require_equal(row["session_id"], session_id, "detail session")
     require_equal(row["checkpoint_ns"], checkpoint_ns, "detail namespace")
     # 复用新 identity 的路径字符校验，但绝不把该值当新 detail identity 发布。
-    old_ref = DetailRef(session_id, row["assembly_id"], row["detail_ref"])
+    old_ref = DetailRef(
+        session_id, thread_id, row["assembly_id"], row["detail_ref"]
+    )
     old_path = f"context-plan-details/{old_ref.assembly_id}/{old_ref.detail_id}.json"
     require_equal(row["relative_path"], "rollout/" + old_path, "旧 detail locator")
     for field in ("required", "sensitive"):
@@ -57,10 +59,11 @@ def upgrade_detail(
     new_id = "detail-schema3-" + sha256_jcs({
         "owner": old_ref.to_dict(), "envelope_hash": row["content_hash"],
     }).rsplit(":", 1)[1]
-    ref = DetailRef(session_id, old_ref.assembly_id, new_id)
+    ref = DetailRef(session_id, thread_id, old_ref.assembly_id, new_id)
     kind, retention, visibility = purpose
     record = DetailRecord(
-        session_id=session_id, assembly_id=ref.assembly_id, detail_id=ref.detail_id,
+        session_id=session_id, thread_id=thread_id,
+        assembly_id=ref.assembly_id, detail_id=ref.detail_id,
         detail_kind=kind, retention_class=retention, visibility=visibility,
         relative_path=detail_relative_path(ref).as_posix(),
         content_hash=row["content_hash"], length=row["content_length"],

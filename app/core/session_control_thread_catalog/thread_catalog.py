@@ -16,9 +16,9 @@ operation lease / owner binding / 跨 Session 通信账本）。错误分类沿�
 session_control_store 约定：KeyError 目标行缺失、RuntimeError 库被外部改动或
 语义冲突、ValueError 输入形态非法、TypeError 输入类型错误。
 
-注意：会话位置与父子组织的唯一权威来源仍是工作区级
-.boxteam/navigation/session-catalog-index.json（session_catalog_store），本模块
-只保存与其匹配的 per-session main thread 指针，不维护第二套会话层级。
+注意：会话位置与父子组织的唯一权威来源是工作区级
+.boxteam/navigation/session-catalog.sqlite（session_catalog_store），本模块只保存
+与其匹配的 per-session main thread 指针，不维护第二套会话层级。
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
+
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
 from app.core.session_catalog_store import (
     uuid7_embedded_utc_date,
@@ -81,7 +83,11 @@ THREAD_CATALOG_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS thread_catalog (
     thread_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('main', 'child')),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    graph_id TEXT,
+    graph_revision INTEGER CHECK (graph_revision >= 1),
+    graph_schema_hash TEXT,
+    capability_profile_hash TEXT
 )
 """
 
@@ -178,9 +184,9 @@ class ThreadCatalogMixin:
         """
         self._connection.execute(_THREAD_CATALOG_KIND_UPGRADE_TABLE_DDL)
         before = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM thread_catalog"
-            ).fetchone()[0]
+            self._connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[
+                0
+            ]
         )
         self._connection.execute(
             "INSERT INTO thread_catalog_kind_upgrade "
@@ -214,7 +220,53 @@ class ThreadCatalogMixin:
             "ALTER TABLE thread_catalog_kind_upgrade RENAME TO thread_catalog"
         )
 
-    def initialize_main_thread(self, thread_id: str, created_at: datetime) -> None:
+    def _upgrade_thread_catalog_graph_binding_columns(
+        self,
+        *,
+        allow_upgrade: bool,
+    ) -> None:
+        """为既有 thread_catalog 加四个 nullable selector 列。
+
+        历史行保持 NULL，运行时按 graph_binding_unavailable fail closed；升级不
+        读取旧 JSON，也不按当前 registry 补写 selector。
+        """
+        columns = {
+            str(row["name"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(thread_catalog)"
+            ).fetchall()
+        }
+        expected = {
+            "graph_id",
+            "graph_revision",
+            "graph_schema_hash",
+            "capability_profile_hash",
+        }
+        present = columns & expected
+        if present == expected:
+            return
+        if present or not allow_upgrade:
+            raise RuntimeError(
+                "thread_catalog GraphBinding 列不完整（库被外部改动，fail closed）: "
+                f"path={self.database_path}, present={sorted(present)}, "
+                f"allow_upgrade={allow_upgrade}"
+            )
+        for column, column_type in (
+            ("graph_id", "TEXT"),
+            ("graph_revision", "INTEGER"),
+            ("graph_schema_hash", "TEXT"),
+            ("capability_profile_hash", "TEXT"),
+        ):
+            self._connection.execute(
+                f"ALTER TABLE thread_catalog ADD COLUMN {column} {column_type}"
+            )
+
+    def initialize_main_thread(
+        self,
+        thread_id: str,
+        created_at: datetime,
+        graph_binding: ThreadGraphBindingRecord,
+    ) -> None:
         """create-or-get 唯一 main row：已存在且一致 → 幂等；不一致 → fail closed。
 
         ``thread_catalog`` 只允许 ``kind='main'``（CHECK 冻结）；main row
@@ -225,9 +277,14 @@ class ThreadCatalogMixin:
         validate_thread_id(thread_id)
         if not isinstance(created_at, datetime):
             raise TypeError(f"created_at 必须是 datetime: {created_at!r}")
+        if not isinstance(graph_binding, ThreadGraphBindingRecord):
+            raise TypeError(
+                f"graph_binding 必须是 ThreadGraphBindingRecord: {graph_binding!r}"
+            )
         if created_at.tzinfo is None:
             raise ValueError(f"created_at 必须带时区: {created_at!r}")
         created_at_text = created_at.isoformat()
+        graph_binding_values = graph_binding.as_tuple()
         self._ensure_open()
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -235,14 +292,16 @@ class ThreadCatalogMixin:
             # 判定一律按 kind='main' 过滤——child row 的存在不影响 main
             # row 的 create-or-get 语义（唯一 main row 语义不变）。
             rows = self._connection.execute(
-                "SELECT thread_id, kind, created_at FROM thread_catalog "
+                "SELECT thread_id, kind, created_at, graph_id, graph_revision, "
+                "graph_schema_hash, capability_profile_hash FROM thread_catalog "
                 "WHERE kind = 'main'"
             ).fetchall()
             if not rows:
                 self._connection.execute(
-                    "INSERT INTO thread_catalog (thread_id, kind, created_at) "
-                    "VALUES (?, 'main', ?)",
-                    (thread_id, created_at_text),
+                    "INSERT INTO thread_catalog (thread_id, kind, created_at, "
+                    "graph_id, graph_revision, graph_schema_hash, "
+                    "capability_profile_hash) VALUES (?, 'main', ?, ?, ?, ?, ?)",
+                    (thread_id, created_at_text, *graph_binding_values),
                 )
             else:
                 if len(rows) > 1:
@@ -263,10 +322,76 @@ class ThreadCatalogMixin:
                         f"existing_kind={existing['kind']!r}, "
                         f"requested_thread_id={thread_id!r}"
                     )
+                existing_binding = self._graph_binding_record_from_row(
+                    existing,
+                    thread_id=thread_id,
+                )
+                if existing_binding is not None and existing_binding != graph_binding:
+                    raise RuntimeError(
+                        "main row 已存在且 GraphBinding 与初始化参数不一致"
+                        "（拒绝覆盖，fail closed）: "
+                        f"thread_id={thread_id!r}, existing={existing_binding!r}, "
+                        f"requested={graph_binding!r}"
+                    )
         except BaseException:
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
+
+    @staticmethod
+    def _graph_binding_record_from_row(
+        row: sqlite3.Row,
+        *,
+        thread_id: str,
+    ) -> ThreadGraphBindingRecord | None:
+        values = tuple(
+            row[field]
+            for field in (
+                "graph_id",
+                "graph_revision",
+                "graph_schema_hash",
+                "capability_profile_hash",
+            )
+        )
+        missing = tuple(value is None for value in values)
+        if all(missing):
+            return None
+        if any(missing):
+            raise RuntimeError(
+                "thread_catalog GraphBinding 四字段部分缺失（fail closed）: "
+                f"thread_id={thread_id!r}, values={values!r}"
+            )
+        try:
+            return ThreadGraphBindingRecord(
+                graph_id=values[0],
+                graph_revision=values[1],
+                graph_schema_hash=values[2],
+                capability_profile_hash=values[3],
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "thread_catalog GraphBinding 字段非法（fail closed）: "
+                f"thread_id={thread_id!r}, values={values!r}"
+            ) from error
+
+    def get_thread_graph_binding(
+        self,
+        thread_id: str,
+    ) -> ThreadGraphBindingRecord | None:
+        """读取 thread 唯一持久 selector；未绑定行返回 None。"""
+        validate_thread_id(thread_id)
+        self._ensure_open()
+        row = self._connection.execute(
+            "SELECT graph_id, graph_revision, graph_schema_hash, "
+            "capability_profile_hash FROM thread_catalog WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(
+                "thread catalog 不存在目标 thread: "
+                f"thread_id={thread_id!r}, path={self.database_path}"
+            )
+        return self._graph_binding_record_from_row(row, thread_id=thread_id)
 
     def initialize_fence(self, state: str = "active", generation: int = 1) -> None:
         """create-or-get 单行 fence（id=1）：已存在且一致 → no-op；不一致 → fail closed。"""
@@ -286,10 +411,7 @@ class ThreadCatalogMixin:
                     "VALUES (?, ?, ?)",
                     (FENCE_ROW_ID, state, generation),
                 )
-            elif (
-                str(row["state"]) != state
-                or int(row["generation"]) != generation
-            ):
+            elif str(row["state"]) != state or int(row["generation"]) != generation:
                 raise RuntimeError(
                     "fence 已存在且与初始化参数不一致（拒绝覆盖，fail closed）: "
                     f"path={self.database_path}, "
@@ -326,15 +448,11 @@ class ThreadCatalogMixin:
         if not isinstance(expected_generation, int) or isinstance(
             expected_generation, bool
         ):
-            raise TypeError(
-                f"expected_generation 必须是整数: {expected_generation!r}"
-            )
+            raise TypeError(f"expected_generation 必须是整数: {expected_generation!r}")
         self._ensure_open()
         # 只读判态：连接为 isolation_level=None，裸 SELECT 不开启事务，
         # 失败路径因此天然无事务可泄漏（同实例可直接重试 CAS）。
-        row = read_fence_row(
-            self._connection, database_path=self.database_path
-        )
+        row = read_fence_row(self._connection, database_path=self.database_path)
         state = str(row["state"])
         generation = int(row["generation"])
         # active→deleting 是唯一合法转移（deleting→active 不可复活）。
@@ -346,9 +464,7 @@ class ThreadCatalogMixin:
         # IMMEDIATE 之间 fence 被其他写者改变导致误推进。
         self._connection.execute("BEGIN IMMEDIATE")
         try:
-            row = read_fence_row(
-                self._connection, database_path=self.database_path
-            )
+            row = read_fence_row(self._connection, database_path=self.database_path)
             state = str(row["state"])
             generation = int(row["generation"])
             proceed = (
@@ -358,8 +474,7 @@ class ThreadCatalogMixin:
             )
             if proceed:
                 self._connection.execute(
-                    "UPDATE lifecycle_fence SET state = ?, generation = ? "
-                    "WHERE id = ?",
+                    "UPDATE lifecycle_fence SET state = ?, generation = ? WHERE id = ?",
                     (new_state, generation + 1, FENCE_ROW_ID),
                 )
         except BaseException:
@@ -380,13 +495,10 @@ class ThreadCatalogMixin:
         """
         self._ensure_open()
         rows = self._connection.execute(
-            "SELECT thread_id, kind, created_at FROM thread_catalog "
-            "WHERE kind = 'main'"
+            "SELECT thread_id, kind, created_at FROM thread_catalog WHERE kind = 'main'"
         ).fetchall()
         if not rows:
-            raise KeyError(
-                f"session control 缺少 main row: path={self.database_path}"
-            )
+            raise KeyError(f"session control 缺少 main row: path={self.database_path}")
         if len(rows) > 1:
             raise RuntimeError(
                 "session control 出现多个 main row（库被外部改动，fail closed）: "
@@ -437,10 +549,9 @@ class ThreadCatalogMixin:
             )
         locator = str(row["final_relative_locator"])
         validate_thread_relative_locator(locator)
-        if (
-            str(row["created_at"]) != str(row["child_created_at"])
-            or not locator.endswith(f"/{thread_id}")
-        ):
+        if str(row["created_at"]) != str(
+            row["child_created_at"]
+        ) or not locator.endswith(f"/{thread_id}"):
             raise RuntimeError(
                 "child thread catalog 与 creation record 不一致（fail closed）: "
                 f"thread_id={thread_id!r}, locator={locator!r}"
@@ -450,9 +561,7 @@ class ThreadCatalogMixin:
     def get_fence(self) -> tuple[str, int]:
         """返回 (state, generation)；缺失抛 KeyError。"""
         self._ensure_open()
-        row = read_fence_row(
-            self._connection, database_path=self.database_path
-        )
+        row = read_fence_row(self._connection, database_path=self.database_path)
         return str(row["state"]), int(row["generation"])
 
     def verify_matches_catalog_main_thread(self, main_thread_id: str) -> None:
@@ -481,9 +590,9 @@ class ThreadCatalogMixin:
         """
         self._ensure_open()
         return int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM thread_catalog"
-            ).fetchone()[0]
+            self._connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[
+                0
+            ]
         )
 
     def list_child_thread_rows(self) -> tuple[ChildThreadRow, ...]:

@@ -279,12 +279,14 @@ session_metadata = {
 }
 
 async def create_session(key):
-    return await service.create(
+    record = await service.prepare(
         idempotency_key=key,
         title=key,
+        purpose="normal",
         parent_node_id=None,
         session_metadata=session_metadata,
     )
+    return await service.publish_prepared(record)
 
 def create_child(session_record, key):
     session_directory = sessions_root / session_record.storage_relative_locator[

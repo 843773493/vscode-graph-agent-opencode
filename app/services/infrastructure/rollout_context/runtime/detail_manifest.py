@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.detail_ref import DetailRef
 
 
 class DetailUnavailableError(RuntimeError):
@@ -115,6 +115,7 @@ def expiry_time(value: object) -> datetime | None:
 @dataclass(frozen=True, slots=True)
 class DetailRecord:
     session_id: str
+    thread_id: str
     assembly_id: str
     detail_id: str
     detail_kind: str
@@ -135,7 +136,9 @@ class DetailRecord:
 
     @property
     def detail_ref(self) -> DetailRef:
-        return DetailRef(self.session_id, self.assembly_id, self.detail_id)
+        return DetailRef(
+            self.session_id, self.thread_id, self.assembly_id, self.detail_id
+        )
 
     def __post_init__(self) -> None:
         ref = self.detail_ref
@@ -198,6 +201,7 @@ def detail_record_from_mapping(raw: Mapping[str, object]) -> DetailRecord:
         )
     required_fields = {
         "session_id",
+        "thread_id",
         "assembly_id",
         "detail_id",
         "detail_kind",

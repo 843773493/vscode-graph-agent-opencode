@@ -41,6 +41,8 @@ from app.services.orchestration.event_stream.tool_events import (
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
+pytestmark = pytest.mark.usefixtures("workspace_scope")
+
 
 class FakeAgent:
     def __init__(self, events: list[dict[str, Any]]) -> None:
@@ -258,6 +260,7 @@ async def test_agent_stream_fails_when_no_model_or_tool_event_arrives(
             input_payload={"messages": []},
             config={},
             session_id="ses_first_event_timeout",
+            job_id="job_first_event_timeout",
             turn_id="job_first_event_timeout",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -277,6 +280,7 @@ async def test_lifecycle_events_extend_initial_model_event_watchdog(
         input_payload={"messages": []},
         config={},
         session_id="ses_lifecycle_event_watchdog",
+        job_id="job_lifecycle_event_watchdog",
         turn_id="job_lifecycle_event_watchdog",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -298,6 +302,7 @@ async def test_active_model_events_refresh_idle_watchdog_for_long_response(
         input_payload={"messages": []},
         config={},
         session_id="ses_model_idle_watchdog",
+        job_id="job_model_idle_watchdog",
         turn_id="job_model_idle_watchdog",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -360,6 +365,7 @@ async def test_default_model_wait_after_start_uses_job_budget_not_idle_watchdog(
         input_payload={"messages": []},
         config={},
         session_id="ses_model_wait_after_start",
+        job_id="job_model_wait_after_start",
         turn_id="job_model_wait_after_start",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -426,6 +432,7 @@ async def test_active_model_stream_is_not_cancelled_by_fixed_model_scope_deadlin
             input_payload={"messages": []},
             config={},
             session_id="ses_active_model_scope",
+            job_id="job_active_model_scope",
             turn_id="job_active_model_scope",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -468,6 +475,7 @@ async def test_tool_dispatch_timeout_does_not_escape_as_agent_cancellation(
             input_payload={"messages": []},
             config={},
             session_id="ses_dispatch_timeout",
+            job_id="job_dispatch_timeout",
             turn_id="job_dispatch_timeout",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -530,6 +538,7 @@ async def test_provider_scope_cancellation_from_event_iterator_reaches_agent_loo
             input_payload={"messages": []},
             config={},
             session_id="ses_provider_cancelled",
+            job_id="job_provider_cancelled",
             turn_id="job_provider_cancelled",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -587,6 +596,7 @@ async def test_tool_start_event_contains_only_model_visible_arguments(
         input_payload={"messages": []},
         config={},
         session_id="ses_runtime_args",
+        job_id="job_runtime_args",
         turn_id="job_runtime_args",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -656,6 +666,7 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
         input_payload={"messages": []},
         config={},
         session_id="ses_unknown_tool",
+        job_id="job_unknown_tool",
         turn_id="job_unknown_tool",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -786,6 +797,7 @@ async def test_model_failed_custom_event_is_published_to_trace(tmp_path: Path) -
         input_payload={"messages": []},
         config={},
         session_id="ses_model_failed",
+        job_id="job_model_failed",
         turn_id="job_model_failed",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -884,6 +896,7 @@ async def test_agent_stream_starts_with_isolated_callbacks_and_business_identity
         input_payload={"messages": []},
         config={},
         session_id="ses_isolated",
+        job_id="job_isolated",
         turn_id="job_isolated",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -919,6 +932,7 @@ async def test_agent_stream_does_not_inherit_sender_callback_context(
             input_payload={"messages": []},
             config={},
             session_id="ses_target",
+            job_id="job_target",
             turn_id="job_target",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -964,6 +978,7 @@ async def test_agent_stream_rejects_model_event_from_another_job(
             input_payload={"messages": []},
             config={},
             session_id="ses_sender",
+            job_id="job_sender",
             turn_id="job_sender",
             agent_id="default",
             custom_tool_skill_sources={},
@@ -1019,6 +1034,7 @@ async def test_agent_stream_reports_model_and_tool_progress(
         input_payload={"messages": []},
         config={},
         session_id="ses_progress_report",
+        job_id="job_progress_report",
         turn_id="job_progress_report",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1057,6 +1073,7 @@ async def test_first_parallel_tool_end_does_not_clear_remaining_tool(
         input_payload={"messages": []},
         config={},
         session_id=session_id,
+        job_id="job_parallel",
         turn_id="job_parallel",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1121,6 +1138,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
         input_payload={"messages": []},
         config={},
         session_id="ses_failed_tool",
+        job_id="job_failed_tool",
         turn_id="job_failed_tool",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1192,6 +1210,7 @@ async def test_structured_tool_error_is_not_treated_as_successful_apply_patch(
         input_payload={"messages": []},
         config={},
         session_id="ses_apply_patch_error",
+        job_id="job_apply_patch_error",
         turn_id="job_apply_patch_error",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1247,6 +1266,7 @@ async def test_skill_load_event_does_not_expose_internal_source_metadata(
         input_payload={"messages": []},
         config={},
         session_id="ses_system_skill",
+        job_id="job_system_skill",
         turn_id="job_system_skill",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1305,6 +1325,7 @@ async def test_command_tool_output_extracts_nested_tool_message(
         input_payload={"messages": []},
         config={},
         session_id="ses_command_tool",
+        job_id="job_command_tool",
         turn_id="job_command_tool",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1363,6 +1384,7 @@ async def test_successful_tool_call_keeps_arguments_for_delegation_validation(
         input_payload={"messages": []},
         config={},
         session_id="ses_child",
+        job_id="job_child",
         turn_id="job_child",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1414,6 +1436,7 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
         input_payload={"messages": []},
         config={},
         session_id="ses_tool_identity",
+        job_id="job_tool_identity",
         turn_id="job_tool_identity",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1429,6 +1452,60 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
     assert published[0][1]["execution_id"] == "run_write"
     assert published[1][1]["tool_call_id"] == "call_write"
     assert published[1][1]["execution_id"] == "run_write"
+
+
+@pytest.mark.asyncio
+async def test_internal_file_edit_keeps_job_identity_without_turn_attribution(
+    tmp_path: Path,
+) -> None:
+    changes = RecordingSessionChangesService()
+    events = [
+        {
+            "event": "on_tool_start",
+            "run_id": "run_internal_write",
+            "name": "write_file",
+            "data": {"input": {"file_path": "src/internal.txt", "content": "ok"}},
+            "metadata": {},
+        },
+        {
+            "event": "on_tool_end",
+            "run_id": "run_internal_write",
+            "name": "write_file",
+            "data": {
+                "output": ToolMessage(
+                    content="写入成功",
+                    tool_call_id="call_internal_write",
+                    name="write_file",
+                )
+            },
+            "metadata": {},
+        },
+    ]
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(event_type: str, payload: dict[str, Any]) -> None:
+        published.append((event_type, payload))
+
+    await process_agent_event_stream(
+        agent=FakeAgent(events),
+        input_payload={"messages": []},
+        config={},
+        session_id="ses_internal_tool_identity",
+        job_id="job_internal_tool_identity",
+        turn_id=None,
+        agent_id="default",
+        custom_tool_skill_sources={},
+        publish=publish,
+        session_changes_service=changes,
+        workspace_root=tmp_path,
+    )
+
+    assert len(changes.recorded) == 1
+    assert changes.recorded[0]["turn_id"] is None
+    assert changes.recorded[0]["execution_id"] == "run_internal_write"
+    assert changes.recorded[0]["tool_call_id"] == "call_internal_write"
+    assert published[0][1]["execution_id"] == "run_internal_write"
+    assert published[1][1]["execution_id"] == "run_internal_write"
 
 
 @pytest.mark.asyncio
@@ -1466,6 +1543,7 @@ async def test_small_model_chunks_only_feed_final_text_aggregation(
         input_payload={"messages": []},
         config={},
         session_id="ses_coalesced_delta",
+        job_id="job_coalesced_delta",
         turn_id="job_coalesced_delta",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1516,6 +1594,7 @@ async def test_model_end_output_recovers_text_missing_from_stream_callback(
         input_payload={"messages": []},
         config={},
         session_id="ses_model_end_only",
+        job_id="job_model_end_only",
         turn_id="job_model_end_only",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1608,6 +1687,7 @@ async def test_model_end_does_not_replay_text_already_committed_by_provider_hook
         input_payload={"messages": []},
         config={},
         session_id="ses_model_end_dedup",
+        job_id="job_model_end_dedup",
         turn_id="job_model_end_dedup",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1689,6 +1769,7 @@ async def test_resumed_authoritative_text_part_keeps_all_text_without_legacy_rea
         input_payload={"messages": []},
         config={},
         session_id="ses_resumed_text_part",
+        job_id="job_resumed_text_part",
         turn_id="job_resumed_text_part",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1774,6 +1855,7 @@ async def test_model_stream_usage_keeps_only_last_call(
         input_payload={"messages": []},
         config={},
         session_id="ses_token_usage",
+        job_id="job_token_usage",
         turn_id="job_token_usage",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1846,6 +1928,7 @@ async def test_empty_reasoning_done_preserves_encrypted_response_item(
         input_payload={"messages": []},
         config={},
         session_id="ses_encrypted_reasoning",
+        job_id="job_encrypted_reasoning",
         turn_id="job_encrypted_reasoning",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1912,6 +1995,7 @@ async def test_task_tool_is_projected_as_subagent_activity(
         input_payload={"messages": []},
         config={},
         session_id="ses_parent",
+        job_id="job_parent",
         turn_id="job_parent",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -1985,6 +2069,7 @@ async def test_resource_tool_is_projected_as_resource_activity(
         input_payload={"messages": []},
         config={},
         session_id="ses_resource",
+        job_id="job_resource",
         turn_id="job_resource",
         agent_id="default",
         custom_tool_skill_sources={},
@@ -2094,6 +2179,7 @@ async def test_retryable_resource_failure_does_not_abort_event_stream(
         input_payload={"messages": []},
         config={},
         session_id="ses_resource_error",
+        job_id="job_resource_error",
         turn_id="job_resource_error",
         agent_id="default",
         custom_tool_skill_sources={},

@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { readSessionContext, sessionContextResource } from "../../api/session/sessionContext";
-import { appendInspectionPage, emptyInspectionPage } from "../../state/contextInspection/pagination";
+import {
+  readSessionContext,
+  type SessionContextSession,
+} from "../../api/session/sessionContext";
+import {
+  appendInspectionPage,
+  emptyInspectionPage,
+  textField,
+  type ContextItem,
+} from "../../state/contextInspection/pagination";
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface InspectionOwner {
   port: number;
-  workspaceId: string;
-  sessionId: string;
+  gatewayWorkspaceId: string;
+  session: SessionContextSession | null;
   active: boolean;
 }
 
-export function useContextInspection({ port, workspaceId, sessionId, active }: InspectionOwner) {
+export function useContextInspection({ port, gatewayWorkspaceId, session, active }: InspectionOwner) {
   const [catalog, setCatalog] = useState(emptyInspectionPage);
   const [projection, setProjection] = useState(emptyInspectionPage);
+  const [selectedAssembly, setSelectedAssembly] = useState<ContextItem | null>(null);
   const [assemblyId, setAssemblyId] = useState("");
+  const [assemblyRef, setAssemblyRef] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [projectionLoading, setProjectionLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -22,7 +32,7 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
   const projectionRef = useRef(projection);
   const catalogRequest = useRef<AbortController | null>(null);
   const projectionRequest = useRef<AbortController | null>(null);
-  const selectedRef = useRef("");
+  const selectedRef = useRef<ContextItem | null>(null);
 
   const loadCatalog = useCallback(async (reset = false) => {
     catalogRequest.current?.abort();
@@ -33,12 +43,15 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      const resource = sessionContextResource(sessionId);
-      const page = await readSessionContext(port, workspaceId, resource, "assemblies", {
+      if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
+      const page = await readSessionContext(port, gatewayWorkspaceId, session, "assemblies", {
         signal: controller.signal, cursor: previous.nextCursor, revision: previous.revision,
       });
       if (controller.signal.aborted) return;
-      const next = appendInspectionPage(previous, page, resource);
+      if (page.items.some((item) => item.kind !== "assembly" || !item.assembly_ref)) {
+        throw new Error("封存 assembly 列表项缺少 assembly_ref");
+      }
+      const next = appendInspectionPage(previous, page, session);
       catalogRef.current = next;
       setCatalog(next);
     } catch (error) {
@@ -46,26 +59,37 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
     } finally {
       if (!controller.signal.aborted) setCatalogLoading(false);
     }
-  }, [port, workspaceId, sessionId]);
+  }, [port, gatewayWorkspaceId, session]);
 
-  const loadProjection = useCallback(async (id: string, reset = false) => {
+  const loadProjection = useCallback(async (item: ContextItem | null, reset = false) => {
     projectionRequest.current?.abort();
     const controller = new AbortController();
     projectionRequest.current = controller;
     const previous = reset ? emptyInspectionPage() : projectionRef.current;
+    const id = item ? textField(item.data, "assembly_id") : "";
+    const ref = item?.assembly_ref ?? "";
+    setSelectedAssembly(item);
     setAssemblyId(id);
-    selectedRef.current = id;
+    setAssemblyRef(ref);
+    selectedRef.current = item;
     if (reset) { projectionRef.current = previous; setProjection(previous); }
     setProjectionError(null);
-    if (!id) { setProjectionLoading(false); return; }
+    if (!item) { setProjectionLoading(false); return; }
+    if (item.kind !== "assembly" || !id || !ref) {
+      setProjectionError("封存 assembly 响应缺少 assembly_id 或 assembly_ref");
+      setProjectionLoading(false);
+      return;
+    }
     setProjectionLoading(true);
     try {
-      const resource = sessionContextResource(sessionId, id);
-      const page = await readSessionContext(port, workspaceId, resource, "assembly", {
+      if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
+      if (controller.signal.aborted) return;
+      const page = await readSessionContext(port, gatewayWorkspaceId, session, "assembly", {
         signal: controller.signal, cursor: previous.nextCursor, revision: previous.revision,
+        assemblyRef: ref,
       });
       if (controller.signal.aborted) return;
-      const next = appendInspectionPage(previous, page, resource);
+      const next = appendInspectionPage(previous, page, session);
       projectionRef.current = next;
       setProjection(next);
     } catch (error) {
@@ -73,12 +97,14 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
     } finally {
       if (!controller.signal.aborted) setProjectionLoading(false);
     }
-  }, [port, workspaceId, sessionId]);
+  }, [port, gatewayWorkspaceId, session]);
 
   useEffect(() => {
     if (active) {
       void loadCatalog(true);
-      if (selectedRef.current) void loadProjection(selectedRef.current, true);
+      if (selectedRef.current) {
+        void loadProjection(selectedRef.current, true);
+      }
     } else {
       setCatalogLoading(false);
       setProjectionLoading(false);
@@ -86,5 +112,5 @@ export function useContextInspection({ port, workspaceId, sessionId, active }: I
     return () => { catalogRequest.current?.abort(); projectionRequest.current?.abort(); };
   }, [active, loadCatalog, loadProjection]);
 
-  return { catalog, projection, assemblyId, catalogLoading, projectionLoading, catalogError, projectionError, loadCatalog, loadProjection };
+  return { catalog, projection, selectedAssembly, assemblyId, assemblyRef, catalogLoading, projectionLoading, catalogError, projectionError, loadCatalog, loadProjection };
 }

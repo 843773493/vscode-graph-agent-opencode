@@ -242,6 +242,7 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
                 "job_id",
                 "session_id",
                 "ordinal",
+                "root_logical_item_ordinal",
                 "revision",
                 "status",
                 "created_at",

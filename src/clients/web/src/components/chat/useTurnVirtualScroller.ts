@@ -1,11 +1,10 @@
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import { conversationTurnKey } from "../../state/session/turnIdentity";
 import {
-  advanceTurnVirtualIndex,
-  type TurnVirtualIndexState,
+  advanceTranscriptVirtualIndex,
+  type TranscriptVirtualIndexState,
 } from "../../state/session/turnVirtualization";
-import type { ConversationView } from "../../types/frontend";
+import type { ChatTranscriptItem } from "./transcriptItems";
 import { errorMessage } from "../../utils/errorMessage";
 
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
@@ -50,7 +49,7 @@ function isNativeScrollbarPointer(
 const MAX_VIEW_STATE_ANCHOR_LOAD_ATTEMPTS = 16;
 
 export function useTurnVirtualScroller({
-  conversations,
+  items,
   sessionId,
   onLoadNewerMessages,
   onLoadOlderMessages,
@@ -63,7 +62,7 @@ export function useTurnVirtualScroller({
   onViewStateChange,
   onViewStateRestoreStatus,
 }: {
-  conversations: ConversationView[];
+  items: readonly ChatTranscriptItem[];
   sessionId: string;
   onLoadNewerMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
@@ -89,7 +88,7 @@ export function useTurnVirtualScroller({
   const followsLatestRef = React.useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = React.useState(false);
   const [nativeScrollbarDragging, setNativeScrollbarDragging] = React.useState(false);
-  const virtualIndexRef = React.useRef<TurnVirtualIndexState | null>(null);
+  const virtualIndexRef = React.useRef<TranscriptVirtualIndexState | null>(null);
   const renderedFirstItemIndexRef = React.useRef<number | null>(null);
   const renderedFirstItemIndexSessionRef = React.useRef<string | null>(null);
   const nativeScrollbarDragRef = React.useRef(false);
@@ -117,10 +116,11 @@ export function useTurnVirtualScroller({
     followsLatestRef.current = true;
     userRequestedOlderRef.current = false;
   }
-  virtualIndexRef.current = advanceTurnVirtualIndex(
+  const itemKeys = React.useMemo(() => items.map((item) => item.key), [items]);
+  virtualIndexRef.current = advanceTranscriptVirtualIndex(
     virtualIndexRef.current,
     sessionId,
-    conversations.map(conversationTurnKey),
+    itemKeys,
   );
   const currentFirstItemIndex = virtualIndexRef.current.firstItemIndex;
   if (renderedFirstItemIndexSessionRef.current !== sessionId) {
@@ -133,23 +133,25 @@ export function useTurnVirtualScroller({
   const firstItemIndex = nativeScrollbarDragging
     ? renderedFirstItemIndexRef.current ?? currentFirstItemIndex
     : currentFirstItemIndex;
-  const layoutRevision = conversations.map((conversation) => [
-    conversationTurnKey(conversation),
-    conversation.turnRevision ?? 0,
-    conversation.turnItemsView ?? "pending",
-    conversation.status,
-  ].join(":")).join("|");
+  const layoutRevision = React.useMemo(() => items.map((item) => item.kind === "turn"
+    ? [
+      item.key,
+      item.conversation.turnRevision ?? 0,
+      item.conversation.turnItemsView ?? "pending",
+      item.conversation.status,
+    ].join(":")
+    : `${item.key}:${item.displayPart.text}`).join("|"), [items]);
 
   const scrollToLatest = React.useCallback((behavior: "auto" | "smooth" = "auto") => {
-    if (!streamRef.current || conversations.length === 0) return;
+    if (!streamRef.current || items.length === 0) return;
     streamRef.current.scrollToIndex({
-      index: conversations.length - 1,
+      index: items.length - 1,
       align: "end",
       behavior,
     });
     followsLatestRef.current = true;
     setShowJumpToLatest(false);
-  }, [conversations.length]);
+  }, [items.length]);
   const followOutput = React.useCallback(
     (isAtBottom: boolean) => turnFollowOutput(
       followsLatestRef.current,
@@ -256,9 +258,7 @@ export function useTurnVirtualScroller({
       return;
     }
     const anchorIndex = viewState.turn_anchor
-      ? conversations.findIndex(
-          (conversation) => conversationTurnKey(conversation) === viewState.turn_anchor,
-        )
+      ? itemKeys.indexOf(viewState.turn_anchor)
       : -1;
     if (anchorIndex < 0) {
       if (
@@ -328,7 +328,8 @@ export function useTurnVirtualScroller({
       }
     });
   }, [
-    conversations,
+    items,
+    itemKeys,
     firstItemIndex,
     hasOlderMessages,
     loadingNewerMessages,
@@ -401,7 +402,7 @@ export function useTurnVirtualScroller({
     if (
       typeof window === "undefined"
       || !followsLatestRef.current
-      || conversations.length === 0
+      || items.length === 0
     ) return;
     const frame = requestTurnFollowLatestFrame(
       window.requestAnimationFrame.bind(window),
@@ -409,7 +410,7 @@ export function useTurnVirtualScroller({
       () => scrollToLatest("auto"),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [conversations.length, layoutRevision, scrollToLatest]);
+  }, [items.length, layoutRevision, scrollToLatest]);
 
   React.useLayoutEffect(() => {
     if (typeof window === "undefined") {

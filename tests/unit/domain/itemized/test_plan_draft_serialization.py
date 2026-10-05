@@ -7,9 +7,9 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
@@ -26,14 +26,14 @@ def draft() -> ContextRequestPlan:
     ref = ContextRef.request_only_ref(
         "plan-item", session_id="session", thread_id="thread-1", plan_id="plan", source_revision="revision-1",
         content_hash_value=contribution.content_hash, content_length=contribution.content_length,
-        source_ref=DetailRef("session", "source-assembly", "source-detail"),
+        source_ref=DetailRef("session", "thread-1", "source-assembly", "source-detail"),
     )
     tool = ToolSetRef.from_tool_snapshot(
-        session_id="session", plan_id="plan", snapshot_id="tools", source_revision="tools-1",
+        session_id="session", thread_id="thread-1", plan_id="plan", snapshot_id="tools", source_revision="tools-1",
         tools=({"name": "read_file", "parameters": {"type": "object"}},),
     )
     return ContextRequestPlan(
-        session_id="session", plan_id="plan", refs=(ref,), contributions=(contribution,),
+        session_id="session", thread_id="thread-1", plan_id="plan", refs=(ref,), contributions=(contribution,),
         tool_set_refs=(tool,), plan_creation_idempotency_key="creation-key",
     )
 
@@ -46,12 +46,14 @@ def test_draft_roundtrip_preserves_owner_and_deferred_binding(draft):
     assert restored.selection == ()
     assert restored.tool_set_refs[0].assembly_id is None
     assert restored.contributions[0].contribution_ordinal is None
-    assert restored.refs[0].source_ref == DetailRef("session", "source-assembly", "source-detail")
+    assert restored.refs[0].source_ref == DetailRef(
+        "session", "thread-1", "source-assembly", "source-detail"
+    )
     assert "detail_ref" not in restored.refs[0].to_dict()
 
 
 @pytest.mark.parametrize("field", [
-    "session_id", "format_version", "plan_id", "plan_state", "assembly_id",
+    "session_id", "thread_id", "format_version", "plan_id", "plan_state", "assembly_id",
     "history_view_revision", "source_overlay_epoch", "active_view_id", "selection_policy",
     "refs", "tool_set_refs", "contributions", "selection", "compiler_version",
     "plan_creation_idempotency_key", "plan_hash",
@@ -81,7 +83,7 @@ def test_draft_restore_rejects_duplicate_registry(draft, registry):
 
 
 @pytest.mark.parametrize("registry", ["refs", "tool_set_refs"])
-@pytest.mark.parametrize("owner", ["session_id", "plan_id"])
+@pytest.mark.parametrize("owner", ["session_id", "thread_id", "plan_id"])
 def test_draft_restore_rejects_cross_owner(draft, registry, owner):
     raw = draft.to_dict()
     raw[registry][0][owner] = "foreign-owner"
@@ -123,7 +125,9 @@ def test_digest_only_draft_never_restores_plaintext(draft):
 
 def test_draft_source_ref_rejects_final_detail_field(draft):
     raw = draft.to_dict()
-    raw["refs"][0]["detail_ref"] = DetailRef("session", "assembly", "detail").to_dict()
+    raw["refs"][0]["detail_ref"] = DetailRef(
+        "session", "thread-1", "assembly", "detail"
+    ).to_dict()
     with pytest.raises(ItemSchemaError, match="未知或不属于 ref"):
         unsealed_context_plan_from_dict(raw)
 

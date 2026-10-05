@@ -33,6 +33,138 @@ from app.domain.itemized.validation import _non_empty_string
 _OPTIONAL_FIELDS = frozenset(
     {"turn_id", "turn_scope", "message_group_id", "wire_role"}
 )
+_INTERNAL_DISPLAY_KINDS = frozenset({"delegated_task", "generated_session_result"})
+_RUNTIME_NOTICE_PAYLOAD_FIELDS = frozenset({"prompt", "display_part"})
+_DISPLAY_PART_FIELDS = frozenset({"kind", "text", "provenance"})
+_DISPLAY_PROVENANCE_FIELDS = frozenset(
+    {
+        "source_session_id",
+        "source_thread_id",
+        "delegation_id",
+        "source_execution_id",
+        "source_item_id",
+    }
+)
+
+
+def _strict_mapping(value: object, allowed: frozenset[str], name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ItemSchemaError(f"{name} 必须是 object")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ItemSchemaError(f"{name} 含未知字段: " + ",".join(unknown))
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class InternalDisplayProvenance:
+    source_session_id: str | None = None
+    source_thread_id: str | None = None
+    delegation_id: str | None = None
+    source_execution_id: str | None = None
+    source_item_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in _DISPLAY_PROVENANCE_FIELDS:
+            value = getattr(self, field_name)
+            if value is not None:
+                _non_empty_string(value, f"display_part.provenance.{field_name}")
+
+    @classmethod
+    def from_dict(cls, value: object) -> InternalDisplayProvenance:
+        raw = _strict_mapping(value, _DISPLAY_PROVENANCE_FIELDS, "display_part.provenance")
+        return cls(
+            **{
+                field_name: (
+                    _non_empty_string(
+                        raw[field_name], f"display_part.provenance.{field_name}"
+                    )
+                    if field_name in raw
+                    else None
+                )
+                for field_name in _DISPLAY_PROVENANCE_FIELDS
+            }
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            field_name: value
+            for field_name in _DISPLAY_PROVENANCE_FIELDS
+            if (value := getattr(self, field_name)) is not None
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InternalDisplayPart:
+    kind: str
+    text: str
+    provenance: InternalDisplayProvenance
+
+    def __post_init__(self) -> None:
+        if self.kind not in _INTERNAL_DISPLAY_KINDS:
+            raise ItemSchemaError(f"未知 display_part.kind: {self.kind}")
+        if not isinstance(self.text, str) or not self.text.strip():
+            raise ItemSchemaError("display_part.text 必须是非空字符串")
+        if not isinstance(self.provenance, InternalDisplayProvenance):
+            raise ItemSchemaError("display_part.provenance 必须是 typed provenance")
+
+    @classmethod
+    def from_dict(cls, value: object) -> InternalDisplayPart:
+        raw = _strict_mapping(value, _DISPLAY_PART_FIELDS, "display_part")
+        required = _DISPLAY_PART_FIELDS
+        missing = sorted(required - set(raw))
+        if missing:
+            raise ItemSchemaError("display_part 缺少字段: " + ",".join(missing))
+        kind = _non_empty_string(raw["kind"], "display_part.kind")
+        text = raw["text"]
+        if not isinstance(text, str):
+            raise ItemSchemaError("display_part.text 必须是字符串")
+        return cls(
+            kind=kind,
+            text=text,
+            provenance=InternalDisplayProvenance.from_dict(raw["provenance"]),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "text": self.text,
+            "provenance": self.provenance.to_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeNoticePayload:
+    prompt: str
+    display_part: InternalDisplayPart
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.prompt, str) or not self.prompt:
+            raise ItemSchemaError("runtime_notice.prompt 必须是非空字符串")
+        if not isinstance(self.display_part, InternalDisplayPart):
+            raise ItemSchemaError("runtime_notice.display_part 必须是 typed display part")
+
+    @classmethod
+    def from_dict(cls, value: object) -> RuntimeNoticePayload:
+        raw = _strict_mapping(
+            value, _RUNTIME_NOTICE_PAYLOAD_FIELDS, "RuntimeNoticePayload"
+        )
+        missing = sorted(_RUNTIME_NOTICE_PAYLOAD_FIELDS - set(raw))
+        if missing:
+            raise ItemSchemaError("RuntimeNoticePayload 缺少字段: " + ",".join(missing))
+        prompt = raw["prompt"]
+        if not isinstance(prompt, str):
+            raise ItemSchemaError("runtime_notice.prompt 必须是字符串")
+        return cls(
+            prompt=prompt,
+            display_part=InternalDisplayPart.from_dict(raw["display_part"]),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "prompt": self.prompt,
+            "display_part": self.display_part.to_dict(),
+        }
 
 
 def _validate_producer(value: object) -> dict[str, object]:
@@ -53,6 +185,13 @@ def _validate_payload(
         payload, (Mapping, list, tuple)
     ):
         raise ItemSchemaError("structured_content payload 必须是 object 或 array")
+    if (
+        semantic_kind == SemanticKind.RUNTIME_NOTICE
+        and payload_kind == PayloadKind.STRUCTURED_CONTENT
+        and isinstance(payload, Mapping)
+        and set(payload) & _RUNTIME_NOTICE_PAYLOAD_FIELDS
+    ):
+        RuntimeNoticePayload.from_dict(payload)
     if payload_kind == PayloadKind.SUMMARY and not isinstance(payload, Mapping):
         raise ItemSchemaError("summary payload 必须是 object")
     if payload_kind in {PayloadKind.OPAQUE, PayloadKind.EXTENSION}:
@@ -369,4 +508,10 @@ class CanonicalItemRecord:
         return result
 
 
-__all__ = ["CanonicalItemRecord", "ProducerRef"]
+__all__ = [
+    "CanonicalItemRecord",
+    "InternalDisplayPart",
+    "InternalDisplayProvenance",
+    "ProducerRef",
+    "RuntimeNoticePayload",
+]

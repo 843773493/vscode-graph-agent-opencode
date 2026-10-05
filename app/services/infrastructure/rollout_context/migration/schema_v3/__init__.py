@@ -57,7 +57,7 @@ from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
 
 
 def prepare_schema_v3_upgrade(
-    connection: sqlite3.Connection, *, rollout_root: Path, session_id: str,
+    connection: sqlite3.Connection, *, rollout_root: Path, session_id: str, thread_id: str,
     checkpoint_ns: str, detail_capability: SchemaV3DetailCapability | None,
 ) -> PreparedSchemaV3Upgrade:
     """锁由显式调用方持有；预检源与内存中的完整 target 后才写备份/暂存。"""
@@ -101,12 +101,16 @@ def prepare_schema_v3_upgrade(
     legacy = {row["assembly_id"]: load_snapshot(row, session_id) for row in assemblies}
     purposes = detail_purposes(assemblies, legacy)
     details = tuple(upgrade_detail(
-        row, rollout_root=rollout_root, session_id=session_id, checkpoint_ns=row["checkpoint_ns"],
+        row, rollout_root=rollout_root, session_id=session_id, thread_id=thread_id,
+        checkpoint_ns=row["checkpoint_ns"],
         purpose=purposes.get(row["detail_ref"], ("legacy_unbound", "legacy_audit", "private")),
         detail_capability=detail_capability,
     ) for row in detail_rows)
     detail_map = {detail.old_id: detail.record.detail_ref for detail in details}
-    snapshots = {key: typed_snapshot(value, detail_map) for key, value in legacy.items()}
+    snapshots = {
+        key: typed_snapshot(value, detail_map, thread_id=thread_id)
+        for key, value in legacy.items()
+    }
     script = build_sql(connection, details, snapshots)
     with closing(sqlite3.connect(":memory:")) as target:
         connection.backup(target)

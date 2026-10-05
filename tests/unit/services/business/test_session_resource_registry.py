@@ -52,6 +52,7 @@ class FakeResourceProvider:
         session_id: str,
         resource_id: str,
         action: SessionResourceAction,
+        operation_id: str,
     ) -> SessionResourceControlResultDTO:
         self.control_calls.append((session_id, resource_id, action))
         return SessionResourceControlResultDTO(
@@ -88,6 +89,7 @@ async def test_registry_dispatches_registered_providers(
         kind="terminal",
         resource_id="terminal_1",
         action="cancel",
+        operation_id="request-registry",
     )
     cleaned = await registry.cleanup_session("ses_registry")
 

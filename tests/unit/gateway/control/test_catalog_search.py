@@ -48,6 +48,7 @@ def _offline_target() -> WorkspaceTarget:
         root_path="/tmp/offline-without-backend",
         backend_url="",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
 
@@ -167,6 +168,7 @@ async def test_catalog_caches_are_pruned_when_workspaces_are_removed(
             root_path=f"/tmp/{workspace_id}",
             backend_url="",
             connection_kind="local",
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
             managed=True,
         )
         registry.upsert(target)
@@ -197,6 +199,7 @@ async def test_catalog_caches_are_retained_for_live_workspaces(tmp_path: Path) -
         root_path="/tmp/ws_live",
         backend_url="",
         connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
     registry.upsert(live)

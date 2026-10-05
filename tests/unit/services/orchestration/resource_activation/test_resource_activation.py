@@ -46,6 +46,7 @@ class _FakeBodyStore:
         self,
         *,
         owner_session_id: str,
+        owner_thread_id: str,
         activation_snapshot_id: str,
         resource_id: str,
         activation_ordinal: int,
@@ -59,6 +60,7 @@ class _FakeBodyStore:
         self.written.append((resource_id, activation_ordinal))
         return DetailRef(
             owner_session_id,
+            owner_thread_id,
             activation_snapshot_id,
             f"body-{resource_id}-{activation_ordinal}",
         )

@@ -13,7 +13,7 @@ function renderPanel(jsonl: string): string {
       error={null}
       port={8011}
       workspaceId="workspace_test"
-      sessionId="ses_agent_state"
+      session={null}
       active={false}
     />,
   );

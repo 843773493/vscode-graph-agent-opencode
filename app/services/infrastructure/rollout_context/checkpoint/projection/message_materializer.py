@@ -36,12 +36,15 @@ class RolloutMessageMaterializerMixin:
 
     def _read_messages(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         sequences: Iterable[int],
         *,
         connection: sqlite3.Connection | None = None,
     ) -> list[dict[str, object]]:
+        session_id = strict_text(session_id, field="_read_messages.session_id")
+        thread_id = strict_text(thread_id, field="_read_messages.thread_id")
         sequence_values = tuple(
             dict.fromkeys(
                 strict_non_negative_int(value, field="message_sequence")
@@ -52,8 +55,13 @@ class RolloutMessageMaterializerMixin:
             return []
         values: list[dict[str, object]] = []
         if connection is None:
-            with self._connect(thread_id, checkpoint_ns) as owned_connection:
+            with self._connect(
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+            ) as owned_connection:
                 return self._read_messages(
+                    session_id,
                     thread_id,
                     checkpoint_ns,
                     sequence_values,
@@ -66,7 +74,11 @@ class RolloutMessageMaterializerMixin:
             sequence_values,
         ).fetchall()
         found_sequences: set[int] = set()
-        with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+        with self.jsonl_path(
+            session_id,
+            checkpoint_ns,
+            thread_id=thread_id,
+        ).open("rb") as stream:
             for (
                 sequence_value,
                 message_id,
@@ -85,14 +97,10 @@ class RolloutMessageMaterializerMixin:
                     )
                 found_sequences.add(sequence)
                 message_id = strict_text(message_id, field="messages.message_id")
-                turn_id = strict_text(turn_id, field="messages.turn_id")
+                turn_id = strict_optional_text(turn_id, field="messages.turn_id")
                 created_at = strict_text(
                     created_at, field="messages.created_at"
                 )
-                if not turn_id:
-                    raise RuntimeError(
-                        f"SQLite message turn_id 必须是非空字符串: {message_id}"
-                    )
                 offset = strict_non_negative_int(
                     offset_value,
                     field=f"SQLite message offset: {message_id}",
@@ -219,7 +227,7 @@ class RolloutMessageMaterializerMixin:
         message: Mapping[str, object],
         *,
         message_id: str,
-        turn_id: str,
+        turn_id: str | None,
         created_at: str,
     ) -> dict[str, object]:
         """把 SQLite 的 canonical identity 回填到 LangChain 消息。
@@ -246,8 +254,11 @@ class RolloutMessageMaterializerMixin:
             if isinstance(raw_message_metadata, Mapping)
             else {}
         )
-        message_metadata["turn_id"] = turn_id
-        message_metadata["job_id"] = turn_id
+        if turn_id is None:
+            message_metadata.pop("turn_id", None)
+        else:
+            message_metadata["turn_id"] = turn_id
+        message_metadata.pop("job_id", None)
         metadata["message_metadata"] = message_metadata
         data["response_metadata"] = metadata
         data["id"] = message_id
@@ -257,6 +268,7 @@ class RolloutMessageMaterializerMixin:
 
     def materialize_messages(
         self,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
         message_sequence: int,
@@ -264,12 +276,23 @@ class RolloutMessageMaterializerMixin:
         snapshot: RolloutReadSnapshot | None = None,
         context_ranges: Iterable[tuple[str, int, int]] | None = None,
     ) -> list[object]:
+        session_id = strict_text(session_id, field="materialize_messages.session_id")
+        thread_id = strict_text(thread_id, field="materialize_messages.thread_id")
         if snapshot is not None:
+            if (
+                snapshot.session_id != session_id
+                or snapshot.thread_id != thread_id
+                or snapshot.checkpoint_ns != checkpoint_ns
+            ):
+                raise ValueError("materialize_messages snapshot 与目标 rollout 不一致")
             self._require_v2_runtime(self._snapshot_connection(snapshot))
         else:
-            self.initialize(thread_id, checkpoint_ns)
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._connect(
-                thread_id, checkpoint_ns, read_only=True
+                thread_id,
+                checkpoint_ns,
+                session_id=session_id,
+                read_only=True,
             ) as check_connection:
                 self._require_v2_runtime(check_connection)
         connection = (
@@ -286,7 +309,11 @@ class RolloutMessageMaterializerMixin:
             )
         else:
             if connection is None:
-                with self._connect(thread_id, checkpoint_ns) as owned_connection:
+                with self._connect(
+                    thread_id,
+                    checkpoint_ns,
+                    session_id=session_id,
+                ) as owned_connection:
                     row = self._checkpoint_row(owned_connection, checkpoint_ns, None)
             else:
                 row = self._checkpoint_row(connection, checkpoint_ns, None)
@@ -304,6 +331,7 @@ class RolloutMessageMaterializerMixin:
         return [
             self._codec().from_dict(value)
             for value in self._read_messages(
+                session_id,
                 thread_id,
                 checkpoint_ns,
                 sequences,
@@ -346,8 +374,11 @@ class RolloutMessageMaterializerMixin:
         view_id: str,
     ) -> None:
         """校验 context view 父链、jump table 和消息范围，发现损坏立即失败。"""
-        self.initialize(thread_id, checkpoint_ns)
-        with self._connect(thread_id, checkpoint_ns) as connection:
+        session_id = self._session_id_from_owner_scope(thread_id)
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id
+        ) as connection:
             self._validate_context_view_chain_connection(connection, view_id)
 
 

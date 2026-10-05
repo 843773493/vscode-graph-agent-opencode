@@ -5,6 +5,11 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.itemized.execution_admission import (
+    ExecutionBinding,
+    InternalExecutionIntent,
+    UserExecutionIdentity,
+)
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.message import AttachmentRef
 from app.schemas.internal_v2.pending_request import (
@@ -21,8 +26,10 @@ from app.services.business.message_display import project_message_for_display
 
 class PendingJob(Protocol):
     job_id: str
+    execution_binding: ExecutionBinding
     message_id: str
     session_id: str
+    thread_id: str
     message: str
     agent_id: str
     gateway_id: str | None
@@ -70,10 +77,20 @@ class JobPendingRequestController:
             job.message,
             job.message_metadata,
         )
+        execution_binding = job.execution_binding
+        if isinstance(execution_binding, UserExecutionIdentity):
+            turn_id = execution_binding.turn_id
+        elif isinstance(execution_binding, InternalExecutionIntent):
+            turn_id = None
+        else:
+            raise TypeError("待处理 Job execution_binding 类型非法")
         return PendingRequestDTO(
             job_id=job.job_id,
+            execution_binding=execution_binding,
             message_id=job.message_id,
             session_id=job.session_id,
+            thread_id=job.thread_id,
+            turn_id=turn_id,
             content=display_projection.content,
             attachments=list(job.attachments),
             delivery_policy=entry.delivery_policy,
@@ -117,6 +134,7 @@ class JobPendingRequestController:
                     PendingRequestSummaryDTO(
                         job_id=job.job_id,
                         message_id=job.message_id,
+                        thread_id=job.thread_id,
                         enqueue_sequence=entry.enqueue_sequence,
                         delivery_policy=entry.delivery_policy,
                         status="queued",
@@ -164,7 +182,8 @@ class JobPendingRequestController:
             job = self._job_by_message_id(session_id, message_id)
             job.message = normalized_content
             job.attachments = list(attachments)
-            job.updated_at = datetime.now()
+            # JobState 沿用现有无时区本地时间字段约定。
+            job.updated_at = datetime.now()  # noqa: DTZ005
             self._queue.touch(session_id)
         return await self.list(session_id)
 
@@ -189,7 +208,7 @@ class JobPendingRequestController:
             job = self._job_by_message_id(session_id, message_id)
             self._queue.update_policy(session_id, job.job_id, delivery_policy)
             job.delivery_policy = delivery_policy
-            job.updated_at = datetime.now()
+            job.updated_at = datetime.now()  # noqa: DTZ005
         return await self.list(session_id)
 
     async def remove(self, session_id: str, message_id: str) -> PendingRequestListDTO:
@@ -207,7 +226,7 @@ class JobPendingRequestController:
         async with self._lock:
             removed = self._queue.clear(session_id)
             jobs = self._get_jobs()
-            now = datetime.now()
+            now = datetime.now()  # noqa: DTZ005
             for entry in removed:
                 job = jobs.get(entry.job_id)
                 if job is not None:

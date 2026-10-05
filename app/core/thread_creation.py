@@ -61,9 +61,8 @@
 - **不做 delegate/subagent 业务改造、不做 Job 绑定实现、不做 board
   migration batch**（board migration 由 8.11 的 BoardMigrationRecord
   承担，明确不走本 worker）。
-- **双模式无关性**：本流只依赖 workspace catalog store（R10）解析 owner
-  session 目录与校验 active，不依赖 resolver 的模式切换（catalog/legacy
-  双模式下行为一致——只消费 ``get_node`` 的稳定投影，见报告 §9）。
+- **唯一目录权威**：本流只依赖 workspace catalog store（R10）解析 owner
+  session 目录与校验 active，只消费 ``get_node`` 的稳定投影。
 
 错误分类约定（沿用 ``session_catalog_store.py``）：``TypeError`` 类型错、
 ``ValueError`` 形态非法、``KeyError`` 目标不存在、``RuntimeError`` 语义
@@ -163,6 +162,7 @@ _GRAPH_BINDING_KEYS = frozenset(
     }
 )
 
+
 def canonical_json_text(payload: object) -> str:
     """canonical JSON 文本（紧凑 + sort_keys，preimage/冻结列共用口径）。
 
@@ -180,8 +180,7 @@ def canonical_json_text(payload: object) -> str:
 def canonical_json_bytes(payload: object) -> bytes:
     """canonical JSON 文件字节（indent 形式，thread.json/清单文件共用）。"""
     return (
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
-        + "\n"
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     ).encode("utf-8")
 
 
@@ -242,15 +241,12 @@ def validate_thread_session_metadata(
         )
     if graph_revision < 1:
         raise ValueError(
-            "graph_binding['graph_revision'] 必须 >= 1: "
-            f"实际 {graph_revision}"
+            f"graph_binding['graph_revision'] 必须 >= 1: 实际 {graph_revision}"
         )
     for key in sorted(_GRAPH_BINDING_KEYS - {"graph_revision"}):
         value = graph_binding[key]
         if not isinstance(value, str) or not value:
-            raise ValueError(
-                f"graph_binding[{key!r}] 必须是非空字符串: {value!r}"
-            )
+            raise ValueError(f"graph_binding[{key!r}] 必须是非空字符串: {value!r}")
     profile_hash = compute_capability_profile_hash(
         capability_profile=session_metadata["capability_profile"]
     )
@@ -266,9 +262,7 @@ def validate_thread_session_metadata(
     if task_seed is not None and not isinstance(task_seed, dict):
         raise ValueError(f"task_seed 必须是 dict 或 None: {task_seed!r}")
     if task_reference is not None and not isinstance(task_reference, dict):
-        raise ValueError(
-            f"task_reference 必须是 dict 或 None: {task_reference!r}"
-        )
+        raise ValueError(f"task_reference 必须是 dict 或 None: {task_reference!r}")
     if initial_state == "idle" and task_seed is not None:
         raise ValueError(
             "initial_state='idle' 不得携带 task_seed（无 seed 必须显式 "
@@ -309,9 +303,7 @@ def validate_artifact_manifest(artifact_manifest: dict[str, object]) -> None:
         if any(segment in ("", ".", "..") for segment in segments):
             raise ValueError(f"artifact 路径含空段/./..: {rel_path!r}")
         if not isinstance(content, str):
-            raise TypeError(
-                f"artifact 内容必须是 str（UTF-8 文本）: {rel_path!r}"
-            )
+            raise TypeError(f"artifact 内容必须是 str（UTF-8 文本）: {rel_path!r}")
         # 本路径的每个祖先目录都被本文件占用；祖先目录若同时作为另一
         # artifact 的文件路径出现，即 file/dir 语义冲突。逐路径检查即可
         # 覆盖两种给出顺序（后出现者必然看到先前注册的祖先）。
@@ -349,9 +341,7 @@ def compute_thread_creation_preimage_hash(
         "session_metadata": session_metadata,
         "artifact_manifest": artifact_manifest,
     }
-    return hashlib.sha256(
-        canonical_json_text(payload).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(canonical_json_text(payload).encode("utf-8")).hexdigest()
 
 
 def build_thread_node_files(
@@ -414,9 +404,7 @@ def serialize_artifact_manifest_bytes(inventory: dict[str, str]) -> bytes:
 
 def compute_artifact_manifest_hash(inventory: dict[str, str]) -> str:
     """清单 hash = sha256(canonical JSON 文本)（record 冻结口径）。"""
-    return hashlib.sha256(
-        canonical_json_text(inventory).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(canonical_json_text(inventory).encode("utf-8")).hexdigest()
 
 
 def expected_node_directory_names(
@@ -454,8 +442,7 @@ def verify_node_directory(
     """
     if not directory.is_dir() or directory.is_symlink():
         raise RuntimeError(
-            f"{stage}: 目录缺失或不是目录（外部改动，fail closed）: "
-            f"{directory}"
+            f"{stage}: 目录缺失或不是目录（外部改动，fail closed）: {directory}"
         )
     actual_files: dict[str, bytes] = {}
     actual_dirs: set[str] = set()
@@ -465,16 +452,14 @@ def verify_node_directory(
             dir_entry = root_path / dir_name
             if dir_entry.is_symlink():
                 raise RuntimeError(
-                    f"{stage}: 发现 symlink 目录（外部改动，fail closed）: "
-                    f"{dir_entry}"
+                    f"{stage}: 发现 symlink 目录（外部改动，fail closed）: {dir_entry}"
                 )
             actual_dirs.add(dir_entry.relative_to(directory).as_posix())
         for file_name in file_names:
             file_entry = root_path / file_name
             if file_entry.is_symlink():
                 raise RuntimeError(
-                    f"{stage}: 发现 symlink 文件（外部改动，fail closed）: "
-                    f"{file_entry}"
+                    f"{stage}: 发现 symlink 文件（外部改动，fail closed）: {file_entry}"
                 )
             relative = file_entry.relative_to(directory).as_posix()
             actual_files[relative] = file_entry.read_bytes()
@@ -495,9 +480,7 @@ def verify_node_directory(
             f"actual={sorted(actual_files)}"
         )
     for rel_path, payload in sorted(expected_files.items()):
-        if hashlib.sha256(actual_files[rel_path]).hexdigest() != inventory[
-            rel_path
-        ]:
+        if hashlib.sha256(actual_files[rel_path]).hexdigest() != inventory[rel_path]:
             raise RuntimeError(
                 f"{stage}: {rel_path} sha256 与预期不一致（外部改动，fail "
                 f"closed）: path={directory / rel_path}"
@@ -644,9 +627,7 @@ class ThreadCreationService:
         async with self._key_lock(idempotency_key):
             # 步骤 1：准入 = topology shared → Session gate exclusive（2.3-A
             # 固定锁序），fresh 验证后冻结 record（等价 operation lease）。
-            async with self._gate.shared(), self._session_gate.exclusive(
-                session_id
-            ):
+            async with self._gate.shared(), self._session_gate.exclusive(session_id):
                 node = self._store.get_node(session_id)
                 self._validate_owner_node(node)
                 session_dir = self._session_dir_for(node)
@@ -765,9 +746,7 @@ class ThreadCreationService:
                     expected_files=expected_files,
                     inventory=inventory,
                 )
-            self._prepare_staging(
-                staging_dir, session_dir, expected_files, inventory
-            )
+            self._prepare_staging(staging_dir, session_dir, expected_files, inventory)
             self._rename_staging_to_final(
                 staging_dir,
                 final_dir,
@@ -819,9 +798,7 @@ class ThreadCreationService:
         validate_thread_session_metadata(
             initial_state,
             session_metadata,
-            compute_capability_profile_hash=(
-                self._compute_capability_profile_hash
-            ),
+            compute_capability_profile_hash=(self._compute_capability_profile_hash),
         )
         validate_artifact_manifest(artifact_manifest)
         # preimage 计算兼作 JSON 可序列化校验（不可序列化值 fail fast）。
@@ -841,9 +818,11 @@ class ThreadCreationService:
                 "collaboration member 登记必须携带 delegation_id（manual "
                 f"creation 不登记）: key={idempotency_key!r}"
             )
-        if not isinstance(collaboration_member, dict) or set(
-            collaboration_member
-        ) != {"role", "subagent_type", "title"}:
+        if not isinstance(collaboration_member, dict) or set(collaboration_member) != {
+            "role",
+            "subagent_type",
+            "title",
+        }:
             raise ValueError(
                 "collaboration_member 必须是 {role, subagent_type, title} "
                 f"闭集: {sorted(collaboration_member)!r}"
@@ -876,9 +855,7 @@ class ThreadCreationService:
         ``thread_id``（恒定 36 字符）与日期桶（恒定 10 字符）长度固定，用
         等长占位符即可精确复现总长预算。
         """
-        validate_path_budget(
-            session_dir, f"{_STAGING_DIR_NAME}/{idempotency_key}"
-        )
+        validate_path_budget(session_dir, f"{_STAGING_DIR_NAME}/{idempotency_key}")
         node_locator = "threads/0000/00/00/" + "thr_" + "0" * 32
         for rel_path in artifact_manifest:
             validate_path_budget(
@@ -898,8 +875,7 @@ class ThreadCreationService:
         """owner session 节点校验：session 类型、active、同 workspace。"""
         if node.kind != "session":
             raise ValueError(
-                f"owner 节点不是 session: node_id={node.node_id!r}, "
-                f"kind={node.kind!r}"
+                f"owner 节点不是 session: node_id={node.node_id!r}, kind={node.kind!r}"
             )
         if node.state == "deleting":
             # 2.3-D：catalog deleting 后新准入立即失败（统一错误合同）。
@@ -927,7 +903,7 @@ class ThreadCreationService:
 
     def _session_dir_for(self, node: SessionCatalogNode) -> Path:
         locator = str(node.storage_relative_locator)
-        return self._sessions_root / locator[len("sessions/"):]
+        return self._sessions_root / locator[len("sessions/") :]
 
     def _validate_control_store_binding(self, session_dir: Path) -> None:
         """control store 必须绑定 owner session 目录（误绑 fail fast）。"""
@@ -1048,9 +1024,7 @@ class ThreadCreationService:
         """staging 原子 rename 到冻结最终 locator（父目录链 mkdir + fsync）。"""
         stage = "rename 到最终 locator"
         if not staging_dir.is_dir() or staging_dir.is_symlink():
-            raise RuntimeError(
-                f"{stage}: staging 缺失或不是目录: {staging_dir}"
-            )
+            raise RuntimeError(f"{stage}: staging 缺失或不是目录: {staging_dir}")
         if final_dir.exists() or final_dir.is_symlink():
             # 校验与 rename 之间目标被外部放置：内容一致 → 视为 rename
             # 已完成（清理已校验一致的冗余 staging 副本后继续 publish）；
@@ -1067,8 +1041,7 @@ class ThreadCreationService:
             os.rename(staging_dir, final_dir)
         except OSError as error:
             raise RuntimeError(
-                f"{stage}: staging rename 失败: {staging_dir} -> "
-                f"{final_dir}: {error}"
+                f"{stage}: staging rename 失败: {staging_dir} -> {final_dir}: {error}"
             ) from error
         # durability barrier：rename 后沿 threads/YYYY/MM/DD 父目录链逐级
         # fsync 到 session 目录（新建条目的持久性边界 = owner session 目录，
@@ -1110,15 +1083,11 @@ class ThreadCreationService:
         # 步骤 5：初始 execution admission intent（publish 后幂等写入；
         # 本轮不绑定真实 Job——state 恒 pending，8.5 幂等 worker 消费）。
         intent = self._control_store.create_or_get_initial_execution_intent(
-            admission_idempotency_key=(
-                published.thread_creation_idempotency_key
-            ),
+            admission_idempotency_key=(published.thread_creation_idempotency_key),
             session_id=session_id,
             thread_id=published.child_thread_id,
             initial_state=published.initial_state,
-            creation_idempotency_key=(
-                published.thread_creation_idempotency_key
-            ),
+            creation_idempotency_key=(published.thread_creation_idempotency_key),
         )
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
@@ -1171,9 +1140,7 @@ class ThreadCreationService:
         """
         idempotency_key = record.thread_creation_idempotency_key
         try:
-            async with self._gate.shared(), self._session_gate.exclusive(
-                session_id
-            ):
+            async with self._gate.shared(), self._session_gate.exclusive(session_id):
                 # fresh 复验：workspace catalog owner 节点必须仍 active
                 # （与步骤 1 同一投影口径；不重基、不降级）。catalog
                 # deleting → 统一 session_deletion_pending 合同（2.3-D）。
@@ -1190,17 +1157,13 @@ class ThreadCreationService:
                         "节点非 active（创建/删除双顺序红线，fail closed）: "
                         f"session_id={session_id!r}, state={node.state!r}"
                     )
-                published = (
-                    self._control_store.publish_thread_creation_record(
-                        idempotency_key
-                    )
+                published = self._control_store.publish_thread_creation_record(
+                    idempotency_key
                 )
         except SessionDeletionPendingError as error:
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），
             # 错误类型原样传播（调用方据此终止，不换 key 重放）。
-            current = self._control_store.get_thread_creation_record(
-                idempotency_key
-            )
+            current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "preparing":
                 self._cleanup_after_failed_publish(
                     record,
@@ -1218,9 +1181,7 @@ class ThreadCreationService:
             # （引入可重试错误）时必须收窄捕获范围——可用
             # ``type(error) is RuntimeError`` 精确捕获确定性冲突，让
             # RuntimeError 子类（可重试类）向调用方传播而不误 abort 换 key。
-            current = self._control_store.get_thread_creation_record(
-                idempotency_key
-            )
+            current = self._control_store.get_thread_creation_record(idempotency_key)
             if current.state == "published":
                 # 跨执行根（多进程 GUI/worker/CLI）重复投递同一
                 # idempotency_key：进程内 asyncio.Lock 只保护本进程，另一

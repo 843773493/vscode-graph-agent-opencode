@@ -149,7 +149,7 @@ export function useTurnBootstrap({
           sessionCacheKey,
           beginTurnBootstrap(timeline, targetGeneration),
         ),
-        status: timeline.orderedTurnIds.length > 0
+        status: timeline.orderedTurnIds.length > 0 || timeline.internalExecutions.length > 0
           ? "已显示 Turn 缓存，正在校准最新状态"
           : "正在加载最新 Turn",
       };
@@ -287,17 +287,22 @@ export function useTurnBootstrap({
         }
         if (
           shouldLoadInitialHistory
-          && bootstrap.latest_turn
-          && !invalidatedTurnIdsRef.current.has(bootstrap.latest_turn.turn_id)
+          && (
+            !bootstrap.latest_turn
+            || !invalidatedTurnIdsRef.current.has(bootstrap.latest_turn.turn_id)
+          )
         ) {
-          const initialHistoryRequestIdentity = [
-            bootstrap.projection_epoch,
-            bootstrap.latest_turn.turn_id,
-            bootstrap.latest_turn.revision,
-          ].join(":");
+          const initialHistoryRequestIdentity = bootstrap.latest_turn
+            ? [
+                bootstrap.projection_epoch,
+                "turn",
+                bootstrap.latest_turn.turn_id,
+                bootstrap.latest_turn.revision,
+              ].join(":")
+            : [bootstrap.projection_epoch, "tail"].join(":");
           if (initialHistoryRequestIdentity !== initialHistoryIdentity) {
             initialHistoryIdentity = initialHistoryRequestIdentity;
-            void loadInitialTurns(bootstrap.latest_turn.turn_id).catch((error: unknown) => {
+            void loadInitialTurns(bootstrap.latest_turn?.turn_id).catch((error: unknown) => {
               if (controller.signal.aborted || generationRef.current !== targetGeneration) {
                 return;
               }
@@ -334,7 +339,8 @@ export function useTurnBootstrap({
         setState((previous) => {
           const timeline = timelineForScope(previous.turnTimelinesBySession, sessionCacheKey);
           if (timeline.generation !== targetGeneration) return previous;
-          const hasVisibleContent = timeline.orderedTurnIds.length > 0;
+          const hasVisibleContent = timeline.orderedTurnIds.length > 0
+            || timeline.internalExecutions.length > 0;
           return {
             ...previous,
             turnTimelinesBySession: writeTurnTimelineCache(

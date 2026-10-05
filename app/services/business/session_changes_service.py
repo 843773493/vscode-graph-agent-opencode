@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.abstractions.session_changes import (
     FileEditSnapshot,
@@ -8,10 +8,10 @@ from app.abstractions.session_changes import (
     StoredFileEdit,
 )
 from app.schemas.internal_v2.session_changes import (
-    SessionChangesSummaryDTO,
     SessionChangesetDTO,
     SessionChangesetListDTO,
     SessionChangesetListItemDTO,
+    SessionChangesSummaryDTO,
     SessionFileChangeDTO,
     SessionFileReviewResultDTO,
 )
@@ -69,7 +69,7 @@ class SessionChangesService:
         self,
         *,
         session_id: str,
-        turn_id: str,
+        turn_id: str | None,
         tool_call_id: str,
         execution_id: str,
         tool_name: str,
@@ -89,6 +89,7 @@ class SessionChangesService:
         additions, deletions = count_diff_lines(diff_text)
         edit_id = build_edit_id(
             turn_id=turn_id,
+            execution_id=execution_id,
             tool_call_id=tool_call_id,
             file_path=before.file_path,
         )
@@ -106,7 +107,7 @@ class SessionChangesService:
             ),
             additions=additions,
             deletions=deletions,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             before_exists=before.existed,
             after_exists=after_exists,
             before_file=f"edits/{edit_id}/before.txt" if before.existed else None,
@@ -262,7 +263,7 @@ class SessionChangesService:
             turn_id=turn_id,
             summary=summary,
             files=files,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
         )
         if persist:
             self._store.save_changeset_summary(changeset)

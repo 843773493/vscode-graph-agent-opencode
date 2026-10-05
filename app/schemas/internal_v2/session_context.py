@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceIdentity,
+    validate_resource_identity,
+)
+
+SessionContextScope = Literal["workspace", "user", "gateway", "inline"]
 SessionContextView = Literal[
     "overview",
     "messages",
@@ -28,16 +34,21 @@ SessionContextSearchSource = Literal[
     "session_information",
 ]
 SessionContextMatchMode = Literal["literal", "regex"]
+SessionResourceIdentity = Annotated[
+    ResourceIdentity,
+    AfterValidator(validate_resource_identity),
+]
 
 
 class SessionContextReadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resource: str = Field(
-        min_length=1,
-        description="session/workspace 资源；冻结 assembly 使用 #assembly=<assembly_id> 和 assembly view",
-    )
+    resource_identity: SessionResourceIdentity
+    vrn: str = Field(min_length=1)
+    scope: SessionContextScope
     view: SessionContextView = "overview"
+    record_index: int | None = Field(default=None, ge=0)
+    assembly_ref: SessionResourceIdentity | None = None
     include: list[SessionContextInclude] = Field(
         default_factory=lambda: ["visible_text", "tool_summary"]
     )
@@ -46,13 +57,15 @@ class SessionContextReadRequest(BaseModel):
     cursor: str | None = None
     limit: int = Field(default=20, ge=1, le=200)
     max_chars: int = Field(default=16_384, ge=256, le=65_536)
-    expected_revision: str | None = None
+    revision: str | None = None
 
 
 class SessionContextSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resource: str = Field(min_length=1)
+    resource_identity: SessionResourceIdentity
+    vrn: str = Field(min_length=1)
+    scope: SessionContextScope
     query: str = Field(min_length=1)
     sources: list[SessionContextSearchSource] = Field(
         default_factory=lambda: ["effective_context"]
@@ -62,12 +75,15 @@ class SessionContextSearchRequest(BaseModel):
     max_results: int = Field(default=20, ge=1, le=200)
     max_chars: int = Field(default=16_384, ge=256, le=65_536)
     cursor: str | None = None
-    expected_revision: str | None = None
+    revision: str | None = None
 
 
 class SessionContextItemDTO(BaseModel):
     kind: str
-    locator: str
+    resource_identity: SessionResourceIdentity | None = None
+    vrn: str | None = None
+    scope: SessionContextScope | None = None
+    assembly_ref: SessionResourceIdentity | None = None
     role: str | None = None
     record_index: int | None = None
     text: str | None = None
@@ -81,13 +97,17 @@ class SessionContextItemDTO(BaseModel):
 
 
 class SessionContextPartialErrorDTO(BaseModel):
-    resource: str
+    resource_identity: SessionResourceIdentity
     error: str
 
 
 class SessionContextReadResultDTO(BaseModel):
-    resource: str
+    resource_identity: SessionResourceIdentity
+    vrn: str
+    scope: SessionContextScope
     view: SessionContextView
+    record_index: int | None = None
+    assembly_ref: SessionResourceIdentity | None = None
     revision: str
     compacted: bool = False
     compaction_cutoff: int | None = None
@@ -103,7 +123,9 @@ class SessionContextReadResultDTO(BaseModel):
 
 
 class SessionContextSearchMatchDTO(BaseModel):
-    locator: str
+    resource_identity: SessionResourceIdentity
+    vrn: str
+    scope: SessionContextScope
     preview: str
     source: SessionContextSearchSource
     revision: str
@@ -113,7 +135,9 @@ class SessionContextSearchMatchDTO(BaseModel):
 
 
 class SessionContextSearchResultDTO(BaseModel):
-    resource: str
+    resource_identity: SessionResourceIdentity
+    vrn: str
+    scope: SessionContextScope
     query: str
     match_mode: SessionContextMatchMode
     revision: str

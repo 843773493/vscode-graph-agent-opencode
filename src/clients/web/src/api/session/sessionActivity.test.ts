@@ -28,6 +28,12 @@ afterEach(() => {
   unwrapSessionCatalogFetch();
 });
 
+const workspaceTarget = {
+  workspace_id: "workspace-1",
+  backend_workspace_id: "backend-workspace-1",
+  connection_kind: "local",
+} as const;
+
 async function flushMicrotasks(rounds = 50): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
     await Promise.resolve();
@@ -56,10 +62,12 @@ describe("Workspace 会话活动 API", () => {
       });
     }, { credentialToken: "activity-token" });
 
-    const page = await listSessionActivity(48_201, "workspace-1", { after: 6 });
+    const page = await listSessionActivity(48_201, workspaceTarget, { after: 6 });
     expect(page.items[0]?.event_seq).toBe(7);
     expect(new Headers(request?.headers).get("X-BoxTeam-Workspace-Id"))
       .toBe("workspace-1");
+    expect(new Headers(request?.headers).get("X-BoxTeam-Backend-Workspace-Id"))
+      .toBe("backend-workspace-1");
   });
 
   test("SSE 活动事件解析 id 并转发游标", async () => {
@@ -68,7 +76,7 @@ describe("Workspace 会话活动 API", () => {
       ]), { credentialToken: "activity-token" });
     const received: number[] = [];
 
-    await streamSessionActivity(48_202, "workspace-1", {
+    await streamSessionActivity(48_202, workspaceTarget, {
       after: 7,
       onEvent: (event, cursor) => {
         expect(event.session_id).toBe("session-8");
@@ -84,7 +92,7 @@ describe("Workspace 会话活动 API", () => {
     });
 
     await expect(
-      streamSessionActivity(48_203, "workspace-1", { after: 3 }),
+      streamSessionActivity(48_203, workspaceTarget, { after: 3 }),
     ).rejects.toBeInstanceOf(SessionActivityCursorGoneError);
   });
 });
@@ -112,7 +120,7 @@ describe("Workspace 会话活动流空闲超时", () => {
       failure: null,
     };
     // 不 await：超时丢失时 promise 永不 settle，轮询终态把「挂起」本身变成失败。
-    streamSessionActivity(port, "workspace-1", { after: 0 }).then(
+    streamSessionActivity(port, workspaceTarget, { after: 0 }).then(
       () => {
         settled.outcome = "resolved";
       },

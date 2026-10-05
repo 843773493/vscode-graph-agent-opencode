@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import TypeVar
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Protocol, TypeVar, cast
 
 from fastapi import Header, HTTPException, Request
 
 from app.abstractions.job_service import JobServiceProtocol
+from app.core.path_utils import SessionCatalogComponents, workspace_context
 from app.core.trace_middleware import get_request_id  # noqa: F401
+from app.core.workspace_identity import validate_workspace_id
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.context_compaction_service import ContextCompactionService
@@ -27,6 +31,7 @@ from app.services.business.session_skill_tracking_service import (
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -52,7 +57,10 @@ from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.tool_testing.service import ToolTestService
 
 
-class _AppContainerProtocol:
+class _AppContainerProtocol(Protocol):
+    workspace_id: str
+    workspace_root: Path
+    session_catalog: SessionCatalogComponents
     config_service: ConfigService
     agent_service: AgentService
     artifact_service: ArtifactService
@@ -73,6 +81,7 @@ class _AppContainerProtocol:
     session_information_service: SessionInformationService
     session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
+    terminal_resource_owner: TerminalResourceOwner
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
     log_service: LogService
@@ -90,7 +99,15 @@ class _AppContainerProtocol:
     message_stream_store: MessageStreamStore
 
 
+class _WorkspaceContainerRegistryProtocol(Protocol):
+    def get(self, workspace_id: str) -> _AppContainerProtocol: ...
+
+
 T = TypeVar("T")
+
+
+def get_terminal_resource_owner(request: Request) -> TerminalResourceOwner:
+    return _require_service(request, "terminal_resource_owner", TerminalResourceOwner, "Terminal owner 尚未初始化")
 
 
 def _require_service(
@@ -115,18 +132,63 @@ def verify_local_token(x_local_token: str | None = Header(default=None)) -> str:
     return x_local_token
 
 
+def get_workspace_container(request: Request) -> _AppContainerProtocol:
+    """从显式 path UUID 或 Gateway 内部头取得唯一 workspace 服务图。"""
+
+    path_workspace_id = request.path_params.get("workspace_id")
+    header_workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+    if (
+        path_workspace_id is not None
+        and header_workspace_id is not None
+        and path_workspace_id != header_workspace_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "workspace path UUID 与 X-BoxTeam-Workspace-Id 不一致: "
+                f"path={path_workspace_id!r}, header={header_workspace_id!r}"
+            ),
+        )
+    workspace_id = path_workspace_id or header_workspace_id
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise HTTPException(status_code=400, detail="缺少显式 workspace_id")
+    try:
+        workspace_id = validate_workspace_id(workspace_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    registry = cast(
+        _WorkspaceContainerRegistryProtocol | None,
+        getattr(request.app.state, "workspace_container_registry", None),
+    )
+    if registry is None:
+        raise RuntimeError("已挂载工作区服务图注册表尚未初始化")
+    try:
+        return registry.get(workspace_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+async def workspace_container_scope(
+    request: Request,
+) -> AsyncIterator[_AppContainerProtocol]:
+    """在整个请求期间绑定按显式 ID 解析出的工作区根目录上下文。"""
+
+    container = get_workspace_container(request)
+    with workspace_context(
+        container.workspace_id,
+        container.workspace_root,
+        session_catalog=container.session_catalog,
+    ):
+        yield container
+
+
 def _get_container(request: Request) -> _AppContainerProtocol:
-    container = getattr(request.app.state, "container", None)
-    if container is None:
-        raise RuntimeError("应用容器尚未初始化")
-    return container
+    return get_workspace_container(request)
 
 
 def get_config_service(request: Request) -> ConfigService:
-    # 与其余提供者不同：容器整体缺失时也必须报 ConfigService 自身的文案，
-    # 保持该入口既有的可观察错误信息不变。
-    container = getattr(request.app.state, "container", None)
-    service = getattr(container, "config_service", None) if container is not None else None
+    service = getattr(_get_container(request), "config_service", None)
     if not isinstance(service, ConfigService):
         raise RuntimeError("ConfigService 尚未在应用启动阶段初始化")  # noqa: TRY004
     return service

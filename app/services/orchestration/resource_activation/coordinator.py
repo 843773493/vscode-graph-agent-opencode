@@ -246,6 +246,7 @@ class ResourceActivationCoordinator:
                 )
             detail_ref = self._body_store.write_resource_body(
                 owner_session_id=owner_session_id,
+                owner_thread_id=owner_thread_id,
                 activation_snapshot_id=snapshot_id,
                 resource_id=item.resource_id,
                 activation_ordinal=ordinal,

@@ -16,9 +16,9 @@ enum TerminalStatus {
 
 message TerminalSession {
   string terminal_id = 1;
-  string session_id = 2;
+  reserved 2, 4;
+  reserved "session_id", "cwd";
   string title = 3;
-  string cwd = 4;
   uint32 cols = 5;
   uint32 rows = 6;
   TerminalStatus status = 7;
@@ -26,6 +26,11 @@ message TerminalSession {
   google.protobuf.Struct metadata = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
+  string workspace_id = 12;
+  string cwd_relative = 13;
+  uint64 transport_owner_revision = 14;
+  optional int32 exit_code = 15;
+  optional int32 last_command_exit_code = 16;
 }
 
 message TerminalJsonMessage {

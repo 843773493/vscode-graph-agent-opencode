@@ -19,6 +19,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
+
 from app.core.identifier import (
     create_prefixed_id,
     to_epoch_ms,
@@ -95,7 +97,6 @@ _THREAD_CREATION_RECORD_COLUMNS = (
 
 
 _INITIAL_STATE_VALUES = ("running", "idle")
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,15 +193,11 @@ class ThreadCreationRecordMixin:
         row: sqlite3.Row,
     ) -> ThreadCreationRecord:
         return ThreadCreationRecord(
-            thread_creation_idempotency_key=str(
-                row["thread_creation_idempotency_key"]
-            ),
+            thread_creation_idempotency_key=str(row["thread_creation_idempotency_key"]),
             state=str(row["state"]),
             preimage_hash=str(row["preimage_hash"]),
             delegation_id=(
-                str(row["delegation_id"])
-                if row["delegation_id"] is not None
-                else None
+                str(row["delegation_id"]) if row["delegation_id"] is not None else None
             ),
             child_thread_id=str(row["child_thread_id"]),
             final_relative_locator=str(row["final_relative_locator"]),
@@ -226,9 +223,7 @@ class ThreadCreationRecordMixin:
             owner_session_lifecycle_generation=int(
                 row["owner_session_lifecycle_generation"]
             ),
-            catalog_precondition_revision=int(
-                row["catalog_precondition_revision"]
-            ),
+            catalog_precondition_revision=int(row["catalog_precondition_revision"]),
             collaboration_precondition_revision=(
                 int(row["collaboration_precondition_revision"])
                 if row["collaboration_precondition_revision"] is not None
@@ -285,6 +280,7 @@ class ThreadCreationRecordMixin:
         if not isinstance(preimage_hash, str) or not preimage_hash:
             raise ValueError(f"preimage_hash 不能为空: {preimage_hash!r}")
         self._validate_frozen_json_text(graph_binding, "graph_binding")
+        ThreadGraphBindingRecord.from_creation_json(graph_binding)
         self._validate_frozen_json_text(capability_profile, "capability_profile")
         self._validate_optional_frozen_json_text(task_seed, "task_seed")
         self._validate_optional_frozen_json_text(task_reference, "task_reference")
@@ -293,9 +289,7 @@ class ThreadCreationRecordMixin:
         if thread_id is not None:
             validate_thread_id(thread_id)
         if (created_at is None) != (thread_id is None):
-            raise ValueError(
-                "固定 Thread fixture 必须同时提供 created_at 与 thread_id"
-            )
+            raise ValueError("固定 Thread fixture 必须同时提供 created_at 与 thread_id")
         if created_at is not None and created_at.tzinfo is None:
             raise ValueError(f"created_at 必须带时区: {created_at!r}")
         if created_at is not None and thread_id is not None:
@@ -311,8 +305,7 @@ class ThreadCreationRecordMixin:
             not isinstance(delegation_id, str) or not delegation_id
         ):
             raise ValueError(
-                "delegated child 必须携带非空 delegation_id: "
-                f"{delegation_id!r}"
+                f"delegated child 必须携带非空 delegation_id: {delegation_id!r}"
             )
         if collaboration_precondition_revision is not None and (
             not isinstance(collaboration_precondition_revision, int)
@@ -437,8 +430,7 @@ class ThreadCreationRecordMixin:
         final_relative_locator = f"threads/{utc_date:%Y/%m/%d}/{child_thread_id}"
         validate_thread_relative_locator(final_relative_locator)
         locator_taken = self._connection.execute(
-            "SELECT 1 FROM thread_creation_records "
-            "WHERE final_relative_locator = ?",
+            "SELECT 1 FROM thread_creation_records WHERE final_relative_locator = ?",
             (final_relative_locator,),
         ).fetchone()
         if locator_taken is not None:
@@ -462,9 +454,7 @@ class ThreadCreationRecordMixin:
         # 本轮 thread_catalog 只有插入型变更（行数单调不减），行数等价于
         # 单调 revision；publish 时 CAS 校验行数未漂移。
         catalog_precondition_revision = int(
-            self._connection.execute(
-                SELECT_THREAD_CATALOG_ROW_COUNT
-            ).fetchone()[0]
+            self._connection.execute(SELECT_THREAD_CATALOG_ROW_COUNT).fetchone()[0]
         )
         # admission identity（8.5-A 冻结项）：幂等键 + thread ref + 初始
         # state；发布后由幂等 worker create-or-get 初始 execution。

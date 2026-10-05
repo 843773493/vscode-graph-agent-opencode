@@ -14,8 +14,10 @@ from app.core.path_utils import (
     get_session_path,
     get_session_path_resolver,
     initialize_directories,
+    workspace_context,
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 
@@ -87,14 +89,33 @@ def test_sqlite_wins_over_stale_legacy_index(tmp_path):
     assert isinstance(get_session_path_resolver(sessions_root), SessionCatalogPathResolver)
 
 
-def test_legacy_index_without_sqlite_fails_closed_with_migration_hint(tmp_path):
+def test_legacy_index_without_sqlite_fails_closed_without_fallback(tmp_path):
     _, sessions_root = make_standard_workspace(tmp_path)
     legacy_index = seed_legacy_index(sessions_root)
+    database_path = sessions_root.parent / "navigation" / "session-catalog.sqlite"
+    physical_manifest = (
+        sessions_root
+        / "2026"
+        / "01"
+        / "01"
+        / "ses_legacy000000000000000000000000"
+        / "session.json"
+    )
+    physical_manifest.parent.mkdir(parents=True)
+    physical_manifest.write_text('{"preserve": true}\n', encoding="utf-8")
+    legacy_index_bytes = legacy_index.read_bytes()
+    physical_manifest_bytes = physical_manifest.read_bytes()
 
-    with pytest.raises(RuntimeError, match="SessionCatalogMigrator"):
+    with pytest.raises(
+        RuntimeError, match="此版本不提供旧 Session Catalog 迁移"
+    ) as error:
         get_session_path_resolver(sessions_root)
 
-    assert legacy_index.is_file()
+    assert str(legacy_index) in str(error.value)
+    assert str(database_path) in str(error.value)
+    assert legacy_index.read_bytes() == legacy_index_bytes
+    assert physical_manifest.read_bytes() == physical_manifest_bytes
+    assert not database_path.exists()
 
 
 def test_fresh_workspace_initializes_empty_catalog(tmp_path):
@@ -133,20 +154,21 @@ def test_workspace_identity_is_created_and_bound(tmp_path):
     assert identity["workspace_id"] == expected_id
 
 
-def test_convenience_functions_route_through_catalog_factory(tmp_path, monkeypatch):
+def test_convenience_functions_route_through_catalog_factory(tmp_path):
     workspace_root, _ = make_standard_workspace(tmp_path)
-    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace_root))
-    initialize_directories()
-    get_session_path_resolver()
-    session_id = f"ses_{create_uuid_hex()}"
-    session_dir = seed_catalog_session_bundle(
-        workspace_root / ".boxteam" / "sessions",
-        session_id,
-        title="便捷函数会话",
-    ).directory
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    initialize_directories(workspace_id, workspace_root)
+    with workspace_context(workspace_id, workspace_root):
+        get_session_path_resolver()
+        session_id = f"ses_{create_uuid_hex()}"
+        session_dir = seed_catalog_session_bundle(
+            workspace_root / ".boxteam" / "sessions",
+            session_id,
+            title="便捷函数会话",
+        ).directory
 
-    assert get_session_path(session_id) == session_dir
-    assert get_session_file(session_id) == session_dir / "session.json"
+        assert get_session_path(session_id) == session_dir
+        assert get_session_file(session_id) == session_dir / "session.json"
 
 
 def test_non_standard_sessions_root_uses_sqlite_catalog(tmp_path):

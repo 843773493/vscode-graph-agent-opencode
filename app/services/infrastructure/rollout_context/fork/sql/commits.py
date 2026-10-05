@@ -313,6 +313,8 @@ def rewrite_full_copy_control_and_commits(state: FullCopyRemapState) -> None:
             "terminal_convergence": "turn",
             "assembly_sealed": "assembly",
         }[commit_kind]
+        if commit_kind in {"item_convergence", "terminal_convergence"} and subject_id in maps.get("execution", {}):
+            subject_map = "execution"
         target_subject = (
             mapped(subject_map, subject_id) if subject_id is not None else subject_id
         )
@@ -324,6 +326,10 @@ def rewrite_full_copy_control_and_commits(state: FullCopyRemapState) -> None:
         if commit_kind == "acceptance" and idempotency_key is not None:
             target_idempotency_key = mapped(
                 "acceptance_idempotency_key", idempotency_key
+            )
+        elif idempotency_key is not None and idempotency_key.startswith("internal-admission:"):
+            target_idempotency_key = "internal-admission:" + mapped(
+                "admission_idempotency_key", idempotency_key.removeprefix("internal-admission:")
             )
         remapped_metadata = remap_json(metadata_value)
         if not isinstance(remapped_metadata, Mapping):

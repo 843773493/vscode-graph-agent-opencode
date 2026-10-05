@@ -2,106 +2,203 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
-import re
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
-
-_SESSION_RESOURCE = re.compile(r"^boxteam://session/([^/]+)$")
-_WORKSPACE_SESSION_RESOURCE = re.compile(
-    r"^boxteam://workspace/([^/]+)/session/([^/]+)$"
+from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+    parse_vrn,
+    resource_display_uri,
 )
-_WORKSPACE_SESSIONS_RESOURCE = re.compile(r"^boxteam://workspace/([^/]+)/sessions$")
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    VrnResolveError,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE,
+    SESSION_RESOURCE_IDENTITY_NAMESPACE,
+    ResourceIdentity,
+    derive_resource_identity,
+    validate_resource_identity,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ParsedSessionContextResource:
-    """经过校验、可安全用于路由和 cursor 绑定的上下文资源。"""
+    """从中央 VRN grammar 得到的会话上下文引用。"""
 
-    canonical: str
-    base: str
-    kind: Literal["session", "workspace_sessions"]
+    resource_identity: ResourceIdentity
+    vrn: str
+    scope: str
+    kind: Literal["session", "workspace_sessions", "other"]
     session_id: str | None
-    workspace_id: str | None
-    selector: str | None = None
+    scope_id: str
 
 
-def parse_session_context_resource(resource: str) -> ParsedSessionContextResource:
-    value = resource.strip()
-    base, separator, selector = value.partition("#")
-    if separator and not (
-        selector == "information"
-        or (
-            selector.startswith("assembly=")
-            and bool(selector.removeprefix("assembly="))
-            and not any(character in selector for character in "#/?\\")
+def parse_session_context_ref(
+    *,
+    resource_identity: str,
+    vrn: str,
+    scope: str,
+) -> ParsedSessionContextResource:
+    """用唯一 VRN grammar 解析会话上下文引用，不解析 fragment 或私有语法。"""
+    parsed = parse_vrn(vrn)
+    if scope != parsed.scope:
+        raise VrnResolveError(
+            "scope_mismatch",
+            f"上下文 scope 与 VRN 不一致: scope={scope!r}, vrn_scope={parsed.scope!r}",
         )
-        or (
-            selector.startswith("record=")
-            and selector.removeprefix("record=").isdigit()
-        )
-    ):
+    identity = validate_resource_identity(resource_identity)
+    if parsed.kind != "session":
+        kind: Literal["session", "workspace_sessions", "other"] = "other"
+        session_id = None
+    elif parsed.tail_segments == ("inventory",):
+        kind = "workspace_sessions"
+        session_id = None
+    elif len(parsed.tail_segments) == 1:
+        kind = "session"
+        session_id = parsed.tail_segments[0]
+    else:
         raise ValueError(
-            "resource locator 只支持 #record={index}、#information 或 #assembly={id}"
+            "session VRN 必须指向单个 session_id 或 inventory 资源"
         )
-    match = _SESSION_RESOURCE.fullmatch(base)
-    if match is not None:
-        return ParsedSessionContextResource(
-            value,
-            base,
-            "session",
-            match.group(1),
-            None,
-            selector or None,
-        )
-    match = _WORKSPACE_SESSION_RESOURCE.fullmatch(base)
-    if match is not None:
-        workspace_id, session_id = match.groups()
-        return ParsedSessionContextResource(
-            value,
-            base,
-            "session",
-            session_id,
-            workspace_id,
-            selector or None,
-        )
-    match = _WORKSPACE_SESSIONS_RESOURCE.fullmatch(base)
-    if match is not None:
-        if selector:
-            raise ValueError("workspace sessions inventory 不支持 locator fragment")
-        return ParsedSessionContextResource(
-            value,
-            base,
-            "workspace_sessions",
-            None,
-            match.group(1),
-        )
-    raise ValueError(
-        "resource 必须是 boxteam://session/{session_id}、"
-        "boxteam://workspace/{workspace_id}/session/{session_id} 或 "
-        "boxteam://workspace/{workspace_id}/sessions"
+    return ParsedSessionContextResource(
+        resource_identity=identity,
+        vrn=parsed.display_uri,
+        scope=parsed.scope,
+        kind=kind,
+        session_id=session_id,
+        scope_id=parsed.scope_id,
     )
+
+
+def session_resource_vrn(workspace_id: str, session_id: str) -> str:
+    return resource_display_uri(
+        scope="workspace",
+        scope_id=workspace_id,
+        kind="session",
+        tail_segments=(session_id,),
+    )
+
+
+def workspace_session_inventory_vrn(workspace_id: str) -> str:
+    return resource_display_uri(
+        scope="workspace",
+        scope_id=workspace_id,
+        kind="session",
+        tail_segments=("inventory",),
+    )
+
+
+def gateway_session_inventory_vrn(gateway_id: str) -> str:
+    return resource_display_uri(
+        scope="gateway",
+        scope_id=gateway_id,
+        kind="session",
+        tail_segments=("inventory",),
+    )
+
+
+def session_resource_identity(workspace_id: str, session_id: str) -> ResourceIdentity:
+    return derive_resource_identity(
+        SESSION_RESOURCE_IDENTITY_NAMESPACE,
+        workspace_id,
+        session_id,
+    )
+
+
+def workspace_session_inventory_identity(workspace_id: str) -> ResourceIdentity:
+    return derive_resource_identity(
+        SESSION_RESOURCE_IDENTITY_NAMESPACE,
+        "workspace-inventory",
+        workspace_id,
+    )
+
+
+def gateway_session_inventory_identity(gateway_id: str) -> ResourceIdentity:
+    return derive_resource_identity(
+        SESSION_RESOURCE_IDENTITY_NAMESPACE,
+        "gateway-inventory",
+        gateway_id,
+    )
+
+
+def context_assembly_identity(
+    resource_identity: ResourceIdentity,
+    assembly_id: str,
+) -> ResourceIdentity:
+    return derive_resource_identity(
+        CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE,
+        str(resource_identity),
+        assembly_id,
+    )
+
+
+def session_context_read_operation(
+    *,
+    view: str,
+    include: list[str],
+    recent_rounds: int,
+    include_initial_goal: bool,
+) -> str:
+    selection = json.dumps(
+        {
+            "include": sorted(set(include)),
+            "recent_rounds": recent_rounds,
+            "include_initial_goal": include_initial_goal,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"read:{view}:{hashlib.sha256(selection).hexdigest()}"
 
 
 def validate_session_context_read_view(
     resource: ParsedSessionContextResource,
     view: str,
+    *,
+    record_index: int | None = None,
+    assembly_ref: ResourceIdentity | None = None,
 ) -> None:
-    is_assembly = resource.selector is not None and resource.selector.startswith(
-        "assembly="
-    )
-    if (view == "assembly") != is_assembly:
-        raise ValueError(
-            "assembly view 必须与显式 #assembly=<assembly_id> selector 一起使用"
+    views = {
+        "overview",
+        "messages",
+        "records",
+        "information",
+        "inventory",
+        "assembly",
+        "assemblies",
+    }
+    if view not in views:
+        raise ValueError(f"未知 session context view: {view!r}")
+    if record_index is not None and view != "records":
+        raise ValueError("record_index 只能与 records view 一起使用")
+    if assembly_ref is not None and view != "assembly":
+        raise ValueError("assembly_ref 只能与 assembly view 一起使用")
+    if view == "assembly" and assembly_ref is None:
+        raise ValueError("assembly view 必须提供 assembly_ref")
+    if resource.kind == "other":
+        raise VrnResolveError(
+            "unsupported_view",
+            f"session context 不支持该 VRN resource kind: {resource.vrn!r}",
         )
-    if view == "assemblies" and (resource.kind != "session" or resource.selector):
-        raise ValueError("assemblies view 只接受 session 资源根")
     if resource.kind == "workspace_sessions" and view != "inventory":
-        raise ValueError("workspace sessions 资源只支持 inventory view")
+        raise VrnResolveError(
+            "unsupported_view",
+            "workspace session inventory 只支持 inventory view",
+        )
     if resource.kind == "session" and view == "inventory":
-        raise ValueError("session 资源不支持 inventory view")
+        raise VrnResolveError(
+            "unsupported_view",
+            "单个 session resource 不支持 inventory view",
+        )
+    if view in {"assembly", "assemblies"} and resource.kind != "session":
+        raise VrnResolveError(
+            "unsupported_view",
+            f"{view} view 只支持单个 session resource",
+        )
 
 
 def require_session_context_revision(expected: str | None, actual: str) -> None:
@@ -112,16 +209,11 @@ def require_session_context_revision(expected: str | None, actual: str) -> None:
         )
 
 
-def require_cursor_offset_in_range(offset: int, total: int, *, resource: str) -> None:
-    """游标 offset 越过真实条目数时 fail-closed。
-
-    offset 是客户端可伪造的分页输入；越界时上层按 offset 切片只会得到空页，
-    调用方却仍会按契约继续翻页——表现为永远停在空页而拿不到终态。恰好等于
-    total 是合法的「已读完」边界，只有严格越过才报错。
-    """
+def require_cursor_offset_in_range(offset: int, total: int, *, vrn: str) -> None:
+    """游标 offset 越过真实条目数时 fail-closed。"""
     if offset > total:
         raise ValueError(
-            f"cursor offset 越界: resource={resource} offset={offset} total={total}"
+            f"cursor offset 越界: vrn={vrn} offset={offset} total={total}"
         )
 
 
@@ -139,11 +231,7 @@ def set_exact_returned_chars(
     *,
     operation: str,
 ) -> _SerializedResultT:
-    """把 result.returned_chars 收敛为序列化后的真实字符数。
-
-    returned_chars 自身参与序列化，写入新值会改变响应长度，因此需要迭代
-    直到稳定；迭代上限用于在长度无法自洽时立刻暴露，而不是静默返回错误值。
-    """
+    """把 result.returned_chars 收敛为序列化后的真实字符数。"""
     for _ in range(8):
         length = len(result.model_dump_json())
         if result.returned_chars == length:
@@ -153,22 +241,30 @@ def set_exact_returned_chars(
 
 
 class SessionContextCursorCodec:
-    """编码并校验绑定资源、操作和 revision 的不透明分页游标。"""
+    """绑定身份、VRN、scope、修订、视图与结构化选择的分页游标。"""
 
     @staticmethod
     def encode(
         *,
-        resource: str,
+        resource_identity: ResourceIdentity,
+        vrn: str,
+        scope: str,
         revision: str,
         operation: str,
+        record_index: int | None = None,
+        assembly_ref: ResourceIdentity | None = None,
         offset: int,
         char_offset: int = 0,
     ) -> str:
         payload = json.dumps(
             {
-                "resource": resource,
+                "resource_identity": str(resource_identity),
+                "vrn": vrn,
+                "scope": scope,
                 "revision": revision,
                 "operation": operation,
+                "record_index": record_index,
+                "assembly_ref": str(assembly_ref) if assembly_ref is not None else None,
                 "offset": offset,
                 "char_offset": char_offset,
             },
@@ -181,9 +277,13 @@ class SessionContextCursorCodec:
     def decode(
         cursor: str | None,
         *,
-        resource: str,
+        resource_identity: ResourceIdentity,
+        vrn: str,
+        scope: str,
         revision: str,
         operation: str,
+        record_index: int | None = None,
+        assembly_ref: ResourceIdentity | None = None,
     ) -> tuple[int, int]:
         if cursor is None:
             return 0, 0
@@ -205,8 +305,16 @@ class SessionContextCursorCodec:
                 expected_revision=str(cursor_revision),
                 actual_revision=revision,
             )
-        if payload.get("resource") != resource or payload.get("operation") != operation:
-            raise ValueError("cursor 与当前 resource 或查询参数不匹配")
+        expected = {
+            "resource_identity": str(resource_identity),
+            "vrn": vrn,
+            "scope": scope,
+            "operation": operation,
+            "record_index": record_index,
+            "assembly_ref": str(assembly_ref) if assembly_ref is not None else None,
+        }
+        if any(payload.get(key) != value for key, value in expected.items()):
+            raise ValueError("cursor 与当前资源或查询选择不匹配")
         offset = payload.get("offset")
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("cursor offset 无效")

@@ -70,6 +70,7 @@ def _seal_tool_pairings(
         return ()
     items = owner._storage.read_items(
         snapshot.session_id,
+        snapshot.thread_id,
         checkpoint_ns=checkpoint_ns,
         item_ids=tuple(entry.ref.ref_id for entry in entries),
     )
@@ -106,6 +107,8 @@ def _activation_binding_callable(
 
 def seal_snapshot(
     owner,
+    session_id: str,
+    thread_id: str,
     snapshot: ContextAssemblySnapshot,
     *,
     seal_idempotency_key: str,
@@ -117,6 +120,8 @@ def seal_snapshot(
     activation_binding: ActivationSealBinding | None = None,
 ) -> int:
 
+    if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
+        raise ValueError("source-mismatch: assembly seal owner 不一致")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     require_key(seal_input_hash, field="seal_input_hash")
     # 已提交 assembly 的幂等重试不重新绑定 activation：旧 assembly 若在接入前
@@ -129,7 +134,10 @@ def seal_snapshot(
         tool_pairings=_seal_tool_pairings(owner, snapshot, checkpoint_ns),
     )
     registered = owner.get_context_plan_registration(
-        snapshot.session_id, plan_id=snapshot.plan_id, checkpoint_ns=checkpoint_ns
+        session_id,
+        thread_id=snapshot.thread_id,
+        plan_id=snapshot.plan_id,
+        checkpoint_ns=checkpoint_ns,
     )
     draft = runtime_draft(registered)
     if registered.plan_state == "sealed":
@@ -141,7 +149,8 @@ def seal_snapshot(
                 "assembly-idempotency-conflict: snapshot seal key/input 不一致"
             )
         committed = owner._storage.get_context_assembly(
-            snapshot.session_id,
+            session_id,
+            thread_id,
             assembly_id=registered.assembly_id,
             checkpoint_ns=checkpoint_ns,
         )
@@ -152,7 +161,8 @@ def seal_snapshot(
                 "assembly-idempotency-conflict: snapshot 与已提交 assembly 不一致"
             )
         detail_ref = owner._storage.get_context_assembly_detail_ref(
-            snapshot.session_id,
+            session_id,
+            thread_id,
             assembly_id=committed.assembly_id,
             checkpoint_ns=checkpoint_ns,
         )
@@ -163,7 +173,8 @@ def seal_snapshot(
         if detail_ref is not None:
             record = detail_record_from_mapping(
                 owner._storage.get_context_plan_detail(
-                    snapshot.session_id,
+                    session_id,
+                    thread_id,
                     detail_ref=detail_ref,
                     checkpoint_ns=checkpoint_ns,
                 )
@@ -178,13 +189,18 @@ def seal_snapshot(
                     "assembly-idempotency-conflict: 重试 header detail manifest 不一致"
                 )
             owner.read_context_plan_detail(
-                snapshot.session_id, detail_ref=detail_ref, checkpoint_ns=checkpoint_ns
+                session_id,
+                thread_id,
+                detail_ref=detail_ref,
+                checkpoint_ns=checkpoint_ns,
             )
         elif required_detail or sensitive_detail:
             raise ValueError(
                 "assembly-idempotency-conflict: 无正文的 header detail flags 不一致"
             )
         return owner._storage.seal_context_assembly(
+            session_id,
+            thread_id,
             committed,
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=seal_input_hash,
@@ -211,7 +227,8 @@ def seal_snapshot(
             raise ValueError("detail-unavailable: sensitive detail 必须提供正文")
         if detail is not None:
             record = owner._detail_store.write(
-                session_id=snapshot.session_id,
+                session_id=session_id,
+                thread_id=thread_id,
                 assembly_id=snapshot.assembly_id,
                 detail_kind="assembly_snapshot",
                 retention_class="assembly_audit",
@@ -223,6 +240,8 @@ def seal_snapshot(
             )
             owner._storage.register_context_plan_detail(record)
         return owner._storage.seal_context_assembly(
+            session_id,
+            thread_id,
             snapshot,
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=seal_input_hash,
@@ -233,7 +252,8 @@ def seal_snapshot(
     except BaseException as error:
         record_failed_seal(
             owner,
-            snapshot.session_id,
+            session_id,
+            thread_id,
             snapshot.plan_id,
             seal_idempotency_key,
             checkpoint_ns,
@@ -241,6 +261,10 @@ def seal_snapshot(
         )
         if record is not None:
             release_uncommitted_details(
-                owner, snapshot.session_id, checkpoint_ns, (record,)
+                owner,
+                session_id,
+                thread_id,
+                checkpoint_ns,
+                (record,),
             )
         raise

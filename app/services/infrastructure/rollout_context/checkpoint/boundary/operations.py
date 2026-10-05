@@ -76,9 +76,12 @@ class RolloutCheckpointOperationsMixin:
             raise ValueError(
                 "context boundary 必须是 rewind、history_replay 或 compaction"
             )
-        with self._lock(thread_id, checkpoint_ns):
-            self.initialize(thread_id, checkpoint_ns)
-            with self._connect(thread_id, checkpoint_ns) as connection:
+        session_id = self._session_id_from_owner_scope(thread_id)
+        with self._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+            with self._connect(
+                thread_id, checkpoint_ns, session_id=session_id
+            ) as connection:
                 self._require_v2_runtime(connection)
                 if source_turn_id is not None:
                     resolved = self._resolve_turn_anchor_connection(
@@ -157,7 +160,7 @@ class RolloutCheckpointOperationsMixin:
                 )
                 activation_refs = read_activation_refs_for_turns(
                     connection,
-                    session_id=thread_id,
+                    session_id=session_id,
                     turn_ids=source_turn_ids,
                 )
                 # 在创建目标 view/branch 前验证 tool protocol closure：

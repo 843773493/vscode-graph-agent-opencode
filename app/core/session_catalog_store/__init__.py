@@ -12,7 +12,8 @@ subtree delete journal 与空 folder 删除（``subtree_delete.py``）、只读�
 生命周期方法（``__init__``/``connection``/``close``/``_ensure_open``/
 ``_connect``/``_initialize``/``_verify_quick_integrity``/
 ``_require_tables_present``/``write_transaction``/``_bump_generation``/
-``current_generation``/``read_transaction``），并按原名再导出模块级公开符号，
+``current_generation``/``current_navigation_revision``/``read_transaction``），
+并按原名再导出模块级公开符号，
 对外契约与导入路径保持不变：``app.core.session_catalog_store.SessionCatalogStore``。
 
 错误分类约定：``TypeError`` 输入类型错误、``ValueError`` 输入形态非法、
@@ -37,7 +38,9 @@ from app.core.session_catalog_store._schema import (
     _IDX_NODES_PARENT_DDL,
     _IDX_NODES_WORKSPACE_DDL,
     _IDX_SUBTREE_DELETE_STATE_DDL,
+    _NAVIGATION_REVISION_TRIGGER_DDLS,
     _NODES_TABLE_DDL,
+    _REQUIRED_NAVIGATION_REVISION_TRIGGERS,
     _REQUIRED_TABLES_BY_VERSION,
     _SUBTREE_DELETE_RECORDS_TABLE_DDL,
 )
@@ -48,6 +51,7 @@ from app.core.session_catalog_store.contracts import (
     CatalogMaintenanceRequiredError,
     ForkRetentionClaim,
     SessionCatalogNode,
+    SessionCreationPurpose,
     SessionCreationRecord,
     SourceRetainedByForkError,
     SourceRetentionOperationPendingError,
@@ -80,6 +84,7 @@ __all__ = [
     "ForkRetentionClaim",
     "SessionCatalogNode",
     "SessionCatalogStore",
+    "SessionCreationPurpose",
     "SessionCreationRecord",
     "SessionLifecycleFence",
     "SourceRetainedByForkError",
@@ -110,7 +115,7 @@ class SessionCatalogStore(
     创建和删除 journal 与 nodes 同库，由事务保证目录可见性和恢复进度的一致性。
     """
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 7
 
     def __init__(self, database_path: Path, sessions_root: Path) -> None:
         self.database_path = database_path.expanduser().resolve()
@@ -197,25 +202,36 @@ class SessionCatalogStore(
         return connection
 
     def _initialize(self) -> None:
-        """幂等建表并设置 user_version；未知版本 fail-closed 拒绝打开。
-
-        支持的 current：0（全新库，建全部表并置 v3）、1（R10 v1 库）、
-        2（R14 v2 库）、3（当前版本）。1/2→3 是**显式一次性 schema
-        迁移**：同一 ``BEGIN IMMEDIATE`` 事务内加法建
-        ``fork_retention_claims``/``catalog_metadata`` 两张表并升 v3，不动
-        既有表 DDL 与数据、无动态分支。``subtree_delete_records`` 是 R14
-        加法补表（不改 user_version），每次打开幂等补建。
-        """
+        """只初始化全新 v7 catalog；其它版本必须经显式维护处理。"""
         current = int(
             self._connection.execute("PRAGMA user_version").fetchone()[0]
         )
-        if current > self.SCHEMA_VERSION:
+        if current not in (0, self.SCHEMA_VERSION):
+            if current < self.SCHEMA_VERSION:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog schema 旧版不受支持，拒绝自动迁移；"
+                    "须通过显式维护流程核对或恢复备份: "
+                    f"path={self.database_path}, user_version={current}, "
+                    f"required={self.SCHEMA_VERSION}"
+                )
             raise RuntimeError(
                 "session catalog schema 版本未知，fail-closed 拒绝打开: "
                 f"path={self.database_path}, user_version={current}, "
                 f"supported={self.SCHEMA_VERSION}"
             )
-        if current:
+        if current == 0:
+            existing_tables = self._connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            if existing_tables:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog user_version 为 0 但已包含数据表，"
+                    "拒绝按全新库初始化: "
+                    f"path={self.database_path}, "
+                    f"tables={[str(row[0]) for row in existing_tables]}"
+                )
+        else:
             self._verify_quick_integrity()
             self._require_tables_present(current)
         self._connection.execute("BEGIN IMMEDIATE")
@@ -230,7 +246,10 @@ class SessionCatalogStore(
             self._connection.execute(_FORK_RETENTION_CLAIMS_TABLE_DDL)
             self._connection.execute(_IDX_FORK_RETENTION_SOURCE_DDL)
             self._connection.execute(_CATALOG_METADATA_TABLE_DDL)
-            self._connection.execute(_CATALOG_METADATA_SEED)
+            if current == 0:
+                self._connection.execute(_CATALOG_METADATA_SEED)
+            for trigger_ddl in _NAVIGATION_REVISION_TRIGGER_DDLS:
+                self._connection.execute(trigger_ddl)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(
                     f"PRAGMA user_version = {self.SCHEMA_VERSION}"
@@ -279,6 +298,90 @@ class SessionCatalogStore(
                 "session catalog 缺表，拒绝以空表重建（库被外部改写）: "
                 f"path={self.database_path}, user_version={current}, "
                 f"missing={missing}"
+            )
+        node_columns = {
+            str(row[1])
+            for row in self._connection.execute("PRAGMA table_info(nodes)").fetchall()
+        }
+        creation_columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(session_creation_records)"
+            ).fetchall()
+        }
+        if (
+            "title_source" not in node_columns
+            or not {"title_source", "purpose", "session_metadata_json", "request_intent_json",
+                    "graph_id", "graph_revision", "graph_schema_hash", "capability_profile_hash"}
+            <= creation_columns
+        ):
+            raise CatalogMaintenanceRequiredError(
+                "session catalog v7 缺少权威创建字段，拒绝自动修复: "
+                f"path={self.database_path}, nodes={sorted(node_columns)}, "
+                f"creation_records={sorted(creation_columns)}"
+            )
+        metadata_columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(catalog_metadata)"
+            ).fetchall()
+        }
+        missing_columns = {
+            "generation",
+            "navigation_revision",
+        } - metadata_columns
+        if missing_columns:
+            raise CatalogMaintenanceRequiredError(
+                "session catalog metadata 缺少必需列，拒绝自动修复: "
+                f"path={self.database_path}, missing={sorted(missing_columns)}"
+            )
+        metadata_row = self._connection.execute(
+            "SELECT 1 FROM catalog_metadata WHERE singleton_id = 1"
+        ).fetchone()
+        if metadata_row is None:
+            raise CatalogMaintenanceRequiredError(
+                "session catalog 缺少 catalog_metadata 单例行，"
+                "拒绝重置备份或导航 revision: "
+                f"path={self.database_path}"
+            )
+        canonical = sqlite3.connect(":memory:")
+        try:
+            canonical.execute(_NODES_TABLE_DDL)
+            canonical.execute(_CATALOG_METADATA_TABLE_DDL)
+            for trigger_ddl in _NAVIGATION_REVISION_TRIGGER_DDLS:
+                canonical.execute(trigger_ddl)
+            canonical_trigger_sql = {
+                str(row[0]): str(row[1])
+                for row in canonical.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
+                ).fetchall()
+            }
+        finally:
+            canonical.close()
+
+        present_trigger_sql = {
+            str(row[0]): str(row[1])
+            for row in self._connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        missing_triggers = (
+            set(_REQUIRED_NAVIGATION_REVISION_TRIGGERS)
+            - present_trigger_sql.keys()
+        )
+        mismatched_triggers = {
+            name
+            for name in _REQUIRED_NAVIGATION_REVISION_TRIGGERS
+            if name in present_trigger_sql
+            and present_trigger_sql[name] != canonical_trigger_sql[name]
+        }
+        if missing_triggers or mismatched_triggers:
+            raise CatalogMaintenanceRequiredError(
+                "session catalog 缺少导航 revision triggers 或定义不符，"
+                "拒绝继续读写: "
+                f"path={self.database_path}, "
+                f"missing={sorted(missing_triggers)}, "
+                f"definition_mismatch={sorted(mismatched_triggers)}"
             )
 
     @contextmanager
@@ -330,6 +433,20 @@ class SessionCatalogStore(
                 raise CatalogMaintenanceRequiredError(
                     "session catalog 缺少 catalog_metadata 单例行（库被外部改动，"
                     f"须进入维护模式核对）: path={self.database_path}"
+                )
+            return int(row[0])
+
+    def current_navigation_revision(self) -> int:
+        """返回由真实 nodes 行变化推进的导航 revision。"""
+        with self.read_transaction() as connection:
+            row = connection.execute(
+                "SELECT navigation_revision FROM catalog_metadata "
+                "WHERE singleton_id = 1"
+            ).fetchone()
+            if row is None:
+                raise CatalogMaintenanceRequiredError(
+                    "session catalog 缺少 navigation revision 记录，"
+                    f"须进入维护模式核对: path={self.database_path}"
                 )
             return int(row[0])
 

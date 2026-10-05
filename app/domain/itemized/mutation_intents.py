@@ -43,6 +43,7 @@ IntentFailureOutcome = Literal[
 
 CanonicalItemKind = Literal[
     "user_message",
+    "runtime_notice",
     "attachment",
     "assistant_message",
     "reasoning",
@@ -121,17 +122,21 @@ class AppendCanonicalItemIntent:
     owner: MutationIntentOwner
     item_id: str
     item_kind: CanonicalItemKind
-    origin_turn_id: str
+    execution_id: str
+    origin_turn_id: str | None
     tool_call_id: str | None = None
     append_ordinal: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty(self.item_id, "AppendCanonicalItemIntent.item_id")
-        _require_non_empty(
-            self.origin_turn_id, "AppendCanonicalItemIntent.origin_turn_id"
-        )
+        _require_non_empty(self.execution_id, "AppendCanonicalItemIntent.execution_id")
+        if self.origin_turn_id is not None:
+            _require_non_empty(
+                self.origin_turn_id, "AppendCanonicalItemIntent.origin_turn_id"
+            )
         if self.item_kind not in {
             "user_message",
+            "runtime_notice",
             "attachment",
             "assistant_message",
             "reasoning",
@@ -140,6 +145,10 @@ class AppendCanonicalItemIntent:
         }:
             raise ValueError(
                 f"AppendCanonicalItemIntent.item_kind 非法: {self.item_kind!r}"
+            )
+        if self.item_kind in {"user_message", "attachment"} and self.origin_turn_id is None:
+            raise ValueError(
+                f"{self.item_kind} append intent 必须绑定真实 origin_turn_id"
             )
         if self.item_kind in {"tool_call", "tool_result"}:
             _require_non_empty(

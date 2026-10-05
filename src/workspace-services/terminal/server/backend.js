@@ -1,13 +1,12 @@
 import http from "node:http";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   encodeTerminalServerMessage,
   parseTerminalClientMessage,
 } from "../protocol/messages.js";
-import { TerminalManager, resolveWorkspaceRoot } from "./terminalManager.js";
+import { TerminalManager, resolveWorkspaceRoot, validateWorkspaceId } from "./terminalManager.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8012;
@@ -35,9 +34,6 @@ function sendJson(response, status, data) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type",
   });
   response.end(body);
 }
@@ -56,39 +52,6 @@ async function readJson(request) {
 
 function notFound(response) {
   sendJson(response, 404, { error: "not_found" });
-}
-
-function missingTerminalSnapshot(manager, terminalId) {
-  const timestamp = new Date().toISOString();
-  return {
-    terminal_id: terminalId,
-    session_id: "",
-    title: "Deleted Terminal",
-    command: "",
-    args: [],
-    cwd_relative: "",
-    cols: 100,
-    rows: 30,
-    status: "deleted",
-    created_at: timestamp,
-    updated_at: timestamp,
-    started_at: null,
-    ended_at: timestamp,
-    exit_code: null,
-    signal: null,
-    os_pid: null,
-    pty_worker_pid: null,
-    sequence: 0,
-    buffer: "",
-    display_buffer: "",
-    last_command: null,
-    last_command_status: "deleted",
-    last_command_exit_code: null,
-    last_command_started_at: null,
-    last_command_completed_at: timestamp,
-    client_count: 0,
-    attach_url: manager.attachUrl(terminalId),
-  };
 }
 
 function normalizePathname(request) {
@@ -118,15 +81,53 @@ function resolveRequiredWorkspaceRoot(args) {
   return resolved;
 }
 
-function resolveWorkspaceId(args, workspaceRoot) {
-  const configured = args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID;
-  if (typeof configured === "string" && configured.trim() !== "" && configured !== "true") {
-    return configured.trim();
+function resolveRequiredWorkspaceId(args) {
+  const configured = args.has("workspace-id")
+    ? args.get("workspace-id")
+    : process.env.BOXTEAM_WORKSPACE_ID;
+  return validateWorkspaceId(configured);
+}
+
+class WorkspaceAddressError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+    this.statusCode = statusCode;
   }
-  const digest = createHash("sha256")
-    .update(`local-managed\n${workspaceRoot}`, "utf8")
-    .digest("hex");
-  return `gw_${digest.slice(0, 32)}`;
+}
+
+function requestWorkspaceId(request, url, mountedWorkspaceId) {
+  const header = request.headers["x-boxteam-workspace-id"];
+  const queryValues = url.searchParams.getAll("workspace_id");
+  if (queryValues.length > 1 || Array.isArray(header)) {
+    throw new WorkspaceAddressError("workspace_id 必须是单一显式 UUID", 400);
+  }
+  const query = queryValues[0];
+  if (header !== undefined && query !== undefined && header !== query) {
+    throw new WorkspaceAddressError("workspace_id 头部与查询载体冲突", 400);
+  }
+  const selected = header ?? query;
+  if (selected === undefined) {
+    throw new WorkspaceAddressError("缺少显式 workspace_id", 400);
+  }
+  try {
+    validateWorkspaceId(selected);
+  } catch (error) {
+    throw new WorkspaceAddressError(error.message, 400);
+  }
+  if (selected !== mountedWorkspaceId) {
+    throw new WorkspaceAddressError(`未挂载的终端工作区 UUID: ${selected}`, 404);
+  }
+  return selected;
+}
+
+function requireResourceOwner(request) {
+  const address = request.socket.remoteAddress;
+  if (!new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]).has(address)
+    || request.headers["x-boxteam-resource-owner"] !== "workspace-terminal"
+    || request.headers.origin !== undefined
+    || request.headers["sec-fetch-site"] !== undefined) {
+    throw new WorkspaceAddressError("Terminal 管理仅接受工作区 owner 的 loopback 通道", 403);
+  }
 }
 
 function wsClient(socket) {
@@ -167,29 +168,14 @@ async function main() {
   const host = args.get("host") || process.env.BOXTEAM_TERMINAL_HOST || DEFAULT_HOST;
   const port = Number(args.get("port") || process.env.BOXTEAM_TERMINAL_BACKEND_PORT || DEFAULT_PORT);
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
-  const workspaceId = resolveWorkspaceId(args, workspaceRoot);
-  const terminalFrontendBaseUrl =
-    args.get("frontend-url") ||
-    process.env.BOXTEAM_TERMINAL_FRONTEND_URL ||
-    "http://127.0.0.1:8013";
-
+  const workspaceId = resolveRequiredWorkspaceId(args);
   const manager = new TerminalManager({
     workspaceRoot,
     workspaceId,
-    terminalFrontendBaseUrl,
   });
   await manager.init();
 
   const server = http.createServer(async (request, response) => {
-    response.setHeader("access-control-allow-origin", "*");
-    response.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
-    response.setHeader("access-control-allow-headers", "content-type");
-    if (request.method === "OPTIONS") {
-      response.writeHead(204);
-      response.end();
-      return;
-    }
-
     try {
       const { url, pathname } = normalizePathname(request);
 
@@ -198,24 +184,37 @@ async function main() {
           ok: true,
           process_id: process.pid,
           workspace_id: workspaceId,
-          workspace_root: workspaceRoot,
           terminal_count: manager.list().length,
         });
         return;
       }
 
+      if (pathname.startsWith("/api/terminals")) {
+        requireResourceOwner(request);
+        requestWorkspaceId(request, url, workspaceId);
+      }
+
       if (request.method === "GET" && pathname === "/api/terminals") {
         sendJson(response, 200, {
-          data: manager.list({ sessionId: url.searchParams.get("session_id") }),
+          data: manager.list(),
         });
         return;
       }
 
       if (request.method === "POST" && pathname === "/api/terminals") {
         const payload = await readJson(request);
+        for (const field of ["session_id", "source_thread_id", "source_thread", "retention_scope", "thread_associations"]) {
+          if (Object.hasOwn(payload, field)) {
+            throw new WorkspaceAddressError(`Terminal 传输层不接受领域归属字段: ${field}`, 400);
+          }
+        }
+        if (payload.workspace_id !== workspaceId) {
+          throw new WorkspaceAddressError("workspace_id 请求载体与终端 owner 冲突", 400);
+        }
         const terminal = await manager.create({
           workspaceId: payload.workspace_id,
-          sessionId: payload.session_id,
+          terminalId: payload.terminal_id,
+          ownerRevision: payload.owner_revision,
           agentId: payload.agent_id,
           title: payload.title,
           cwd: payload.cwd,
@@ -234,21 +233,22 @@ async function main() {
         const action = terminalMatch[2] || "";
 
         if (request.method === "GET" && !action) {
-          try {
-            sendJson(response, 200, { data: manager.get(terminalId).snapshot() });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            if (
-              message.startsWith("终端不存在") &&
-              url.searchParams.get("missing_as_deleted") === "1"
-            ) {
-              sendJson(response, 200, {
-                data: missingTerminalSnapshot(manager, terminalId),
-              });
-              return;
-            }
-            throw error;
-          }
+          sendJson(response, 200, { data: manager.get(terminalId).snapshot() });
+          return;
+        }
+
+        if (request.method === "POST" && action === "owner-revision") {
+          const payload = await readJson(request);
+          await manager.syncOwnerRevision(terminalId, payload.owner_revision);
+          sendJson(response, 200, { data: manager.get(terminalId).snapshot() });
+          return;
+        }
+
+        if (request.method === "POST" && action === "transport-grant") {
+          const payload = await readJson(request);
+          sendJson(response, 200, { data: manager.issueTransportGrant(terminalId, {
+            ownerRevision: payload.owner_revision, association: payload.association,
+          }) });
           return;
         }
 
@@ -329,14 +329,30 @@ async function main() {
       notFound(response);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const status = message.startsWith("终端不存在") ? 404 : 500;
+      const status = error.statusCode ?? (message.startsWith("终端不存在") ? 404 : 500);
       sendJson(response, status, {
         error: message,
       });
     }
   });
 
-  const wss = new WebSocketServer({ server, path: "/terminal" });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      const { url, pathname } = normalizePathname(request);
+      if (pathname !== "/terminal") {
+        throw new WorkspaceAddressError("未知终端 WebSocket 路径", 404);
+      }
+      requestWorkspaceId(request, url, workspaceId);
+      wss.handleUpgrade(request, socket, head, (connection) => {
+        wss.emit("connection", connection, request);
+      });
+    } catch (error) {
+      const status = error.statusCode ?? 500;
+      const body = error.message;
+      socket.end(`HTTP/1.1 ${status} Workspace Address Rejected\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    }
+  });
   wss.on("connection", (socket) => {
     const client = wsClient(socket);
     let attachedTerminal = null;
@@ -346,6 +362,7 @@ async function main() {
       const currentTerminal = attachedTerminal;
       attachedTerminal = null;
       if (currentTerminal) {
+        currentTerminal.transports.delete(client);
         await currentTerminal.detach(client);
       }
     };
@@ -356,6 +373,7 @@ async function main() {
       if (message.type === "attach") {
         await detachCurrent();
         const targetTerminal = manager.get(message.terminalId);
+        const grant = manager.consumeTransportGrant(message.terminalId, message.grantToken);
         if (message.cols && message.rows) {
           await manager.resize(
             targetTerminal.id,
@@ -363,8 +381,12 @@ async function main() {
             parsePositiveInt(message.rows, "rows"),
           );
         }
+        if (grant.revision !== targetTerminal.transportOwnerRevision) {
+          throw new Error(`终端连接授权已过期: terminal_id=${targetTerminal.id}`);
+        }
         await targetTerminal.attach(client, {
           afterSequence: message.afterSequence,
+          grant,
         });
         attachedTerminal = targetTerminal;
         return;
@@ -379,6 +401,7 @@ async function main() {
       if (!currentTerminal) {
         throw new Error("尚未 attach 到终端");
       }
+      currentTerminal.assertTransport(client);
 
       if (message.type === "input" || message.type === "agentInput") {
         if (typeof message.data !== "string") {

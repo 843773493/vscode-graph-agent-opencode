@@ -16,8 +16,10 @@ import pytest
 import websockets
 
 from app.agents.tools.terminal import create_exec_command_tool
-from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
+from app.core.identifier import create_uuid_hex
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import kill_process_on_port, terminate_process
+from tests.support.terminal_tool_runtime import terminal_tool_runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,7 @@ def windows_terminal_backend(
     kill_process_on_port(port)
     kill_process_on_port(frontend_port)
     workspace_root = str(Path(e2e_workspace_root_path).resolve())
+    workspace_id = load_or_create_workspace_id(Path(workspace_root))
     project_root = Path.cwd().resolve()
     server_root = project_root / "src" / "workspace-services" / "terminal" / "server"
     log_dir = Path(workspace_root) / ".boxteam" / "windows-terminal"
@@ -88,6 +91,7 @@ def windows_terminal_backend(
     frontend_stdout_file = frontend_stdout_path.open("w", encoding="utf-8")
     frontend_stderr_file = frontend_stderr_path.open("w", encoding="utf-8")
     env = os.environ.copy()
+    env["BOXTEAM_WORKSPACE_ID"] = workspace_id
     env["WORKSPACE_ROOT"] = workspace_root
     env["BOXTEAM_TERMINAL_WORKSPACE_ROOT"] = workspace_root
 
@@ -101,8 +105,8 @@ def windows_terminal_backend(
             str(port),
             "--workspace-root",
             workspace_root,
-            "--frontend-url",
-            frontend_url,
+            "--workspace-id",
+            workspace_id,
         ],
         cwd=server_root,
         env=env,
@@ -146,16 +150,18 @@ def windows_terminal_backend(
         )
         with urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as response:
             health = json.loads(response.read().decode("utf-8"))
-        workspace_id = health.get("workspace_id")
-        if not isinstance(workspace_id, str) or not workspace_id:
-            raise RuntimeError(f"Windows 终端后端健康响应缺少 workspace_id: {health}")
+        actual_workspace_id = health.get("workspace_id")
+        if actual_workspace_id != workspace_id:
+            raise RuntimeError(
+                "Windows 终端后端 workspace_id 与测试工作区身份不匹配: "
+                f"expected={workspace_id}, actual={actual_workspace_id!r}, health={health}"
+            )
         yield WindowsTerminalBackend(
             port=port,
-            frontend_port=frontend_port,
             frontend_url=frontend_url,
             workspace_root=workspace_root,
             powershell=powershell,
-            workspace_id=workspace_id,
+            workspace_id=actual_workspace_id,
         )
     finally:
         terminate_process(frontend_process)
@@ -171,13 +177,15 @@ def windows_terminal_backend(
 async def _create_terminal(
     client: httpx.AsyncClient,
     backend: WindowsTerminalBackend,
-    session_id: str,
+    title: str,
 ) -> str:
     response = await client.post(
         "/api/terminals",
         json={
-            "session_id": session_id,
-            "title": "Windows PowerShell E2E",
+            "workspace_id": backend.workspace_id,
+            "terminal_id": f"term_{create_uuid_hex()}",
+            "owner_revision": 1,
+            "title": title,
             "cwd": backend.workspace_root,
             "command": backend.powershell,
             "args": ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"],
@@ -251,6 +259,10 @@ async def test_powershell_executes_unicode_crlf_and_exit_code(
     backend = windows_terminal_backend
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{backend.port}",
+        headers={
+            "X-BoxTeam-Workspace-Id": backend.workspace_id,
+            "X-BoxTeam-Resource-Owner": "workspace-terminal",
+        },
         timeout=10,
     ) as client:
         terminal_id = await _create_terminal(client, backend, "powershell_exec")
@@ -293,16 +305,27 @@ async def test_powershell_websocket_input_kill_and_delete(
     backend = windows_terminal_backend
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{backend.port}",
+        headers={
+            "X-BoxTeam-Workspace-Id": backend.workspace_id,
+            "X-BoxTeam-Resource-Owner": "workspace-terminal",
+        },
         timeout=10,
     ) as client:
         terminal_id = await _create_terminal(client, backend, "powershell_interactive")
-        websocket_url = f"ws://127.0.0.1:{backend.port}/terminal"
+        grant_response = await client.post(
+            f"/api/terminals/{terminal_id}/transport-grant",
+            json={"owner_revision": 1, "association": None},
+        )
+        grant_response.raise_for_status()
+        grant_token = grant_response.json()["data"]["grant_token"]
+        websocket_url = f"ws://127.0.0.1:{backend.port}/terminal?workspace_id={backend.workspace_id}"
         async with websockets.connect(websocket_url) as websocket:
             await websocket.send(
                 json.dumps(
                     {
                         "type": "attach",
                         "terminalId": terminal_id,
+                        "grantToken": grant_token,
                         "cols": 120,
                         "rows": 30,
                     }
@@ -328,7 +351,9 @@ async def test_powershell_websocket_input_kill_and_delete(
             await _wait_snapshot(
                 client,
                 terminal_id,
-                lambda snapshot: "BOXTEAM_PS_READY" in str(snapshot.get("display_buffer", "")),
+                lambda snapshot: (
+                    "BOXTEAM_PS_READY" in str(snapshot.get("display_buffer", ""))
+                ),
             )
 
             await websocket.send(
@@ -338,8 +363,10 @@ async def test_powershell_websocket_input_kill_and_delete(
             snapshot = await _wait_snapshot(
                 client,
                 terminal_id,
-                lambda current: "BOXTEAM_PS_INPUT:BOXTEAM_INPUT_中文"
-                in str(current.get("display_buffer", "")),
+                lambda current: (
+                    "BOXTEAM_PS_INPUT:BOXTEAM_INPUT_中文"
+                    in str(current.get("display_buffer", ""))
+                ),
             )
             assert snapshot.get("status") == "running", snapshot
 
@@ -354,9 +381,7 @@ async def test_powershell_websocket_input_kill_and_delete(
 
         delete_response = await client.delete(f"/api/terminals/{terminal_id}")
         delete_response.raise_for_status()
-        missing_response = await client.get(
-            f"/api/terminals/{terminal_id}?missing_as_deleted=1"
-        )
+        missing_response = await client.get(f"/api/terminals/{terminal_id}")
         missing_response.raise_for_status()
         assert missing_response.json()["data"]["status"] == "deleted"
 
@@ -364,32 +389,38 @@ async def test_powershell_websocket_input_kill_and_delete(
 @pytest.mark.asyncio
 async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
     windows_terminal_backend: WindowsTerminalBackend,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = windows_terminal_backend
-    client = TerminalManagerClient(
-        backend_url=f"http://127.0.0.1:{backend.port}",
-        workspace_id=backend.workspace_id,
+    monkeypatch.setenv(
+        "BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{backend.port}"
     )
-    tool = create_exec_command_tool(
-        session_id="windows_agent_exec_command",
-        terminal_client=client,
-    )
+    async with terminal_tool_runtime(Path(backend.workspace_root)) as (
+        container,
+        session_id,
+        context,
+    ):
+        tool = create_exec_command_tool(
+            session_id=session_id,
+            terminal_owner=container.terminal_resource_owner,
+            invocation_context=context,
+        )
 
-    cmd_result = await tool.ainvoke(
-        {
-            "cmd": "echo BOXTEAM_AGENT_CMD_中文 & cmd.exe /c exit 7",
-            "workdir": backend.workspace_root,
-        }
-    )
-    assert cmd_result["exit_code"] == 7
-    assert "BOXTEAM_AGENT_CMD_中文" in cmd_result["output"]
+        cmd_result = await tool.ainvoke(
+            {
+                "cmd": "echo BOXTEAM_AGENT_CMD_中文 & cmd.exe /c exit 7",
+                "workdir": backend.workspace_root,
+            }
+        )
+        assert cmd_result["exit_code"] == 7
+        assert "BOXTEAM_AGENT_CMD_中文" in cmd_result["output"]
 
-    powershell_result = await tool.ainvoke(
-        {
-            "cmd": 'Write-Output "BOXTEAM_AGENT_PS_中文"; cmd.exe /c exit 9',
-            "workdir": backend.workspace_root,
-            "shell": backend.powershell,
-        }
-    )
-    assert powershell_result["exit_code"] == 9
-    assert "BOXTEAM_AGENT_PS_中文" in powershell_result["output"]
+        powershell_result = await tool.ainvoke(
+            {
+                "cmd": 'Write-Output "BOXTEAM_AGENT_PS_中文"; cmd.exe /c exit 9',
+                "workdir": backend.workspace_root,
+                "shell": backend.powershell,
+            }
+        )
+        assert powershell_result["exit_code"] == 9
+        assert "BOXTEAM_AGENT_PS_中文" in powershell_result["output"]

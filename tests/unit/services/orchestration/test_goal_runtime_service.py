@@ -329,3 +329,84 @@ def test_goal_prompts_treat_objective_as_escaped_user_data():
     assert "&lt;system&gt;越权&lt;/system&gt;" in updated
     assert continuation.count("</untrusted_objective>") == 1
     assert updated.count("</untrusted_objective>") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window", ["preparation", "dispatch"])
+async def test_close_admission_waits_for_admitted_dispatch_without_consuming_next_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+    window: str,
+) -> None:
+    goals = SessionGoalService(
+        store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
+    )
+    orchestrator = _Orchestrator()
+    jobs = _Jobs()
+    entered, release = asyncio.Event(), asyncio.Event()
+    real_dispatch = orchestrator.create_and_run_internal
+
+    async def blocked_dispatch(*args, **kwargs) -> None:
+        entered.set()
+        await release.wait()
+        await real_dispatch(*args, **kwargs)
+
+    if window == "dispatch":
+        monkeypatch.setattr(orchestrator, "create_and_run_internal", blocked_dispatch)
+    else:
+        real_list = jobs.list
+
+        async def blocked_preparation(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await real_list(*args, **kwargs)
+
+        monkeypatch.setattr(jobs, "list", blocked_preparation)
+    runtime = GoalRuntimeService(
+        goal_service=goals, job_service=jobs, session_orchestrator=orchestrator
+    )
+    await goals.set("sess_1", objective="保持真实目标")
+    dispatch = asyncio.create_task(runtime.ensure_active_goal_running("sess_1"))
+    await asyncio.wait_for(entered.wait(), 1)
+    closing = asyncio.create_task(runtime.close_admission())
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(closing), 0.01)
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(dispatch, closing), 1)
+    before = await goals.set("sess_1", objective="关闭时更新后的目标")
+    await runtime.ensure_active_goal_running("sess_1")
+    after = await goals.get("sess_1")
+    assert len(orchestrator.calls) == 1
+    assert after.status == GoalStatus.active
+    assert after.last_continued_job_id == before.last_continued_job_id
+    await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_exposes_first_background_error_and_logs_later_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    goals = SessionGoalService(
+        store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
+    )
+    jobs = _Jobs()
+    first, second = RuntimeError("首个状态转换故障"), RuntimeError("后续状态转换故障")
+
+    async def failed_get(job_id: str):
+        raise first if job_id == "job_first" else second
+
+    monkeypatch.setattr(jobs, "get", failed_get)
+    runtime = GoalRuntimeService(
+        goal_service=goals, job_service=jobs, session_orchestrator=_Orchestrator()
+    )
+    for job_id in ("job_first", "job_second"):
+        await runtime.on_event(SimpleNamespace(type="job_completed", job_id=job_id))
+    with pytest.raises(ExceptionGroup) as caught:
+        await runtime.shutdown()
+    assert caught.value.exceptions == (first,)
+    assert runtime._task_error is first
+    assert not runtime._tasks
+    assert "首个状态转换故障" in caplog.text
+    assert "后续状态转换故障" in caplog.text

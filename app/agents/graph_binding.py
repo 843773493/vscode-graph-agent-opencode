@@ -7,10 +7,10 @@
 revision/hash；解析不到或不匹配时抛 :class:`GraphBindingUnavailableError`
 （``graph_binding_unavailable``），绝不回退到当前最新图。
 
-进程内缓存最多只允许复用不捕获 Session/Thread 的 graph blueprint/topology；
-需要 Session、thread、工具、provider 或执行信息的工具/middleware 通过每次
-invocation 的 :class:`ThreadRuntimeBinding` 取得（见 ``binding_for``），避免一个
-已编译图把其它 thread 的闭包带入请求。
+进程级 blueprint/topology 不捕获 Session/Thread；真实编译图由精确
+SessionThread 的 generation scope 持有，工厂通过 :class:`ThreadRuntimeBinding`
+显式绑定该 thread。跨 Turn 复用同代图，每轮 execution admission 由 Runner
+重新绑定，禁止把已编译图或首次 admission 交给其它 thread。
 
 hash 口径（deep-agent revision 2）：两个 hash 都是「确定性 canonical JSON →
 sha256」的稳定内容摘要，摘要形状遵循
@@ -22,8 +22,8 @@ sha256」的稳定内容摘要，摘要形状遵循
 - ``capability_profile_hash``：能力 profile 平面键值映射的确定性序列化。
 
 revision 2 的 slot/profile 是代码内声明式骨架（``DEEP_AGENT_MIDDLEWARE_STACK``
-等常量），而不是按 invocation 实际构建产物逐次计算：resolved 工具面与
-middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 invocation 漂移，
+等常量），而不是按 generation 实际构建产物逐次计算：resolved 工具面与
+middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 generation 漂移，
 若把它们直接纳入 hash，同一 ``(graph_id, graph_revision)`` 的重复注册会触发
 注册冲突错误。TODO(OpenSpec 8.4 后续轮)：把声明式骨架替换为「真实构建产物中
 稳定部分的确定性投影」，并让 registry 冲突检查覆盖该投影。
@@ -36,15 +36,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
 
 from app.agents.tool_invocation_context import ThreadRuntimeBinding
+from app.core.session_control_store import SessionControlStore
 
 # 摘要形状与 channel_events.py 同一标准：完整 ``sha256:`` + 64 位小写 hex。
 # 只查前缀会让「sha256: + 任意正文」走私，因此必须 fullmatch 全匹配。
@@ -71,9 +70,7 @@ def _validate_graph_identity(value: object, *, field_name: str) -> None:
             f"{field_name} 超过长度上限 {_MAX_IDENTITY_LENGTH}: 实际 {len(value)}"
         )
     if value.startswith("/") or _HOST_PATH_PATTERN.match(value):
-        raise ValueError(
-            f"{field_name} 不允许是宿主机路径，只能是稳定标识: {value!r}"
-        )
+        raise ValueError(f"{field_name} 不允许是宿主机路径，只能是稳定标识: {value!r}")
     if "/" in value or "\\" in value or ".." in value or value.startswith("~"):
         raise ValueError(
             f"{field_name} 不允许包含路径分隔符、'..' 或 '~' 前缀: {value!r}"
@@ -108,9 +105,8 @@ class GraphBinding:
             self.graph_id,
             field_name="GraphBinding.graph_id",
         )
-        if (
-            not isinstance(self.graph_revision, int)
-            or isinstance(self.graph_revision, bool)
+        if not isinstance(self.graph_revision, int) or isinstance(
+            self.graph_revision, bool
         ):
             raise TypeError(
                 "GraphBinding.graph_revision 必须是整数: "
@@ -150,10 +146,10 @@ class GraphFactoryRegistrationConflictError(RuntimeError):
 GraphFactoryBuilder = Callable[..., object]
 """可由 GraphBinding 选中的 graph factory callable。
 
-合同（OpenSpec 8.4 / design「graph factory 可重建」）：factory 只重建不捕获
-Session/Thread 的 graph blueprint/topology；需要 Session、thread、工具、
-provider 或执行信息的部分必须在 invocation 时经 :class:`ThreadRuntimeBinding`
-显式注入，不允许 factory 闭包捕获其它 thread 的上下文。
+合同（OpenSpec 8.4 / design「graph factory 可重建」）：注册 callable 不捕获
+Session/Thread。构建精确 thread generation 时，session/thread 经
+:class:`ThreadRuntimeBinding` 显式注入；编译结果只由该 thread 的 scope 持有。
+工厂与长期资源不得捕获任何 invocation admission。
 """
 
 
@@ -335,9 +331,7 @@ def compute_capability_profile_hash(
                 f"key={key!r}, value_type={type(value).__name__}"
             )
         profile[key] = value
-    return _sha256_of_canonical_json(
-        {"kind": "capability_profile", "profile": profile}
-    )
+    return _sha256_of_canonical_json({"kind": "capability_profile", "profile": profile})
 
 
 DEEP_AGENT_GRAPH_ID: Final[str] = "deep-agent"
@@ -416,66 +410,30 @@ class GraphBindingOwnerKey:
         for field_name in ("session_id", "thread_id"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
-                raise ValueError(
-                    f"GraphBindingOwnerKey.{field_name} 必须是非空字符串"
-                )
+                raise ValueError(f"GraphBindingOwnerKey.{field_name} 必须是非空字符串")
 
 
 class GraphBindingStorePort(Protocol):
-    """GraphBinding 在 owner SessionThread 上的读写端口；实现方拥有存储。"""
+    """GraphBinding 在 owner SessionThread 上的只读查询端口。"""
 
     def load_graph_binding(
         self,
         owner: GraphBindingOwnerKey,
     ) -> GraphBinding | None:
-        """读取该 owner 已持久化的 selector；从未持久化时返回 None。"""
+        """读取权威 catalog selector；未绑定行返回 None，不能写入或推断。"""
         ...
 
-    def save_graph_binding(
+
+class SessionControlGraphBindingStore:
+    """只读读取 thread_catalog authority 的 GraphBinding 适配器。"""
+
+    def __init__(
         self,
-        owner: GraphBindingOwnerKey,
-        binding: GraphBinding,
+        session_control_store_factory: Callable[[str], SessionControlStore],
     ) -> None:
-        """持久化该 owner 的 selector；与已存内容不同必须显式冲突。"""
-        ...
-
-
-_STORE_FORMAT_VERSION: Final[int] = 1
-_STORE_FILE_NAME: Final[str] = "graph-bindings.json"
-_BINDING_ENTRY_FIELDS: Final[frozenset[str]] = frozenset(
-    {
-        "graph_id",
-        "graph_revision",
-        "graph_schema_hash",
-        "capability_profile_hash",
-    }
-)
-
-
-class JsonFileGraphBindingStore:
-    """最小侵入的 GraphBinding 持久化：每个 owner 目录一个 JSON 文档。
-
-    选择独立小存储而不是扩 RolloutCheckpointSaver/rollout SQLite schema 的
-    理由：GraphBinding 在 thread 创建/重建时写入一次、重启时读取一次，没有
-    CSM 控制状态那样的工具调用/before_model 高频事务边界；独立 JSON 文档不
-    触碰 canonical writer 的文件锁序，也不涉及 v4 schema 版本化迁移，侵入
-    最小。持久化位置由装配方显式传入：生产必须把 ``directory`` 指到统一会话
-    路径解析器解析出的 thread 节点附属目录；本类不拼接任何 ``.boxteam`` 固定
-    路径。session/thread 身份只作为文档内的字典键，不进入文件名，无路径拼接
-    风险。
-
-    语义：``save`` 对同一 owner 幂等（同一 selector 重复写入不产生副作用），
-    写入不同 selector 视为绑定漂移并显式失败（fail closed）。
-
-    图骨架变更（例如删除 slot 并 bump revision）会让既有 owner 的持久 selector
-    失配，必须在升级窗口内显式重绑：``rebind_graph_binding`` 要求调用方逐
-    owner 声明它读到的既有 selector，只有与磁盘完全一致才改写，否则显式失败。
-    正常 resolve 路径永远不会调用它，fail-closed 语义不被削弱。
-    """
-
-    def __init__(self, directory: Path) -> None:
-        self._directory = directory
-        self._path = directory / _STORE_FILE_NAME
+        if not callable(session_control_store_factory):
+            raise TypeError("session_control_store_factory 必须可调用")
+        self._session_control_store_factory = session_control_store_factory
 
     def load_graph_binding(
         self,
@@ -485,226 +443,19 @@ class JsonFileGraphBindingStore:
             raise TypeError(
                 f"load_graph_binding 需要 GraphBindingOwnerKey: {type(owner).__name__}"
             )
-        bindings = self._read_bindings()
-        session_bindings = bindings.get(owner.session_id)
-        if not isinstance(session_bindings, dict):
-            return None
-        entry = session_bindings.get(owner.thread_id)
-        if entry is None:
-            return None
-        return self._binding_from_entry(owner, entry)
-
-    def save_graph_binding(
-        self,
-        owner: GraphBindingOwnerKey,
-        binding: GraphBinding,
-    ) -> None:
-        if not isinstance(owner, GraphBindingOwnerKey):
-            raise TypeError(
-                f"save_graph_binding 需要 GraphBindingOwnerKey: {type(owner).__name__}"
-            )
-        if not isinstance(binding, GraphBinding):
-            raise TypeError(
-                f"save_graph_binding 需要 GraphBinding: {type(binding).__name__}"
-            )
-        bindings = self._read_bindings()
-        session_bindings = dict(
-            bindings.get(owner.session_id)
-            if isinstance(bindings.get(owner.session_id), dict)
-            else {}
-        )
-        existing = session_bindings.get(owner.thread_id)
-        if existing is not None:
-            stored = self._binding_from_entry(owner, existing)
-            if stored == binding:
-                # 幂等写入：同一 owner 的同一 selector 重复持久化无副作用。
-                return
-            raise RuntimeError(
-                "graph-binding-store-conflict: 该 SessionThread 已持久化不同的 "
-                f"GraphBinding: owner=({owner.session_id!r}, {owner.thread_id!r}), "
-                f"已持久化=[{_binding_summary(stored)}], "
-                f"新写入=[{_binding_summary(binding)}]；重绑必须走显式流程，"
-                "不允许静默覆盖"
-            )
-        session_bindings[owner.thread_id] = {
-            "graph_id": binding.graph_id,
-            "graph_revision": binding.graph_revision,
-            "graph_schema_hash": binding.graph_schema_hash,
-            "capability_profile_hash": binding.capability_profile_hash,
-        }
-        bindings[owner.session_id] = session_bindings
-        self._write_document({"version": _STORE_FORMAT_VERSION, "bindings": bindings})
-
-    def persisted_owners(self) -> tuple[GraphBindingOwnerKey, ...]:
-        """枚举该文档中已持久化的全部 owner，用于显式迁移前盘点。"""
-        owners: list[GraphBindingOwnerKey] = []
-        for session_id, session_bindings in self._read_bindings().items():
-            if not isinstance(session_bindings, dict):
-                # _read_bindings 已做过结构校验，这里只是给静态类型收窄。
-                raise TypeError(
-                    f"graph-binding-store session 条目必须是对象: "
-                    f"path={self._path}, session_id={session_id!r}"
-                )
-            for thread_id in session_bindings:
-                owners.append(
-                    GraphBindingOwnerKey(
-                        session_id=session_id,
-                        thread_id=thread_id,
-                    )
-                )
-        return tuple(sorted(owners, key=lambda o: (o.session_id, o.thread_id)))
-
-    def rebind_graph_binding(
-        self,
-        owner: GraphBindingOwnerKey,
-        *,
-        expected: GraphBinding,
-        new: GraphBinding,
-    ) -> bool:
-        """显式重绑：仅当磁盘上的既有 selector 逐字段等于 ``expected`` 才改写。
-
-        返回是否发生了写入（磁盘已是 ``new`` 时为幂等 no-op）。这是唯一允许
-        改写既有 selector 的入口：调用方必须声明它读到的既有值，磁盘与声明
-        不一致即显式失败，绝不按"当前最新图"盲目覆盖。正常构建/reload 路径
-        不会调用本方法。
-        """
-        if not isinstance(owner, GraphBindingOwnerKey):
-            raise TypeError(
-                f"rebind_graph_binding 需要 GraphBindingOwnerKey: {type(owner).__name__}"
-            )
-        if not isinstance(expected, GraphBinding) or not isinstance(new, GraphBinding):
-            raise TypeError(
-                "rebind_graph_binding 需要 GraphBinding 作为 expected/new: "
-                f"expected={type(expected).__name__}, new={type(new).__name__}"
-            )
-        bindings = self._read_bindings()
-        session_bindings = bindings.get(owner.session_id)
-        entry = (
-            session_bindings.get(owner.thread_id)
-            if isinstance(session_bindings, dict)
-            else None
-        )
-        if entry is None:
-            raise RuntimeError(
-                "graph-binding-rebind-no-persistence: 该 SessionThread 没有已持久化 "
-                f"的 GraphBinding，无法重绑: owner=({owner.session_id!r}, "
-                f"{owner.thread_id!r})；never-persisted owner 由正常构建路径首次落盘"
-            )
-        stored = self._binding_from_entry(owner, entry)
-        if stored == new:
-            return False
-        if stored != expected:
-            raise RuntimeError(
-                "graph-binding-rebind-stale-expected: 磁盘上的既有 selector 与调用方 "
-                f"声明的 expected 不一致，拒绝重绑: owner=({owner.session_id!r}, "
-                f"{owner.thread_id!r}), 磁盘=[{_binding_summary(stored)}], "
-                f"expected=[{_binding_summary(expected)}], new=[{_binding_summary(new)}]"
-            )
-        session_bindings_mutated = dict(session_bindings)
-        session_bindings_mutated[owner.thread_id] = {
-            "graph_id": new.graph_id,
-            "graph_revision": new.graph_revision,
-            "graph_schema_hash": new.graph_schema_hash,
-            "capability_profile_hash": new.capability_profile_hash,
-        }
-        replaced = dict(bindings)
-        replaced[owner.session_id] = session_bindings_mutated
-        self._write_document({"version": _STORE_FORMAT_VERSION, "bindings": replaced})
-        return True
-
-    def _read_bindings(self) -> dict[str, object]:
-        """读取并严格校验存储文档；文件不存在等于没有任何持久化 binding。"""
-        if not self._path.exists():
-            return {}
-        raw = self._path.read_text(encoding="utf-8")
+        store = self._session_control_store_factory(owner.session_id)
         try:
-            document = json.loads(raw)
-        except json.JSONDecodeError as error:
-            raise RuntimeError(
-                f"graph-binding-store 文档损坏，无法解析 JSON: path={self._path}: {error}"
-            ) from error
-        if not isinstance(document, dict):
-            raise TypeError(
-                f"graph-binding-store 文档必须是对象: path={self._path}, "
-                f"actual_type={type(document).__name__}"
-            )
-        if set(document) != {"version", "bindings"}:
-            raise RuntimeError(
-                "graph-binding-store 文档字段集非法: "
-                f"path={self._path}, fields={sorted(document)}"
-            )
-        version = document["version"]
-        if isinstance(version, bool) or version != _STORE_FORMAT_VERSION:
-            raise RuntimeError(
-                f"graph-binding-store 文档版本非法: path={self._path}, "
-                f"version={version!r}, expected={_STORE_FORMAT_VERSION}"
-            )
-        bindings = document["bindings"]
-        if not isinstance(bindings, dict):
-            raise TypeError(
-                f"graph-binding-store bindings 必须是对象: path={self._path}"
-            )
-        for session_id, session_bindings in bindings.items():
-            if not isinstance(session_id, str) or not session_id:
-                raise RuntimeError(
-                    f"graph-binding-store session_id 键非法: path={self._path}, "
-                    f"key={session_id!r}"
-                )
-            if not isinstance(session_bindings, dict):
-                raise TypeError(
-                    f"graph-binding-store session 条目必须是对象: "
-                    f"path={self._path}, session_id={session_id!r}"
-                )
-            for thread_id, entry in session_bindings.items():
-                if not isinstance(thread_id, str) or not thread_id:
-                    raise RuntimeError(
-                        f"graph-binding-store thread_id 键非法: "
-                        f"path={self._path}, session_id={session_id!r}, "
-                        f"key={thread_id!r}"
-                    )
-                # 值级校验委托给 GraphBinding 构造（含摘要形状全匹配）。
-                self._binding_from_entry(
-                    GraphBindingOwnerKey(
-                        session_id=session_id,
-                        thread_id=thread_id,
-                    ),
-                    entry,
-                )
-        return bindings
-
-    @staticmethod
-    def _binding_from_entry(
-        owner: GraphBindingOwnerKey,
-        entry: object,
-    ) -> GraphBinding:
-        if not isinstance(entry, dict):
-            raise TypeError(
-                f"graph-binding-store binding 条目必须是对象: "
-                f"owner=({owner.session_id!r}, {owner.thread_id!r}), "
-                f"actual_type={type(entry).__name__}"
-            )
-        if set(entry) != _BINDING_ENTRY_FIELDS:
-            raise RuntimeError(
-                f"graph-binding-store binding 条目字段集非法: "
-                f"owner=({owner.session_id!r}, {owner.thread_id!r}), "
-                f"fields={sorted(entry)}"
-            )
+            record = store.get_thread_graph_binding(owner.thread_id)
+        finally:
+            store.close()
+        if record is None:
+            return None
         return GraphBinding(
-            graph_id=entry["graph_id"],
-            graph_revision=entry["graph_revision"],
-            graph_schema_hash=entry["graph_schema_hash"],
-            capability_profile_hash=entry["capability_profile_hash"],
+            graph_id=record.graph_id,
+            graph_revision=record.graph_revision,
+            graph_schema_hash=record.graph_schema_hash,
+            capability_profile_hash=record.capability_profile_hash,
         )
-
-    def _write_document(self, document: dict[str, object]) -> None:
-        """原子写入：先写同目录临时文件，再 os.replace 覆盖正式文档。"""
-        self._directory.mkdir(parents=True, exist_ok=True)
-        temporary_path = self._path.with_name(f"{_STORE_FILE_NAME}.tmp")
-        temporary_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        os.replace(temporary_path, self._path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -733,8 +484,8 @@ def binding_for(
 ) -> InvocationGraphBinding:
     """组合查询辅助：把持久 selector 与 invocation 线程归属组成完整绑定。
 
-    持久 selector 负责解析不捕获 thread 的 graph blueprint/topology；线程
-    归属只来自 Agent 后端装配时的 :class:`ThreadRuntimeBinding`，二者合成
+    持久 selector 负责解析受注册的 factory；线程
+    归属只来自 generation 装配时的 :class:`ThreadRuntimeBinding`，二者合成
     一次 invocation 的完整身份。
     """
     return InvocationGraphBinding(
@@ -743,33 +494,22 @@ def binding_for(
     )
 
 
-def resolve_or_persist_graph_binding(
+def resolve_graph_binding(
     *,
-    store: GraphBindingStorePort | None,
+    store: GraphBindingStorePort,
     owner: GraphBindingOwnerKey,
-    current_binding: GraphBinding,
+    registry: GraphFactoryRegistry = GRAPH_FACTORY_REGISTRY,
 ) -> GraphBinding:
-    """按精确 revision 解析该 owner 已持久化的 selector，缺失即持久化当前值。
-
-    构建路径的唯一入口：持久化的是可验证的 factory selector，不是已编译图。
-
-    - 未装配 store（合成装配/测试替身）：只能 fail-fast 校验当前 binding 仍在
-      注册表内，不伪造持久化成功。
-    - 该 owner 从未持久化：把当前 binding 落盘并返回它。
-    - 该 owner 已持久化：按四元组精确解析受注册 factory；解析不到该精确
-      revision/hash 时抛 :class:`GraphBindingUnavailableError`
-      （``graph_binding_unavailable``），绝不静默改用旧 binding 或回退到当前
-      最新 revision。
-    """
-    GRAPH_FACTORY_REGISTRY.resolve(current_binding)
-    if store is None:
-        return current_binding
+    """读取 authority 中的精确 selector 并解析注册 factory；缺失或漂移即失败。"""
+    if not isinstance(owner, GraphBindingOwnerKey):
+        raise TypeError(f"owner 必须是 GraphBindingOwnerKey: {type(owner).__name__}")
     persisted = store.load_graph_binding(owner)
     if persisted is None:
-        store.save_graph_binding(owner, current_binding)
-        return current_binding
-    # 精确 revision 校验：不匹配即 fail closed，阻塞构建而不是回退。
-    GRAPH_FACTORY_REGISTRY.resolve(persisted)
+        raise GraphBindingUnavailableError(
+            "graph_binding_unavailable: thread_catalog 缺少已创建的 GraphBinding: "
+            f"owner=({owner.session_id!r}, {owner.thread_id!r})"
+        )
+    registry.resolve(persisted)
     return persisted
 
 
@@ -789,9 +529,9 @@ __all__ = [
     "GraphFactoryRegistrationConflictError",
     "GraphFactoryRegistry",
     "InvocationGraphBinding",
-    "JsonFileGraphBindingStore",
+    "SessionControlGraphBindingStore",
     "binding_for",
     "compute_capability_profile_hash",
     "compute_graph_schema_hash",
-    "resolve_or_persist_graph_binding",
+    "resolve_graph_binding",
 ]

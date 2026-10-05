@@ -18,7 +18,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    MAIN_THREAD_ID,
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -46,18 +45,18 @@ class SessionSkillTrackingService:
         thread_id: str,
         name: str,
     ) -> SessionSkillUntrackResultDTO:
+        main_thread_id = self._session_service.path_resolver.main_thread_id(session_id)
         owner = ContextSourceOwnerKey(session_id=session_id, thread_id=thread_id)
         if thread_id == session_id:
-            # 与生产 owner 解析同一条规则：main thread 必须用 MAIN_THREAD_ID，
             # 裸 session_id 不是合法 thread 身份，提前拒绝保证零状态变化。
             raise ValueError(
-                "main thread 必须使用 thread_id='main'，"
+                "SessionThread 必须使用 catalog 冻结的真实 thread_id，"
                 f"不能把裸 session_id 当作 thread_id: {session_id}"
             )
         # 错误 thread 零状态变化：会话不存在（404）或 thread 未在权威
         # thread_catalog 登记（404）都在触碰 rollout owner 之前失败。
         child_threads = await self._session_service.list_child_threads(session_id)
-        if thread_id != MAIN_THREAD_ID and thread_id not in {
+        if thread_id != main_thread_id and thread_id not in {
             item.thread_id for item in child_threads.items
         }:
             raise NotFoundError(

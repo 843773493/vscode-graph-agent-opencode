@@ -18,6 +18,7 @@ from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
 from app.services.infrastructure.rollout_context.fork.validation import (
+    json_mapping,
     non_negative_int,
     optional_text,
     required_text,
@@ -61,12 +62,17 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
     mapped = state.mapped
     overlay_epoch_map = state.overlay_epoch_map
     target_overlay_epoch = max(overlay_epoch_map.values(), default=0)
+    target_thread_id = state.target_thread_id
     _update_one(
         connection,
-        "UPDATE database_meta SET session_id = ?, rollout_id = ?, active_branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?), committed_jsonl_offset = ?, source_overlay_epoch = ?, updated_at = ? WHERE singleton_id = 1",
+        "UPDATE database_meta SET session_id = ?, thread_id = ?, rollout_id = ?, "
+        "active_branch_id = (SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?), "
+        "committed_jsonl_offset = ?, source_overlay_epoch = ?, updated_at = ? "
+        "WHERE singleton_id = 1",
         (
             target_session_id,
-            self._rollout_id(target_session_id),
+            target_thread_id,
+            self._rollout_id(target_session_id, thread_id=target_thread_id),
             checkpoint_ns,
             sum(len(line) for line in new_lines),
             target_overlay_epoch,
@@ -74,6 +80,27 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
         ),
         context="database_meta",
     )
+
+    # checkpoint core 的 id 与 SQL 主键是同一身份，不能留下 source id 让下一次
+    # fork 把已导入 checkpoint 误当成最早 source 的 checkpoint。
+    for source_id, target_id in state.maps.get("checkpoint", {}).items():
+        row = connection.execute(
+            "SELECT checkpoint_json, metadata_json FROM checkpoints WHERE checkpoint_id = ?",
+            (target_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"full copy target checkpoint 缺失: {target_id}")
+        checkpoint = dict(json_mapping(row[0], field="checkpoints.checkpoint_json"))
+        if checkpoint.get("id") != source_id:
+            raise RuntimeError(f"full copy checkpoint core 与 source 主键不一致: {source_id}")
+        checkpoint["id"] = target_id
+        metadata = json_mapping(row[1], field="checkpoints.metadata_json")
+        _update_one(
+            connection,
+            "UPDATE checkpoints SET checkpoint_json = ?, metadata_json = ? WHERE checkpoint_id = ?",
+            (_json(checkpoint), _json(state.remap_json(metadata)), target_id),
+            context=f"checkpoint:{target_id}",
+        )
 
     for sequence, item in new_items.items():
         offset, length = new_positions[sequence]
@@ -129,7 +156,7 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
         if sequence == 0:
             raise RuntimeError("full_rollout_copy messages.message_sequence 不能为 0")
         message_id = required_text(message_id, field="messages.message_id")
-        required_text(_turn_id, field=f"messages.turn_id:{message_id}")
+        optional_text(_turn_id, field=f"messages.turn_id:{message_id}")
         non_negative_int(_offset, field=f"messages.jsonl_offset:{message_id}")
         message_length = non_negative_int(
             _length, field=f"messages.jsonl_length:{message_id}"
@@ -156,6 +183,8 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
                 "full_rollout_copy message 没有对应 canonical item: "
                 f"message_id={message_id}"
             )
+        if item.turn_id != _turn_id:
+            raise RuntimeError(f"full copy message Turn 与 target canonical 不一致: {message_id}")
         offset, length = new_positions[item.item_sequence]
         group = tuple(
             value for value in sorted(new_items.values(), key=lambda value: value.item_sequence)
@@ -243,7 +272,9 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
 def record_full_copy_lineage(state: FullCopyRemapState) -> None:
     connection = state.connection
     source_session_id = state.source_session_id
+    source_thread_id = state.source_thread_id
     target_session_id = state.target_session_id
+    target_thread_id = state.target_thread_id
     fork_id = state.fork_id
     timestamp = state.timestamp
     maps = state.maps
@@ -442,6 +473,164 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
                 "ordinal": ordinal,
             },
         }
+        if entity_type == "execution":
+            execution = connection.execute(
+                "SELECT session_id, thread_id, job_id, execution_origin, "
+                "admission_idempotency_key, admission_payload_hash, "
+                "accepted_ingress_id, turn_id FROM executions "
+                "WHERE execution_id = ?",
+                (target_id,),
+            ).fetchone()
+            if execution is None:
+                raise RuntimeError(
+                    "full_rollout_copy execution target 缺少 Job provenance: "
+                    f"execution_id={target_id}"
+                )
+            execution_owner = (
+                required_text(execution[0], field=f"executions.session_id:{target_id}"),
+                required_text(execution[1], field=f"executions.thread_id:{target_id}"),
+            )
+            if execution_owner not in {
+                (state.source_session_id, state.source_thread_id),
+                (target_session_id, target_thread_id),
+            }:
+                raise RuntimeError(
+                    "full_rollout_copy execution owner 与 source/target pair 不匹配: "
+                    f"execution_id={target_id}, owner={execution_owner!r}"
+                )
+            source_job_id = required_text(
+                execution[2],
+                field=f"executions.job_id:{target_id}",
+            )
+            source_job_ref = {
+                "type": "GlobalEntityRef",
+                "session_id": state.source_session_id,
+                "thread_id": state.source_thread_id,
+                "entity_type": "job",
+                "local_id": source_job_id,
+            }
+            lineage["source"]["job_ref"] = source_job_ref
+            lineage["target"]["job_ref"] = source_job_ref
+            execution_origin = required_text(
+                execution[3], field=f"executions.execution_origin:{target_id}"
+            )
+            if execution_origin == "user_turn":
+                target_admission_key = required_text(
+                    execution[4],
+                    field=f"executions.admission_idempotency_key:{target_id}",
+                )
+                target_admission_hash = required_text(
+                    execution[5],
+                    field=f"executions.admission_payload_hash:{target_id}",
+                )
+                target_ingress = required_text(
+                    execution[6],
+                    field=f"executions.accepted_ingress_id:{target_id}",
+                )
+                target_turn_id = required_text(
+                    execution[7], field=f"executions.turn_id:{target_id}"
+                )
+                admission_mapping = connection.execute(
+                    "SELECT lineage_json FROM fork_identity_mappings "
+                    "WHERE fork_id = ? AND entity_type = 'admission_idempotency_key' "
+                    "AND target_local_id = ?",
+                    (fork_id, target_admission_key),
+                ).fetchone()
+                if admission_mapping is None:
+                    raise RuntimeError(
+                        "full_rollout_copy execution 缺少 admission lineage: "
+                        f"execution_id={target_id}"
+                    )
+                admission_lineage = json.loads(
+                    required_text(
+                        admission_mapping[0],
+                        field=f"fork_identity_mappings.admission:{target_id}",
+                    )
+                )
+                if not isinstance(admission_lineage, Mapping):
+                    raise TypeError(
+                        "full_rollout_copy admission lineage 必须是 object: "
+                        f"execution_id={target_id}"
+                    )
+                source_admission = admission_lineage.get("source")
+                target_admission = admission_lineage.get("target")
+                if not isinstance(source_admission, Mapping) or not isinstance(
+                    target_admission, Mapping
+                ):
+                    raise TypeError(
+                        "full_rollout_copy admission lineage 必须包含 source/target: "
+                        f"execution_id={target_id}"
+                    )
+                if (
+                    target_admission.get("session_id") != target_session_id
+                    or target_admission.get("thread_id") != target_thread_id
+                    or target_admission.get("turn_id") != target_turn_id
+                    or target_admission.get("execution_id") != target_id
+                    or target_admission.get("job_ref") != source_job_ref
+                    or target_admission.get("accepted_ingress_id") != target_ingress
+                    or target_admission.get("admission_idempotency_key")
+                    != target_admission_key
+                    or target_admission.get("admission_payload_hash")
+                    != target_admission_hash
+                ):
+                    raise RuntimeError(
+                        "full_rollout_copy target execution admission lineage 不匹配: "
+                        f"execution_id={target_id}"
+                    )
+                if (
+                    source_admission.get("session_id") != source_session_id
+                    or source_admission.get("thread_id") != source_thread_id
+                    or source_admission.get("job_ref") != source_job_ref
+                ):
+                    raise RuntimeError(
+                        "full_rollout_copy source execution admission lineage 不匹配: "
+                        f"execution_id={target_id}"
+                    )
+                lineage["source"].update(
+                    {
+                        "turn_id": source_admission["turn_id"],
+                        "accepted_ingress_id": source_admission[
+                            "accepted_ingress_id"
+                        ],
+                        "admission_idempotency_key": source_admission[
+                            "admission_idempotency_key"
+                        ],
+                        "admission_payload_hash": source_admission[
+                            "admission_payload_hash"
+                        ],
+                        "payload_hash": source_admission["payload_hash"],
+                    }
+                )
+                lineage["target"].update(
+                    {
+                        "turn_id": target_turn_id,
+                        "accepted_ingress_id": target_ingress,
+                        "admission_idempotency_key": target_admission_key,
+                        "admission_payload_hash": target_admission_hash,
+                        "payload_hash": target_admission["payload_hash"],
+                    }
+                )
+            elif execution_origin == "internal":
+                if execution[6] is not None or execution[7] is not None:
+                    raise RuntimeError("full copy internal execution 不得绑定 Turn/ingress")
+                admission = connection.execute(
+                    "SELECT lineage_json FROM fork_identity_mappings WHERE fork_id = ? "
+                    "AND entity_type = 'admission_idempotency_key' AND target_local_id = ?",
+                    (fork_id, execution[4]),
+                ).fetchone()
+                if admission is None:
+                    raise RuntimeError("full copy internal execution 缺少冻结 admission lineage")
+                internal_lineage = json.loads(admission[0])
+                for side in ("source", "target"):
+                    lineage[side].update(internal_lineage[side])
+                if (lineage["target"]["execution_id"] != target_id
+                    or lineage["target"]["admission_payload_hash"] != execution[5]):
+                    raise RuntimeError("full copy internal admission lineage 与 execution 不一致")
+            else:
+                raise RuntimeError(
+                    "full_rollout_copy execution origin 非法: "
+                    f"execution_id={target_id}, origin={execution_origin}"
+                )
         if lineage_extra:
             lineage.update(dict(lineage_extra))
         result = connection.execute(
@@ -473,6 +662,7 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
         if entity_type in {
             "accepted_ingress",
             "acceptance_idempotency_key",
+            "admission_idempotency_key",
         }:
             continue
         for source_id, target_id in entity_map.items():
@@ -485,8 +675,9 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
             lineage_extra: dict[str, object] = {}
             if entity_type == "source_overlay":
                 overlay = connection.execute(
-                    "SELECT source_overlay_epoch, base_ref, delta_ref, base_source_revision, delta_source_revision FROM source_overlays WHERE overlay_id = ?",
-                    (target_id,),
+                    "SELECT source_overlay_epoch, base_ref, delta_ref, base_source_revision, delta_source_revision "
+                    "FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+                    (target_id, target_session_id, target_thread_id),
                 ).fetchone()
                 if overlay is None:
                     raise RuntimeError(
@@ -508,6 +699,10 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
                     overlay[2], field=f"source_overlays.delta_ref:{target_id}"
                 )
                 lineage_extra["source_overlay"] = {
+                    "source_session_id": source_session_id,
+                    "source_thread_id": source_thread_id,
+                    "target_session_id": target_session_id,
+                    "target_thread_id": target_thread_id,
                     "source_overlay_epoch": source_epoch,
                     "target_overlay_epoch": target_epoch,
                     "source_base_ref": inverse_map("request_ref", target_base_ref),
@@ -534,8 +729,8 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
             elif entity_type == "detail":
                 source_detail = detail_ref_from_key(source_id)
                 target_detail = detail_ref_from_key(target_id)
-                source_detail.require_owner(source_session_id)
-                target_detail.require_owner(target_session_id)
+                source_detail.require_owner(source_session_id, source_thread_id)
+                target_detail.require_owner(target_session_id, target_thread_id)
                 source_path = None
                 source_detail_rows = 0
                 target_path = connection.execute(

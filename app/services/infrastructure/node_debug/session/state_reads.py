@@ -2,9 +2,9 @@
 
 承载 get_state/get_variables 两条只读入口：冷读取时按持久 claim 核实旧实例、
 对账 source、并组装脱敏快照。由 NodeDebugService 继承（宿主必须提供
-_runtimes、_session_state、_configuration_registry、_lifecycle、_claim_runtime、
-_resolve_owner、_reconcile_session_sources 与快照装配），不反向依赖顶层
-service.py。
+_runtimes、_session_state、_configuration_registry、_claim_runtime、
+_admit_mutation、_reconcile_session_sources 与快照装配），
+不反向依赖顶层 service.py。
 """
 
 from __future__ import annotations
@@ -22,16 +22,19 @@ class NodeDebugStateReadMixin:
     """状态读取入口链路的方法族（由 NodeDebugService 继承）。"""
 
     async def get_state(
+        self, session_id: str, thread_id: str | None = None
+    ) -> NodeDebugStateDTO:
+        async with self._admit_mutation(session_id, thread_id) as owner:
+            return await self._get_state_admitted(*owner)
+
+    async def _get_state_admitted(
         self, session_id: str, thread_id: str
     ) -> NodeDebugStateDTO:
-        owner = self._resolve_owner(session_id, thread_id)
-        session_id, thread_id = owner
+        """读取状态并对账；调用方必须已持有该 Session 准入。"""
+        owner = (session_id, thread_id)
         self._session_state.ensure_loaded(session_id, thread_id)
         self._configuration_registry.refresh_new_files(session_id, thread_id)
         runtime = self._runtimes.get(owner)
-        if runtime is None:
-            # 冷读取时必须先按持久 claim 核实旧实例，绝不虚报 idle/终态。
-            await self._lifecycle.reconcile_persisted_claim(owner)
         await self._reconcile_session_sources(session_id, thread_id, runtime)
         if runtime is None:
             selection = self._configuration_registry.selection(session_id, thread_id)
@@ -84,12 +87,12 @@ class NodeDebugStateReadMixin:
         self,
         *,
         session_id: str,
-        thread_id: str,
+        thread_id: str | None = None,
         variable_names: list[str] | None = None,
         scope: str = "all",
     ) -> list[NodeDebugVariableDTO]:
-        session_id, thread_id = self._resolve_owner(session_id, thread_id)
-        state = await self.get_state(session_id, thread_id)
+        async with self._admit_mutation(session_id, thread_id) as owner:
+            state = await self._get_state_admitted(*owner)
         if state.status != "paused" or not state.call_stack:
             raise RuntimeError("只有暂停在源码断点时才能检查变量")
         if scope not in {"local", "global", "all"}:

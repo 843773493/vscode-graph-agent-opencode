@@ -54,6 +54,7 @@ from app.core.thread_creation import (
     verify_node_directory,
 )
 from tests.support.canonical_id_at import thread_id_for_name_at
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 WORKSPACE_ID = "ws-thread-create"
 
@@ -122,13 +123,11 @@ class OwnerSession:
 
 
 def date_bucket_dir(sessions_root: Path, locator: str) -> Path:
-    return sessions_root / locator[len("sessions/"):]
+    return sessions_root / locator[len("sessions/") :]
 
 
 def count_rows(store: SessionCatalogStore | SessionControlStore, table: str) -> int:
-    return int(
-        store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    )
+    return int(store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
 @pytest.fixture
@@ -158,10 +157,12 @@ async def owner(
         workspace_id=WORKSPACE_ID,
         gate=NavigationTopologyGate(sessions_root),
     )
-    result = await creation.create(
+    record = await creation.prepare(
         idempotency_key="owner-key",
         title="属主会话",
+        purpose="normal",
         parent_node_id=None,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata={
             "kind": "normal",
             "delegation": None,
@@ -171,9 +172,8 @@ async def owner(
             "context_source_session_id": None,
         },
     )
-    session_dir = date_bucket_dir(
-        sessions_root, result.storage_relative_locator
-    )
+    result = await creation.publish_prepared(record)
+    session_dir = date_bucket_dir(sessions_root, result.storage_relative_locator)
     control = SessionControlStore(session_dir / "session-control.sqlite")
     try:
         control.verify_matches_catalog_main_thread(result.main_thread_id)
@@ -245,9 +245,7 @@ def child_node_inventory(
     owner: OwnerSession,
     artifacts: dict[str, object],
 ) -> dict[str, str]:
-    return build_thread_node_inventory(
-        child_node_files(record, owner, artifacts)
-    )
+    return build_thread_node_inventory(child_node_files(record, owner, artifacts))
 
 
 def materialize_node(
@@ -267,9 +265,7 @@ def materialize_node(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
     (base / "artifact-manifest.json").write_bytes(
-        serialize_artifact_manifest_bytes(
-            build_thread_node_inventory(files)
-        )
+        serialize_artifact_manifest_bytes(build_thread_node_inventory(files))
     )
 
 
@@ -300,11 +296,7 @@ def prepare_manual_record(
         session_metadata=effective_metadata,
         artifact_manifest=effective_artifacts,
     )
-    fixture_created_at = (
-        created_at
-        if created_at is not None
-        else OWNER_CREATED_AT
-    )
+    fixture_created_at = created_at if created_at is not None else OWNER_CREATED_AT
     fixture_thread_id = (
         thread_id
         if thread_id is not None
@@ -356,11 +348,18 @@ async def test_create_full_flow_publishes_child_thread(
     validate_thread_id_shape(result)
     # thread_catalog child row 可见（唯一可见性提交点）且 kind='child'
     rows = owner.control.connection.execute(
-        "SELECT thread_id, kind, created_at FROM thread_catalog "
-        "WHERE kind = 'child'"
+        "SELECT thread_id, kind, created_at FROM thread_catalog WHERE kind = 'child'"
     ).fetchall()
     assert len(rows) == 1
     assert str(rows[0]["thread_id"]) == result.child_thread_id
+    child_binding = owner.control.get_thread_graph_binding(result.child_thread_id)
+    assert child_binding is not None
+    assert child_binding.graph_id == "deep-agent"
+    assert child_binding.graph_revision == 1
+    assert child_binding.graph_schema_hash == "sha256:" + "a" * 64
+    assert child_binding.capability_profile_hash == compute_capability_profile_hash(
+        capability_profile=CAPABILITY_PROFILE
+    )
     # record published
     record = owner.control.get_thread_creation_record("key-1")
     assert record.state == "published"
@@ -369,9 +368,7 @@ async def test_create_full_flow_publishes_child_thread(
     # final locator 就位于 owner session 目录下、日期 == child created_at
     final_dir = owner.session_dir / result.final_relative_locator
     assert final_dir.is_dir()
-    created_date = datetime.fromisoformat(record.child_created_at).astimezone(
-        UTC
-    )
+    created_date = datetime.fromisoformat(record.child_created_at).astimezone(UTC)
     assert result.final_relative_locator == (
         f"threads/{created_date:%Y/%m/%d}/{result.child_thread_id}"
     )
@@ -385,9 +382,7 @@ async def test_create_full_flow_publishes_child_thread(
     assert intent.creation_idempotency_key == "key-1"
     assert intent.session_id == owner.session_id
     # owner main row 不受影响
-    assert str(owner.control.get_main_thread()["thread_id"]) == (
-        owner.main_thread_id
-    )
+    assert str(owner.control.get_main_thread()["thread_id"]) == (owner.main_thread_id)
 
 
 def validate_thread_id_shape(result: ThreadCreationResult) -> None:
@@ -432,9 +427,7 @@ async def test_create_writes_expected_thread_node_content(
     assert thread_manifest["task_reference"] == {"ref": "doc-1"}
     # 初始 ContextStore 占位
     context_store = json.loads(
-        (final_dir / "rollout" / "context-store.json").read_text(
-            encoding="utf-8"
-        )
+        (final_dir / "rollout" / "context-store.json").read_text(encoding="utf-8")
     )
     assert context_store["thread_id"] == result.child_thread_id
     assert context_store["items"] == []
@@ -453,9 +446,7 @@ async def test_create_artifact_manifest_hash_matches_record(
     inventory = child_node_inventory(record, owner, make_artifacts())
     # record 冻结清单 == 目录实际内容清单
     assert json.loads(record.artifact_manifest) == inventory
-    assert record.artifact_manifest_hash == compute_artifact_manifest_hash(
-        inventory
-    )
+    assert record.artifact_manifest_hash == compute_artifact_manifest_hash(inventory)
     # artifact-manifest.json 文件字节 == 清单落盘形态
     assert (
         final_dir / "artifact-manifest.json"
@@ -500,9 +491,7 @@ async def test_create_running_without_seed_rejected(
             metadata=make_metadata(task_seed=None),
         )
     # 无 record 残留（fail fast 在任何状态变更之前）
-    assert (
-        count_rows(owner.control, "thread_creation_records") == 0
-    )
+    assert count_rows(owner.control, "thread_creation_records") == 0
 
 
 async def test_create_idle_with_seed_rejected(
@@ -511,9 +500,7 @@ async def test_create_idle_with_seed_rejected(
 ) -> None:
     with pytest.raises(ValueError, match="不得携带 task_seed"):
         await do_create(service, owner, initial_state="idle")
-    assert (
-        count_rows(owner.control, "thread_creation_records") == 0
-    )
+    assert count_rows(owner.control, "thread_creation_records") == 0
 
 
 async def test_create_missing_metadata_key_rejected(
@@ -525,9 +512,7 @@ async def test_create_missing_metadata_key_rejected(
     del metadata["task_seed"]
     with pytest.raises(ValueError, match="缺失不得推断"):
         await do_create(service, owner, metadata=metadata)
-    assert (
-        count_rows(owner.control, "thread_creation_records") == 0
-    )
+    assert count_rows(owner.control, "thread_creation_records") == 0
 
 
 async def test_create_rejects_bad_graph_binding(
@@ -710,13 +695,20 @@ async def test_create_same_key_different_preimage_conflict(
 ) -> None:
     await do_create(service, owner, initial_state="running")
     with pytest.raises(RuntimeError, match="preimage 冲突"):
-        await do_create(service, owner, initial_state="idle",
-                        metadata=make_metadata(task_seed=None))
+        await do_create(
+            service, owner, initial_state="idle", metadata=make_metadata(task_seed=None)
+        )
     # 不同 artifact 载荷同样冲突（preimage 覆盖 artifact manifest）
     with pytest.raises(RuntimeError, match="preimage 冲突"):
-        await do_create(service, owner, artifacts=make_artifacts(**{
-            "notes/plan.md": "# 计划\n步骤一\n被篡改\n",
-        }))
+        await do_create(
+            service,
+            owner,
+            artifacts=make_artifacts(
+                **{
+                    "notes/plan.md": "# 计划\n步骤一\n被篡改\n",
+                }
+            ),
+        )
     record = owner.control.get_thread_creation_record("key-1")
     assert record.state == "published"
 
@@ -937,9 +929,7 @@ async def test_cross_instance_duplicate_delivery_converges_to_same_child(
         )
 
     try:
-        first, second = await asyncio.gather(
-            call(build(cs_a)), call(build(cs_b))
-        )
+        first, second = await asyncio.gather(call(build(cs_a)), call(build(cs_b)))
     finally:
         cs_a.close()
         cs_b.close()
@@ -1120,9 +1110,7 @@ async def test_publish_reentry_rejects_child_thread_id_drift_without_reuse(
             "WHERE thread_creation_idempotency_key = ?",
             (key,),
         ).fetchone()
-        created = datetime.fromisoformat(str(row["child_created_at"])).astimezone(
-            UTC
-        )
+        created = datetime.fromisoformat(str(row["child_created_at"])).astimezone(UTC)
         # child 与最终 locator 同步改成另一个（同日、合法形态），使 store 的
         # 内部一致性复验可过，从而精确命中恢复分支的 child 半边判据。
         other_control.connection.execute(
@@ -1232,16 +1220,12 @@ async def test_crash_after_publish_before_terminal_response_recovers(
     # 模拟：publish 已在崩溃前完成（record → published + child row），
     # 但 admission intent 尚未写入、terminal 响应未返回。
     owner.control.publish_thread_creation_record("key-1")
-    assert (
-        count_rows(owner.control, "thread_execution_intents") == 0
-    )
+    assert count_rows(owner.control, "thread_execution_intents") == 0
     result = await do_create(service, owner)
     assert result.child_thread_id == record.child_thread_id
     assert result.record_state == "published"
     # intent 已补写且恰一条
-    assert (
-        count_rows(owner.control, "thread_execution_intents") == 1
-    )
+    assert count_rows(owner.control, "thread_execution_intents") == 1
     intent = owner.control.get_initial_execution_intent("key-1")
     assert intent.thread_id == record.child_thread_id
 
@@ -1303,17 +1287,13 @@ async def test_crash_during_abort_cleanup_converges(
     materialize_node(final_dir, record, owner, make_artifacts())
     owner.control.cas_fence_transition(1, "deleting")
     # 变体 1 create：删除先行拒绝 → 清理 final（staging 不存在）→ abort
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         await do_create(service, owner)
     assert not final_dir.exists()
     aborted = owner.control.get_thread_creation_record("key-1")
     assert aborted.state == "aborted"
     # 变体 2 create：同一拒绝 → 定点清理残留 staging → abort
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         await do_create(service, owner, key="key-2")
     # 收敛：staging 也被定点清理，record aborted，无重复 child row
     assert not staging2.exists()
@@ -1393,9 +1373,7 @@ async def test_foreign_staging_directory_not_absorbed(
     # 外来目录原样保留（不吸收、不删除）
     assert (foreign / "junk.txt").read_text(encoding="utf-8") == "外来内容"
     # record 保持 preparing（未吸收现场）
-    assert owner.control.get_thread_creation_record("key-1").state == (
-        "preparing"
-    )
+    assert owner.control.get_thread_creation_record("key-1").state == ("preparing")
 
 
 async def test_foreign_final_directory_fail_closed(
@@ -1428,9 +1406,7 @@ async def test_publish_cas_failure_fence_drift_cleans_and_aborts(
     final_dir = owner.session_dir / record.final_relative_locator
     materialize_node(staging_dir, record, owner, make_artifacts())
     owner.control.cas_fence_transition(1, "deleting")
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         await do_create(service, owner)
     # 定点清理：staging/final 均无残留
     assert not staging_dir.exists()
@@ -1522,9 +1498,7 @@ async def test_publish_rejected_when_catalog_deleting_but_fence_active(
         compute_capability_profile_hash=compute_capability_profile_hash,
         gate=gate,
     )
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         await do_create(service, owner)
     # 窗口确实发生在 publish 临界区（步骤 1 通过后）
     assert gate.entries == 2
@@ -1583,9 +1557,7 @@ async def test_create_fails_when_owner_session_deleting(
         "UPDATE nodes SET state = 'deleting' WHERE node_id = ?",
         (owner.session_id,),
     )
-    with pytest.raises(
-        SessionDeletionPendingError, match="session_deletion_pending"
-    ):
+    with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
         await do_create(service, owner)
     # 零副作用：无 record、无 staging/最终目录、无 child row
     assert count_rows(owner.control, "thread_creation_records") == 0
@@ -1621,7 +1593,9 @@ async def test_create_fails_with_control_store_misbinding(
     other_dir.mkdir(parents=True)
     other_control = SessionControlStore(other_dir / "session-control.sqlite")
     try:
-        other_control.initialize_main_thread(make_thread_id(), OWNER_CREATED_AT)
+        other_control.initialize_main_thread(
+            make_thread_id(), OWNER_CREATED_AT, TEST_THREAD_GRAPH_BINDING
+        )
         other_control.initialize_fence("active", 1)
         misbound = ThreadCreationService(
             store=store,
@@ -1713,9 +1687,7 @@ async def test_durability_barrier_fsync_observable(
         fsync_dir_calls.append(directory)
         original_dir(directory)
 
-    monkeypatch.setattr(
-        thread_creation_module, "_fsync_directory", counting_dir
-    )
+    monkeypatch.setattr(thread_creation_module, "_fsync_directory", counting_dir)
     await do_create(service, owner)
     # 目录 fsync：staging 树（4 目录）+ .staging 父目录 + rename 后父目录
     # 链（threads/YYYY/MM/DD + session 目录）等，至少覆盖 6 次调用。
@@ -1742,9 +1714,7 @@ async def test_rename_fsyncs_parent_chain(
         fsynced.append(directory)
         original_dir(directory)
 
-    monkeypatch.setattr(
-        thread_creation_module, "_fsync_directory", counting_dir
-    )
+    monkeypatch.setattr(thread_creation_module, "_fsync_directory", counting_dir)
     result = await do_create(service, owner)
     final_dir = owner.session_dir / result.final_relative_locator
     # 链上每一级（threads/YYYY、threads/YYYY/MM、threads/YYYY/MM/DD、
@@ -1822,8 +1792,12 @@ def test_thread_node_files_deterministic() -> None:
         record_updated_at=OWNER_CREATED_AT.isoformat(),
     )
     artifacts = make_artifacts()
-    first = build_thread_node_files(record=record, session_id="ses_" + "2" * 32, artifact_manifest=artifacts)
-    second = build_thread_node_files(record=record, session_id="ses_" + "2" * 32, artifact_manifest=artifacts)
+    first = build_thread_node_files(
+        record=record, session_id="ses_" + "2" * 32, artifact_manifest=artifacts
+    )
+    second = build_thread_node_files(
+        record=record, session_id="ses_" + "2" * 32, artifact_manifest=artifacts
+    )
     assert first == second
     inv1 = build_thread_node_inventory(first)
     inv2 = build_thread_node_inventory(second)
@@ -1867,6 +1841,7 @@ def test_node_directory_rejects_symlink(
             child_node_inventory(record, owner, make_artifacts()),
             stage="symlink 文件负向",
         )
+
 
 async def test_key_lock_pool_is_bounded_and_stable_per_key(service) -> None:
     """child thread 创建服务的 per-key 锁必须是固定上界且同 key 恒定命中。"""

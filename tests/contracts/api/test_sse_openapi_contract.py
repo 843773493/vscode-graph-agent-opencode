@@ -10,7 +10,7 @@ from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
 def test_sse_endpoints_publish_event_contracts() -> None:
     paths = app.openapi()["paths"]
 
-    workspace_response = paths["/api/v1/workspace/files/events"]["post"]["responses"][
+    workspace_response = paths["/api/v1/workspaces/{workspace_id}/workspace/files/events"]["post"]["responses"][
         "200"
     ]
     assert workspace_response["x-sse-events"] == {
@@ -26,7 +26,7 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     assert "text/event-stream" in workspace_response["content"]
     assert "application/json" not in workspace_response["content"]
 
-    trace_response = paths["/api/v1/sessions/{session_id}/traces/stream"]["get"][
+    trace_response = paths["/api/v1/workspaces/{workspace_id}/sessions/{session_id}/traces/stream"]["get"][
         "responses"
     ]["200"]
     assert trace_response["x-sse-events"] == {
@@ -37,7 +37,7 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     }
     assert set(trace_response["content"]) == {"text/event-stream"}
 
-    job_response = paths["/api/v1/jobs/{job_id}/events/stream"]["get"]["responses"][
+    job_response = paths["/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events/stream"]["get"]["responses"][
         "200"
     ]
     assert job_response["x-sse-events"] == {
