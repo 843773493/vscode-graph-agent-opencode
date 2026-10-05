@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **fb63b168a76ea141228fa2c977b1e8e9220469ff**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；从fresh fb63组合tree=`b99fc188a67cf60da985ec916a9601cb751fd69d`。全部pre/post hash、删除、mode、三保护及两个默认index通过；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
+本文更新前ROOT HEAD **326e2177dbcd7212f2f4480c5cce55d1f0ddb12b**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e只改交接文档。本轮重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -102,6 +102,7 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - fixed/direct/helper/间接/deferred分列已发现漏caller；真实callee/MRO规则纠正不存在Saver.main_thread_id阻断28项，固定209481 ROOT49验证checkpoint迁移效果。named旧API归零不能代完整签名闭包。
 - 作者无超时rg扫`/`找日志，主核PID/cwd后只SIGTERM该rg，延迟534.29秒；恢复同Sol并重发绝对WT/index/A，入口限定根及外部超时。恢复replay通过，后续自主完整交付效果待证。证据 `sol-unbounded-search-correction/attempt-1/`。
 - 两退休reviewer容量错误无新报告，主独审增量并复用删除边界。主误把AGENTS owned路径当删除已撤；旧Gateway缺句柄假诊断、private index/旧tree混读、preload猜错等另计主成本，不归作者/模型。
+- Sol对固定tree跑git log/-S得到空结果，不能据此判断提交来源；已纠正为先核对象类型，仅commit核历史，入口原基线条款补一句，后续效果待证。cursor旧items为空断言又与active design:692的冻结include冲突；主独核合同，允许迁为精确轻量摘要/不读完整body，保分页完整性，其它断言仍保留，尚未验收。证据 `skill-object-type-correction/attempt-1/receipt.json`。
 - 比较只维护 `efficiency-comparison.json`；继承前置、作者返工、依赖等待、主机械导出和主错误分列。无同起点可比计时，不报倍率/永久最佳模型；继续一个Sol贯穿、独审和主串行集成。
 
 旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index观察ROOT=`98850fa4…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
