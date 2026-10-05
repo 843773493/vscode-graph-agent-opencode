@@ -20,11 +20,11 @@ Session创建 MUST先在workspace `.boxteam/navigation/session-catalog.sqlite`�
 
 `session-control.sqlite` MUST为每个Session保存唯一`SessionLifecycleFence(state=active|deleting|tombstoned, lifecycle_generation, deletion_record_id?)`。所有会产生新持久副作用的Session入口 MUST先取得workspace跨进程`NavigationTopologyGate` shared、再取得该Session的`SessionLifecycleGate` exclusive，在fresh SQLite catalog查询目标active/locator并确认local fence active generation，于至多一个session-control事务建立durable lease/等价record后立即释放两锁；已存在execution/runtime lease可覆盖其内部callback。最终可见性publication重取topology shared→Session gate并fresh验证catalog active及fencing token；catalog已deleting时新可见性发布必须取消，仅允许先前准入的冻结operation收敛，不得新派生root/wakeup/child。导航parent/name变更只写workspace SQLite且不产生context；lock顺序固定为topology→至多一个Session gate→至多一个SQLite写事务，禁止反向等待、持两个Session gate/两个DB写事务或持锁跨模型/网络等待。
 
-`SessionOperationLease` MUST至少包含`lease_id`、`operation_kind=thread_creation|board_migration|collaboration_fanout|runtime_owner|execution|context_control|debug_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定`operation_identity`与preimage hash、捕获的`lifecycle_generation`、`holder_generation/fencing_token`、`state=active|settling|completed|cancelled|failed`、revision和可选`recovery_ref`；同generation/operation identity唯一且非终态可索引。独立Web/API调试mutation以`debug_control`准入，Agent内部可由既有execution lease覆盖；该短期准入与跨Turn外部调试进程lease分工明确。专用record承担lease时 MUST提供同等字段/约束，并以显式`lease_state`或版本化全映射把自己的preparing/routing/published/aborted等状态归入上述非终态/terminal集合，不得按状态名称猜测。lease MUST NOT按墙钟自动到期。恢复owner只有在验证旧holder generation失效并CAS新token后才能继续原operation或进入settling；fence deleting后不得建新lease，旧lease只可完成/取消冻结operation且不得派生新root/wakeup/child。跨库主体先durable commit、lease后terminal；中间崩溃按稳定identity/recovery ref核对同一结果。删除方请求settling后仍必须等待原writer确认或幂等恢复核对，terminal前不能隔离节点；terminal后旧token callback必须失败。同一Session的catalog locator/lifecycle/归档等目标条目mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
+`SessionOperationLease` MUST至少包含`lease_id`、`operation_kind=thread_creation|collaboration_fanout|runtime_owner|execution|context_control|debug_control|communication_source|communication_target|federated_call|remote_observation|attachment|fork_retention|session_catalog_mutation`、稳定`operation_identity`与preimage hash、捕获的`lifecycle_generation`、`holder_generation/fencing_token`、`state=active|settling|completed|cancelled|failed`、revision和可选`recovery_ref`；同generation/operation identity唯一且非终态可索引。独立Web/API调试mutation以`debug_control`准入，Agent内部可由既有execution lease覆盖；该短期准入与跨Turn外部调试进程lease分工明确。专用record承担lease时 MUST提供同等字段/约束，并以显式`lease_state`或版本化全映射把自己的preparing/routing/published/aborted等状态归入上述非终态/terminal集合，不得按状态名称猜测。lease MUST NOT按墙钟自动到期。恢复owner只有在验证旧holder generation失效并CAS新token后才能继续原operation或进入settling；fence deleting后不得建新lease，旧lease只可完成/取消冻结operation且不得派生新root/wakeup/child。跨库主体先durable commit、lease后terminal；中间崩溃按稳定identity/recovery ref核对同一结果。删除方请求settling后仍必须等待原writer确认或幂等恢复核对，terminal前不能隔离节点；terminal后旧token callback必须失败。同一Session的catalog locator/lifecycle/归档等目标条目mutation MUST以`session_catalog_mutation`竞争gate，旁路写入fail closed。
 
 `SessionLifecycleGate` MUST按`(workspace_id, canonical_session_id)`使用navigation控制根中不随Session日期node改变的跨进程OS shared/exclusive锁，打开前执行ID/path/no-symlink校验；`NavigationTopologyGate`另在workspace导航根提供跨进程shared/exclusive短锁。cold history/detail read在topology shared下取得fresh catalog locator和Session shared `SessionReadGuard`后释放topology锁，保持Session guard直到全部node/SQLite handles关闭并复核catalog/fence；已开始reader可完成，catalog deleting后新reader返回`session_deletion_pending`。删除owner逐Session关闭local fence前须等待read guard；锁对象生命周期内不得unlink/recreate，仅进程mutex或不能验证的锁语义必须fail closed。
 
-普通单child创建 MUST在owner Session内以`thread_creation_idempotency_key`去重，delegated child还必须把`delegation_id`纳入preimage及唯一约束。在创建staging目录前，系统 MUST先按生命周期准入协议于`session-control.sqlite` create-or-get不进入thread catalog且承担operation lease的`ThreadCreationRecord(state=preparing)`，冻结request preimage hash、canonical child ID、最终relative locator、内部staging locator、GraphBinding/capability/seed/admission identity、预期artifact manifest/hash及owner Session lifecycle generation、thread catalog、collaboration/delegation precondition revision；同key不同preimage MUST冲突。delegated child MUST 同时在该SQLite中的唯一`collaboration_members` ledger按`delegation_id` create-or-get隐藏`registering` member，并冻结child ID、membership preimage与ledger revision；该member是唯一delegation admission、fanout和binder readiness事实，不得新增Team JSON membership intent或为旧开发期JSON member数据保留兼容读写。child node、GraphBinding、capability、task seed/reference、初始ContextStore和持久execution admission intent再按记录完整staging并通过durability barrier，原子rename到记录指定且尚未被catalog引用的最终locator；最后重取topology shared/Session gate，由thread catalog、collaboration_members与该record在同一SQLite事务中CAS验证workspace catalog active及fence仍为记录捕获的active generation、delegation/parent/member未取消且precondition未漂移，再插入child并把member从`registering`推进为`published`；这是child和member的单一可见性提交点。CAS失败 MUST不发布、不重基到当前状态，只可定点清理record列出的staging/final orphan，并把record置为`aborted`、registering member置为`cancelled`；显式重试使用新operation。rename后、发布前崩溃的orphan MUST从预先存在的record定点校验、继续或清理，不得扫盘、猜测或吸收无记录目录；发布后、terminal response前恢复同一结果。发布后worker按creation/delegation identity幂等且重新通过生命周期准入create-or-get初始execution；binder readiness只检查同库member已`published`，不得等待Team JSON激活。不得留下可见空child、重复child或重复Job。手动child只有显式`initial_state=idle`时可无seed，且该值必须进入preimage。board migration批量child MUST改由在gate内先行建立的`BoardMigrationRecord`内逐target的`MigrationChildCreationEntry`承担等价lease/generation/creation manifest，且只有验证同一active generation的board最终事务可以整批发布；不得为同一target建立可由普通worker推进的独立`ThreadCreationRecord`。
+普通单child创建 MUST在owner Session内以`thread_creation_idempotency_key`去重，delegated child还必须把`delegation_id`纳入preimage及唯一约束。在创建staging目录前，系统 MUST先按生命周期准入协议于`session-control.sqlite` create-or-get不进入thread catalog且承担operation lease的`ThreadCreationRecord(state=preparing)`，冻结request preimage hash、canonical child ID、最终relative locator、内部staging locator、GraphBinding/capability/seed/admission identity、预期artifact manifest/hash及owner Session lifecycle generation、thread catalog、collaboration/delegation precondition revision；同key不同preimage MUST冲突。delegated child MUST 同时在该SQLite中的唯一`collaboration_members` ledger按`delegation_id` create-or-get隐藏`registering` member，并冻结child ID、membership preimage与ledger revision；该member是唯一delegation admission、fanout和binder readiness事实，不得新增Team JSON membership intent或为旧开发期JSON member数据保留兼容读写。child node、GraphBinding、capability、task seed/reference、初始ContextStore和持久execution admission intent再按记录完整staging并通过durability barrier，原子rename到记录指定且尚未被catalog引用的最终locator；最后重取topology shared/Session gate，由thread catalog、collaboration_members与该record在同一SQLite事务中CAS验证workspace catalog active及fence仍为记录捕获的active generation、delegation/parent/member未取消且precondition未漂移，再插入child并把member从`registering`推进为`published`；这是child和member的单一可见性提交点。CAS失败 MUST不发布、不重基到当前状态，只可定点清理record列出的staging/final orphan，并把record置为`aborted`、registering member置为`cancelled`；显式重试使用新operation。rename后、发布前崩溃的orphan MUST从预先存在的record定点校验、继续或清理，不得扫盘、猜测或吸收无记录目录；发布后、terminal response前恢复同一结果。发布后worker按creation/delegation identity幂等且重新通过生命周期准入create-or-get初始execution；binder readiness只检查同库member已`published`，不得等待Team JSON激活。不得留下可见空child、重复child或重复Job。手动child只有显式`initial_state=idle`时可无seed，且该值必须进入preimage。
 
 Session删除（含其逻辑后代）与`recursive=true` Folder删除 MUST统一使用workspace `session-catalog.sqlite`的`NavigationSubtreeDeleteRecord`；不再打开独立`session-deletion-journal.sqlite`。删除持topology exclusive，以递归CTE冻结精确node/Session集合、各Session最后/隔离locator和parent/revision preimage；逐Session短时取得一个Session gate预检active/preparing `ForkRetentionClaim`，有blocker即不发布删除。随后同一workspace SQLite事务create-or-get幂等batch record并CAS全部target active，一次标记整棵子树deleting；此commit是逻辑可见性和新操作准入的线性化关闭点。同key同preimage恢复原batch，不同preimage冲突；任一目标preimage漂移明确abort且不部分标记。
 
@@ -391,59 +391,9 @@ target workspace MUST 由单一`InboxAdmissionWorker`恢复未绑定communicatio
 
 消息`kind`闭集 MUST 为`question|reply|progress|result`。`kind=reply`必须提供`reply_to_communication_id`，且target inbox必须证明被回复communication的source/target与本次方向相反；其它kind携带该字段必须被拒绝。reply correlation只能建立消息因果关系，不得成为跨Session共享task/team状态。
 
-跨Session transport或通信账本 MUST NOT 保存或同步team member、task assignment、role、Goal或其它共享协作状态。既有跨Session team/member/task状态 MUST 迁移为单个Session内部以child thread为成员的协作状态；另一个Session不能被attach为该board的持久成员。跨Session需要协同时只能通过上述显式操作和独立Session自身的状态推进。
+跨Session transport或通信账本 MUST NOT保存或同步team/member/task/role/Goal；同Session协作只引用自己的child，另一个Session不能被attach为board成员。旧开发期跨Session team/member/task/coordinator与delegated Session数据按用户授权直接清理；生产只接受同Session child-thread协作和当前格式，不新增旧board迁移、物化或freeze/detach兼容入口。新格式创建、同事务发布、同版本重启和删除恢复仍须完整验证。
 
-迁移旧跨Session team成员时，系统 MUST 对每个legacy member显式选择“在coordinator Session内物化为target-local durable child并建立source Session lineage/mapping”或“冻结/脱离membership并保留原Session独立”。物化 MUST 对已终态或显式quiesce的source main-thread checkpoint/view使用migration-only `materialize_thread_copy`，复用target-local mapping/校验引擎但只在`BoardMigrationRecord`冻结的不可见staging中创建goal-disabled target child和完整target-local identity；该原语 MUST NOT创建新Session/main、写catalog/ledger、自行发布或暴露可执行owner。公开`context_fork`、`history_prefix_fork`和`full_rollout_copy`仍只创建新的target Session及其main thread，不得被board migration改写语义。source Session及其用户历史保持不变。active execution、runtime、lease或未收敛mutation不得复制；无法quiesce时只能选择freeze/detach或使整个migration失败，不能创建缺失上下文的空child。
-
-`materialize_thread_copy` MUST把coordinator准入、source snapshot capture和coordinator最终publication分成不重叠的锁阶段。migration先在coordinator Session的exclusive gate内建立承担lease的`BoardMigrationRecord`后立即释放；再按record冻结顺序逐个source Session取得shared `SessionReadGuard`，一次最多持有一个，从catalog解析到关闭node/SQLite handle期间冻结绑定source lifecycle generation、view/checkpoint上界、artifact/detail清单与hash的不可变snapshot manifest和staging bytes，随后立即释放。source删除先关闭fence时整批migration MUST保持未发布并定点abort；guard先行时删除只等待该source capture，guard释放后不得等待child staging或board publication。最终publication另行取得coordinator gate并CAS原record/fence/board/catalog/member/task preimage。系统 MUST NOT同时持有coordinator gate、source guard、另一Session gate或两个数据库写事务，也不得在guard释放后重新打开source。
-
-每个`MigrationChildCreationEntry` MUST在capture前预分配唯一`source_snapshot_id`和内部locator。capture在source SQLite固定read snapshot中冻结同一revision的view/checkpoint/control rows、`storage_commits`与各JSONL committed end offset，使用可验证SQLite snapshot/online backup复制数据库，并只读取offset以内JSONL及manifest点名且hash/length/capability验证通过的thread-local immutable detail。完成时先在该locator原子发布绑定operation/preimage、source lifecycle generation、database hash、逐文件offset/length/hash、view/checkpoint revision、detail manifest hash和attachment claim manifest hash的`SourceCopySnapshot(state=captured)`并durably flush；释放guard后才CAS entry为`source_captured`。冻结后的并发source append/view变化不进入该child。partial/prepared capture只能使原operation abort并定点清理；完整marker可在不回读source时恢复，禁止扫盘、补齐或同operation改用新revision。
-
-board migration中的workspace attachment正文 MUST保持单一content-addressed blob而不进入child staging。source snapshot冻结logical attachment/variant、digest/length/availability、source owner/item ref和catalog revision，并以record绑定的IdentifierFactory预分配target child-local item/attachment identity与mapping。关闭source SQLite read transaction后、仍持source guard时，每个entry在单个attachment catalog事务中按copy operation/source ref/target owner ref create-or-get `ForkAttachmentClaim(preparing)`，验证source owner与blob正文并阻止GC；全部成功后才把有序claim ID清单/hash写入captured marker，中途崩溃按精确copy operation ID释放本operation claim。board发布前全部required claim必须成为`owner_reserved`并建立指向coordinator Session/target child/item的owner ref；resolver仅在child catalog active后允许读取。有required claim时`BoardMigrationRecord` MUST绑定有序claim ID/hash并在board可见性发布时进入非终态`published_pending_attachment_commit`；无required claim时可见性事务直接进入终态`published`。finalizer单独取得coordinator gate、复核active generation与publication preimage后，以不重叠的attachment catalog和session-control事务依次提交claim并把record推进`published`。coordinator删除先关闭fence时，删除排空按record中的精确claim ID释放reserved claim/ref，或验证committed claim属于冻结的child owner后按普通删除协议幂等、持久释放该owner ref，再把record推进终态`coordinator_deleted`；不得重建owner、保留child owner ref、伪装成成功`published`或隔离仍有非终态settlement record的节点。未发布失败按entry claim ID释放并进入`aborted`。source unavailable的非required历史ref可保留unavailable；required claim失败使整批board不发布。不得复制blob、复用source identity、扫描digest补claim或部分激活child owner。
-
-#### Scenario: migration copy 与公开 full rollout copy 不混用
-
-- **WHEN**legacy board迁移在既有coordinator Session中物化child，同时调用方也可使用公开`full_rollout_copy`
-- **THEN**board路径只能由`BoardMigrationRecord`调用`materialize_thread_copy`生成未发布child，最终由coordinator本地事务发布；公开copy仍创建独立target Session/main，二者不共享target creation key、发布事务、catalog语义或可见性结果
-
-#### Scenario: board migration capture 与 source 删除双顺序
-
-- **WHEN**migration先取得某个legacy member source的shared `SessionReadGuard`
-- **THEN**该source删除等待snapshot capture完成；guard释放后删除可继续，migration仅从冻结manifest/bytes准备child且不再访问source
-- **WHEN**source删除先关闭fence
-- **THEN**该member capture返回`source_session_deletion_pending|source_session_deleted`，整批board不发布并按record定点abort/清理，不能留下空child或部分mapping
-
-#### Scenario: board migration 一次只持一个 Session 锁
-
-- **WHEN**migration包含多个source member并最终发布到coordinator
-- **THEN**coordinator record准入、每个source snapshot capture和coordinator publication是顺序且不重叠的阶段；任意时刻最多持有一个Session gate/guard和一个数据库事务
-
-#### Scenario: migration capture 使用一致 committed 上界
-
-- **WHEN**source在固定read snapshot后继续append item、提交terminal convergence或切换active view
-- **THEN**child只从该`SourceCopySnapshot`冻结的SQLite revision、JSONL committed offsets和detail manifest生成；不得组合不同时刻的SQLite、JSONL、checkpoint channel或detail
-
-#### Scenario: migration capture 中断不改用当前 source
-
-- **WHEN**某个member的capture只写入partial staging便崩溃，或完整marker已durable但entry尚未CAS为`source_captured`
-- **THEN**恢复只按该entry预登记locator定点abort/清理partial，或验证并继续完整snapshot；不得扫描其它目录、从当前source补齐或在同operation静默升级revision
-
-#### Scenario: board attachment owner 与 child 一起保持不可见或完整可用
-
-- **WHEN**migration child引用source attachment，claim已owner_reserved但board最终事务尚未发布，或board已发布但claim尚未标记committed便崩溃
-- **THEN**前者正常resolver不能读取reserved ref且恢复会整批继续/释放；后者保持`BoardMigrationRecord`非终态，只有coordinator仍active且publication preimage一致才按同一claim确认target owner，所有已发布child attachment均可用，不出现部分member附件、重复blob或source删除后的悬空ref
-
-#### Scenario: board attachment finalization 与 coordinator 删除串行
-
-- **WHEN**board已经发布但claim仍为owner_reserved，coordinator Session删除与attachment finalizer竞争同一gate
-- **THEN**finalizer先行时在释放gate前提交全部claim并把board record推进成功终态`published`，删除随后按普通owner ref释放；删除先关闭fence时由排空流程释放reserved claim/ref，或验证committed claim归属后持久释放其child owner ref，再把board record推进终态`coordinator_deleted`，copy recovery不得重建owner ref、保留child owner ref或让已删除child重新可见
-
-board migration MUST使用不可见staging和单一coordinator可见性提交点，而非跨thread/workspace分布式事务。在创建任何child staging目录前，系统 MUST先于coordinator `session-control.sqlite` create-or-get不改变thread catalog/collaboration ledger的`BoardMigrationRecord(state=preparing)`，冻结operation/preimage、coordinator Session lifecycle、旧board/catalog revision，并为每个target内嵌唯一`MigrationChildCreationEntry`，包含child ID、最终relative locator、内部staging locator、GraphBinding/capability、source checkpoint/view、lineage/mapping和预期artifact manifest/hash；同operation不同preimage MUST冲突。该entry是batch child唯一creation journal，普通ThreadCreationWorker MUST NOT枚举、发布或启动它，且不得为同一target创建独立`ThreadCreationRecord`。随后才准备、验证并durably flush所有记录内的child artifact、lineage、权限和hash，把全部child原子rename到记录冻结且尚未被catalog引用的最终locator；恢复只能枚举该record中的有限target。全部rename完成后，在同一`session-control.sqlite`事务中CAS验证coordinator仍active、旧board/catalog revision及member/task preimage未漂移，再更新thread catalog、collaboration ledger全部locator/member/task mapping；无required attachment claim时record直接推进为终态`published`，否则推进为非终态`published_pending_attachment_commit`并在claim结算后转为`published`。该事务是唯一可见性提交点，后续结算不得改变board成员集合。CAS失败 MUST不覆盖并发修改、不重基或部分发布，并只可定点清理record列出的全部staging/final orphan后标记`aborted`；重新迁移使用新operation/preimage。任一rename失败不得发布；rename后、发布前崩溃的不可见orphan因preparing record已先存在而可定点恢复/清理，不得扫盘吸收；发布后、terminal response前恢复同一结果。发布前正常reader只见旧board，发布后只见完整新board。不得原地复用source identity、部分发布一个board或让正常runtime继续读写旧跨Session状态；任一member无法决定、授权、复制或验证时整个board保持未发布并产生审计报告。
-
-#### Scenario: batch child 只有一个 publication journal
-
-- **WHEN**board migration为多个target child建立staging并发生普通ThreadCreationWorker并发扫描
-- **THEN**每个target只存在所属`BoardMigrationRecord`内的creation entry，普通worker无法认领或单独发布；只有board最终事务可同时发布全部child/member/task mapping
+公开`context_fork|history_prefix_fork|full_rollout_copy`的SourceCopySnapshot、source capture、target publication、pinned retention和attachment claim/settlement协议，以`add-itemized-rollout-context/specs/checkpoint-context-branching/spec.md`的现行要求为唯一owner；仅同Workspace，保持target-local身份、固定revision及source/target不重叠的锁阶段，完整保留各崩溃点、删除双顺序与GC验证。
 
 #### Scenario: 实施 Session 通知 Git 管理 Session
 
@@ -545,20 +495,10 @@ board migration MUST使用不可见staging和单一coordinator可见性提交点
 - **WHEN** 调用方尝试把其它Session作为team member、向跨Session协议写入member/task/role/Goal状态，或让wait创建持久共享任务板
 - **THEN** 系统拒绝该操作并指向同Session child-thread协作或显式send/read/wait入口，不通过message metadata静默恢复旧状态机
 
-#### Scenario: legacy team board 迁移不产生混合成员
+#### Scenario: 旧开发期跨Session team数据不进入新owner
 
-- **WHEN** 旧board含有以另一Session表示的member，且迁移选择将其物化为coordinator Session的child thread
-- **THEN** 系统从已终态/quiesce的source main checkpoint/view在不可见staging中full-copy出goal-disabled child并创建target-local identity和source lineage，只在全部member验证完成后通过coordinator catalog/board单一事务发布全部member/task引用；原Session及历史仍独立，runtime中不存在空child、部分board或既指向Session又指向child的成员
-
-#### Scenario: legacy team migration 在发布边界崩溃可恢复
-
-- **WHEN**migration在若干child staging artifact完成后、coordinator可见性提交前崩溃，或在该提交成功后、staging清理前崩溃
-- **THEN**恢复分别只暴露完整旧board或完整新board，并按migration journal继续/清理；正常reader永远看不到staging child、混合member或跨库半提交状态
-
-#### Scenario: legacy board 在 staging 期间发生并发修改
-
-- **WHEN**`BoardMigrationRecord`冻结旧board/catalog revision后，coordinator被删除或任一member/task/board revision在最终发布前变化
-- **THEN**发布CAS失败并保留并发修改，旧board继续完整可见；系统只按record清理全部不可见target并标记`aborted`，不得把staging结果重基到新board或发布部分child
+- **WHEN** 生产入口收到旧Session member或旧board格式
+- **THEN** 明确拒绝；按授权清理开发数据，不自动创建child、迁移历史或恢复旧membership，新格式创建与公开fork仍使用各自唯一owner
 
 ### Requirement: durable GraphBinding 可验证重建，不持久化进程对象
 
