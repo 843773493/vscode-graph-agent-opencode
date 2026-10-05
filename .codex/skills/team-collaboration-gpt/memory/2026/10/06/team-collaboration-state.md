@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **ea9d35fb43366c4ca0cd1d88594889a3b71b095d**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248＋ff1＋414＋5a89＋1ff0＋ce768＋cd4＋d04＋58ad＋e645＋88f＋7df＋37eb＋3f951＋180d固定75路径组合已物化但未提交，从fresh ea9组合tree=`0d0833b778b46312ea6e9835efce421615b5b287`；本轮独核75路径含两项预期删除全部与180d一致、两个默认index SHA不变，证据 `r-current-composition/primary-pre-retirement.json`。主provider/AGENTS校准已在356文档提交，活跃记忆另更新，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
+本文更新前ROOT HEAD **d06a8673103f2c9f9de67b56bd508099595a10e8**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。当前固定180d累计75owned业务路径已物化ROOT、业务未提交；从fresh d06组合tree=`40ac91c3f3b9c4bfc4d05a68d3c16fd70f213cf7`。75路径含两项预期删除与候选一致，默认index未变，证据 `r-current-composition/after-skill-d06.json`。b086退休早包只在私有index严格重建/组合，尚未物化ROOT，不把作者live绿灯归给ROOT。主补业务源码为0；下次恢复重新核HEAD/候选/preimage，三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -45,7 +45,7 @@
 ## 当前执行与后续顺序
 
 1. **Sol正在实现 R 正向生产切片**，产物 `r-producers-and-toolset-production/`。WT按三方同步163路径后，app/src/tests/scripts/configs/proto/openspec与ROOT1c20零差异；3生成冲突按合并proto等于ROOT后复用官方输出。证据 `root-dependency-sync-attempt-2/preparation.json`；build0/17.483s与真实composition import0/2.990s。不整树覆盖 .codex/docs，不启动 WT/ROOT全服务。
-   公共合同8ac、封存事务39509和语义revision0e423已集成；当前固定180d累计75owned路径物化ROOT、业务未提交。真实dispatch/API35及Chat双协议正文11项已按固定包通过，不代完整Provider/E2E。Sol先收口旧实验v2升级退役及剩余Thread/admission caller，再接真实transition、checkpoint CSM恢复和normalized wire/profile。删除旧名、静态候选数量与作者live绿灯均不代整R验收；固定报告及必要测试见下方最新记录。
+   公共合同8ac、封存事务39509和语义revision0e423已集成；当前固定180d累计75owned路径物化ROOT、业务未提交。真实dispatch/API35及Chat双协议正文11项已按固定包通过，不代完整Provider/E2E。Sol先收口旧实验v2升级退役、reader/terminal/checkpoint及其受影响caller，随后先固定normalized wire/profile公共合同，再接真实transition与checkpoint CSM恢复。删除旧名、静态候选数量与作者live绿灯均不代整R验收；固定报告及必要测试见下方最新记录。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 2. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
 3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。 原task对表发现粗队列漏了E01–E07 runtime source/wakeup、同Session team/fanout、通信accepted→binding→cold recovery/持久观察以及8.15背景任务/mailbox；已分成依赖清楚的待办，仍由同Sol后续实现。`create_and_run_internal`已有InternalExecutionIntent，不造真实user Turn；Terminal已有精确source_thread/claim。缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
@@ -152,6 +152,14 @@ Chat正文固定180d（base3f951）七路径主strict/hash/preimage/保护/defau
 
 当前outbox owner独审及主fixed源码核验已收：已有Web runtime/caller、跨进程flock＋generation worker、旧sync端点/非递归第二writer下线；原handoff/OpenSpec状态已校准，不派重复接线。两个pending-parent建child入口及后端两个旧test caller仍待，IDB Playwright harness不代App/Gateway/backend真实验收。证据 `session-catalog-outbox-current-owner-review/attempt-1/report.md` 和 `primary-confirmation.json`；8.1/10.8不勾，后续交同Sol。
 
-退休＋fork包的作者live验证继续：共享import最终102pass actual0（含旧4来源拒绝和递归full-copy）；独立v1及v1→fork31pass actual0，冻结DDL与v1生产10路径原SHA未变。扩大reader检查159pass/5fail及fork60pass/1fail均actual1，原raw/exit保留，不把wrapper0当pytest0。五项checkpoint失败及静态发现的后续caller均是同类Thread/admission迁移，主已明确整个文件和child/helper一次迁完再单文件验，不按首批五项分轮追红。此调度调整效果尚待固定包验证，作者live绿灯不归ROOT；证据在 `r-producers-and-toolset-production/checks/legacy-v2-retirement-final-*`。
+退休＋fork包的作者live验证继续：共享import最终102pass actual0（含旧4来源拒绝和递归full-copy）；独立v1及v1→fork31pass actual0，冻结DDL与v1生产10路径原SHA未变。扩大reader检查159pass/5fail及fork60pass/1fail均actual1，原raw/exit保留，不把wrapper0当pytest0。首批五项之外仍有同类Thread/admission caller，主已要求整个文件和child/helper一次迁完再单文件验；后续完整测试也暴露了独立的空选择reader与迟到terminal问题，不能把全部失败归成参数迁移。此调度调整效果尚待固定包验证，作者live绿灯不归ROOT；证据在 `r-producers-and-toolset-production/checks/legacy-v2-retirement-final-*`。
 
 pinned保护复制失败的固定180d调用图已独核：SessionContextForkService在capture前建立retention claim，原底层测试直接afork漏该前置；裁定迁真实catalog claim fixture，保afork guard、retention与独立密文断言，未证生产缺口不扩写底层。下一wire preimage/profile的只读owner盘点在 `r-wire-preimage-owner-review/attempt-1/`，不重复180d正文验收、不启动新增文件工具实施。新增OpenSpec规划四组当前blob与HEAD相同，原strict41/0和独审证据复用。
+
+退休早包固定180d→b086含60差异路径、37删除，累计union134；主strict重建、全部pre/post hash/mode、AST21、保护和default index通过，删除符号在app/tests/scripts/configs/tools零引用，冻结schema3 SHA不变。共享journal/DDL、maintenance备份/恢复、ordinary detail和真实fork能力保留；v1十个生产路径原字节证据复用。证据 `r-legacy-v2-retirement-primary-review/fixed-only-attempt-1/` 与 `deletion-closure-attempt-1/`。两名只读reviewer容量错误均未产出新报告，主独审新增差异并复用原删除边界报告；尚未ROOT运行验收。
+
+checkpoint全文首次14pass/29fail中28项因作者猜用不存在的Saver.main_thread_id，AST/Ruff未检出；改用resolve_main_thread_owner并按真实MRO审计278call后38pass/5fail。后续42pass/1fail actual1：三history及迟到cancelled幂等通过，typed terminal/admission原组18pass actual0。replay完整cp-1/tool pairing与恰两新项通过，临时projection和checkpoint hydration仍需精确核同messages SQLite权威行，不能以canonical item.created_at替代恢复DTO时间；单例重试仍红，不计通过、不删manifest/extension断言。原raw/exit均保留于 `r-producers-and-toolset-production/checks/`。真实callee条款已纠正作者批量入口错误，最终固定包效果待验；该返工计入Sol投入，不报模型倍率。
+
+空选择reader受影响原组 `test_internal_display_view_order.py` 仍import/call已删validate_item_storage_metadata，主固定b086独核两处并读完整fixture，已授权同Sol在当前终包固定后迁完整typed fixture，保分页/顺序/owner/corruption断言，单独交窄包，不复活alias。新增文件工具规划四组与当前HEAD逐字一致，复用strict41/0与独审；本轮不再改规划、不启动其实施，证据 `file-tools-openspec-plan/current-reuse-attempt-8/`。
+
+主线程删除边界独审另识别P2：新增schema_transactions单函数进程内测试应在unit，已交同Sol物理迁移且保七项断言。初次误将schema_v4_fixtures/AGENTS owned路径当删除，随后实际fixed diff反证、立刻撤单，原四节说明已正确更新；此误派单归主协调成本。独审报告 `r-legacy-v2-retirement-primary-review/deletion-closure-attempt-1/report.md`，final差异待验。
