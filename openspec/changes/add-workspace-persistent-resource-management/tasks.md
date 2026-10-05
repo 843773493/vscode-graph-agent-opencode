@@ -23,11 +23,11 @@
 
 - [x] 4.1 在资源类型所属的 UI 区域提供工作区范围列表，并在 30 分钟宽限期内展示无 Thread 关联的临时孤儿及计划回收时间，支持重新关联或持久化。
 - [x] 4.2 在 Session 资源表面展示当前 Thread 关联和持久化快捷操作；区分资源关联 attach/detach 与浏览器/WebSocket/终端客户端传输连接。
-- [ ] 4.3 按后端完整结果整体替换成功对象；失败后重新读取 owner 状态并展示明确错误；Terminal 资源归主窗口底部面板。
+- [x] 4.3 按后端完整结果整体替换成功对象；失败后重新读取 owner 状态并展示明确错误；Terminal 资源归主窗口底部面板。
 
 ## 5. 生命周期与恢复验证
 
-- [ ] 5.1 为默认 Thread scope 与显式 Workspace scope 创建、Thread unload 即时 detach/delete、有效 lease、promotion/unload 并发、detach 冲突、Session 删除和 owner 重启增加 owner/API 验证；覆盖孤儿资源在 29:59 重新 attach 取消回收、满 30:00 自动回收、lease 阻止回收、attach/回收竞态和 Workspace scope 永不按期限回收。
+- [x] 5.1 为默认 Thread scope 与显式 Workspace scope 创建、Thread unload 即时 detach/delete、有效 lease、promotion/unload 并发、detach 冲突、Session 删除和 owner 重启增加 owner/API 验证；覆盖孤儿资源在 29:59 重新 attach 取消回收、满 30:00 自动回收、lease 阻止回收、attach/回收竞态和 Workspace scope 永不按期限回收。
 - [ ] 5.2 在 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 这一既有唯一 Web E2E owner 中增加用户持久化 Browser/Terminal 资源、unload 后保留、另一个 Thread attach/detach、Session 删除后仍可从 Workspace UI 访问及明确失败反馈的完整场景。
 - [ ] 5.3 用外置 process control 验证 owner 在外部操作结果未知时崩溃和重启；恢复孤儿期限时不得重置计时、重放未知副作用、伪报删除成功或遗留无权威记录的外部资源。
 
