@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 07:49（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 08:47（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
 
 ## 当前授权与唯一实现者
 
@@ -62,10 +62,14 @@ fork P2窄包 **ce595→`4cf1d8ddf43c7c32ce27f883e8848e72c383e6e0`**11路径已�
 3. **WVL**：固定 `519dd1a405ce7042db2539b24760ec6fe3421dca` 从a952严格183path，但main.py:248悬空try被AST拒，未合中央；不采用e814旧导航/DTO回退。原Web1244pass13fail仅转录，6组13失败路径在queue；主从36e刷新真三方组合，11冲突保36e原字节，非冲突准备树 **95f34e697f3f2e9003d8ba9fa43246ea1db3edb8**172path AST0，逐preimage同步唯一WT172写/0删，共享index未变；`wvl-integration-preparation/attempt-2,attempt-3/`与`wvl-sync/attempt-1/`。Sol已接续95f完整WVL，多workspace/registry/DI/lifespan/Gateway/Web真实闭包；冲突树4e164不可运行/同步。新产物`wvl-production/`。先生产main/caller合同，再定向，完整matrix仅必要新闭包后。额外整树workspace已保独有源码后删除。
    Sol已核95f/私有index实际同步，正收main registry/DI/lifespan、SessionService旧身份常量、MessageService显式thread与空Context Job/compiler workspace绑定；进程SessionInterruptState仅session键会跨workspace串，集中迁受控workspace+session/真实caller。main未写前纠正record_session_activity：它只写工作区活动展示，须保功能且Job排空后注销，不等于已删Job-as-Turn终态SQL。仅旧pending migration/catch数据旁路删，无默认workspace归属。
    本轮自然边界作者回报：95f上9生产文件＋2fixture改动，Python Ruff与Terminal两文件Bun静态解析通过，未报runtime绿。main已接canonical工作区UUID路由/显式header、registry逆序生命周期及部分启动清理；保fork/navigation/activity，Job排空后关runtime/platform。AgentExecutionService显式workspace注入/空Context绑定，InterruptState受控UUID+session隔离。双container隔离/故障关闭、caller fixture、Terminal寻址、六Web失败组与OpenAPI尚待真实验证；无冻结候选、无主补实现。
+   新确认WVL callee缺口：95f TerminalClient只有create payload带UUID，全部HTTP headers仅content-type，Node list未核workspace身份；主固定对象检索与作者判断一致。已授权同Sol把全HTTP/WS/空列表、Gateway辅助proxy/native frontend及fixture纳当前WVL寻址闭包，显式受控UUID映射、缺失/冲突/错误owner拒绝，真实双Terminal进程create/list/read/kill隔离；保schema2及source/retention。后续operation lease/一次WS grant仍单独验收，不把本寻址修复当owner整项完成。
+   最新自然边界：Terminal生产全HTTP/WS、Python/Gateway/native frontend已作者接线并迁正式caller，静态绿；真实双AppContainer/lifespan与双Terminal仍未跑。Web attempt1作者回报57pass/10fail，9处target/harness旧UUID合同，另有分页生产helper读废resource/locator使诊断不推进；已同Sol迁现代身份及7测试，attempt2/build1在跑，未验收。public.proto已现代而TS生成绑定仍旧，build未做类型检查；主把当前已固定Schema协议纳WVL立即生成：核Job/Pending字段实际tag/reserved后官方gen:protocol+gen:openapi、显式WT BOXTEAM_PROJECT_ROOT、真实tsc/Buf/contract/Web各门禁。后续新合同另按新增差异生成，不等全部功能。
+   08:47真实raw进展：backend7 134pass、Node1 17pass、lifespan-real2 4pass、Web2 74pass、Web matrix1 **1257pass/0fail**、build2/static3 exit0、Gateway/API4 147pass、fork-lifespan2 7pass、Session-unit1 61pass；不同范围不相加，尚无最终固定candidate归属核验。Terminal-final2为12pass后startup1error，mount-scope1为10pass后managed1fail；两份真实服务traceback均拒fixture空v2 catalog（required7），不是silent fallback或已证实生产回归。Sol核消费者后移除冗余旧生成库并让当前writer初始化；persistent/managed/adoption验证待，主补实现仍0。同132路径Ruff对照基线139/当前122，新增9（8import＋1unused fixture），作者报修复11文件静态0；继承诊断仍红、最终收据待核。
+   后续原raw：terminal-remainder1在0用例setup失败，模块级backend早于function manifest环境注入；主已独立核装配顺序，同Sol统一共享session级owner并删除重复fixture。remainder2为persistent3pass后managed1fail，真实Gateway接管仍按废health.workspace_root验证；同Sol全callee迁Terminal必填UUID、Browser保独立合同，拒绝反证待。strict OpenSpec全40已作者报绿。主原开发服务仍MainPID955663：游客探针三个初始化API均200/request_id一致，但logout404与源码既已修复的路由顺序不符，旧进程尚未重启；不当作候选回归，完整ROOT集成后统一恢复。主首次guest探针错传tracking布尔被422拒绝，是主成本，没创建用户；证据仅工具转录，不补造raw。
 4. **Terminal/Browser**：Terminal首16path在e16，后8path partial保 `navigation_authenticated_scope/artifacts/p05-terminal-owner/lease-forward-attempt-1/handoff.md`；Backend唯一owner/operationlease，Node127本机trust/一次WS grant，Gateway精确禁管理POST/DELETE旁路，真实ThreadRuntimeBinding，API/Agent/UI全调用闭包。随后Browser，不能全表reconcile误清Browser。
 5. **Resource activation生产**：底座7path draft、上层唯一registry、持久workspace key/freshmarker、真实execution/modelcall冻结/恢复、原子sealbind，无None/当前源旁路；`coordinator/artifacts/activation-production-wiring/review-plan.md`。36e固定独审未发现合法reasoning-only retry权限产品bug，但只有fake graph单测覆盖retry本身；真实编译图reasoning-only→正文与耗尽路径、逐model-call/canonical身份及唯一终态交同Sol补证，复用已审Runner/runtime，不打断在途WVL。固定报告已完成，无阻止集成finding；不将该覆盖限制记成已测绿。
 6. **delegate**：唯一Session SQLite ledger与child publication同事务，recovery/factory/startcaller，published不倒删。
-7. **最终验证**：PendingRequest手proto thread/nullableTurn核19/20编号后统一gen，JobDTO/typed Job proto也缺生产必填thread_id；check:protocol只lint/build proto，不能证明生成类型和DTO一致。不手改pb2；OpenAPI、strict OpenSpec、唯一完整WebE2E/真实浏览器及产物清理。未全部完成保持goal active。
+7. **最终验证**：当前Job/Pending与VRN公共Schema协议闭包已前移到WVL官方生成，不再等最终才修旧TS绑定；后续新合同按受影响差异再生成。Pending字段19/20只是早期编号候选，实际须核tag/reserved；check:protocol只lint/build proto，不能证明生成类型和DTO一致。不手改pb2；OpenAPI、strict OpenSpec、唯一完整WebE2E/真实浏览器及产物清理。未全部完成保持goal active。
 
 ## 严重事故与保留证据
 
