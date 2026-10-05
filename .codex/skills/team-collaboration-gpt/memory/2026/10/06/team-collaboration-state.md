@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 00:51（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 01:07（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
 
 ## 授权与恢复坐标
 
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **84f2acc9106c876d51d1a606e9540adbb7919706**；业务源码 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；下次恢复重新核HEAD，不把本文值当live。后续文档另提交，三保护未变。
+本文更新前ROOT HEAD **c58b6cab5a6003031fcaac09e2cdc1d85dbe3d02**；业务源码 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；下次恢复重新核HEAD，不把本文值当live。后续文档另提交，三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。本轮systemctl核验 **active/running**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -60,7 +60,7 @@
 - reviewer恢复读错schema3 tree，误撤缺陷；纠正base/target/报告根后回到9bec真实caller/callee。计审查返工，不归Sol；后续效果继续观察。
 - 主线程错误诊断“Gateway缺句柄”已撤销。固定7f8dc已有两handle，真实Bun退出3约155ms和SIGTERM均可见，无源码/测试增量。清旧库后服务恢复；此前等待为何未看到退出仍未证明。证据 `dev-launcher-early-exit/final-readonly-attestation.json`。不对反证已推翻的诊断派实现或写镜像测试。
 - 主错误成本单列：不存在preload前置失败0.081s、首次依赖patch含已相同新增文件被拒（未写源码）、初始化探针猜错字段connection_state。原raw/exit保留，不计作者返工，不以重试覆盖。
-- ROOT共享index当前观察98850fa4…；WT默认index e1cb50fd…。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
+- ROOT共享index当前观察98850fa4…；WT默认index当前4f4eba12…（此前e1cb50fd…）。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
 - R完整对象早审在生产大包前发现两个P2，forward/protected候选独审与ROOT95绿已验证规则效果；机械完整仍不代联合业务约束。审查中的封存后脱敏假workflow、猜测transition previous字段/source-selected旁路已按实际caller/type及低层合同撤回，计主/审查成本，无作者业务返工，不要求旧算法兼容。e4d scoped pass不代尚未接的生产投影。技能入口规则简短修订，原报告保留。
 - 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
 
@@ -79,3 +79,11 @@
 文件规划提交3940（17路径）、f107边界与附件delta、84f2媒体/唯一owner修订；最新strict41/0、独审finding闭合、guard/双祖先/sharedindex不变。文件规划本身未修改业务源码或旧handoff草稿；本轮原R的e4d/58e1业务集成单独计证。
 
 本轮规划原稿的媒体范围遗漏与重复kind表归主规划/审查成本，源码实现尚未启动。严格校验只能验证结构，语义矛盾由固定对象交叉审发现；保留原report，后续仅重核新增差异。
+
+本轮补齐context旧验收7.3-L：合法Skill文件URI可读且零activation/tracking，source preparation/Provider dispatch保持零文件I/O；旧私有路径拒绝，skill_load仍冻结来源。它此前与新spec冲突，属于主规划返工，不归Sol。
+
+R early 19path仍待固定交付；作者live新增7项通过（actual0/13.023秒、AST/Ruff0），主已读原command/raw/exit，但不归固定候选或整R验收。freeze被WT默认index字节变化阻止；主独立读3445项mode/blob/stage与WT HEAD ad093e完全一致、读前后SHA4f4eba不变，允许按新SHA续guard，未恢复默认index。只证明当前staging等于HEAD，不证明原字节精确恢复或完整历史命令。证据 `r-producers-and-toolset-production/production-prefix-early-attempt-1/primary-index-incident-review.json`。
+
+owner_contract当前ROOT c58定向89pass后首个setup error（actual1/15.834秒）来自owned_included_snapshot canonical ref public与entry默认internal冲突。独审已定位最小合法fixture迁移，保guard/断言，交唯一Sol随消费者完成；无独立旧baseline，不作继承归因。证据 `owner-contract-fixture-verification/attempt-1/fixture-review.md`。Browser6.4架构独审仍在途，不插当前R。
+
+旧验收7.3-L修订后，strict全量41pass/0fail、两版本skill quick_validate actual0；证据 `file-tools-openspec-plan/acceptance-coherence-attempt-6/`。这是规划/技能校验，不代文件工具实施或E2E验收。
