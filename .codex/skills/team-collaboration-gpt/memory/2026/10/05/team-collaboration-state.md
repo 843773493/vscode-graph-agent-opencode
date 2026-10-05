@@ -72,3 +72,5 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 主错误单列：私有/共享index误识别约九分钟、title合同误判、Gateway路由ID与旧Session DELETE探针假设；原失败留存，不计为作者返修。路径计数须显式--no-renames包含删除/新增。ROOT共享index旧观察dfe47已过期，锁作者strict窗口后为f2afa293（变更原因未确定）；主锁集成窗口前后独立核验均为f2afa293，不能据此声称整个作者窗口未变。WT默认index最近观察e1cb50f；共享index由absolute-git-dir/index定位，继续fresh私有index，不还原共享暂存。
 
 目录迁移已释放系统盘约238GB；旧根terminal-manager曾被2026-10-04的steering fixture重新写入，2026-10-05确认仅completed测试记录后再次清理，当前fixture已走out/tests显式UUID路径；授权旧数据与可复现副本已清，独有源码保留。原目录审查见 docs/handoff/20261003-151500-team-collaboration-directory-review.md。原始报告和提交保真；本台账压缩不重复产生总结文档。
+
+2026-10-05 typed canonical边界小组repair6–9及真实sealrepair2–4多轮首次失败即停；最后原回执分别为dual completion carrier pairing conflict和draft缺幂等键，不能全归为旧fixture。主建议合法初始化单例先通、随后有限相关组有界maxfail集中收剩余失败；同Sol已采用attempt10六文件组、timeout150/ulimit4194304/maxfail10，actual exit1/25.049秒（pytest23.35秒），一次收4fail/94pass。已验证能集中显现剩余问题，整体返工耗时仍待，不将live结果作固定候选验收。原raw/exit保留在A/typed-canonical-production/canonical-tests/，不把live绿项归给尚未固定的完整候选。
