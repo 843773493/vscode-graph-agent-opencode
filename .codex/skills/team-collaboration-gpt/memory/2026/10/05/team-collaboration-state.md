@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 19:08（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 19:28（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
 本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
@@ -18,7 +18,7 @@
 
 ## ROOT 已集成与真实产品
 
-现行规划文档 HEAD：`4e49b7c30c250e8eddd662e3014b10f4cb5c51f2`；业务源码提交：`11a925b0d6ba7f880517947d3b5207c0300cf3c9`（树 f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5）。此前主体 0b355979（893路径）及启动器 c525e346 已集成。Browser 最终 111 路径严格应用并保留四份主独有文档，含 AGENTS.md；preimage、guard、双祖先与共享 index 均通过。
+activation规划合同：`4e49b7c30c250e8eddd662e3014b10f4cb5c51f2`；术语收口计划：`81a084572e470ad2d017dc87ca355f1c0e02d934`。Browser主体源码 `11a925b0d6ba7f880517947d3b5207c0300cf3c9`（树 f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5）；后续锁 c5a4、remote launcher e78c、远端UUID145759与正式WS helper5fef已串行集成，fresh连接元数据修复待同Sol交付。此前主体 0b355979（893路径）及启动器 c525e346 已集成。Browser 最终 111 路径严格应用并保留四份主独有文档，含 AGENTS.md；preimage、guard、双祖先与共享 index 均通过。
 
 主服务 unit=boxteam-dev-cff6686cbc5b0e76.service，active/running，MainPID1274667；offset16，frontend8027/Gateway8030；BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。恢复时重新核验。
 
@@ -85,3 +85,11 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 正式remote attempt4在145759 actual exit1/69.279秒（pytest67.56秒）：联邦ready、资源create/list、attach页面和Browser grant均通过；Browser WS返回合法二进制screencast却被旧JSON-only接收helper解码，未到TerminalWS与Gateway重启。Node framing与已有integration helper分流已主核；同Sol在typed可停点窄修正式helper，主固定差异独审/集成后attempt5，不重跑无关组。原证据A/root-product-verification/remote-browser-terminal-attempt-4/。这是f838已有测试消费者遗漏，不归新增UUID实现。
 
 作者typed阶段报告（尚未固定/验收）：全仓items/offline restore/content-part locator显式session/thread；checkpoint typed provenance/extensions与真实fullcopy fork；group semantic retry严格核extensions/source/token_usage。逐字段JSONL→canonical→JCS原样一致，原行号误判实际是companion重复统计，未改hash算法；token_usage仅group anchor。通用acceptance_metadata迁为显式extensions、lineage参数与attachment payload，全量8caller闭合，不让opaque legacy audit扩展推导身份。保留原98pass及有限失败回执，不作为完整交付。
+
+2026-10-05远端后续：ROOT145759的六改动测试文件68pass/14.27秒，actual0/16.495秒；不与作者71相加。Browser binary helper固定b25b/1path3新增行已主strict/blob/AST/作用域Ruff0及固定差异独审，通过guard/双祖先/sharedindex后集成5fefdf82。attempt5 actual1/65.043秒（pytest63.31秒），真实BrowserWS attached/detached及TerminalWS GATEWAY_TERMINAL_OK均通过，helper修复效果已验证。首Gateway原lifespan完整关闭无残留监听；rebootGateway因本轮fresh SQLite投影引用未知连接退出3。主只读SQL确证meta.remote_gateway_connections=[]而合法UUID投影已落盘；固定树独审定位owner-scoped保存把旧空连接列表覆盖新输入。这是新写/恢复缺陷，不能清库或补默认；同Sol修唯一事务owner，来源基线尚待独审核，不先归模型。原raw/exit和identity-only事实在A/root-product-verification/remote-browser-terminal-attempt-5/。
+
+attempt5初次端口预检尚未启动测试，发现attempt4孤儿SSH2323641占22164；主核时间/专用key/known-hosts/forward精确归属后仅SIGTERM该pid，6原日志保留。该残留原因尚未确定，不按端口批杀，不冒称为新增作者缺陷；固定树只读生命周期审查继续。源码正名计划已提交81a08457，术语预备清单146path/1246行（8generated），排除historical handoff/archive，两个bun.exe二进制匹配只记录、不改。
+
+只读独审进一步确认 fresh连接元数据覆盖源于 ecf7e62（2026-09-22），属于继承源码缺陷，非本轮Sol。修复仍由唯一Sol闭合；attempt4孤儿的源码因果尚未证实，不将猜测当交付缺陷。
+
+固定树独审另确认正式fixture的继承清理风险：terminate_process10秒后静默kill Gateway父进程，产品lifespan先await多个stop/aclose，再关闭独立SSH组及Browser最长120秒owner；外部预算与真实关闭链不匹配。attempt4孤儿的具体因果未证，attempt5正常close无遗留；同Sol后续定点修harness有界关闭与透明失败/精确handle回收，不按端口批杀、不改受控handoff语义。报告A/remote-cleanup-review/attempt-1/report.md，尚未修复验收。
