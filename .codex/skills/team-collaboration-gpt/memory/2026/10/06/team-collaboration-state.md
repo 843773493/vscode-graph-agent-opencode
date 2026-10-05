@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **ac34da2e641f8bf5830ea0d205e57779c69b765b**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树已从原180d75路径物化退休＋reader/terminal/checkpoint固定最终tree **209481985e2619f29ed4ef26371185ab0e072a8f**，累计owned136路径、业务未提交；从fresh ac34组合tree=`9cc38ad11f28f86963480f40f15ffb14d2ea0e3e`。全部pre/post hash、删除、mode、AST23、三保护及两个默认index通过，ROOT单轮49pass actual0、Ruff0。主仅机械冻结、装配和独审，业务源码手写0。历史分页测试及其已暴露的原读取owner缺口另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
+本文更新前ROOT HEAD **fb63b168a76ea141228fa2c977b1e8e9220469ff**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；从fresh fb63组合tree=`b99fc188a67cf60da985ec916a9601cb751fd69d`。全部pre/post hash、删除、mode、三保护及两个默认index通过；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -45,7 +45,7 @@
 ## 当前执行与后续顺序
 
 1. **Sol正在实现 R 正向生产切片**，产物 `r-producers-and-toolset-production/`。WT按三方同步163路径后，app/src/tests/scripts/configs/proto/openspec与ROOT1c20零差异；3生成冲突按合并proto等于ROOT后复用官方输出。证据 `root-dependency-sync-attempt-2/preparation.json`；build0/17.483s与真实composition import0/2.990s。不整树覆盖 .codex/docs，不启动 WT/ROOT全服务。
-   公共合同8ac、封存事务39509和语义revision0e423已集成；当前固定209481累计136owned路径已物化ROOT、业务未提交。真实dispatch/API35及Chat双协议正文11项已按固定包通过，不代完整Provider/E2E。旧实验升级退休与reader/terminal/checkpoint已固定并通过窄验；Sol继续受影响display fixture，随后先固定normalized wire/profile公共合同，再接真实transition与checkpoint CSM恢复。删除旧名、静态候选数量与作者live绿灯均不代整R验收；固定报告及必要测试见下方最新记录。
+   公共合同8ac、封存事务39509和语义revision0e423已集成；当前固定0b064累计138owned路径已物化ROOT、业务未提交。真实dispatch/API35及Chat双协议正文11项已按固定包通过，不代完整Provider/E2E。旧实验升级退休与reader/terminal/checkpoint已固定并通过窄验；Sol继续受影响history-loading全文caller，随后先固定normalized wire/profile公共合同，再接真实transition与checkpoint CSM恢复。删除旧名、静态候选数量与作者live绿灯均不代整R验收；固定报告及必要测试见下方最新记录。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 2. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
 3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。 原task对表发现粗队列漏了E01–E07 runtime source/wakeup、同Session team/fanout、通信accepted→binding→cold recovery/持久观察以及8.15背景任务/mailbox；已分成依赖清楚的待办，仍由同Sol后续实现。`create_and_run_internal`已有InternalExecutionIntent，不造真实user Turn；Terminal已有精确source_thread/claim。缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
@@ -80,11 +80,14 @@ generic事务/备份恢复/journal/原子DDL、schema10、独立v1 importer十�
 
 原42pass/1fail、恢复单例1pass保原raw/exit，不拼成43绿。ROOT49是一次完整组合；replay保cp-1完整tool pairing、恰两新item、旧cp-2只旧view、JSONL逐字前缀，hydration四字段按messages SQLite权威行联校，不用canonical时间替代。SQL6case全文逐字从integration移到unit。
 
+
+Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee6cb317a840fad11ae020ba3a4bf6b79756fba55a0dd`；全部16个test函数含decorator AST不变，22参数case保留。生产复用既有require_context_view_order_integrity并去重复unknown-kind查询，session/thread在空结果前校同database_meta。主strict/hash/保护/default index、独立窄审及ROOT22单轮通过，主手写业务源码0；作者新runner的baseline字段仍180d，原记录保留，正式收据以209481→0b064归属，不伪装标签准确。证据 `r-display-primary-review/root-composed-attempt-1/` 和 `r-producers-and-toolset-production/internal-display-final-primary-export-attempt-1/`。
+
 ## 下一闭包与尚未完成的合同
 
 | 顺序 | 实际状态及验收 | 证据入口（相对 A） |
 |---|---|---|
-| display分页 | 同Sol在途，base209481。22case首轮14pass/8fail actual1；typed stream需model_call_id，session/thread校验须在empty-bound返回前，bounds须消费既有完整性validator。已允许窄修原internal_history owner，保分页/wrong-owner/corruption；尚无最终包 | r-producers-and-toolset-production/checks/internal-display-view-order-production-1.* |
+| history-loading caller | 同Sol在途，base0b064。受影响两文件原组17pass/15fail actual1/299.26秒；真实raw显示Session当Thread、Reader.load/open_read_snapshot缺必填thread及checkpoint缺owner/admission。允许整文件迁test_session_history_loading.py，保所有分页/预算/不读JSONL/可见性/错pointer断言；先真实最小入口，再单文件全文，不恢复alias | r-producers-and-toolset-production/checks/internal-display-view-order-affected-consumers-1.* |
 | wire/profile | 先固定真实Chat `_create_message_dicts→_astream`及Responses `_responses_payload→aresponses`最终规范化HTTP正文，含projector/version/provider/model/tools/attachment/loss/redaction，同owner剔除auth/transport/attempt。drift发送前拒绝；envelope/fake handler不代验收 | r-wire-preimage-owner-review/attempt-1/ |
 | transition/CSM | epoch intent仍NotImplemented；view事务未pending transition；prepare未传transition；checkpoint-versioned CSM未恢复。原owner同事务view+CSM+pending，首成功新epoch seal才consume/applied。paired barrier已有rewind/replay/compaction接线，不重做；source_manager deferred一并收口 | r-transition-owner-boundary-review/attempt-1/ |
 | ToolSet与后续 | producer已消费新selection并联合seal，不报漏接；SessionControl第二applied只在未接helper/tests，按8.3-B/C清理。activation、delegate publication/runtime source/wakeup、同Session child/team、通信binding/cold recovery/mailbox仍待 | runtime-event-task-evidence-review/attempt-1/ |
