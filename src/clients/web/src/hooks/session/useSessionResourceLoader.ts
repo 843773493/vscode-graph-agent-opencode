@@ -38,22 +38,37 @@ export function useSessionResourceLoader({
   setState: SetAppState;
 }) {
   const requestIdRef = useRef(0);
+  const ownerRef = useRef({ apiPort, workspaceId, sessionId: currentSession?.session_id });
   const inFlightRefreshRef = useRef<{
     key: string;
     promise: Promise<void>;
   } | null>(null);
   const userAccessRecoveryRef = useRef<Promise<Awaited<ReturnType<typeof ensureGatewayUserAccess>> | null> | null>(null);
 
+  if (
+    ownerRef.current.apiPort !== apiPort
+    || ownerRef.current.workspaceId !== workspaceId
+    || ownerRef.current.sessionId !== currentSession?.session_id
+  ) {
+    ownerRef.current = { apiPort, workspaceId, sessionId: currentSession?.session_id };
+    requestIdRef.current += 1;
+    inFlightRefreshRef.current = null;
+  }
+
   const invalidateSessionResources = useCallback(() => {
+    ownerRef.current = { ...ownerRef.current };
     requestIdRef.current += 1;
     inFlightRefreshRef.current = null;
   }, []);
 
-  const refreshSessionResources = useCallback(
-    async (sessionId: string, options: RefreshOptions = {}) => {
+  const readSessionResources = useCallback(
+    async (sessionId: string, options: RefreshOptions, failureStatus: string | null) => {
+      const owner = ownerRef.current;
+      if (owner.sessionId !== sessionId || owner.apiPort !== apiPort || owner.workspaceId !== workspaceId) return;
       const requestKey = `${workspaceId ?? ""}:${sessionId}`;
       const existing = inFlightRefreshRef.current;
-      if (existing?.key === requestKey) {
+      // 控制失败必须新读 owner，不能复用动作之前已经在途的旧结果。
+      if (failureStatus === null && existing?.key === requestKey) {
         await existing.promise;
         return;
       }
@@ -62,12 +77,15 @@ export function useSessionResourceLoader({
       requestIdRef.current = requestId;
 
       const request = (async () => {
-        setState((prev) => ({
-          ...prev,
-          sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
-          sessionResourcesError: null,
-          status: silent ? prev.status : "正在读取后台连接",
-        }));
+        setState((prev) => {
+          if (ownerRef.current !== owner || prev.currentSession?.session_id !== sessionId) return prev;
+          return {
+            ...prev,
+            sessionResourcesLoading: silent ? prev.sessionResourcesLoading : true,
+            sessionResourcesError: null,
+            status: failureStatus ?? (silent ? prev.status : "正在读取后台连接"),
+          };
+        });
 
         try {
           const loadResources = async () => {
@@ -84,13 +102,16 @@ export function useSessionResourceLoader({
                   userAccessRecoveryRef.current = null;
                 }
               });
+              if (ownerRef.current !== owner || requestId !== requestIdRef.current) return null;
               setState((prev) => ({ ...prev, gatewayUserAccess: userAccess }));
               return await getSessionResources(apiPort, sessionId, workspaceId);
             }
           };
           const resources = await loadResources();
+          if (resources === null) return;
           setState((prev) => {
             if (
+              ownerRef.current !== owner ||
               requestId !== requestIdRef.current ||
               prev.currentSession?.session_id !== sessionId
             ) {
@@ -110,13 +131,14 @@ export function useSessionResourceLoader({
               sessionResourcesLoadedAt: new Date().toISOString(),
               sessionResourcesLoading: false,
               sessionResourcesError: null,
-              status,
+              status: failureStatus ?? status,
             };
           });
         } catch (error) {
           const message = errorMessage(error);
           setState((prev) => {
             if (
+              ownerRef.current !== owner ||
               requestId !== requestIdRef.current ||
               prev.currentSession?.session_id !== sessionId
             ) {
@@ -126,7 +148,7 @@ export function useSessionResourceLoader({
               ...prev,
               sessionResourcesLoading: false,
               sessionResourcesError: message,
-              status: silent ? prev.status : `后台连接加载失败: ${message}`,
+              status: failureStatus ?? (silent ? prev.status : `后台连接加载失败: ${message}`),
             };
           });
         }
@@ -143,6 +165,11 @@ export function useSessionResourceLoader({
     [apiPort, workspaceId, setState],
   );
 
+  const refreshSessionResources = useCallback(
+    (sessionId: string, options: RefreshOptions = {}) => readSessionResources(sessionId, options, null),
+    [readSessionResources],
+  );
+
   const controlSessionResource = useCallback(
     async (
       kind: SessionResourceKind,
@@ -154,6 +181,10 @@ export function useSessionResourceLoader({
       }
 
       const sessionId = currentSession.session_id;
+      const owner = ownerRef.current;
+      if (owner.sessionId !== sessionId || owner.apiPort !== apiPort || owner.workspaceId !== workspaceId) {
+        throw new Error("当前会话资源请求已失效");
+      }
       const actionLabel = actionLabelForKind(kind, action);
       setState((prev) => ({
         ...prev,
@@ -171,24 +202,17 @@ export function useSessionResourceLoader({
           workspaceId,
         );
       } catch (error) {
-        // 失败必须给出带原因的可见诊断：之前只把「正在取消/关闭…」留在状态栏，
-        // 用户既看不到失败也看不到原因，属于静默失败。
         const message = errorMessage(error);
-        setState((prev) => {
-          // 与成功路径同一守卫：会话已切走时，旧会话的失败诊断不得污染新会话状态栏。
-          if (prev.currentSession?.session_id !== sessionId) {
-            return prev;
-          }
-          return {
-            ...prev,
-            status: `${actionLabel}失败: ${message}`,
-          };
-        });
+        const failureStatus = `${actionLabel}失败: ${message}`;
+        if (ownerRef.current === owner) {
+          // 权威重读完成前保持原控制错误；重读失败另存完整读取诊断。
+          await readSessionResources(sessionId, {}, failureStatus);
+        }
         throw error;
       }
 
       setState((prev) => {
-        if (prev.currentSession?.session_id !== sessionId) {
+        if (ownerRef.current !== owner || prev.currentSession?.session_id !== sessionId) {
           return prev;
         }
         const nextResources = prev.sessionResources.flatMap((resource) => {
@@ -210,7 +234,7 @@ export function useSessionResourceLoader({
         };
       });
     },
-    [apiPort, currentSession, workspaceId, setState],
+    [apiPort, currentSession, workspaceId, setState, readSessionResources],
   );
 
   return {

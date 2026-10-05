@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -142,3 +143,167 @@ async def test_cancelled_call_releases_lease_and_delete_unknown_blocks_session_c
     assert saved["records"][0]["reconciliation_status"] == "unknown"
     with pytest.raises(ResourceConflict):
         await bundle.owner.cleanup_session(SESSION_A)
+
+
+@pytest.fixture
+def revision_barrier(
+    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], tuple[asyncio.Event, asyncio.Event]]:
+    def arm() -> tuple[asyncio.Event, asyncio.Event]:
+        entered, release = asyncio.Event(), asyncio.Event()
+        sync = bundle.transport.sync_owner_revision
+
+        async def blocked(resource_id: str, revision: int) -> None:
+            # 真实 owner 已持锁并落盘新 revision，传输同步回执在此挂起。
+            entered.set()
+            await release.wait()
+            await sync(resource_id, revision)
+
+        monkeypatch.setattr(bundle.transport, "sync_owner_revision", blocked)
+        return entered, release
+
+    return arm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["promote", "unload"])
+async def test_promotion_and_unload_race_at_real_owner_revision_barrier(
+    bundle: BrowserBundle,
+    revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
+    first: str,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    owner = bundle.owner
+    assert owner is not None
+    entered, release = revision_barrier()
+    first_task = asyncio.create_task(
+        bundle.command(rid, action="promote", expected_revision=1)
+        if first == "promote"
+        else owner.release_thread(SESSION_A, THREAD_A, 1)
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    second_task = asyncio.create_task(
+        owner.release_thread(SESSION_A, THREAD_A, 1)
+        if first == "promote"
+        else bundle.command(rid, action="promote", expected_revision=1)
+    )
+    try:
+        await asyncio.sleep(0)
+        assert owner._lock.locked()
+        assert not second_task.done()
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(first_task, second_task, return_exceptions=True)
+    promoted = outcomes[0] if first == "promote" else outcomes[1]
+    unloaded = outcomes[1] if first == "promote" else outcomes[0]
+    assert unloaded is None
+    current = await owner.get_resource(rid)
+    assert current["source_thread"] == resource["source_thread"]
+    assert current["thread_associations"] == []
+    if first == "promote":
+        assert isinstance(promoted, dict)
+        assert current["retention_scope"] == "workspace"
+        assert current["status"] == "running"
+        assert current["owner_revision"] == 3
+        assert bundle.transport.deleted == []
+        assert [item["resource_id"] for item in await owner.list_resources()] == [rid]
+    else:
+        assert isinstance(promoted, ResourceConflict)
+        assert "已删除" in str(promoted)
+        assert current["retention_scope"] == "thread"
+        assert current["status"] == "deleted"
+        assert current["owner_revision"] == 2
+        assert bundle.transport.deleted == [rid]
+        assert await owner.list_resources() == []
+    assert bundle.transport.creates == 1
+    assert bundle.leases.leases_for_resource(rid) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["attach", "reclaim"])
+async def test_reattach_and_due_orphan_reclaim_race_at_real_owner_revision_barrier(
+    bundle: BrowserBundle,
+    revision_barrier: Callable[[], tuple[asyncio.Event, asyncio.Event]],
+    first: str,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    ref = ThreadRef(SESSION_A, THREAD_A)
+    detached = await bundle.command(rid, action="detach", expected_revision=1, thread=ref)
+    bundle.now += timedelta(seconds=1800)
+    owner = bundle.owner
+    assert owner is not None
+    entered, release = revision_barrier()
+    first_task = asyncio.create_task(
+        bundle.command(rid, action="attach", expected_revision=detached["owner_revision"], thread=ref)
+        if first == "attach"
+        else owner.sweep_orphans()
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    second_task = asyncio.create_task(
+        owner.sweep_orphans()
+        if first == "attach"
+        else bundle.command(rid, action="attach", expected_revision=detached["owner_revision"], thread=ref)
+    )
+    try:
+        await asyncio.sleep(0)
+        assert owner._lock.locked()
+        assert not second_task.done()
+    finally:
+        release.set()
+        outcomes = await asyncio.gather(first_task, second_task, return_exceptions=True)
+    attached = outcomes[0] if first == "attach" else outcomes[1]
+    reclaimed = outcomes[1] if first == "attach" else outcomes[0]
+    current = await owner.get_resource(rid)
+    assert current["source_thread"] == resource["source_thread"]
+    assert current["owner_revision"] == 3
+    assert current["reclaim_at"] is None
+    if first == "attach":
+        assert isinstance(attached, dict)
+        assert reclaimed == []
+        assert current["thread_associations"] == [{"session_id": SESSION_A, "thread_id": THREAD_A}]
+        assert current["status"] == "running"
+        assert bundle.transport.deleted == []
+    else:
+        assert isinstance(attached, ResourceConflict)
+        assert "已删除" in str(attached)
+        assert isinstance(reclaimed, list) and len(reclaimed) == 1
+        assert reclaimed[0]["status"] == "deleted"
+        assert current["thread_associations"] == []
+        assert current["status"] == "deleted"
+        assert bundle.transport.deleted == [rid]
+    assert bundle.transport.creates == 1
+    assert bundle.leases.leases_for_resource(rid) == []
+
+
+@pytest.mark.asyncio
+async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
+    bundle: BrowserBundle,
+) -> None:
+    resource = await bundle.create()
+    rid = str(resource["resource_id"])
+    detached = await bundle.command(
+        rid, action="detach", expected_revision=1, thread=ThreadRef(SESSION_A, THREAD_A),
+    )
+    lease = bundle.leases.acquire_operation(
+        resource_id=rid, turn_stream_id="actual-orphan-holder", operation_id="actual-operation",
+        holder_session_id=SESSION_A, holder_thread_id=THREAD_A,
+    )
+    bundle.now += timedelta(seconds=1800)
+    owner = bundle.owner
+    assert owner is not None
+    assert await owner.sweep_orphans() == []
+    current = await owner.get_resource(rid)
+    assert current["reclaim_at"] == detached["reclaim_at"]
+    assert current["thread_associations"] == []
+    assert current["status"] == "running"
+    assert bundle.leases.get_lease(lease.lease_id).status == "active"
+    assert bundle.transport.deleted == []
+    bundle.leases.release(lease.lease_id)
+    reclaimed = await owner.sweep_orphans()
+    assert len(reclaimed) == 1 and reclaimed[0]["status"] == "deleted"
+    assert await owner.sweep_orphans() == []
+    assert bundle.transport.deleted == [rid]
+    assert bundle.transport.creates == 1
+    assert bundle.leases.leases_for_resource(rid) == []
