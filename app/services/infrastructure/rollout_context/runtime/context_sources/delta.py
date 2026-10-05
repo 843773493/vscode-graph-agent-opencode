@@ -15,21 +15,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.state i
 
 
 class SourceDeltaMixin:
-        def _apply_content(
-            self,
-            state: SourceState,
-            content: str,
-            *,
-            kind: Literal["activation", "delta", "rebuild"],
-        ) -> None:
-            revision = _revision(content)
-            if state.latest_revision == revision and state.latest_content == content:
-                return
-            state.latest_revision = revision
-            state.latest_content = content
-            state.pending_kind = kind
-            self._queue_delta(state)
-
         def _record_observation(self, state: SourceState, revision: str) -> None:
             """按观察顺序记录 delta provenance；同一 revision 只记一次。"""
             if revision not in state.observed_revisions:

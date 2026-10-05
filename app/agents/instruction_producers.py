@@ -22,7 +22,8 @@ from app.domain.itemized.epoch.root_compilation import (
     RootPlacement,
     SourcePolicyKey,
 )
-from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -93,7 +94,7 @@ class InstructionProducerSpec:
             )
         if not isinstance(self.content, str) or not self.content:
             raise ValueError("InstructionProducerSpec.content 必须是非空字符串")
-        validate_hash_token(self.revision, "InstructionProducerSpec.revision")
+        _non_empty_string(self.revision, "InstructionProducerSpec.revision")
         if not isinstance(self.wired, bool):
             raise TypeError("InstructionProducerSpec.wired 必须是 boolean")
         if self.policy_key is not None and self.root_placement != "root_eligible":
@@ -218,9 +219,9 @@ class InstructionProducerObservation:
                 "InstructionProducerSpec"
             )
         assert_producer_registrable(self.spec)
-        validate_hash_token(self.revision, "InstructionProducerObservation.revision")
+        _non_empty_string(self.revision, "InstructionProducerObservation.revision")
         if self.from_revision is not None:
-            validate_hash_token(
+            _non_empty_string(
                 self.from_revision,
                 "InstructionProducerObservation.from_revision",
             )

@@ -195,6 +195,42 @@ def test_real_lifecycle_preserves_descriptor_root_policy(root_placement, policy_
     assert intent.policy_key == policy_key
 
 
+def test_first_observation_keeps_exact_owner_revision_through_prepare_and_intent():
+    mutation_port = _RecordingMutationIntentPort()
+    control_port = _FakeControlStatePort()
+    manager = ContextSourceManager(
+        owner=OWNER, control_state_port=control_port, mutation_intent_port=mutation_port,
+    )
+    manager.register(ContextSourceDescriptor(
+        source_id="instruction:R01", source_kind="agent_instructions", name="Agent 说明",
+        description="Agent 说明", internal_locator="instruction-producer://R01",
+        root_placement="root_eligible",
+    ), tracking_status="tracked")
+    assert manager.observe("instruction:R01", "第一版说明", revision="agent-config-revision:7")
+    batch = manager.prepare_pending()
+    assert batch.deltas[0].revision == "agent-config-revision:7"
+    assert batch.deltas[0].content_hash != batch.deltas[0].revision
+    assert batch.deltas[0].observation_provenance == ("agent-config-revision:7",)
+    (stored,) = control_port.load_context_source_control_states(OWNER)
+    assert stored.latest_revision == "agent-config-revision:7"
+    assert stored.latest_visible_committed_revision is None
+    manager.commit_model_call_pending(batch)
+    assert mutation_port.intents[0].revision == "agent-config-revision:7"
+    assert manager.observe("instruction:R01", "第二版说明", revision="agent-config-revision:8")
+    second = manager.prepare_pending().deltas[0]
+    assert second.revision == "agent-config-revision:8"
+    assert second.previous_revision == "agent-config-revision:7"
+    assert second.observation_provenance == ("agent-config-revision:8",)
+
+
+@pytest.mark.parametrize("revision", ["", 7])
+def test_explicit_invalid_observation_revision_is_rejected_without_content_hash_fallback(revision):
+    manager = ContextSourceManager()
+    manager.register(_descriptor("src_a", "a"), tracking_status="tracked")
+    with pytest.raises(ValueError, match="revision 必须是非空字符串"):
+        manager.observe("src_a", "beta", revision=revision)
+
+
 def test_commit_rejects_pending_drift_fail_closed() -> None:
     """提交前 pending 变化时 fail closed：零持久化推进、零事件、可重试。"""
     port = _FakeControlStatePort()

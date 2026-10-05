@@ -104,11 +104,10 @@ class RootCandidateSource:
     included_reason: IncludedReason
 
     def __post_init__(self) -> None:
-        for field_name in ("source_identity", "source_kind", "name"):
+        for field_name in ("source_identity", "source_kind", "name", "revision"):
             _non_empty_string(
                 getattr(self, field_name), f"RootCandidateSource.{field_name}"
             )
-        validate_hash_token(self.revision, "RootCandidateSource.revision")
         _non_empty_string(self.content, "RootCandidateSource.content")
         _non_negative_int(self.source_ordinal, "RootCandidateSource.source_ordinal")
         if self.root_placement not in _ROOT_PLACEMENTS:
@@ -140,12 +139,11 @@ class CompiledRootSourceProvenance:
     included_reason: IncludedReason
 
     def __post_init__(self) -> None:
-        for field_name in ("source_identity", "source_kind", "name"):
+        for field_name in ("source_identity", "source_kind", "name", "revision"):
             _non_empty_string(
                 getattr(self, field_name),
                 f"CompiledRootSourceProvenance.{field_name}",
             )
-        validate_hash_token(self.revision, "CompiledRootSourceProvenance.revision")
         validate_hash_token(
             self.content_hash, "CompiledRootSourceProvenance.content_hash"
         )

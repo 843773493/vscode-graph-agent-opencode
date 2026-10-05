@@ -217,3 +217,15 @@ def test_root_placement_is_single_domain_definition() -> None:
     assert RootPlacement == _DomainRootPlacement
     # tail_only 指引(如 MCP 工具指引)永远只能投影为独立 user-role item。
     assert resolve_source_wire_role("tail_only", compiled_into_root=False) == "user"
+
+
+def test_instruction_observation_preserves_non_hash_owner_revision():
+    spec = _spec(revision="agent-config-revision:7")
+    observation = InstructionProducerObservation(
+        owner=_OWNER, spec=spec, revision=spec.revision,
+        from_revision="agent-config-revision:6",
+    )
+    decision = observation.lifecycle_decision()
+    assert decision.revision == "agent-config-revision:7"
+    assert decision.from_revision == "agent-config-revision:6"
+    assert spec.content_hash.startswith("sha256:jcs:v1:")

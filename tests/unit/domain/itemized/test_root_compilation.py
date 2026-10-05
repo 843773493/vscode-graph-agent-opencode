@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.epoch.prefix_epoch import (
     EpochReason,
     PendingPrefixEpochTransition,
@@ -27,6 +25,8 @@ from app.domain.itemized.epoch.root_compilation import (
     resolve_source_wire_role,
     validate_epoch_root_uniqueness,
 )
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hashing import contribution_content_hash
 
 PROFILE = "test-profile"
 KEY_A = "sha256:jcs:v1:" + "a" * 64
@@ -211,11 +211,20 @@ def test_candidate_declared_fields_fail_closed() -> None:
     with pytest.raises(ItemSchemaError):
         _candidate("agents", 0, content="", revision=REV_1)
     with pytest.raises(ItemSchemaError):
-        _candidate("agents", 0, content="A", revision="rev-1")
+        _candidate("agents", 0, content="A", revision="")
     with pytest.raises(ItemSchemaError):
         _candidate("agents", -1, content="A", revision=REV_1)
     with pytest.raises(RootPlacementViolationError):
         _candidate("agents", 0, content="A", revision=REV_1, placement="root")
+
+
+@pytest.mark.parametrize("revision", ["resource-semantic-revision:7", "sha256:" + "8" * 64])
+def test_root_keeps_owner_semantic_revision_separate_from_jcs_content_hash(revision):
+    state = initial_epoch_state(provider_profile=PROFILE, tool_compatibility_key=KEY_A)
+    root = compile_root_item(state, (_candidate("agents", 0, content="精确正文", revision=revision),))
+    assert root.sources[0].revision == revision
+    assert root.sources[0].content_hash == contribution_content_hash("root_source", "精确正文")
+    assert root.sources[0].content_hash != revision
 
 
 def test_wire_role_decision_by_position() -> None:

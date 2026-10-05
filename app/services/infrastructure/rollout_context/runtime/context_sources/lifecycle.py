@@ -33,21 +33,18 @@ class SourceLifecycleMixin:
                 raise TypeError("ContextSourceManager.observe.content 必须是字符串")
             if not state.tracked:
                 return False
-            effective_revision = revision or _revision(content)
+            if revision is not None and (not isinstance(revision, str) or not revision):
+                raise ValueError("ContextSourceManager.observe.revision 必须是非空字符串或 None")
+            effective_revision = _revision(content) if revision is None else revision
             if state.latest_revision == effective_revision and state.latest_content == content:
                 return False
             if _adopt_restored_baseline(state, content, effective_revision):
                 # 重启恢复：该 revision 已在已提交上下文中，只重建 diff 基准。
                 return False
-            if state.latest_visible_committed_revision is None:
-                self._record_observation(state, effective_revision)
-                self._apply_content(state, content, kind="activation")
-                self._persist_control_state(state)
-                return True
             self._record_observation(state, effective_revision)
             state.latest_revision = effective_revision
             state.latest_content = content
-            state.pending_kind = "delta"
+            state.pending_kind = "activation" if state.latest_visible_committed_revision is None else "delta"
             self._queue_delta(state)
             self._persist_control_state(state)
             return True
