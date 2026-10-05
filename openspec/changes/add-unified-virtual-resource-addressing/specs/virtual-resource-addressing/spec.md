@@ -292,7 +292,7 @@ URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files
 
 ### Requirement: 导航形态与操作能力必须由资源 owner 公布
 
-资源根 MUST 公布 `resource_shape=directory|file|domain_object` 和允许的 operations。仅 directory 根或其真实目录子节点、且公布 child path 规则时可追加相对文件段；file 节点不可追加子路径，domain_object 按 owner 给出的引用、结构化 view 和领域操作访问。导航能力不等于写权限；固定修订文件和受 owner 管理的产物不可由通用写工具覆盖。根定位和读取必须校验实际 containment，越界 symlink 不得成为访问另一根的后门。
+资源根 MUST 公布 `resource_shape=directory|file|domain_object` 和允许的 operations。仅 directory 根或其真实目录子节点、且公布 child path 规则时可追加相对文件段；file 节点不可追加子路径，domain_object 按 owner 给出的引用、结构化 view 和领域操作访问。导航能力不等于写权限；固定修订文件和受 owner 管理的产物不可由通用写工具覆盖。根定位和读取必须校验实际 containment，越界 symlink 不得成为访问另一根的后门。 工作区 files 根也不得绕过业务 owner 导航或修改其私有存储（例如 .boxteam 下的会话、catalog、checkpoint 和运行状态）；这类路径按 owner 能力拒绝，不以禁止所有点号目录代替该边界。
 
 技能包根为 `.../resources/skills/{name}`，name 仍是 catalog 的身份段；其后是文件路径段，可定位 SKILL.md、references、scripts 和其它真实多层文件。工作区文件树使用本 owner 登记的 files/root 根。agent-spec 和 config 的现有逻辑地址是单文件引用；session/assembly 是领域对象，附件与工具结果由各自 owner 在 `session/{session_id}/attachments/{attachment_id}` 和 `session/{session_id}/tool-results/{result_id}` 模板下公布单文件引用（各段均是原业务身份，非文件路径；完整前缀仍遵循统一 scope/authority 语法），不公开底层私有存储树。根名与 URI 模板由本 owner 固定登记，不运行动态插件注册。
 

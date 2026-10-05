@@ -20,7 +20,9 @@
 
 ### Modified Capabilities
 
-无。寻址和 Skill 生命周期的公共要求分别在其现有 change 修订，本 change 只引用；不重复定义 URI grammar、kind 或来源激活状态机。
+- `structured-user-message-attachments`：附件模型可见定位从相对路径改为原owner提供的统一资源 URI；保留身份、预览/协议投影和失败语义。
+
+寻址和 Skill 生命周期的公共要求分别在其现有 change 修订，本 change 只引用；不重复定义 URI grammar、kind 或来源激活状态机。
 
 ## Impact
 
