@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 16:17（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 16:42（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
 本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
@@ -40,8 +40,11 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 - 起点 UTC：2026-10-05T07:45:36.414759+00:00（先读合同）；baseline=f838d13ad91cbeaa13bc83eca41f324b3dfca451。
 - 主已初始化状态 index：TEMP/coordinator/git/typed-canonical-status.idx，read-tree f838。作者产物：A/typed-canonical-production/。不得用 WT HEAD 或 ROOT 文档 HEAD 替代该基线。
 - 原 itemized1.5/1.6 与 context4.6、6.7/7.1 的 typed/R01–R07部分：metadata→opaque namespaced/versioned extensions；ProjectionGroup、ItemProjectionIdentity、ToolResultEvidence、ItemSourceManifest、SourceBinding与显式relation贯穿writer/SQLite/JSONL/checkpoint/fork/history/provider。已有selection_role/replacement_policy/source_ordinal和RuntimeNoticePayload保留；source_ordinal只由owner-thread registry在既有ContextContribution分配/恢复。
-- 作者已报告源码在途：contribution SourceBinding/extensions、resolver/overlay、统一serializer、registry/assembly、composer/restart/fork binding已迁，静态边改边跑；旧metadata source_ordinal过滤删除，opaque value不决策。**未冻结、未验收。** canonical四typed/关系、实际R01–R07及全caller/tests继续同一WT。supersession/attachment/fork控制读取不能只改字段名。
-- 稳定生产依赖闭包可固定早审，后续只审新增差异；不为早审裁残签名、callee、导入或消费者。不得据这条切片勾整个context6.7/7.1。
+- SourceBinding 已有下述早审树；后续 canonical 仍在途、未验收。作者报告四typed/关系与extensions、stream/tool终态writer、checkpoint codec/group、acceptance/source lifecycle、catalog无正文projection mirror已接；剩余fork copy/remap与v1 importer、carrier dedup/checkpoint authority、standalone history、attachments/旧fixture及真实R01–R07 producer/ToolSet条件roots。静态边改边跑；主不覆盖live，不把作者阶段报告当验收。
+- SourceBinding早审固定树 5c285016bb0f32ce4aa8490760279c4c5c868767 于UTC08:33:56.630550冻结，43paths/28production/15tests；A/typed-canonical-production/source-binding-early/。主strict/blobSHA/AST43、78pass23.32s原raw与实际exit0/外置保护、保护0/sharedindex不变已核；只读review运行。该快照声明四canonical纯值定义未接线，canonical/R01–R07与完整sealed/fork未验收，**不集成、不勾整项**。从typed起点到该早审48.34分钟，不是完整切片耗时。
+- SourceBinding阶段domain67与joint/registry54分别过，原120pass2fail、41pass13fail保留且范围不相加；imported seal source_ordinal序列化比较已作者修，未放宽owner。旧schema→10明确拒绝旧实验v2、原件不动；完整canonical尚继续。
+- 稳定早审与后续实现并行，后续只审新增差异；不裁残签名、callee、导入或消费者。不得据这条切片勾整个context6.7/7.1。
+- 早审确认未闭合的revision CAS：5c285 registry仅按contribution_id更新，composition仅凭新replacement_policy放行，违反同owner/slot/revision CAS、未封存要求。主对比f838确认该无CAS分支已在基线存在，**不记为Sol新引入缺陷或完整交付返工**；同Sol已接真实caller→SQLite CAS、迟到冲突/immutable升级/已封存拒绝和内存无先行修改。独审报告仍待，protected extensions披露疑点尚未确认，不派盲修。
 
 ## 后续唯一队列
 
