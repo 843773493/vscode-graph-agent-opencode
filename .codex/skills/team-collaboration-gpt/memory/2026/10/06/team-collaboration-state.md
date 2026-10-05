@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 01:31（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 01:49（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
 
 ## 授权与恢复坐标
 
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **9730983969c256cdf27359e28f037304a0f8f418**；业务源码 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；下次恢复重新核HEAD，不把本文值当live。后续文档另提交，三保护未变。
+本文更新前ROOT HEAD **9e1167893abcbf7d3dfce46eff29d76d44c375df**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248固定41路径组合已物化但未提交，组合tree=`f5a599eeec2a90bdef69b960f26cc68d152c1541`，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。本轮systemctl核验 **active/running**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -45,7 +45,7 @@
 ## 当前执行与后续顺序
 
 1. **Sol正在实现 R 正向生产切片**，产物 `r-producers-and-toolset-production/`。WT按三方同步163路径后，app/src/tests/scripts/configs/proto/openspec与ROOT1c20零差异；3生成冲突按合并proto等于ROOT后复用官方输出。证据 `root-dependency-sync-attempt-2/preparation.json`；build0/17.483s与真实composition import0/2.990s。不整树覆盖 .codex/docs，不启动 WT/ROOT全服务。
-   公共合同8f922→6dd→0e2a完整22path已经ROOT8ac集成；早审两个P2及protected空policy修复均由同Sol闭合，主95项绿。随后e4d事务10path与58e1语义revision7path分别集成39509、0e423，主61/75相关项绿，独审按未变差异复用；R整体仍未验收。WT当前冻结基点58e1后继续真实prepare→seal→ack→projection，不重审已绿前置。4继承测试疑点与12 owner fixture setup errors完整基线归因未证，未改golden/runtime求绿；必要fixture由同Sol随真实消费者迁移。
+   公共合同8f922→6dd→0e2a完整22path已经ROOT8ac集成；早审两个P2及protected空policy修复均由同Sol闭合，主95项绿。随后e4d事务10path与58e1语义revision7path分别集成39509、0e423，主61/75相关项绿，独审按未变差异复用。当前WT冻结基点6248，19path Saver d29与22path Agent消费者已主strict重建并组合物化到ROOT；201项真实LangChain graph/middleware→Bridge→Saver消费组绿，使用模型/业务依赖替身，不是完整Provider或E2E。最新独审发现seal投影、runtime wire映射和mapping双向import三项职责问题，同Sol优先修固定结构增量与canonical thread fixture，随后迁必要恢复fixture/旧CSM测试caller。生产commit_model_call_pending零引用、测试53引用仍待全量迁，不因201绿就认整R验收。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 2. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
 3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。 原task对表发现粗队列漏了E01–E07 runtime source/wakeup、同Session team/fanout、通信accepted→binding→cold recovery/持久观察以及8.15背景任务/mailbox；已分成依赖清楚的待办，仍由同Sol后续实现。`create_and_run_internal`已有InternalExecutionIntent，不造真实user Turn；Terminal已有精确source_thread/claim。缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
@@ -82,9 +82,9 @@
 
 本轮补齐context旧验收7.3-L：合法Skill文件URI可读且零activation/tracking，source preparation/Provider dispatch保持零文件I/O；旧私有路径拒绝，skill_load仍冻结来源。它此前与新spec冲突，属于主规划返工，不归Sol。
 
-R early 19path仍待固定交付；作者live新增7项通过（actual0/13.023秒、AST/Ruff0），主已读原command/raw/exit，但不归固定候选或整R验收。freeze被WT默认index字节变化阻止；主独立读3445项mode/blob/stage与WT HEAD ad093e完全一致、读前后SHA4f4eba不变，允许按新SHA续guard，未恢复默认index。只证明当前staging等于HEAD，不证明原字节精确恢复或完整历史命令。证据 `r-producers-and-toolset-production/production-prefix-early-attempt-1/primary-index-incident-review.json`。
+R early固定d29（58e1基线）已交付且独审通过，作者7项actual0/13.023秒；WT默认index事故已核当前3445项mode/blob/stage与WT HEAD ad093e一致、读前后SHA4f4eba不变，允许按新SHA续guard，未恢复默认index。只证明当前staging等于HEAD，不证明原字节精确恢复或完整历史命令。后续freeze照新SHA核验；证据 `r-producers-and-toolset-production/production-prefix-early-attempt-1/primary-index-incident-review.json`。
 
-owner_contract当前ROOT c58定向89pass后首个setup error（actual1/15.834秒）来自owned_included_snapshot canonical ref public与entry默认internal冲突。独审已定位最小合法fixture迁移，保guard/断言，交唯一Sol随消费者完成；无独立旧baseline，不作继承归因。证据 `owner-contract-fixture-verification/attempt-1/fixture-review.md`。Browser6.4架构独审仍在途，不插当前R。
+owner_contract原ROOT c58定向89pass后setup error（actual1/15.834秒）来自owned_included_snapshot canonical ref public与entry默认internal冲突；6248按真实ref派生三manifest字段、ToolSet固定internal，保guard/golden，主201组合已验证该组通过。无旧baseline，不作继承归因。原失败证据 `owner-contract-fixture-verification/attempt-1/fixture-review.md` 保留。Browser6.4结构审查已完成并登记独立后续，不插R。
 
 旧验收7.3-L修订后，strict全量41pass/0fail、两版本skill quick_validate actual0；证据 `file-tools-openspec-plan/acceptance-coherence-attempt-6/`。这是规划/技能校验，不代文件工具实施或E2E验收。
 
@@ -97,3 +97,7 @@ R真实Saver早包d29（58e1基线、19path）已主strict重建/hash/preimage/�
 Saver d29窄独审已完成，无actionable finding；ack重试窗口无正常受支持可达失败证据，不新增理论补丁，provider profile变更拒绝符合8.3-B。报告 `r-production-prefix-boundary-review/attempt-1/report.md`。未变19path审查与51项组合测试复用，继续同Sol最小caller候选。
 
 后续规划对齐与Browser登记再次strict41/0，两版本skill quick_validate0。主plan7曾未初始化新私有index就diff，产生3492假删除；从未据此改源码，fresh read-tree后只见7文档与保留handoff草稿，成本单列，不归作者。证据 `file-tools-openspec-plan/historical-coherence-attempt-7/`。
+
+当前固定消费者6248：base=d29，22path＋未变d29的19path共41。factory正向登记R01/R02/条件R03，stack R04/R06/R07，Skill metadata R05；唯一Bridge在routing/producer/policy之后，system_prompt=None；RegisteredToolSetProducer从真实图注册目录取得ToolSet，不读最终request.tools。旧ModelToolVisibility实现与全部引用删除，生产Skill seal前commit/state-message链删除。主strict/hash/preimage/保护核验通过，ROOT组合201pass actual0/54.220秒、AST39/Ruff0，证据 `r-agent-consumer-primary-review/root-composed-attempt-1/`；数量与作者122/79、旧51有重叠不求和，较早unit结果不自动归固定候选。消费者窄独审仍在途。
+
+结构三项finding来自固定d29审查，6248继承，主对目录AGENTS/import独核成立：seal/lifecycle实现Provider request preimage，runtime/prefix_compiler直接LangChain→wire frame，mapping/langchain与prefix_frames函数内双向import。纯投影交现有provider/mapping owner，seal保唯一事务、runtime保source/epoch编排；同Sol修复，不改AGENTS放宽、不新增框架、不重导出旧双轨。报告 `r-production-prefix-architecture-review/attempt-1/report.md`；增量未到，不称闭合。作者affected-fixed有64pass+1fail actual1/16.162秒，旧graph_binding fixture thread_id=main被canonical validator拒，已列同增量迁移；无旧baseline，不称继承。
