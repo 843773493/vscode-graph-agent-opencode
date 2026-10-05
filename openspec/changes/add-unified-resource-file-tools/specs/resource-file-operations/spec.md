@@ -39,7 +39,7 @@
 
 ### Requirement: 普通文本读写必须遵守能力与修订边界
 
-首批文件操作 MUST 使用严格 UTF-8 文本和原始字节内容 hash，不隐式改写换行、BOM 或 Unicode。读取可有明确范围/截断标志，不完整内容不得标作完整；普通文件 hash 按需计算。文件写入 MUST 校验 owner 公布的写能力，绑定预期当前内容 hash 或 owner 的等价 revision；创建 MUST 使用明确的预期不存在条件。只读根、固定历史 revision、领域对象以及由附件/工具结果 owner 管理的产物不得被通用文件工具覆盖。文件工具不得写入上下文来源控制或伪造来源 revision。
+普通文本读取与首批写入 MUST 使用严格 UTF-8 文本和原始字节内容 hash，不隐式改写换行、BOM 或 Unicode。读取可有明确范围/截断标志，不完整内容不得标作完整；普通文件 hash 按需计算。既有 `read_file` 支持的图片等媒体读取 MUST 保留其工具结果合同，不能因文本编码限制而失效；媒体类型与读取能力由实际资源 owner 公布，不将任意非 UTF-8 文件猜成媒体。文件写入 MUST 校验 owner 公布的写能力，绑定预期当前内容 hash 或 owner 的等价 revision；创建 MUST 使用明确的预期不存在条件。只读根、固定历史 revision、领域对象以及由附件/工具结果 owner 管理的产物不得被通用文件工具覆盖。文件工具不得写入上下文来源控制或伪造来源 revision。
 
 #### Scenario: 并发修改返回冲突
 
@@ -53,8 +53,8 @@
 
 #### Scenario: 非 UTF-8 文件被文本工具读取
 
-- **WHEN** 读取字节不符合严格 UTF-8
-- **THEN** 返回明确编码失败，不用替换字符伪造文本；附件既有二进制读取仍归附件 owner
+- **WHEN** 通过文本读取能力读取不符合严格 UTF-8 的字节
+- **THEN** 返回明确编码失败，不用替换字符伪造文本；既有媒体读取能力不受该文本限制，附件二进制读取仍归附件 owner
 
 ### Requirement: 补丁必须固定一个根并披露实际发布结果
 
@@ -102,10 +102,17 @@
 
 附件和工具输出 MUST 使用统一寻址 owner 登记的 Session 单文件引用，保留原 attachment/result 业务 ID、访问授权、保留/删除和历史语义。生成、读取、工具结果、Provider 输入及 Web/历史投影 MUST 同步替换 `boxteam-session://`；该 scheme 与解析分支在全部直接/间接消费者迁移后物理下线，不保留别名或双读。产物可显式读取但不可当作 Session 私有目录遍历或通过通用写工具修改；未授权与不存在遵守原 owner 的披露合同。
 
+统一 URI 的读取分派 MUST 将附件交原附件 owner 取得内容，保留既有 `original`/`thumbnail` 变体参数；变体不成为 URI query、fragment 或另一套文件身份。Web 附件内容接口仍消费同一 owner，既有 `read_file` 对受支持媒体返回原有媒体 block，并经现有 `project_tool_message_content` 和目标 Provider 能力处理。通用文本读取仅消费文本能力，不能替代二进制原件或将其以替换字符返回；不新增 `attachment.xxx` 工具、通用二进制写入平台或私有目录读取旁路。
+
 #### Scenario: 新附件与工具输出可重开读取
 
 - **WHEN** 新产物经消息/工具结果及历史投影发布后重启 owner
 - **THEN** 同一规范 URI 经原 owner 可访问相同内容，授权及删除结果仍与原业务行为一致
+
+#### Scenario: 图片附件 URI 保留已有媒体读取
+
+- **WHEN** 经统一 URI 使用既有 read_file 读取受支持图片附件，或客户端请求该附件的 original/thumbnail 变体
+- **THEN** 内容由原附件 owner 在固定目标提供，媒体工具结果与 Provider 投影遵守既有合同，不报 UTF-8 文本错误、不返回真实路径，也不开放 Session 私有目录
 
 #### Scenario: 旧 scheme 被拒绝
 

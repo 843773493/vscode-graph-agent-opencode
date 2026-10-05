@@ -28,5 +28,5 @@
 
 - 依赖：`add-unified-virtual-resource-addressing` 的可导航根/路径编码与联邦能力；`add-context-injection-lifecycle` 的读取与激活分离；`migrate-session-context-resource-uri` 和 itemized 的既有会话目标 owner。
 - 实施影响面：工作区文件工具/backend 与路径解析、资源平台及文件 API、Gateway 联邦透明路由、附件和工具输出 store、Provider/历史投影、协议与客户端引用，以及对应测试。
-- 首批只承诺有界文本文件操作；终端/Python/浏览器/调试的进程执行、`mkdir/move/copy/remove`、通用二进制读写、`watch/tail`、跨 Gateway 复制与通用 `operation_id` 不纳入。附件现有二进制传输仍由附件 owner 提供。
+- 首批新增写入只承诺文本文件操作；普通文本读取有界且严格 UTF-8，既有 read_file 媒体读取与附件二进制传输经统一 URI 交原 owner，保留原工具结果和 Provider 合同。终端/Python/浏览器/调试的进程执行、`mkdir/move/copy/remove`、新增通用二进制读写、`watch/tail`、跨 Gateway 复制与通用 `operation_id` 不纳入。
 - 规划完成不代表生产实现完成；先固定公共合同，再本地技能包导航、目标端执行、工作区写入和旧链路删除，不打断当前 R 实现。

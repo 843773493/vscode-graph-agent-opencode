@@ -36,6 +36,8 @@ write/edit/patch 的内容前置使用精确原始 byte `sha256:<hex>` 或该 ow
 
 附件与工具结果在 session 模板下公开单文件 URI（模板唯一登记于寻址 owner），保留原业务 ID 和 owner。当前工具输出物理文件名为tool_<digest>.txt，不能把它当成通用身份段；没有独立result ID时由原owner基于现有稳定tool_call_id派生/公布规范引用，物理文件名留在owner内部，不新增通用身份注册库。迁移清点生成器、store/parser、middleware、大输出引用、消息附件、Provider 和 Web/历史 projection，完成后删除旧 scheme 常量/分支。现有附件二进制读取通过原接口保留，不把它扩成通用文件写入能力。不迁旧开发生成数据、不暴露会话私有目录。
 
+现有 `read_file` 经 workspace filesystem backend 返回图片媒体 block，Provider 侧已有 `project_tool_message_content`；Web 的附件 content 接口经 `AttachmentBlobStore.read/read_thumbnail` 返回原件或缩略图。附件的这两条消费者统一从资源 URI 分派到原附件 owner，不能让普通文本的 UTF-8 要求废除既有媒体读取。`original`/`thumbnail` 保留原 owner 参数，URI 只描述同一附件身份；不新增 attachment 工具、URI query/view 解析器或绕过 owner 的 SessionArtifactBackend 私有目录映射。迁移后 workspace 文件读取同样保留既有受支持媒体能力，仍归其工作区文件 owner；首批新增写入仍仅文本。
+
 ## Risks / Trade-offs
 
 - 文件名编码与现有身份 profile 混用 → 公共 grammar 先交完整构造/解析往返与拒绝矩阵，所有消费者只引用，不再加 parser。

@@ -28,6 +28,8 @@
 
 系统 SHALL 由 `UserContentBuilder` 在生成用户 content blocks 的同一入口中提供明确绑定Gateway/工作区/会话目标的附件资源 URI，以及文件名、MIME 类型和稳定附件身份等必要元信息。manifest 可以采用 `<attachment ...>` 形式并复用项目现有标记的转义规则，但不得调用只用于内部 `system_reminder` 的 `InternalMessageFactory` 或内部消息 middleware。模型可以使用理解统一寻址的现有文件读取或查看能力访问原件；原生终端命令不会自动解析资源 URI，跨端进程执行合同另行定义；系统不得要求新增 `attachment.xxx` 工具才能访问附件。
 
+URI 读取 SHALL 按 `resource-file-operations` 的产物分派合同交原附件 owner；既有媒体 read_file、原件/thumbnail 内容接口和工具结果的 Provider 媒体投影保持同一行为。普通文本读取的严格 UTF-8 限制不适用于既有受支持媒体读取，变体继续由原 owner 的独立参数选择，不编码进 URI。
+
 #### Scenario: 模型收到图片附件说明
 
 - **WHEN** 用户消息带有持久化图片附件

@@ -28,7 +28,7 @@
 ## 5. 会话产物与旧链路下线
 
 - [ ] 5.1 平移附件和工具输出的新URI生成、store读取/授权、middleware/tool结果、用户消息、Provider以及Web/历史投影，保留原attachment/result业务ID和生命周期；附加文件URI不意味着可遍历Session私有目录。
-- [ ] 5.2 验证新产物发布、owner重启、授权失败与删除结果；附件原二进制接口保留其行为，不新增通用二进制文件写入。
+- [ ] 5.2 验证新产物发布、owner重启、授权失败与删除结果；从真实read_file图片结果和Web original/thumbnail接口核验URI分派至原附件owner、Provider媒体投影不变，文本编码失败不误拒媒体；不新增通用二进制文件写入。
 - [ ] 5.3 全仓检索旧scheme/旧路径解析的直接间接引用，全部迁移后删除boxteam-session解析分支和重复文件定位链；清开发中间数据，不迁旧数据、不留alias/双读。
 
 ## 6. 验证与交付
