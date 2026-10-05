@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 14:29（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 16:04（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
 
 ## 当前授权与唯一实现者
 
@@ -23,7 +23,7 @@ ROOT三个独有源码preimage已逐路径核并集成：`fork_boundary.py` blob
 
 **当前ROOT：已集成并恢复全组，Terminal真实产品链路已验收。** 主体commit0b355（893路径）后，CLI/launcher窄修两包9fbb→32219→f9ac共5路径独立核验并串行提交 **c525e3463c14e6a7597dbd69d482a49bb52162a1**。主审发现LF-only会拒Windows CRLF，同Sol两路径增量已修并定向1pass。就绪等待会及时报告退出/collect，health后再核同PID与ready；原120s失败与测试JS转义原raw保留。真实CLI、原21绿范围、单例修复、既有systemd4及CRLF分别引用，不相加成新全组绿；两包strict/blobSHA/AST/Ruff0/Bunbuild0/保护0/deferred Browser42核过。精确原始收据与主独审在 root-product-verification/launch-forward/。
 
-当前unit boxteam-dev-cff6686cbc5b0e76.service active/running，MainPID567122，物理ROOT/home、offset16（frontend8027/Gateway8030）。实际经8027验证gateway health/workspaces/workspace均200、同一request_id；新Session mainThread绑定、UI建Terminal、iframe grant/WS与真正PTY输入输出、promote/stop后最终输出、detach/delete都过且浏览器error0。原browser-attempt2总exit1来自主误用已移除Session DELETE做末尾清理，业务断言均已完成；未重跑绿链路，只经正式navigation operation补清理，committed且pending_settlement=false、cleanup-only exit0。原browser-attempt1主误把backendID当Gateway路由ID的404也保留，均不归给作者返工；注册目标与backend稳定ID已分别核验。验收 root-product-verification/terminal-product-acceptance.json 绑定原rawSHA/exit与限定结论，不伪改失败收据。
+当前unit boxteam-dev-cff6686cbc5b0e76.service active/running，MainPID1274667（Browser最终切换后），物理ROOT/home、offset16（frontend8027/Gateway8030）。实际经8027验证gateway health/workspaces/workspace均200、同一request_id；新Session mainThread绑定、UI建Terminal、iframe grant/WS与真正PTY输入输出、promote/stop后最终输出、detach/delete都过且浏览器error0。原browser-attempt2总exit1来自主误用已移除Session DELETE做末尾清理，业务断言均已完成；未重跑绿链路，只经正式navigation operation补清理，committed且pending_settlement=false、cleanup-only exit0。原browser-attempt1主误把backendID当Gateway路由ID的404也保留，均不归给作者返工；注册目标与backend稳定ID已分别核验。验收 root-product-verification/terminal-product-acceptance.json 绑定原rawSHA/exit与限定结论，不伪改失败收据。
 
 两授权workspace生成运行数据已清，普通代码、workspace identity保留，证据 runtime-data-cleanup.json。默认workspace本轮测试Session已正式删除，无新增project-root .boxteam；协作记录已提交b17be79，恢复后维护的新文档变更按本轮状态核验；Sol唯一WT继续Browser在途源码、不覆盖。下一完整Browser baseline为 **f9ac4a12a11910291ea58c2ac1172bcb10b1c603**；原其他typed/activation/delegate/federated及最终唯一WebE2E/OpenSpec仍未验收，goal保持active。
 
@@ -75,3 +75,14 @@ e5增量独审最终确认另一个P2，短报告已落production-preview-2/inde
 真实manual Browser UI **1pass47.10s/exit0**；local Gateway restart原 **1fail20.57s/exit1** 停在metadata.title。主最初建议把页面title断言迁为创建名，Sol仅写两处未stage断言、未跑；主独核f9ac BrowserSession 1480/2215与tool/Session mapper后撤此错误建议：spec无title不可变合同，旧title是实时页面事实，被新公共投影覆盖为创建名是确认生产回归。同Sol窄修Browser runtime title、Terminal保持record.title，保原页面title断言，API三分支 **1pass16.91s/exit0** 作者报，待完整绑定。主误导成本单列，不冒充用户裁定、不计作者源码返工。local restart修2标题过后 **1fail111.14s/exit1**：Node health已workspace_id，Gateway _adopt_browser_manager仍校验workspace_root，pending启动RuntimeError actual=None，accepted:false保旧PID；主核e5与原launcher/helper stderr确认遗漏，由同Sol将Node接管统一UUID并迁全callee/负向测试，原日志不覆盖。
 
 Browser首完整源码＋测试树 **b2d97ae11c2d5c3f049c4b28a868312b86d86a2c** 于2026-10-05T07:28:53.950305 UTC冻结；f9ac→b2为110路径/73production/54AST，主strict重建、逐blobSHA、87原rawSHA/exit、三保护0、两sharedindex不变与freeze外源码0已核，证据final-delivery/primary-mechanical.json。e5→b2仅9production路径，既有Luna增量独审中，原未变71路径不重审。UUID adoption11pass2.49s、真实Gateway restart1pass26.71s、transition失败Node7pass0.60s、Python回执2pass12.21s及真实锁1pass19.08s分别原raw/exit已核，不相加；title1pass16.91s也已核。主同类复核发现b2 close在await releaseRuntime前即closed/verified、release先清context句柄，失败可能误报终态；同Sol正在根修释放callee并另导b2增量，b2不是最终验收。真实ROOT产品、LLM discovery及remote Docker未由该包背书；typed精确开始UTC在必要Browser前向闭包结束后记录，goal仍active，主补业务源码0。
+
+
+## Browser最终释放闭包与typed推进（2026-10-05 16:04 北京时间）
+
+Browser最终组合 f838d13ad91cbeaa13bc83eca41f324b3dfca451（冻结UTC07:38:37.712529），b2增量3paths独审无finding。主strict重建/old-new blobSHA/4实际增量exit和原rawSHA/保护0/两sharedindex不变均通过。关闭、删除、discard释放失败保同一context句柄和unknown，显式close成功后发布verified；Node5pass0.540s、真实attached delete1pass24.00s分别核原收据，不相加。screencast假设经合法入口核查撤回，未派无依据源码修复。证据 sol-efficiency-trial/browser-owner-production/release-confirmation-forward/primary-mechanical.json 与 independent-review.md。
+
+ROOT已串行集成commit 11a925b0d6ba7f880517947d3b5207c0300cf3c9，tree f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5，111路径逐preimage保真并保4份主独有文档（包含AGENTS.md）；guard、双祖先、sharedindex不变通过。显式--no-renames计数含删除/新增，主默认rename计数断言失败未写源码。全组offset16停写、切换、恢复exit0，同unit前端8027/Gateway8030；停写后fresh核两授权业务工作区旧无schema browsers=[]并删仅该空记录，identity与其它owner数据保留。Browser实际Chromium产品探针首轮exit0、19.53s，UI新建/真实grant及WS/导航owner read/promote/正式Session删除/保留发现/无Session重连/原生停止与owner删除全部过，page_errors和failed_requests均0；临时Scenario已验收，5.2既有唯一正式WebE2E仍未执行。证据 root-product-verification/browser-product-acceptance.json 与 browser-attempt-1/；源码绑定ROOT11a925，不背书后续activation或remote Docker。原Terminal已验收不复跑。
+
+typed真实起点UTC 2026-10-05T07:45:36.414759+00:00，唯一Sol已获实际初始化的 TEMP/coordinator/git/typed-canonical-status.idx（read-tree f838），源码根仍唯一WT/thread_owner_implementer，产物 sol-efficiency-trial/typed-canonical-production/。itemized1.5/1.6、context4.6/6.7/7.1及R01–R07持续；不仅改metadata，须迁catalog/JSONL/checkpoint/fork/history/provider、ContextContribution registry以及supersession/attachment/fork控制关系；未冻结未验收，不覆盖WT、不等ROOT产品。主补业务源码0。Browser起点未核不倒推计时，Luna旧投入及主协调错误单列，不宣称速度倍率或永久最优。七change及后续activation/delegate/federated/唯一正式WebE2E仍未完成，goal active。
+
+本次Browser切换unit恢复active/running、MainPID1274667。探针所建Session正式删除且资源已删，无待清理业务数据；两张Chromium截图只在分配的artifacts中保留作为可复查产品证据，不加入Git。当前继续单Sol，未因该里程碑终止goal。
