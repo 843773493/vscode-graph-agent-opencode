@@ -33,7 +33,7 @@ start_delegated_task({
 
 以同一业务闭包记录首个完整候选所用时间、真实入口遗漏、必要测试首次通过、返工、依赖等待和主线程补救量；接手前的 Luna 投入及已完成前置单列，不把累计耗时差直接归因于模型。结果出来后据证据选择分工及模型，未验收前不宣布 Sol 更快。
 
-fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定向验证与独审，主补实现源码仍为零；主树最终集成尚未完成。catalog 稳定差异预审与同一 Sol 的生成器验证并行，提前发现关停 writer 未排空；最终27路径包机械通过、增量独审进行中，Sol 已继续 Terminal。此实践支持复用未变审查、让稳定差异审查与下一段实现并行；最终准入仍须闭合实际产品入口。聚合报告只有既知阻塞而没有精确依赖时，不重复派相同调查。主协调误检的约九分钟另计；没有可比计时，不给速度倍率或永久默认结论。
+fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定向验证与独审，主补实现源码仍为零；主树最终集成尚未完成。catalog 稳定差异预审与同一 Sol 的生成器验证并行，提前发现关停 writer 未排空；最终27路径包机械核验及增量独审已通过，Sol 已继续 Terminal。此实践支持复用未变审查、让稳定差异审查与下一段实现并行；最终准入仍须闭合实际产品入口。聚合报告只有既知阻塞而没有精确依赖时，不重复派相同调查。主协调误检的约九分钟另计；没有可比计时，不给速度倍率或永久默认结论。
 
 ## 按实际交付选择分工
 
@@ -45,12 +45,11 @@ fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定
 
 详细证据与后续效果维护在[实时台账](memory/2026/10/05/team-collaboration-state.md)，本入口只保留影响下一次决策的原因。
 
-- **交付包不完整。** 手筛 hunk、旧白名单与只测 helper 多次漏签名、删除、UI caller 和生产接线。用[交付校验脚本](scripts/verify_delivery.py)从固定 base/target 导出标准补丁，严格重建并核 blob/hash；冻结前列候选外源码及未跟踪文件。再从候选的真实入口核 callee、装配和必要测试闭包。Terminal Python/Node寻址验证全绿后，独审仍发现 Web 创建请求漏必填身份/Thread/scope而会400；跨层创建必须核实际产品API到受控owner的完整请求，不用mock/build通过代替。`numstat`、AST 或机械绿灯都不证明业务完成；无 `.git` 的既有快照直接按对象核，不再为工具新建全树副本。
-- **前置和公共合同错配。** 作者 live、旧 HEAD、固定候选被混当同一源码；旧 union 回退新 owner，分页 hook 仍读废弃 `resource/locator` 卡住诊断，消费者被循环依赖拖住。检索显式给 tree，核真实共同祖先和逐路径 preimage；公共合同先固定，主串行同步。文档也核合同来源，较新 HEAD 仍可能含旧规范；共享文件按符号保双方语义，不能选一侧整覆盖或沿旧数量清单造 no-op。 factory/NodeDebug 的旧 owner fixture 与正式工作区的过期 schema 曾集中拖慢首轮验证；先全量平移调用 fixture，按授权重建生成数据，保合法 alias 和拒绝断言。standalone 生成器也是合同消费者：只验 `--help` 曾漏掉真实 `Saver.put` 的 Thread/owner/admission，必须执行实际生成及既有产物合同。空 fixture 携带的 v2 SQLite 又令 persistent/managed 服务启动失败；检查 fixture 的持久输入，删除无业务内容的过期生成库，由当前唯一 writer 初始化，不另造 fresh-catalog 绕路或恢复旧兼容。
-- **真实身份与生命周期漏项。** helper 绿、mock factory 与合成身份掩盖生产归属错误，真实编译图才暴露日志中间件把 thread_id 当 session_id。 Terminal 仅 create payload 带 UUID，GET/list/read/kill 和空列表漏归属；身份迁移须覆盖全套 HTTP/WS caller、空结果及 health/重连接管，不能只核创建响应。构建前 scope 交唯一 owner，build/cleanup 双失败仍保重试 owner 与旧回调 fence。沿真实 user/internal/child 入口核唯一 writer、事务、await 与恢复；取消 `to_thread` 等待不会停止写入，Job 终态须等受保护 writer 收口，缺 owner 不默认 main，internal 不造 Turn或套用 user 展示字段裁剪。创建合同进入 durable preimage；幂等快路径先核原请求，解析后的 source facts 分开冻结，源已删除不重算。fork 输出仍须能再次作为合法输入，身份重映射同时核 SQL 与 JSON 镜像。具体反例及验证状态留在台账，不删 guard、断言或真实入口求绿。
-- **路径说明没有防住误写。** 默认 cwd、相对编辑、私有 index 下裸 live 检索与自建 archive/.venv 反复错根。给字面绝对 workdir/index/源码/产物路径，核实际写入和进程代码来源；独立 index 只隔离暂存。保独有源码后删可复现副本，对象审查用 Git tree，运行复用主指定完整 worktree，不 `/tmp`、不再复制整树。
-- **索引误写与误检。** WVL 裸 `read-tree --empty` 破坏共享 stage，已收窄为源码编辑、主负责冻结。主也曾在设置 `GIT_INDEX_FILE` 后用 `git --git-path index` 误认共享索引，制造无效修复和导出暂停；共享备份路径须从 `--absolute-git-dir` 定位，明确区分私有 index。保精确 index 与 stage inventory，恢复缺备份则如实记不确定性；协调者错误单列成本，不能归给实现模型。
-- **修补与审查也会引入返工。** 为 lint 移动 await 曾制造取消窗口，重复断言替换改错邻例；main alias 被误判必须以 thread ID 命名。对长期持有的 workspace catalog owner 套数量 LRU，会驱逐出仍被服务引用的组件并重建第二实例，连接也无人回收；有界性须由真实生命周期控制，不能套通用缓存模板。关闭 catalog 前也要收完 listener 派生的 Goal 后台 writer；注销 listener 不等于任务排空。先核规范和真实输入，小修限定函数并核 postimage，定向验证原失败。当前用户已允许删旧开发数据，不把旧 schema 兼容当阻塞；fresh writer 和必要生产能力仍必须兑现。
-- **检查和日志不绑定候选。** 作者额外 workspace 的测试绿不能归给缺接线或语法错误的固定包；重试曾覆盖首失败 raw。每次保候选、命令、源码根和真实 stdout/stderr/exit，attempt 运行前确定。 Web build 不查类型，旧生成 DTO 会漏报；当前合同固定后用官方生成器同步并跑真实类型检查，不因后续无关功能停等。日志遗失如实记工具转录，不补造、不为补日志重跑旧绿。共享 fixture 的配置 owner 必须先于进程 fixture 就绪：function 级 manifest 注入曾晚于 module 级后端启动，统一 session 级注入后保缺失拒绝测试。屏障释放放在 finally，首断言失败不能拖死 teardown；边界 fixture 先用实际完整路径核条件可达性，再有限构造；不可能的预算约束曾让同步搜索永不结束，单例栈确认后修 fixture，保真实 guard 与拒绝断言。
+- **交付残缺或漏实际入口。** 手筛 hunk、旧白名单曾漏签名、删除和 Web caller；Python/Node 测试绿时，真实 Terminal 创建仍因缺字段而400。用[交付校验脚本](scripts/verify_delivery.py)从固定树导出、严格重建并核 blob/hash，冻结时清点候选外源码；业务验收沿实际 UI/API→owner→存储或外部服务，不以 helper/mock/build 代替。
+- **合同与基线错配。** live、旧 HEAD 与固定候选曾混用；旧 union 回退新 owner，消费者准入形成循环依赖。显式检索 tree，核共同祖先和 preimage，唯一提供者先固定公共合同，主串行同步；共享文件按符号保语义，较新的文档也核合同来源。fixture 与 standalone 生成器同属消费者：`--help` 不代真实写入及原产物合同；按授权删除过期生成库，不恢复旧兼容或另造初始化旁路。
+- **身份和异步 writer 漏项。** thread/session 混用、仅 create 带 UUID、取消等待却未收 `to_thread` writer均曾过 helper 测试。核全套 HTTP/WS、空列表/health/接管以及真实 user/internal/child 入口；归属只用明确 owner，内部执行不造 user Turn。幂等先比 durable 原请求，解析事实另冻结；fork 映射核 SQL/JSON 且输出可再次合法输入。
+- **生命周期被缓存或监听器遮蔽。** 数量 LRU 曾驱逐仍被服务持有的 catalog，重建第二实例且无人 close；注销 listener 曾漏其派生 Goal/Job writer。让唯一 registry 持有到真实释放，先关续跑准入、收 Job finalizer 和后台 writer，再关 catalog。scope 在构建前交 owner；cleanup失败保重试句柄与旧回调 fence，不以删 guard 求绿。
+- **路径和索引误操作。** 相对编辑、默认 cwd、裸 Git 与自建 archive/.venv反复错根；私有 index只隔离暂存。每次给绝对 workdir/index/编辑/产物路径，对象审查用 Git tree，运行复用指定完整 WT，不 `/tmp`、不复制整树。共享 index 从 `--absolute-git-dir` 定位；主曾误把私有 index当共享 index，约九分钟协调错误单列。无精确备份不声称精确恢复，重复误操作者收窄写权限。
+- **验证与候选脱节。** 额外 workspace的绿灯不归给固定包；重试不覆盖原 raw/exit。官方生成类型后单跑 tsc，Web build不查类型；未变绿项复用，不为补日志重跑。进程 fixture的配置 owner先就绪；屏障finally释放，路径预算fixture有限构造并先核条件可达。为 lint改await或全局替换断言曾引入新问题，小修限定函数、核postimage并定向复验，不改变合法main alias或生产拒绝条件。
 
 已通过的审查按 tree、路径和依赖复用；后续只审新增差异和受影响入口。依赖变化、真实失败或未解决疑点才重验。每次严重失败先纠正具体任务，再简洁更新本入口与台账；只有后续交付验证有效的调整才记为已解决，不继续叠加同义规则。
