@@ -1,4 +1,4 @@
-"""VRN 冻结绑定单元测试：历史不重解、同名覆盖不改绑、provenance 路径隐藏。"""
+"""URI 冻结绑定单元测试：历史不重解、同名覆盖不改绑、provenance 路径隐藏。"""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from app.services.infrastructure.resource_platform.virtual_resources.grammar imp
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     CatalogBinding,
+    ResourceUriResolveError,
     TrackedResourceBinding,
     VirtualResourceCatalog,
     VirtualResourceResolver,
-    VrnResolveError,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     OPERATION_ACTIVATE,
@@ -113,7 +113,7 @@ def test_frozen_binding_missing_snapshot_fails_explicitly() -> None:
         name="code-review",
         binding=_binding("res-gw-1", uri, snapshot_ref=None),
     )
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         tracked.resolve_frozen()
     assert excinfo.value.reason_code == "historical_snapshot_missing"
 

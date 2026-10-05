@@ -1,4 +1,4 @@
-"""VRN 纯值对象：语义资源描述、resolved handle、provenance 与解析上下文。
+"""统一资源寻址纯值对象：语义资源描述、resolved handle、provenance 与解析上下文。
 
 四种标识严格分离：display_uri 只是安全展示/引用（经 grammar 校验）；
 resource_id/source_id 是 Registry 内稳定 identity，不得是 URI 或路径形态；
@@ -13,7 +13,7 @@ from typing import Final, NewType
 from uuid import UUID, uuid5
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
-    parse_vrn,
+    parse_resource_uri,
 )
 
 OPERATION_READ_CONTENT: Final = "read_content"
@@ -37,13 +37,13 @@ ResourceIdentity = NewType("ResourceIdentity", str)
 
 def _require_identity(field_name: str, value: str) -> None:
     if not isinstance(value, str) or not value:
-        raise ValueError(f"VRN {field_name} 必须是非空字符串")
+        raise ValueError(f"ResourceIdentity {field_name} 必须是非空字符串")
     if any(marker in value for marker in _IDENTITY_FORBIDDEN):
         raise ValueError(
-            f"VRN {field_name} 是内部稳定 identity，不得携带路径/URI/credential 形态: {value!r}"
+            f"ResourceIdentity {field_name} 不得携带路径/URI/credential 形态: {value!r}"
         )
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ValueError(f"VRN {field_name} 不得携带控制字符: {value!r}")
+        raise ValueError(f"ResourceIdentity {field_name} 不得携带控制字符: {value!r}")
 
 
 def validate_resource_identity(value: str) -> ResourceIdentity:
@@ -66,18 +66,18 @@ def derive_resource_identity(namespace: str, *stable_parts: str) -> ResourceIden
 
 def _require_revision(field_name: str, value: str) -> None:
     if not isinstance(value, str) or not value:
-        raise ValueError(f"VRN {field_name} 必须是非空字符串")
+        raise ValueError(f"资源 revision {field_name} 必须是非空字符串")
 
 
 def _require_opaque_ref(field_name: str, value: str) -> None:
     if not isinstance(value, str) or not value:
-        raise ValueError(f"VRN {field_name} 必须是非空字符串")
+        raise ValueError(f"Registry 私有引用 {field_name} 必须是非空字符串")
     if any(marker in value for marker in _IDENTITY_FORBIDDEN):
         raise ValueError(
-            f"VRN {field_name} 是 Registry 私有引用，不得是路径/URI/credential 形态: {value!r}"
+            f"Registry 私有引用 {field_name} 不得是路径/URI/credential 形态: {value!r}"
         )
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ValueError(f"VRN {field_name} 不得携带控制字符: {value!r}")
+        raise ValueError(f"Registry 私有引用 {field_name} 不得携带控制字符: {value!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ class SemanticResourceDescriptor:
         _require_identity("source_id", self.source_id)
         if self.kind not in _DESCRIPTOR_KINDS:
             raise ValueError(f"未知 SemanticResourceDescriptor.kind: {self.kind!r}")
-        parsed = parse_vrn(self.display_uri)
+        parsed = parse_resource_uri(self.display_uri)
         if parsed.kind != self.kind:
             raise ValueError(
                 f"display_uri 与 kind 不一致: kind={self.kind!r} uri={self.display_uri!r}"
@@ -126,7 +126,7 @@ class ResourceProvenance:
     def __post_init__(self) -> None:
         _require_identity("resource_id", self.resource_id)
         _require_identity("source_id", self.source_id)
-        parse_vrn(self.display_uri)
+        parse_resource_uri(self.display_uri)
         _require_revision("semantic_revision", self.semantic_revision)
         _require_revision("semantic_hash", self.semantic_hash)
 

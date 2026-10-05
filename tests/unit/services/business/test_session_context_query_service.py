@@ -32,9 +32,9 @@ from app.services.business.session_context_resource import (
     context_assembly_identity,
     session_context_read_operation,
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
     workspace_session_inventory_identity,
-    workspace_session_inventory_vrn,
+    workspace_session_inventory_uri,
 )
 
 BACKEND_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -46,7 +46,7 @@ def _resign_cursor_offset(cursor: str, offset: int) -> str:
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     return SessionContextCursorCodec.encode(
         resource_identity=payload["resource_identity"],
-        vrn=payload["vrn"],
+        uri=payload["uri"],
         scope=payload["scope"],
         revision=payload["revision"],
         operation=payload["operation"],
@@ -60,7 +60,7 @@ def _resign_cursor_offset(cursor: str, offset: int) -> str:
 def _session_request(session_id: str = "ses_target", **kwargs: object) -> SessionContextReadRequest:
     return SessionContextReadRequest(
         resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, session_id),
-        vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, session_id),
+        uri=session_resource_uri(BACKEND_WORKSPACE_ID, session_id),
         scope="workspace",
         **kwargs,
     )
@@ -69,7 +69,7 @@ def _session_request(session_id: str = "ses_target", **kwargs: object) -> Sessio
 def _workspace_inventory_request(**kwargs: object) -> SessionContextReadRequest:
     return SessionContextReadRequest(
         resource_identity=workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
-        vrn=workspace_session_inventory_vrn(BACKEND_WORKSPACE_ID),
+        uri=workspace_session_inventory_uri(BACKEND_WORKSPACE_ID),
         scope="workspace",
         **kwargs,
     )
@@ -78,7 +78,7 @@ def _workspace_inventory_request(**kwargs: object) -> SessionContextReadRequest:
 def _session_search_request(session_id: str = "ses_target", **kwargs: object) -> SessionContextSearchRequest:
     return SessionContextSearchRequest(
         resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, session_id),
-        vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, session_id),
+        uri=session_resource_uri(BACKEND_WORKSPACE_ID, session_id),
         scope="workspace",
         **kwargs,
     )
@@ -87,7 +87,7 @@ def _session_search_request(session_id: str = "ses_target", **kwargs: object) ->
 def _workspace_inventory_search_request(**kwargs: object) -> SessionContextSearchRequest:
     return SessionContextSearchRequest(
         resource_identity=workspace_session_inventory_identity(BACKEND_WORKSPACE_ID),
-        vrn=workspace_session_inventory_vrn(BACKEND_WORKSPACE_ID),
+        uri=workspace_session_inventory_uri(BACKEND_WORKSPACE_ID),
         scope="workspace",
         **kwargs,
     )
@@ -101,7 +101,7 @@ class _FakeSessionLookup:
                 session_id="ses_target",
                 workspace_id=BACKEND_WORKSPACE_ID,
                 resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"),
-                vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target"),
+                uri=session_resource_uri(BACKEND_WORKSPACE_ID, "ses_target"),
                 scope="workspace",
                 title="目标会话",
                 current_agent_id="default",
@@ -113,7 +113,7 @@ class _FakeSessionLookup:
                 session_id="ses_other",
                 workspace_id=BACKEND_WORKSPACE_ID,
                 resource_identity=session_resource_identity(BACKEND_WORKSPACE_ID, "ses_other"),
-                vrn=session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_other"),
+                uri=session_resource_uri(BACKEND_WORKSPACE_ID, "ses_other"),
                 scope="workspace",
                 title="其他会话",
                 current_agent_id="reviewer",
@@ -444,7 +444,7 @@ async def test_search_literal_by_default_regex_explicit_and_structured_match_can
     assert literal.returned_chars <= 1024
     assert literal.total_matches == 1
     match = literal.matches[0]
-    assert match.vrn == session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target")
+    assert match.uri == session_resource_uri(BACKEND_WORKSPACE_ID, "ses_target")
     assert match.resource_identity == session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target")
     assert match.record_index == 4
     assert match.revision.startswith("content:")
@@ -479,7 +479,7 @@ async def test_inventory_information_and_output_budget(_service):
     assert len(inventory.items) == 1
     assert inventory.has_more is True
     assert inventory.items[0].kind == "session"
-    assert inventory.items[0].vrn == session_resource_vrn(BACKEND_WORKSPACE_ID, "ses_target")
+    assert inventory.items[0].uri == session_resource_uri(BACKEND_WORKSPACE_ID, "ses_target")
 
     information = await service.read_context(
         _session_request(
@@ -597,7 +597,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
 
     beyond = SessionContextCursorCodec.encode(
         resource_identity=request.resource_identity,
-        vrn=request.vrn,
+        uri=request.uri,
         scope=request.scope,
         revision=first.revision,
         operation=session_context_read_operation(
@@ -617,7 +617,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(_service) -> None:
             update={
                 "cursor": SessionContextCursorCodec.encode(
                     resource_identity=request.resource_identity,
-                    vrn=request.vrn,
+                    uri=request.uri,
                     scope=request.scope,
                     revision=first.revision,
                     operation=session_context_read_operation(

@@ -1,13 +1,13 @@
 # agent-memory Specification
 
 ## Purpose
-固化 agent memory 被彻底移除后的负向边界：任何生产运行路径都不得装配 memory middleware、读取 agent memory 配置键、把 memory 作为上下文 source 或 VRN scope，也不得在 deep agent graph 的声明式骨架中重新登记 memory slot。本 capability 只承载这条「memory 必须不存在」的有效边界，用于防止后续重新引入双轨。
+固化 agent memory 被彻底移除后的负向边界：任何生产运行路径都不得装配 memory middleware、读取 agent memory 配置键、把 memory 作为上下文 source 或 URI scope，也不得在 deep agent graph 的声明式骨架中重新登记 memory slot。本 capability 只承载这条「memory 必须不存在」的有效边界，用于防止后续重新引入双轨。
 
 > 说明（delta 编码，如实登记）：`openspec/specs/` 下 32 份 main spec 对 `memory` 零命中，被移除的 memory 能力从未进入任何 main spec，此前只存在于未接线的代码、配置与尚未归档 change 的 delta 描述中。因此本 delta 采用 **ADDED-only 形式**：负向边界由 `## ADDED Requirements` 承载，归档时写入 main spec 并持久保留。「移除了哪 7 条能力」的完整记录留在本 change 的 `proposal.md` 与 `design.md`（D9/D10），不使用 `## REMOVED Requirements`——对尚不存在于 main specs 的 capability 使用 REMOVED 是 warned no-op，且 REMOVED-only 会在归档时报 `archive_spec_validation_failed`（见 design.md D9 实测）。
 ## Requirements
 ### Requirement: Agent memory 不得存在于任何生产运行路径
 
-系统 SHALL NOT 在任何生产运行路径装配 memory middleware、读取 `agent.memory` 配置键、把 memory 作为上下文 source，或把 memory 作为 VRN scope。`DEEP_AGENT_MIDDLEWARE_STACK` MUST NOT 再登记 memory 相关 slot，`InstructionProducerId`/`_KNOWN_PRODUCER_IDS` MUST NOT 再登记 `R09`。历史持久化数据引用已移除的 memory 能力时 MUST fail-closed 显式拒绝，MUST NOT 静默回退、MUST NOT 静默重绑或覆盖。
+系统 SHALL NOT 在任何生产运行路径装配 memory middleware、读取 `agent.memory` 配置键、把 memory 作为上下文 source，或把 memory 作为 URI scope。`DEEP_AGENT_MIDDLEWARE_STACK` MUST NOT 再登记 memory 相关 slot，`InstructionProducerId`/`_KNOWN_PRODUCER_IDS` MUST NOT 再登记 `R09`。历史持久化数据引用已移除的 memory 能力时 MUST fail-closed 显式拒绝，MUST NOT 静默回退、MUST NOT 静默重绑或覆盖。
 
 #### Scenario: 旧用户配置残留 memory 键
 

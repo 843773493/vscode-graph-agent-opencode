@@ -19,7 +19,7 @@ from app.services.business.session_context_query_service import (
     SessionContextQueryService,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    VrnResolveError,
+    ResourceUriResolveError,
 )
 
 router = APIRouter(prefix="/context", tags=["context"])
@@ -58,7 +58,7 @@ async def read_context(
         raise _revision_changed_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
-    except VrnResolveError as error:
+    except ResourceUriResolveError as error:
         raise HTTPException(
             status_code=400,
             detail={"code": error.reason_code, "message": str(error)},
@@ -97,7 +97,7 @@ async def search_context(
         raise _revision_changed_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
-    except VrnResolveError as error:
+    except ResourceUriResolveError as error:
         raise HTTPException(
             status_code=400,
             detail={"code": error.reason_code, "message": str(error)},

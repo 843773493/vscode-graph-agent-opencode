@@ -41,7 +41,7 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
 )
 from app.services.infrastructure.resource_platform.virtual_resources import (
     ResolutionContext,
-    parse_vrn,
+    parse_resource_uri,
     skill_display_uri,
     workspace_agent_spec_display_uri,
 )
@@ -61,7 +61,7 @@ WORKSPACE_AGENTS_SOURCE_ID = "agents:workspace"
 
 
 def workspace_agents_uri(workspace_id: str) -> str:
-    """工作区 AGENTS.md 的规范 VRN（agent-spec kind）。"""
+    """工作区 AGENTS.md 的规范 URI（agent-spec kind）。"""
     return workspace_agent_spec_display_uri(workspace_id)
 
 
@@ -504,7 +504,7 @@ def _layer_scope_identity(
     *,
     workspace_id: str,
 ) -> tuple[str, ResolutionContext | None]:
-    """按真实身份推导 layer（= VRN scope）的 scope_id 与可校验的 principal。
+    """按真实身份推导 layer（= URI scope）的 scope_id 与可校验的 principal。
 
     ``workspace``/``inline``/``gateway`` 的稳定身份都由真实来源推导，返回可用于
     ``require_scope_binding`` 的 ResolutionContext：
@@ -538,12 +538,12 @@ def _layer_skill_display_uri(
     skill_name: str,
     context: ResolutionContext | None,
 ) -> str:
-    """构造 display URI 并走真实 parse_vrn（拒绝裸拼接）。
+    """构造 display URI 并走真实 parse_resource_uri（拒绝裸拼接）。
 
     仅当该 scope 的 principal 真实可用时，才进一步做 scope 绑定校验；principal
     不可用时必须由调用方显式跳过，MUST NOT 伪造绑定值通过校验。
     """
-    parsed = parse_vrn(
+    parsed = parse_resource_uri(
         skill_display_uri(scope=scope, scope_id=scope_id, skill_name=skill_name)
     )
     if context is not None:
@@ -606,7 +606,7 @@ def build_workspace_skill_catalog(
         # 身份，也不物化任何 URI。
         if layer == "gateway" and not layer_files:
             continue
-        # layer 名与 VRN scope 名自此逐字一致（inline/gateway/workspace）；
+        # layer 名与 URI scope 名自此逐字一致（inline/gateway/workspace）；
         # 恒等映射直接使用 layer 名，不再保留改名 shim。
         scope_id, context = _layer_scope_identity(
             layer, workspace_id=workspace_id
@@ -696,7 +696,7 @@ def build_workspace_skill_catalog(
         layer="workspace",
         name="catalog",
         # catalog facet 不是 skill 资源条目，其 display URI 只作内部标识，
-        # 不参与 VRN 寻址；保留既有形态以避免改动内部 registry key。
+        # 不参与 URI 寻址；保留既有形态以避免改动内部 registry key。
         display_uri=f"boxteam://workspace/{workspace_id}/resources/skills/catalog",
         facet="catalog",
         payload={"entries": catalog_payload_entries},

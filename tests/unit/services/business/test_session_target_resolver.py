@@ -12,9 +12,9 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
-    gateway_session_inventory_vrn,
+    gateway_session_inventory_uri,
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.business.session_target_resolver import SessionTargetResolver
 
@@ -78,7 +78,7 @@ class _FakeGatewayContextClient:
         self.search_requests.append(request)
         return SessionContextSearchResultDTO(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             query=request.query,
             match_mode=request.match_mode,
@@ -95,7 +95,7 @@ class _FakeGatewayContextClient:
             matches=[
                 SessionContextSearchMatchDTO(
                     resource_identity=session_resource_identity(backend_id, session_id),
-                    vrn=session_resource_vrn(backend_id, session_id),
+                    uri=session_resource_uri(backend_id, session_id),
                     scope="workspace",
                     preview="session",
                     source="session_catalog",
@@ -124,7 +124,7 @@ async def test_resolver_prefers_local_session_without_gateway_lookup(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_resolver_maps_vrn_backend_identity_to_gateway_route(monkeypatch):
+async def test_resolver_maps_uri_backend_identity_to_gateway_route(monkeypatch):
     monkeypatch.setattr(
         "app.services.business.session_target_resolver.require_current_gateway_id",
         lambda _consumer: "gateway-a",
@@ -144,7 +144,7 @@ async def test_resolver_maps_vrn_backend_identity_to_gateway_route(monkeypatch):
     assert target.workspace_id == "gw_a"
     request = gateway.search_requests[0]
     assert request.resource_identity == gateway_session_inventory_identity("gateway-a")
-    assert request.vrn == gateway_session_inventory_vrn("gateway-a")
+    assert request.uri == gateway_session_inventory_uri("gateway-a")
     assert request.scope == "gateway"
 
 

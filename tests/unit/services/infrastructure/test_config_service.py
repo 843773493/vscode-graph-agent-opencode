@@ -408,12 +408,12 @@ async def test_get_public_config_resolves_default_model_from_agent_provider(
     assert result.max_concurrent_agents == 4
     assert result.metadata["default_agent_id"] == "default"
     # real path 不再对外：metadata 既无 config_path，也无 source_paths；
-    # 来源位置只以 source_details[].vrn 表达（非 inline 层为 None）。
+    # 来源位置只以 source_details[].uri 表达（非 inline 层为 None）。
     assert "config_path" not in result.metadata
     assert "source_paths" not in result.metadata
     source_details = result.metadata["source_details"]
-    assert source_details[0]["vrn"].startswith("boxteam://inline/")
-    assert all(detail["vrn"] is None for detail in source_details[1:])
+    assert source_details[0]["uri"].startswith("boxteam://inline/")
+    assert all(detail["uri"] is None for detail in source_details[1:])
     assert str(config_path) not in result.model_dump_json()
 
 
@@ -582,12 +582,12 @@ def test_workspace_config_migrates_mutable_json_layers_to_sqlite(
         # workspace.sqlite，但共享只是承载事实，MUST NOT 有损改写成 carrier 名。
         # runtime_override 只表达逻辑来源，不暴露 SQLite carrier。此处逐层断言比旧的
         # 「四层同为 sqlite」更强。5A.6：只有 inline 层可寻址；其它层一律不可寻址，
-        # vrn MUST be None，且不含任何真实路径。
+        # uri MUST be None，且不含任何真实路径。
         details = service.get_source_details()
-        assert details[0].vrn is not None
-        assert details[0].vrn.startswith("boxteam://inline/")
+        assert details[0].uri is not None
+        assert details[0].uri.startswith("boxteam://inline/")
         for source in details[1:]:
-            assert source.vrn is None
+            assert source.uri is None
         assert config_path.with_name("workspace.jsonc.migrated.bak").is_file()
         assert local_path.with_name("workspace_local.jsonc.migrated.bak").is_file()
         assert workspace_path.with_name("workspace.jsonc.migrated.bak").is_file()
@@ -657,7 +657,7 @@ def test_config_source_layer_consistent_across_read_paths(
         ]
         assert len(restored_inline) == 1
         assert restored_inline[0].precedence == 0
-        assert restored_inline[0].vrn is not None
+        assert restored_inline[0].uri is not None
     finally:
         store.close()
 
@@ -744,7 +744,7 @@ async def test_public_runtime_overrides_restart_from_workspace_sqlite(tmp_path: 
             "runtime_override",
             4,
         )
-        assert runtime_source.vrn is None
+        assert runtime_source.uri is None
         active = store.get_active_config_snapshot("workspace")
         source = store.get_source_layer("workspace_runtime_override")
         assert active is not None
@@ -1660,7 +1660,7 @@ async def test_source_change_during_apply_fails_final_cas_without_active_promoti
             assert source is not None
             store.sync_config_source(
                 config_key="workspace_mutable_override",
-                vrn=None,
+                uri=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {"default_orchestration": "single_agent"}},
@@ -2051,7 +2051,7 @@ async def test_source_change_during_apply_without_side_effect_fails_before_promo
             assert source is not None
             store.sync_config_source(
                 config_key="workspace_mutable_override",
-                vrn=None,
+                uri=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {"default_orchestration": "single_agent"}},

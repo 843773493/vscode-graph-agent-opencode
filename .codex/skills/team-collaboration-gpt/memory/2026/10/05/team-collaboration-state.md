@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 20:01（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 20:40（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
 本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
@@ -53,12 +53,12 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 
 精确对象、任务ID与交付物由 A/implementation-queue.json 维护；A/current-task-index.json 是当前规划勾选索引，**不等于验收证据**。旧 fixed-candidate-task-inventory-29513.json 是历史规范快照，不据它复活已撤销的旧数据迁移或重建已有路由。
 
-1. typed完整闭包先固定/验收，随后同Sol完成R01–R07与基线缺少的PrefixEpoch/root/ToolSet安全切换真实接线，再推进activation：唯一registry、持久workspace key/freshmarker、execution/model-call冻结恢复与原子sealbind；无None/当前源旁路。sessionVRN5.3 activation_bindings.display_uri/context_source_control_states持久新写/read-path仍待；真实编译reasoning-only→正文及耗尽retry、逐call/canonical身份和唯一终态补证。TEMP/coordinator/artifacts/activation-production-wiring/review-plan.md。
+1. typed完整闭包先固定/验收，随后同Sol完成R01–R07与基线缺少的PrefixEpoch/root/ToolSet安全切换真实接线，再推进activation：唯一registry、持久workspace key/freshmarker、execution/model-call冻结恢复与原子sealbind；无None/当前源旁路。sessionURI5.3 activation_bindings.display_uri/context_source_control_states持久新写/read-path仍待；真实编译reasoning-only→正文及耗尽retry、逐call/canonical身份和唯一终态补证。TEMP/coordinator/artifacts/activation-production-wiring/review-plan.md。
    - activation唯一合同已固定/独审/strict提交4e49b7c（tree1cc2）：snapshot_kind=execution|model_call，execution_id必填、真实userTurn关联/internal NULL，parent_execution_snapshot_id同execution；配置仍turn|model_call。同用户Turn retry/resume从唯一持久冻结owner复用原policy/turn-bound字节，internal在自身active slot冻结/恢复。9.1/9.2因旧Turn非空组件不满足当前合同已撤销整项勾选，尚未实现验收。
 2. delegate：Session SQLite publication ledger与child publication同事务，recovery/factory/startcaller全接；published不倒删。
-3. federated VRN/target-main：复用channel/grant/policy/credential和本地cursor，唯一authority语法；真实B⇄A⇄C、同本机authority等价、一次transit/两hop/deadline、最新权限/零副作用/不泄漏locator。**已有 GET /api/v1/sessions/{session_id}/main-thread，只接 WorkspaceSessionMainPort 消费者，不新增路由。** A/remaining-addressing-contract-review/attempt-1/report.md仅静态。
+3. federated URI/target-main：复用channel/grant/policy/credential和本地cursor，唯一authority语法；真实B⇄A⇄C、同本机authority等价、一次transit/两hop/deadline、最新权限/零副作用/不泄漏locator。**已有 GET /api/v1/sessions/{session_id}/main-thread，只接 WorkspaceSessionMainPort 消费者，不新增路由。** A/remaining-addressing-contract-review/attempt-1/report.md仅静态。
 4. 按七change原task ID逐项证据，官方生成公共协议并独立tsc、strict OpenSpec、既有唯一 tests/e2e/clients/web/test_basic_chat_tool_loop.py 扩展完整场景、真实产品与清理。Browser里程碑不结束goal，不以组件绿灯或测试总数勾整项。
-5. 用户 2026-10-05 新增术语收口：唯一术语表归寻址 change 的 requirement「术语必须区分机制、地址、身份与真实路径」；主线程按该 change 的 1.1/6.6 全量改术语和引用，与 Sol 在途接口错开。当前只登记计划，未开始源码正名，不保留 VRN/URI 别名；URI 字节、身份和授权合同保持既有语义。主线程的机械正名单独计量，不归业务补写或模型提速。
+5. 用户 2026-10-05 新增术语收口：唯一术语表归寻址 change 的 requirement「术语必须区分机制、地址、身份与真实路径」；主线程按该 change 的 1.1/6.6 全量改术语和引用，与 Sol 在途接口错开。当前主线程已实施精确正名并使用官方生成器，不保留同义寻址别名；URI 字节、身份和授权合同保持既有语义。主线程的机械正名单独计量，不归业务补写或模型提速。
 
 ## 效率与协作效果
 
@@ -109,3 +109,17 @@ typed早审固定f838→7dc4832714c5a16bd4e29a8e88124ca9061d0a0d/125path，标�
 持久资源固定dcad对表已交：按已集成生产链路及原绑定/产品证据勾1.1–1.3、2.1–2.5、3.1–3.3、4.1–4.2；1.4/5.3仍欠外置owner unknown窗口重启，5.1仍欠明确竞争/lease场景，5.2仍欠唯一正式WebE2E。4.3确认Session control失败只显错不重读owner（主核hook→content loader→App→ResourcePanel）；成功整体对象已有，限定失败分支交同Sol后续。对表不新增生产调度、不重跑未变绿项，原报告A/persistent-task-evidence-review/attempt-1/report.md。
 
 v1 importer阶段：唯一Sol已接现行RolloutStorage的composition与显式身份private staging，旧migration.store/LegacyMigrationStorage/旧方法app/tests/scripts引用零。首定向typed-v1-importer-initial-attempt-1实际0/7.484秒、9pass/pytest5.61秒，主已读原raw/exit；异常/recovery/fork/CLI新进程仍待，无最终固定交付，不算完成。125path早审由同只读reviewer并行进行。
+
+importer原84组已主读原raw/exit（84pass/38.21s，actual0/40.014s），非空namespace CLI首2pass/3fail、次3pass/2fail揭示基线initialize/_rollout_id丢namespace；同Sol完整透传唯一owner并迁全callee，第三轮5pass/12.82s（actual0/14.583s），fresh CLI→fresh reader与错误owner零副作用均通过，未冻结。受影响fork10pass为作者阶段回报、原始回执待核；不重跑未变82/84。
+
+125早审新发现已真实复现：生产scopedselector经ToolRow/detail loader访问raw checkpoint索引，当前indexed SQL只匹配完整canonical ID而读空。作者新用例把checkpoint输入先改为scoped，漏了仍合法raw carrier；精确复现raw双scope两fail、canonical_scoped两pass（actual1），另HTTP端口35000前置error未进业务单列。主核固定caller链，交同Sol修唯一typed identity/provider+model-call scope查询及实际mapper，不恢复strip裸raw回退。A/typed-canonical-production/canonical-tests/typed-indexed-provider-raw-reproduction-attempt-1；此项归当前SQL增量覆盖不足，namespace基线缺陷另计。修复效果与最终增量尚待，主业务补写仍0。
+
+raw查询修复定向typed-indexed-provider-raw-history-attempt-2主已读原raw/exit：5pass/16.72s（actual0/18.654s），4组真实Saver→indexed→RolloutHistoryReader精确正文/trace/summary、unknown scope零记录与1真实HTTP scoped→raw详情通过；独占35037 file-block fixture，未杀未知35000。locator迁移10pass/3.98s（actual0/5.711s），namespace受影响fork10pass/26.57s（actual0/30.878s）原回执已核。固定最终增量独审仍待；未重跑未变组。
+
+SourceBinding窄核已明确逻辑来源provenance alias与overlay selection alias可不同，但ref/binding的来源必须相同。漏匹配在f838旧metadata已存在，不归typed新增；真实storage seal反例attempt3 DID NOT RAISE已证，前两次分别缺detail_ref与错seal签名属fixture前置，不算生产复现。唯一Sol已在resolver补齐source_ref匹配，合法alias分离及错源拒绝整库/JSONL零写入定向验收待。阶段及窄报告位于A/typed-canonical-production/early-review-attempt-1/independent-review/，主补业务源码0。
+
+最终typed f2c全139path/增量27path双strict、137AST、ROOT preimages零冲突、三保护零及ROOT/WT默认index hash核验通过，完整源码仍未集成。27path独审只发现initial audit发布前退出窗口：audit目录已有而report.json缺失，后续_recover无条件读取卡住；同Sol已接两路径定向闭合，不重跑未变82/84/91。该缺口属于新importer交付的恢复覆盖不足，主业务补写仍0。报告A/typed-canonical-production/final-delivery-attempt-1/independent-review/report.md；reviewer误用一次裸status已披露，主核ROOT共享index仍f2afa293不变。
+
+主URI正名：精确范围与typed139及Sol新owned路径交集均0；停ROOT开发unit后机械更新符号、字段、SQL、DTO/proto、测试及当前规范，官方protocol/OpenAPI生成actual0。317pass/185.78s（actual0/190.243s）、Web四文件16pass、build0；独立tsc改用既有bun run tsc入口actual0/20.003s，首轮直接Bun执行tsc触及4GB外部保护，未据此归因源码或Sol。删除正名后空旧change目录后strict全量40pass/0fail，初轮空目录失败原回执保留。78Python静态相对baseline无新增诊断，65→63既有诊断，不改异常类型消lint；5项新排序告警已精确修正。value对象诊断进一步区分ResourceIdentity/revision/私有ref，仅文案改动；50pass/7.98s（actual0/9.53s）复验通过，已勾术语1.1/6.6，精确提交在准备。A/uri-terminology-plan/validation-attempt-{1,2}/。
+
+持久资源新hook基线：11项专用测试作者回报2pass/9fail，失败未重读及workspace/invalidate旧回执污染；源码hook/后端owner tests尚未改。作者先留下停点，优先闭合importer独审发现，随后继续同一纵向业务闭包；不派Luna重复实现、不将主机械术语算主业务补救。

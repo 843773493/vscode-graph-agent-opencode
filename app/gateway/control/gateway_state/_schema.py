@@ -83,7 +83,7 @@ def _migrate_gateway_config_into_source_layers(
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES (?, NULL, 'present', ?, ?, 1, ?, 1, NULL, ?, NULL)
@@ -404,13 +404,13 @@ _GATEWAY_MIGRATIONS = (
     CREATE INDEX IF NOT EXISTS gateway_restart_intent_gateway_idx
         ON gateway_restart_intent(gateway_id, state, updated_at);
     """,
-    # 配置来源位置改以 VRN 表达（real path 不持久化）：丢弃旧真实路径列、新增 VRN 列。
+    # 配置来源位置改以 URI 表达（real path 不持久化）：丢弃旧真实路径列、新增 URI 列。
     """
     ALTER TABLE config_source_layers DROP COLUMN source_path;
     ALTER TABLE config_source_layers DROP COLUMN backup_path;
-    ALTER TABLE config_source_layers ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_layers ADD COLUMN uri TEXT;
     ALTER TABLE config_source_journal DROP COLUMN source_path;
-    ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_journal ADD COLUMN uri TEXT;
     """,
     # 一次性显式迁移：把 legacy gateway_config 中的 config 来源层镜像行并入权威
     # config_source_layers 后物理删除这些镜像行；控制面独有 KV 必须留在该表。

@@ -1,4 +1,4 @@
-"""ConfigService 拆分后的共享模块级符号：logger、候选应用器别名、来源层权威表与 inline VRN 判定。
+"""ConfigService 拆分后的共享模块级符号：logger、候选应用器别名、来源层权威表与 inline URI 判定。
 
 `ConfigCandidateApplier` 的定义点已上移到中性层 `config/contracts.py`（避开 `config`
 反向依赖本包成环），本模块只做包内再导出，不再重复定义。
@@ -13,7 +13,7 @@ from app.core.config_sources import (
     ConfigSourceLayer,
 )
 from app.services.infrastructure.config.contracts import ConfigCandidateApplier
-from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
+from app.services.infrastructure.config.source_uri import inline_config_source_uri
 from configs.installer import resolve_config_resource_source
 
 logger = logging.getLogger(__name__)
@@ -34,19 +34,19 @@ _SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
 }
 
 
-def release_inline_config_vrn_for_file(
+def release_inline_config_uri_for_file(
     effective_path: Path | None,
     *,
     release_config_name: str,
 ) -> str | None:
-    """生效文件若与发行包同名配置内容一致，返回其 inline VRN，否则 None。
+    """生效文件若与发行包同名配置内容一致，返回其 inline URI，否则 None。
 
     安装链路把发行包内配置与 schema **原字节拷贝**到用户配置目录（`configs/installer.py`
     的 `atomic_write(target, source.read_bytes())`），故「真属发行包 inline 层」的正确
     判据是**与发行包资源内容一致**，而非路径相等——路径相等会把正常安装的拷贝误判为非
     inline。判据失败（路径缺失、不可读、内容不同）一律返回 None，MUST NOT 抛错：调用方
-    以 null 对外表达不可寻址，故含点号或非法字符的用户自定义文件名永不进入 VRN 构造。
-    VRN 尾段取发行包资源的逻辑名（`release_config_name` 去扩展名），MUST NOT 取生效文件 stem。
+    以 null 对外表达不可寻址，故含点号或非法字符的用户自定义文件名永不进入 URI 构造。
+    URI 尾段取发行包资源的逻辑名（`release_config_name` 去扩展名），MUST NOT 取生效文件 stem。
     """
     if effective_path is None:
         return None
@@ -59,7 +59,7 @@ def release_inline_config_vrn_for_file(
             return None
     except OSError:
         return None
-    return inline_config_source_vrn(logical_name=Path(release_config_name).stem)
+    return inline_config_source_uri(logical_name=Path(release_config_name).stem)
 
 
-__all__ = ["_SOURCE_LAYER_AUTHORITY", "ConfigCandidateApplier", "logger", "release_inline_config_vrn_for_file"]
+__all__ = ["_SOURCE_LAYER_AUTHORITY", "ConfigCandidateApplier", "logger", "release_inline_config_uri_for_file"]

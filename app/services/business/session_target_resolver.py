@@ -14,7 +14,7 @@ from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import SessionContextSearchRequest
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
-    gateway_session_inventory_vrn,
+    gateway_session_inventory_uri,
     parse_session_context_ref,
     session_resource_identity,
 )
@@ -106,7 +106,7 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
         gateway_id = require_current_gateway_id("SessionTargetResolver")
         request = SessionContextSearchRequest(
             resource_identity=gateway_session_inventory_identity(gateway_id),
-            vrn=gateway_session_inventory_vrn(gateway_id),
+            uri=gateway_session_inventory_uri(gateway_id),
             scope="gateway",
             query=session_id,
             sources=["session_catalog"],
@@ -118,12 +118,12 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
         )
         if (
             result.resource_identity != request.resource_identity
-            or result.vrn != request.vrn
+            or result.uri != request.uri
             or result.scope != request.scope
         ):
             raise RuntimeError(
                 "Gateway session search 返回的查询身份与请求不一致: "
-                f"resource_identity={result.resource_identity!r}, vrn={result.vrn!r}, "
+                f"resource_identity={result.resource_identity!r}, uri={result.uri!r}, "
                 f"scope={result.scope!r}"
             )
 
@@ -132,14 +132,14 @@ class SessionTargetResolver(SessionTargetResolverProtocol):
             try:
                 resource = parse_session_context_ref(
                     resource_identity=match.resource_identity,
-                    vrn=match.vrn,
+                    uri=match.uri,
                     scope=match.scope,
                 )
             except ValueError as error:
                 raise RuntimeError(
                     "Gateway 返回了无法解析的结构化 session match: "
                     f"resource_identity={match.resource_identity!r}, "
-                    f"vrn={match.vrn!r}, scope={match.scope!r}"
+                    f"uri={match.uri!r}, scope={match.scope!r}"
                 ) from error
             if (
                 resource.scope != "workspace"

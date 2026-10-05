@@ -1,6 +1,6 @@
 ## Purpose
 
-为项目所有 canonical 标识符（`session_id`、`thread_id` 及其它由唯一 id 工厂生成的持久身份）规定**唯一**的位 profile：**UUIDv7（RFC 9562）**。本 capability 是 id **生成位 profile** 的唯一 owner：它规定 id 由哪个显式直接依赖生成、如何 fail-closed、同毫秒内的排序保证、`sessions/YYYY/MM/DD` 日期桶如何从 id 内嵌时间戳推导与复核、时钟回拨行为、校验层命名、JS/浏览器侧的可用性边界，以及旧 UUIDv4 身份的拒绝边界。它**不**定义 VRN、ResourceIdentity、scope 闭集或拒绝码——那些归 `add-unified-virtual-resource-addressing` 等 change，本 capability 只具名引用。
+为项目所有 canonical 标识符（`session_id`、`thread_id` 及其它由唯一 id 工厂生成的持久身份）规定**唯一**的位 profile：**UUIDv7（RFC 9562）**。本 capability 是 id **生成位 profile** 的唯一 owner：它规定 id 由哪个显式直接依赖生成、如何 fail-closed、同毫秒内的排序保证、`sessions/YYYY/MM/DD` 日期桶如何从 id 内嵌时间戳推导与复核、时钟回拨行为、校验层命名、JS/浏览器侧的可用性边界，以及旧 UUIDv4 身份的拒绝边界。它**不**定义 URI、ResourceIdentity、scope 闭集或拒绝码——那些归 `add-unified-virtual-resource-addressing` 等 change，本 capability 只具名引用。
 
 ## ADDED Requirements
 
@@ -147,19 +147,19 @@ canonical `session_id` 与 `thread_id` MUST 只接受 UUIDv7 profile；UUIDv4 �
 - **WHEN** `src/clients/web` 需要生成 id
 - **THEN** 它 MUST NOT 依赖 `Bun.randomUUIDv7`（浏览器无 `Bun`），并 MUST 按上述非 canonical 边界处理
 
-### Requirement: 与 VRN / ResourceIdentity 的边界必须具名引用
+### Requirement: 与 URI / ResourceIdentity 的边界必须具名引用
 
-本 capability 只拥有 id 的**生成位 profile**；MUST NOT 定义或改写 VRN 语法、scope 闭集、`scope_id` 语义、`kind` 闭集、拒绝码或 ResourceIdentity。上述内容 MUST 具名引用对应 change，本 capability MUST NOT 复制其定义。
+本 capability 只拥有 id 的**生成位 profile**；MUST NOT 定义或改写 URI 语法、scope 闭集、`scope_id` 语义、`kind` 闭集、拒绝码或 ResourceIdentity。上述内容 MUST 具名引用对应 change，本 capability MUST NOT 复制其定义。
 
-该边界 MUST 有可机械检查的载体（MUST NOT 只作声明）：本 capability 的生成/校验实现（`app/core/identifier.py`、`app/core/session_catalog_store.py` 的 id 校验路径）MUST NOT 导入或引用 VRN/寻址构造（`app/services/infrastructure/resource_platform/virtual_resources/`），且 VRN grammar/解析实现 MUST NOT 承载 UUID version/variant 位判定。
+该边界 MUST 有可机械检查的载体（MUST NOT 只作声明）：本 capability 的生成/校验实现（`app/core/identifier.py`、`app/core/session_catalog_store.py` 的 id 校验路径）MUST NOT 导入或引用 URI/寻址构造（`app/services/infrastructure/resource_platform/virtual_resources/`），且 URI grammar/解析实现 MUST NOT 承载 UUID version/variant 位判定。
 
 #### Scenario: 生成位 profile 与寻址身份不可混用
 - **WHEN** 某处需要引用资源寻址或资源身份
-- **THEN** 它 MUST 具名引用 `add-unified-virtual-resource-addressing` / `migrate-session-context-uri-to-vrn` 等 owner，MUST NOT 借本 capability 的 id profile 条款表达寻址语义
+- **THEN** 它 MUST 具名引用 `add-unified-virtual-resource-addressing` / `migrate-session-context-resource-uri` 等 owner，MUST NOT 借本 capability 的 id profile 条款表达寻址语义
 
 #### Scenario: 边界由导入方向机械核对
-- **WHEN** 检查 id 生成/校验实现与 VRN 实现的依赖方向
-- **THEN** id 侧 MUST NOT 依赖 `resource_platform/virtual_resources/`，且 VRN 侧 MUST NOT 出现 UUID version/variant 位判定；该断言 MUST 由一条静态检查测试承载
+- **WHEN** 检查 id 生成/校验实现与 URI 实现的依赖方向
+- **THEN** id 侧 MUST NOT 依赖 `resource_platform/virtual_resources/`，且 URI 侧 MUST NOT 出现 UUID version/variant 位判定；该断言 MUST 由一条静态检查测试承载
 
 ### Requirement: canonical 与豁免身份的边界必须显式且豁免不得扩张
 

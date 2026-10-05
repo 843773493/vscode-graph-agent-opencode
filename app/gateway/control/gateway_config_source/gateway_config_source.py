@@ -37,7 +37,7 @@ __all__ = [
 # config_source_journal 的完整行投影：按 event_id 反查、去重后回读与按
 # (source_key, generation) 读取三处共用同一列清单，新增列时只需改这里。
 _SOURCE_JOURNAL_SELECT = """
-SELECT source_key, source_generation, source_event_id, vrn,
+SELECT source_key, source_generation, source_event_id, uri,
        presence, layer_revision, layer_digest, previous_digest,
        origin, fanout_id, created_at
 FROM config_source_journal
@@ -50,7 +50,7 @@ class GatewayConfigSourceMixin:
         try:
             row = connection.execute(
                 """
-                SELECT config_key, vrn, presence, config_version,
+                SELECT config_key, uri, presence, config_version,
                        payload_json, layer_revision, layer_digest,
                        source_generation, previous_digest, updated_at,
                        previous_payload_json
@@ -65,7 +65,7 @@ class GatewayConfigSourceMixin:
             return None
         return ConfigSourceLayerRecord(
             config_key=str(row[0]),
-            vrn=str(row[1]) if row[1] is not None else None,
+            uri=str(row[1]) if row[1] is not None else None,
             presence=cast(str, row[2]),
             config_version=int(row[3]),
             payload=(
@@ -91,7 +91,7 @@ class GatewayConfigSourceMixin:
         self,
         *,
         config_key: str,
-        vrn: str | None,
+        uri: str | None,
         config_version: int,
         presence: str,
         payload: dict[str, object] | None,
@@ -104,8 +104,8 @@ class GatewayConfigSourceMixin:
     ) -> ConfigSourceLayerRecord:
         """写入/去重一条 source layer，并可选在同一事务后回读。
 
-        来源位置只以 ``vrn`` 表达（real path MUST NOT 持久化）：``sqlite`` 层不可寻址，
-        此时 ``vrn`` 为 ``None``。
+        来源位置只以 ``uri`` 表达（real path MUST NOT 持久化）：``sqlite`` 层不可寻址，
+        此时 ``uri`` 为 ``None``。
         """
 
         if presence not in {"present", "absent"}:
@@ -119,7 +119,7 @@ class GatewayConfigSourceMixin:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
                 """
-                SELECT vrn, presence, layer_revision, layer_digest,
+                SELECT uri, presence, layer_revision, layer_digest,
                        source_generation, payload_json
                 FROM config_source_layers WHERE config_key = ?
                 """,
@@ -134,7 +134,7 @@ class GatewayConfigSourceMixin:
                 revision, generation, previous = 1, 1, None
                 previous_payload_json = None
             else:
-                current_vrn = str(current[0]) if current[0] is not None else None
+                current_uri = str(current[0]) if current[0] is not None else None
                 current_presence = str(current[1])
                 revision_now = int(current[2])
                 digest_now = str(current[3]) if current[3] is not None else None
@@ -150,7 +150,7 @@ class GatewayConfigSourceMixin:
                         f"key={config_key}, revision={revision_now}, digest={digest_now}"
                     )
                 if (
-                    current_vrn == vrn
+                    current_uri == uri
                     and current_presence == presence
                     and digest_now == layer_digest
                 ):
@@ -175,7 +175,7 @@ class GatewayConfigSourceMixin:
                             source_event_id=(
                                 source_event_id or f"{config_key}:layer:{revision_now}"
                             ),
-                            vrn=vrn,
+                            uri=uri,
                             presence=presence,
                             layer_revision=revision_now,
                             layer_digest=layer_digest,
@@ -206,12 +206,12 @@ class GatewayConfigSourceMixin:
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(config_key) DO UPDATE SET
-                    vrn=excluded.vrn,
+                    uri=excluded.uri,
                     presence=excluded.presence,
                     config_version=excluded.config_version,
                     payload_json=excluded.payload_json,
@@ -224,7 +224,7 @@ class GatewayConfigSourceMixin:
                 """,
                 (
                     config_key,
-                    vrn,
+                    uri,
                     presence,
                     config_version,
                     payload_json,
@@ -243,7 +243,7 @@ class GatewayConfigSourceMixin:
                     source_event_id=(
                         source_event_id or f"{config_key}:layer:{revision}"
                     ),
-                    vrn=vrn,
+                    uri=uri,
                     presence=presence,
                     layer_revision=revision,
                     layer_digest=layer_digest,
@@ -297,7 +297,7 @@ class GatewayConfigSourceMixin:
         *,
         source_key: str,
         source_event_id: str,
-        vrn: str | None,
+        uri: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -359,7 +359,7 @@ class GatewayConfigSourceMixin:
         connection.execute(
             """
             INSERT INTO config_source_journal(
-                source_key, source_generation, source_event_id, vrn,
+                source_key, source_generation, source_event_id, uri,
                 presence, layer_revision, layer_digest, previous_digest,
                 origin, fanout_id, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -368,7 +368,7 @@ class GatewayConfigSourceMixin:
                 source_key,
                 generation,
                 source_event_id,
-                vrn,
+                uri,
                 presence,
                 layer_revision,
                 layer_digest,
@@ -385,7 +385,7 @@ class GatewayConfigSourceMixin:
         *,
         source_key: str,
         source_event_id: str,
-        vrn: str | None,
+        uri: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -442,7 +442,7 @@ class GatewayConfigSourceMixin:
             connection.execute(
                 """
                 INSERT INTO config_source_journal(
-                    source_key, source_generation, source_event_id, vrn,
+                    source_key, source_generation, source_event_id, uri,
                     presence, layer_revision, layer_digest, previous_digest,
                     origin, fanout_id, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -451,7 +451,7 @@ class GatewayConfigSourceMixin:
                     source_key,
                     generation,
                     source_event_id,
-                    vrn,
+                    uri,
                     presence,
                     layer_revision,
                     layer_digest,
@@ -478,7 +478,7 @@ class GatewayConfigSourceMixin:
             source_key=str(row[0]),
             source_generation=int(row[1]),
             source_event_id=str(row[2]),
-            vrn=str(row[3]) if row[3] is not None else None,
+            uri=str(row[3]) if row[3] is not None else None,
             presence=cast(str, row[4]),
             layer_revision=int(row[5]),
             layer_digest=str(row[6]) if row[6] is not None else None,

@@ -181,7 +181,7 @@ describe("Composer /compact 命令", () => {
           session_id: "session",
           workspace_id: "workspace",
           resource_identity: "fixture-session",
-          vrn: "boxteam://workspace/workspace/resources/session/session",
+          uri: "boxteam://workspace/workspace/resources/session/session",
           scope: "workspace",
           title: "压缩测试",
           current_agent_id: "default",

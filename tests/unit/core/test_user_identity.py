@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.core.user_identity import user_scope_id
 from app.services.infrastructure.resource_platform.virtual_resources import (
     ResolutionContext,
-    parse_vrn,
+    parse_resource_uri,
     resource_display_uri,
 )
 
@@ -17,7 +17,7 @@ def test_user_scope_id_is_single_user_convention_local() -> None:
 
 
 def test_user_scope_id_yields_grammar_valid_scope_id() -> None:
-    # 输出必须能作为真实 VRN scope_id 被 parse_vrn 解析（接上真实 grammar）。
+    # 输出必须能作为真实 URI scope_id 被 parse_resource_uri 解析（接上真实 grammar）。
     scope_id = user_scope_id()
     uri = resource_display_uri(
         scope="user",
@@ -25,7 +25,7 @@ def test_user_scope_id_yields_grammar_valid_scope_id() -> None:
         kind="config",
         tail_segments=("workspace_mutable_override",),
     )
-    parsed = parse_vrn(uri)
+    parsed = parse_resource_uri(uri)
     assert parsed.scope == "user"
     assert parsed.scope_id == scope_id
 

@@ -41,13 +41,13 @@ from app.services.business.session_context_resource import (
     require_session_context_revision,
     session_context_read_operation,
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
     set_exact_returned_chars,
     validate_session_context_read_view,
     workspace_session_inventory_identity,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    VrnResolveError,
+    ResourceUriResolveError,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResourceIdentity,
@@ -57,7 +57,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 @dataclass(frozen=True, slots=True)
 class _SessionContextSnapshot:
     resource_identity: ResourceIdentity
-    vrn: str
+    uri: str
     scope: str
     session_id: str
     revision: str
@@ -70,7 +70,7 @@ class _SessionContextSnapshot:
 @dataclass(frozen=True, slots=True)
 class _SearchCandidate:
     resource_identity: ResourceIdentity
-    vrn: str
+    uri: str
     scope: str
     source: SessionContextSearchSource
     text: str
@@ -116,7 +116,7 @@ class SessionContextQueryService:
     ) -> SessionContextReadResultDTO:
         resource = parse_session_context_ref(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
         )
         validate_session_context_read_view(
@@ -150,7 +150,7 @@ class SessionContextQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             revision=snapshot.revision,
             operation=session_context_read_operation(
@@ -172,7 +172,7 @@ class SessionContextQueryService:
         else:
             items = project_record_items(
                 resource_identity=resource.resource_identity,
-                vrn=resource.vrn,
+                uri=resource.uri,
                 scope=resource.scope,
                 records=snapshot.records,
                 include=set(request.include),
@@ -205,7 +205,7 @@ class SessionContextQueryService:
             )
         return project_record_items(
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             records=snapshot.records,
             include=set(request.include),
@@ -219,7 +219,7 @@ class SessionContextQueryService:
     ) -> SessionContextSearchResultDTO:
         resource = parse_session_context_ref(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
         )
         self._require_workspace_resource(resource)
@@ -240,7 +240,7 @@ class SessionContextQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             revision=revision,
             operation=f"search:{query_hash}",
@@ -254,7 +254,7 @@ class SessionContextQueryService:
             if match is not None:
                 found.append((candidate, match))
 
-        require_cursor_offset_in_range(offset, len(found), vrn=resource.vrn)
+        require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
         selected = found[offset : offset + request.max_results]
         matches: list[SessionContextSearchMatchDTO] = []
         budget_truncated = False
@@ -264,7 +264,7 @@ class SessionContextQueryService:
             preview = candidate.text[preview_start:preview_end]
             dto = SessionContextSearchMatchDTO(
                 resource_identity=candidate.resource_identity,
-                vrn=candidate.vrn,
+                uri=candidate.uri,
                 scope=candidate.scope,
                 preview=preview,
                 source=candidate.source,
@@ -363,7 +363,7 @@ class SessionContextQueryService:
         if has_more:
             next_cursor = SessionContextCursorCodec.encode(
                 resource_identity=request.resource_identity,
-                vrn=request.vrn,
+                uri=request.uri,
                 scope=request.scope,
                 revision=revision,
                 operation=f"search:{query_hash}",
@@ -371,7 +371,7 @@ class SessionContextQueryService:
             )
         result = SessionContextSearchResultDTO(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             query=request.query,
             match_mode=request.match_mode,
@@ -394,7 +394,7 @@ class SessionContextQueryService:
             SessionContextItemDTO(
                 kind="session",
                 resource_identity=snapshot.resource_identity,
-                vrn=snapshot.vrn,
+                uri=snapshot.uri,
                 scope=snapshot.scope,
                 data=public_session_data(session),
             )
@@ -423,7 +423,7 @@ class SessionContextQueryService:
                 unique_indexes.append(index)
         record_items = project_record_items(
             resource_identity=snapshot.resource_identity,
-            vrn=snapshot.vrn,
+            uri=snapshot.uri,
             scope=snapshot.scope,
             records=snapshot.records,
             include=set(request.include),
@@ -439,7 +439,7 @@ class SessionContextQueryService:
                 SessionContextItemDTO(
                     kind="execution",
                     resource_identity=snapshot.resource_identity,
-                    vrn=snapshot.vrn,
+                    uri=snapshot.uri,
                     scope=snapshot.scope,
                     data=information.execution.model_dump(mode="json"),
                 )
@@ -460,7 +460,7 @@ class SessionContextQueryService:
         return SessionContextItemDTO(
             kind="information",
             resource_identity=snapshot.resource_identity,
-            vrn=snapshot.vrn,
+            uri=snapshot.uri,
             scope=snapshot.scope,
             data=information.model_dump(mode="json"),
         )
@@ -476,7 +476,7 @@ class SessionContextQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             revision=revision,
             operation=session_context_read_operation(
@@ -495,7 +495,7 @@ class SessionContextQueryService:
                     session.workspace_id,
                     session.session_id,
                 ),
-                vrn=session_resource_vrn(session.workspace_id, session.session_id),
+                uri=session_resource_uri(session.workspace_id, session.session_id),
                 scope="workspace",
                 data=public_session_data(session),
             )
@@ -526,7 +526,7 @@ class SessionContextQueryService:
                 candidates.append(
                     _SearchCandidate(
                         resource_identity=snapshot.resource_identity,
-                        vrn=snapshot.vrn,
+                        uri=snapshot.uri,
                         scope=snapshot.scope,
                         source="session_catalog",
                         text=json.dumps(
@@ -546,7 +546,7 @@ class SessionContextQueryService:
             revisions.append(sessions_revision(sessions))
             for session in sessions:
                 session_id = session.session_id
-                session_vrn = session_resource_vrn(
+                session_uri = session_resource_uri(
                     session.workspace_id,
                     session_id,
                 )
@@ -556,7 +556,7 @@ class SessionContextQueryService:
                 )
                 session_resource = parse_session_context_ref(
                     resource_identity=session_identity,
-                    vrn=session_vrn,
+                    uri=session_uri,
                     scope="workspace",
                 )
                 snapshot = await self._load_snapshot(session_resource)
@@ -565,7 +565,7 @@ class SessionContextQueryService:
                     candidates.append(
                         _SearchCandidate(
                             resource_identity=session_identity,
-                            vrn=session_vrn,
+                            uri=session_uri,
                             scope="workspace",
                             source="session_catalog",
                             text=json.dumps(
@@ -598,7 +598,7 @@ class SessionContextQueryService:
                     candidates.append(
                         _SearchCandidate(
                             resource_identity=snapshot.resource_identity,
-                            vrn=snapshot.vrn,
+                            uri=snapshot.uri,
                             scope=snapshot.scope,
                             source="effective_context",
                             text=searchable,
@@ -618,7 +618,7 @@ class SessionContextQueryService:
             candidates.append(
                 _SearchCandidate(
                     resource_identity=snapshot.resource_identity,
-                    vrn=snapshot.vrn,
+                    uri=snapshot.uri,
                     scope=snapshot.scope,
                     source="session_information",
                     text=information.model_dump_json(),
@@ -631,7 +631,7 @@ class SessionContextQueryService:
         resource: ParsedSessionContextResource,
     ) -> _SessionContextSnapshot:
         if resource.session_id is None:
-            raise ValueError(f"VRN 不是单个 session 资源: {resource.vrn}")
+            raise ValueError(f"URI 不是单个 session 资源: {resource.uri}")
         session = await self._load_session(resource)
         if session.thread_id is None:
             raise RuntimeError(
@@ -659,7 +659,7 @@ class SessionContextQueryService:
         revision = f"content:{hashlib.sha256(encoded).hexdigest()}"
         return _SessionContextSnapshot(
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             session_id=resource.session_id,
             revision=revision,
@@ -674,9 +674,9 @@ class SessionContextQueryService:
         resource: ParsedSessionContextResource,
     ) -> None:
         if resource.scope != "workspace" or resource.scope_id != self._workspace_id:
-            raise VrnResolveError(
+            raise ResourceUriResolveError(
                 "scope_mismatch",
-                "session context VRN 未绑定当前后端工作区: "
+                "session context URI 未绑定当前后端工作区: "
                 f"scope={resource.scope!r} scope_id={resource.scope_id!r}",
             )
         if resource.kind == "workspace_sessions":
@@ -687,13 +687,13 @@ class SessionContextQueryService:
                 resource.session_id,
             )
         else:
-            raise VrnResolveError(
+            raise ResourceUriResolveError(
                 "unsupported_view",
-                f"session context 不支持该 VRN resource kind: {resource.vrn!r}",
+                f"session context 不支持该 URI resource kind: {resource.uri!r}",
             )
         if resource.resource_identity != expected_identity:
             raise ValueError(
-                "resource_identity 与真实 Workspace 身份和 VRN 路径不一致"
+                "resource_identity 与真实 Workspace 身份和 URI 路径不一致"
             )
 
     async def _load_session(
@@ -701,7 +701,7 @@ class SessionContextQueryService:
         resource: ParsedSessionContextResource,
     ) -> SessionDTO:
         if resource.session_id is None:
-            raise ValueError(f"VRN 不是单个 session 资源: {resource.vrn}")
+            raise ValueError(f"URI 不是单个 session 资源: {resource.uri}")
         session = await self._session_lookup.get(resource.session_id)
         if session.workspace_id != self._workspace_id:
             raise ValueError(
@@ -710,8 +710,8 @@ class SessionContextQueryService:
             )
         if session.workspace_id != resource.scope_id:
             raise ValueError(
-                "source-mismatch: VRN scope_id 与 SessionDTO.workspace_id 不一致: "
-                f"vrn_scope_id={resource.scope_id} session_workspace_id={session.workspace_id}"
+                "source-mismatch: URI scope_id 与 SessionDTO.workspace_id 不一致: "
+                f"uri_scope_id={resource.scope_id} session_workspace_id={session.workspace_id}"
             )
         expected_identity = session_resource_identity(
             session.workspace_id,

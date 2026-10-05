@@ -33,7 +33,7 @@ function session(): Session {
     session_id: SESSION_ID,
     workspace_id: "ws_local",
     resource_identity: `fixture-${SESSION_ID}`,
-    vrn: `boxteam://workspace/ws_local/resources/session/${SESSION_ID}`,
+    uri: `boxteam://workspace/ws_local/resources/session/${SESSION_ID}`,
     scope: "workspace",
     title: "连接恢复测试",
     title_source: "user",

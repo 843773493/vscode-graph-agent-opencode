@@ -1,6 +1,6 @@
 """工作区配置服务（facade）：组合各方法族 mixin，对外保持 ConfigService 单一出口。
 
-本包只保留 ConfigService 的 __init__、极少量直通访问器，以及模块级 inline VRN
+本包只保留 ConfigService 的 __init__、极少量直通访问器，以及模块级 inline URI
 判定与来源层权威表（后者唯一定义在 config_service_common）；其余 100+ 方法按族
 逐字搬迁到同包各 mixin，由 ConfigService 多继承装配（共享同一 self 与 __init__
 槽位）。对外导入路径与符号名保持不变：
@@ -50,7 +50,7 @@ from app.services.infrastructure.config_service.config_runtime_accessors import 
 )
 from app.services.infrastructure.config_service.config_service_common import (
     ConfigCandidateApplier,
-    release_inline_config_vrn_for_file,
+    release_inline_config_uri_for_file,
 )
 from app.services.infrastructure.config_service.config_snapshot import (
     ConfigSnapshotMixin,
@@ -103,7 +103,7 @@ class ConfigService(ConfigSourceLayersMixin,
             if inline_config_path
             else resolve_config_resource_source("workspace_inline.jsonc")
         )
-        # inline 来源的逻辑资源名（VRN 尾段，去扩展名；如 workspace_inline）。
+        # inline 来源的逻辑资源名（URI 尾段，去扩展名；如 workspace_inline）。
         self._inline_logical_name = self._inline_config_path.stem or "workspace_inline"
         self._schema: dict[str, Any] | None = None
         self._workspace_root = (
@@ -184,4 +184,4 @@ class ConfigService(ConfigSourceLayersMixin,
         return self._build_public_config()
 
 
-__all__ = ["ConfigService", "release_inline_config_vrn_for_file"]
+__all__ = ["ConfigService", "release_inline_config_uri_for_file"]

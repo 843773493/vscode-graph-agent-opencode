@@ -1,6 +1,6 @@
 # 目录用途
 
-镜像 `app/services/infrastructure/resource_platform/virtual_resources/`，覆盖 VRN grammar、resolver、冻结绑定与纯值对象合同。
+镜像 `app/services/infrastructure/resource_platform/virtual_resources/`，覆盖 URI grammar、resolver、冻结绑定与纯值对象合同。
 
 # 可修改内容
 

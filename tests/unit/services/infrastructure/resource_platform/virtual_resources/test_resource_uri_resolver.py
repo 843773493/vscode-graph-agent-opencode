@@ -1,19 +1,19 @@
-"""VRN resolver 单元测试：scope、operation、capability 与访问前拒绝。"""
+"""URI resolver 单元测试：scope、operation、capability 与访问前拒绝。"""
 
 from __future__ import annotations
 
 import pytest
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
-    VrnGrammarError,
-    parse_vrn,
+    ResourceUriGrammarError,
+    parse_resource_uri,
     skill_display_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     CatalogBinding,
+    ResourceUriResolveError,
     VirtualResourceCatalog,
     VirtualResourceResolver,
-    VrnResolveError,
     require_scope_binding,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -53,7 +53,7 @@ def _descriptor(resource_id: str, display_uri: str, *, kind: str = "skills") -> 
 def _catalog(bindings: dict) -> VirtualResourceCatalog:
     name_index = {}
     for uri in bindings:
-        parsed = parse_vrn(uri)
+        parsed = parse_resource_uri(uri)
         if parsed.kind == "skills":
             name_index[(parsed.scope, parsed.logical_name)] = uri
     return VirtualResourceCatalog(
@@ -96,13 +96,13 @@ def test_grammar_and_scope_reject_before_catalog_access() -> None:
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
     bindings[uri] = _workspace_binding()
     resolver = VirtualResourceResolver(_catalog(bindings))
-    with pytest.raises(VrnGrammarError):
+    with pytest.raises(ResourceUriGrammarError):
         resolver.resolve(
             "boxteam://workspace/ws-1/resources/skills/../evil/SKILL.md",
             operation=OPERATION_ACTIVATE,
             context=_workspace_context(),
         )
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             skill_display_uri(
                 scope="workspace", scope_id="ws-OTHER", skill_name="code-review"
@@ -133,13 +133,13 @@ def test_scope_mismatch_per_scope() -> None:
             }
         )
     )
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(gateway_uri, operation=OPERATION_READ_CONTENT, context=ResolutionContext(workspace_id="ws-1", gateway_id="gw-OTHER"))
     assert excinfo.value.reason_code == "scope_mismatch"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(gateway_uri, operation=OPERATION_READ_CONTENT, context=ResolutionContext(workspace_id="ws-1"))
     assert excinfo.value.reason_code == "scope_mismatch"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             inline_uri,
             operation=OPERATION_READ_CONTENT,
@@ -154,20 +154,20 @@ def test_unknown_resource_operation_capability_and_snapshot() -> None:
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
     resolver = VirtualResourceResolver(_catalog({uri: _workspace_binding()}))
     forged = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="ghost")
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(forged, operation=OPERATION_ACTIVATE, context=_workspace_context())
     assert excinfo.value.reason_code == "unknown_resource"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(uri, operation="deploy", context=_workspace_context())
     assert excinfo.value.reason_code == "unknown_operation"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(uri, operation=OPERATION_OBSERVE, context=_workspace_context())
     assert excinfo.value.reason_code == "capability_denied"
     no_snapshot = CatalogBinding(
         descriptor=_descriptor("res-ws-1", uri), capabilities=_CAPS, snapshot_ref=None
     )
     resolver2 = VirtualResourceResolver(_catalog({uri: no_snapshot}))
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver2.resolve(uri, operation=OPERATION_ACTIVATE, context=_workspace_context())
     assert excinfo.value.reason_code == "snapshot_unavailable"
 
@@ -182,7 +182,7 @@ def test_resolve_name_uses_current_catalog_index() -> None:
         context=_workspace_context(),
     )
     assert handle.descriptor.resource_id == "res-ws-1"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve_name(
             scope="workspace",
             logical_name="missing",
@@ -197,14 +197,14 @@ def test_config_and_session_kinds_reach_catalog_lookup() -> None:
     # 校验先行，随后落到 catalog 查询（当前无 owner 登记其描述符，故 unknown_resource
     # 是正确 fail-closed 结果，而不是在 grammar 期被 unknown_resource_kind 拒绝）。
     resolver = VirtualResourceResolver(_catalog({}))
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             "boxteam://workspace/ws-1/resources/session/sess-1",
             operation=OPERATION_READ_CONTENT,
             context=_workspace_context(),
         )
     assert excinfo.value.reason_code == "unknown_resource"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline",
             operation=OPERATION_READ_CONTENT,
@@ -217,7 +217,7 @@ def test_config_and_session_kinds_reach_catalog_lookup() -> None:
 
 def test_config_and_session_still_fail_scope_binding() -> None:
     resolver = VirtualResourceResolver(_catalog({}))
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             "boxteam://workspace/ws-OTHER/resources/session/sess-1",
             operation=OPERATION_READ_CONTENT,
@@ -233,13 +233,13 @@ def test_user_scope_binding_accepts_local_and_rejects_other() -> None:
     require_scope_binding(
         "user", "local", ResolutionContext(user_scope_id="local")
     )
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         require_scope_binding(
             "user", "local", ResolutionContext(user_scope_id="someone")
         )
     assert excinfo.value.reason_code == "scope_mismatch"
     # 未绑定（None）同样拒绝，MUST NOT 回退到隐含上下文补全。
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         require_scope_binding("user", "local", ResolutionContext())
     assert excinfo.value.reason_code == "scope_mismatch"
 
@@ -263,7 +263,7 @@ def test_user_scope_resolves_through_catalog() -> None:
         context=ResolutionContext(user_scope_id="local"),
     )
     assert handle.descriptor.resource_id == "res-user-1"
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             uri,
             operation=OPERATION_READ_CONTENT,

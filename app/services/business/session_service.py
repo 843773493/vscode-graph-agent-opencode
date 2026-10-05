@@ -47,7 +47,7 @@ from app.schemas.internal_v2.session import (
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.services.business.session_context_resource import (
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -65,7 +65,7 @@ _MANIFEST_DERIVED_KEYS = (
     *_MANIFEST_NAVIGATION_KEYS,
     "thread_id",
     "resource_identity",
-    "vrn",
+    "uri",
     "scope",
 )
 
@@ -216,7 +216,7 @@ class SessionService:
         data["resource_identity"] = session_resource_identity(
             self._workspace_id, session_id
         )
-        data["vrn"] = session_resource_vrn(self._workspace_id, session_id)
+        data["uri"] = session_resource_uri(self._workspace_id, session_id)
         data["scope"] = "workspace"
 
         session = SessionDTO.model_validate(data)
@@ -588,7 +588,7 @@ class SessionService:
             resource_identity=session_resource_identity(
                 self._workspace_id, record.session_id
             ),
-            vrn=session_resource_vrn(self._workspace_id, record.session_id),
+            uri=session_resource_uri(self._workspace_id, record.session_id),
             scope="workspace",
             title=record.display_name,
             title_source=record.title_source,

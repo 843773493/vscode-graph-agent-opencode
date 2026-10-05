@@ -22,7 +22,7 @@ __all__ = ["WorkspaceConfigSourceJournalMixin"]
 # config_source_journal 的完整行投影：单事件回读（按 event_id / 按 generation）
 # 与按域分页读取三处共用同一列清单，新增列时只需改这里。
 _JOURNAL_SELECT = """
-SELECT source_key, source_generation, source_event_id, vrn,
+SELECT source_key, source_generation, source_event_id, uri,
        presence, layer_revision, layer_digest, previous_digest,
        origin, fanout_id, created_at
 FROM config_source_journal
@@ -40,7 +40,7 @@ LIMIT 1
 
 _JOURNAL_INSERT = """
 INSERT INTO config_source_journal(
-    source_key, source_generation, source_event_id, vrn,
+    source_key, source_generation, source_event_id, uri,
     presence, layer_revision, layer_digest, previous_digest,
     origin, fanout_id, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -58,7 +58,7 @@ class WorkspaceConfigSourceJournalMixin:
             source_key=str(row[0]),
             source_generation=int(row[1]),
             source_event_id=str(row[2]),
-            vrn=str(row[3]) if row[3] is not None else None,
+            uri=str(row[3]) if row[3] is not None else None,
             presence=cast(str, row[4]),
             layer_revision=int(row[5]),
             layer_digest=str(row[6]) if row[6] is not None else None,
@@ -74,7 +74,7 @@ class WorkspaceConfigSourceJournalMixin:
         *,
         source_key: str,
         source_event_id: str,
-        vrn: str | None,
+        uri: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -143,7 +143,7 @@ class WorkspaceConfigSourceJournalMixin:
                 source_key,
                 generation,
                 source_event_id,
-                vrn,
+                uri,
                 presence,
                 layer_revision,
                 layer_digest,
@@ -160,7 +160,7 @@ class WorkspaceConfigSourceJournalMixin:
         *,
         source_key: str,
         source_event_id: str,
-        vrn: str | None,
+        uri: str | None,
         presence: str,
         layer_revision: int,
         layer_digest: str | None,
@@ -245,7 +245,7 @@ class WorkspaceConfigSourceJournalMixin:
                     source_key,
                     generation,
                     source_event_id,
-                    vrn,
+                    uri,
                     presence,
                     layer_revision,
                     layer_digest,

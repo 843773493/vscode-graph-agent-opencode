@@ -36,8 +36,8 @@ export function appendInspectionPage(
   page: SessionContextReadResultDTO,
   resource: SessionContextSession,
 ): InspectionPage {
-  if (page.resource_identity !== resource.resource_identity || page.vrn !== resource.vrn || page.scope !== resource.scope || !page.revision) {
-    throw new Error("上下文响应 resource_identity/vrn/scope/revision 不匹配");
+  if (page.resource_identity !== resource.resource_identity || page.uri !== resource.uri || page.scope !== resource.scope || !page.revision) {
+    throw new Error("上下文响应 resource_identity/uri/scope/revision 不匹配");
   }
   if (previous.revision && previous.revision !== page.revision) throw new Error("上下文分页 revision 已变化，请重新加载");
   if (page.partial_errors.length || page.omitted_partial_error_count) throw new Error("上下文返回不完整错误，请重新加载");
@@ -52,7 +52,7 @@ export function appendInspectionPage(
       fragment += item.text;
       if (!item.truncated) {
         const restored = objectField(JSON.parse(fragment));
-        if (restored.kind !== item.kind.slice(0, -6) || restored.resource_identity !== item.resource_identity || restored.vrn !== item.vrn
+        if (restored.kind !== item.kind.slice(0, -6) || restored.resource_identity !== item.resource_identity || restored.uri !== item.uri
           || restored.scope !== item.scope || restored.assembly_ref !== item.assembly_ref) {
           throw new Error("上下文分片 identity 不一致");
         }

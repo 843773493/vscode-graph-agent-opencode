@@ -138,15 +138,15 @@ export interface GatewayConfigSourceDTO {
   source_generation?:
     | number
     | undefined;
-  /** 可寻址来源文件的 VRN；没有稳定文件位置时不设置。 */
-  vrn?: string | undefined;
+  /** 可寻址来源文件的 URI；没有稳定文件位置时不设置。 */
+  uri?: string | undefined;
 }
 
 export interface GatewayConfigSourcesDTO {
   revision: string;
   sources: GatewayConfigSourceDTO[];
-  /** 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。 */
-  schema_vrn?: string | undefined;
+  /** 配置 schema 文件的 URI；没有可寻址 schema 时不设置。 */
+  schema_uri?: string | undefined;
 }
 
 export interface GatewayDiagnosticLogDTO {
@@ -1601,7 +1601,7 @@ function createBaseGatewayConfigSourceDTO(): GatewayConfigSourceDTO {
     layer_revision: undefined,
     layer_digest: undefined,
     source_generation: undefined,
-    vrn: undefined,
+    uri: undefined,
   };
 }
 
@@ -1616,7 +1616,7 @@ export const GatewayConfigSourceDTO: MessageFns<GatewayConfigSourceDTO> = {
       layer_revision: isSet(object.layer_revision) ? globalThis.Number(object.layer_revision) : undefined,
       layer_digest: isSet(object.layer_digest) ? globalThis.String(object.layer_digest) : undefined,
       source_generation: isSet(object.source_generation) ? globalThis.Number(object.source_generation) : undefined,
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : undefined,
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
     };
   },
 
@@ -1646,8 +1646,8 @@ export const GatewayConfigSourceDTO: MessageFns<GatewayConfigSourceDTO> = {
     if (message.source_generation !== undefined) {
       obj.source_generation = Math.round(message.source_generation);
     }
-    if (message.vrn !== undefined) {
-      obj.vrn = message.vrn;
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
     }
     return obj;
   },
@@ -1665,13 +1665,13 @@ export const GatewayConfigSourceDTO: MessageFns<GatewayConfigSourceDTO> = {
     message.layer_revision = object.layer_revision ?? undefined;
     message.layer_digest = object.layer_digest ?? undefined;
     message.source_generation = object.source_generation ?? undefined;
-    message.vrn = object.vrn ?? undefined;
+    message.uri = object.uri ?? undefined;
     return message;
   },
 };
 
 function createBaseGatewayConfigSourcesDTO(): GatewayConfigSourcesDTO {
-  return { revision: "", sources: [], schema_vrn: undefined };
+  return { revision: "", sources: [], schema_uri: undefined };
 }
 
 export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
@@ -1681,7 +1681,7 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
       sources: globalThis.Array.isArray(object?.sources)
         ? object.sources.map((e: any) => GatewayConfigSourceDTO.fromJSON(e))
         : [],
-      schema_vrn: isSet(object.schema_vrn) ? globalThis.String(object.schema_vrn) : undefined,
+      schema_uri: isSet(object.schema_uri) ? globalThis.String(object.schema_uri) : undefined,
     };
   },
 
@@ -1693,8 +1693,8 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
     if (message.sources?.length) {
       obj.sources = message.sources.map((e) => GatewayConfigSourceDTO.toJSON(e));
     }
-    if (message.schema_vrn !== undefined) {
-      obj.schema_vrn = message.schema_vrn;
+    if (message.schema_uri !== undefined) {
+      obj.schema_uri = message.schema_uri;
     }
     return obj;
   },
@@ -1706,7 +1706,7 @@ export const GatewayConfigSourcesDTO: MessageFns<GatewayConfigSourcesDTO> = {
     const message = createBaseGatewayConfigSourcesDTO();
     message.revision = object.revision ?? "";
     message.sources = object.sources?.map((e) => GatewayConfigSourceDTO.fromPartial(e)) || [];
-    message.schema_vrn = object.schema_vrn ?? undefined;
+    message.schema_uri = object.schema_uri ?? undefined;
     return message;
   },
 };

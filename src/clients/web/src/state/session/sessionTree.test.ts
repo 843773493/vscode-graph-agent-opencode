@@ -10,7 +10,7 @@ function session(
     session_id: sessionId,
     workspace_id: "ws_local",
     resource_identity: `fixture-${sessionId}`,
-    vrn: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
+    uri: `boxteam://workspace/ws_local/resources/session/${sessionId}`,
     scope: "workspace",
     title: sessionId,
     title_source: "user",

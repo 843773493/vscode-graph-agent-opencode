@@ -17,7 +17,7 @@ from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_context_resource import (
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
@@ -100,7 +100,7 @@ async def parent_session(
         session_id=result.session_id,
         workspace_id=WORKSPACE_ID,
         resource_identity=session_resource_identity(WORKSPACE_ID, result.session_id),
-        vrn=session_resource_vrn(WORKSPACE_ID, result.session_id),
+        uri=session_resource_uri(WORKSPACE_ID, result.session_id),
         scope="workspace",
         title="父会话",
         current_agent_id="default",

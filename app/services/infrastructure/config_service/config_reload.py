@@ -512,9 +512,9 @@ class ConfigReloadMixin:
             # 持久化键 MUST 可由权威表逐字还原（见 `_resolve_persisted_layer`）：
             # 否则恢复路径会退化成有损兜底。这里 fail-closed，绝不写入无法还原的键。
             ConfigSnapshotMixin._resolve_persisted_layer(layer_key)
-            # 只持久化 VRN（可为 None），绝不持久化 real path。
+            # 只持久化 URI（可为 None），绝不持久化 real path。
             baseline[layer_key] = {
-                "vrn": source.vrn,
+                "uri": source.uri,
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,

@@ -87,16 +87,16 @@ export interface ConfigSourceDTO {
   source_generation?:
     | number
     | undefined;
-  /** 可寻址来源文件的 VRN；没有稳定文件位置时不设置。 */
-  vrn?: string | undefined;
+  /** 可寻址来源文件的 URI；没有稳定文件位置时不设置。 */
+  uri?: string | undefined;
 }
 
 export interface ConfigSourcesDTO {
   revision: string;
   sources: ConfigSourceDTO[];
   runtime_overrides: string[];
-  /** 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。 */
-  schema_vrn?: string | undefined;
+  /** 配置 schema 文件的 URI；没有可寻址 schema 时不设置。 */
+  schema_uri?: string | undefined;
 }
 
 export interface ConfigUpdateRequest {
@@ -859,7 +859,7 @@ export interface SessionContextItemDTO {
   raw_record?: { [key: string]: any } | undefined;
   truncated?: boolean | undefined;
   resource_identity?: string | undefined;
-  vrn?: string | undefined;
+  uri?: string | undefined;
   scope?: string | undefined;
   assembly_ref?: string | undefined;
 }
@@ -879,7 +879,7 @@ export interface SessionContextReadRequest {
   max_chars?: number | undefined;
   revision?: string | undefined;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
   record_index?: number | undefined;
   assembly_ref?: string | undefined;
@@ -900,7 +900,7 @@ export interface SessionContextReadResultDTO {
   partial_errors: SessionContextPartialErrorDTO[];
   omitted_partial_error_count?: number | undefined;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
   record_index?: number | undefined;
   assembly_ref?: string | undefined;
@@ -914,7 +914,7 @@ export interface SessionContextSearchMatchDTO {
   match_start: number;
   match_end: number;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
 }
 
@@ -928,7 +928,7 @@ export interface SessionContextSearchRequest {
   cursor?: string | undefined;
   revision?: string | undefined;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
 }
 
@@ -945,7 +945,7 @@ export interface SessionContextSearchResultDTO {
   partial_errors: SessionContextPartialErrorDTO[];
   omitted_partial_error_count?: number | undefined;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
 }
 
@@ -975,7 +975,7 @@ export interface SessionDTO {
   kind?: string | undefined;
   generation_origin?: SessionGenerationOriginDTO | undefined;
   resource_identity: string;
-  vrn: string;
+  uri: string;
   scope: string;
   thread_id?: string | undefined;
 }
@@ -2368,7 +2368,7 @@ function createBaseConfigSourceDTO(): ConfigSourceDTO {
     layer_revision: undefined,
     layer_digest: undefined,
     source_generation: undefined,
-    vrn: undefined,
+    uri: undefined,
   };
 }
 
@@ -2383,7 +2383,7 @@ export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
       layer_revision: isSet(object.layer_revision) ? globalThis.Number(object.layer_revision) : undefined,
       layer_digest: isSet(object.layer_digest) ? globalThis.String(object.layer_digest) : undefined,
       source_generation: isSet(object.source_generation) ? globalThis.Number(object.source_generation) : undefined,
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : undefined,
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
     };
   },
 
@@ -2413,8 +2413,8 @@ export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
     if (message.source_generation !== undefined) {
       obj.source_generation = Math.round(message.source_generation);
     }
-    if (message.vrn !== undefined) {
-      obj.vrn = message.vrn;
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
     }
     return obj;
   },
@@ -2432,13 +2432,13 @@ export const ConfigSourceDTO: MessageFns<ConfigSourceDTO> = {
     message.layer_revision = object.layer_revision ?? undefined;
     message.layer_digest = object.layer_digest ?? undefined;
     message.source_generation = object.source_generation ?? undefined;
-    message.vrn = object.vrn ?? undefined;
+    message.uri = object.uri ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigSourcesDTO(): ConfigSourcesDTO {
-  return { revision: "", sources: [], runtime_overrides: [], schema_vrn: undefined };
+  return { revision: "", sources: [], runtime_overrides: [], schema_uri: undefined };
 }
 
 export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
@@ -2451,7 +2451,7 @@ export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
       runtime_overrides: globalThis.Array.isArray(object?.runtime_overrides)
         ? object.runtime_overrides.map((e: any) => globalThis.String(e))
         : [],
-      schema_vrn: isSet(object.schema_vrn) ? globalThis.String(object.schema_vrn) : undefined,
+      schema_uri: isSet(object.schema_uri) ? globalThis.String(object.schema_uri) : undefined,
     };
   },
 
@@ -2466,8 +2466,8 @@ export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
     if (message.runtime_overrides?.length) {
       obj.runtime_overrides = message.runtime_overrides;
     }
-    if (message.schema_vrn !== undefined) {
-      obj.schema_vrn = message.schema_vrn;
+    if (message.schema_uri !== undefined) {
+      obj.schema_uri = message.schema_uri;
     }
     return obj;
   },
@@ -2480,7 +2480,7 @@ export const ConfigSourcesDTO: MessageFns<ConfigSourcesDTO> = {
     message.revision = object.revision ?? "";
     message.sources = object.sources?.map((e) => ConfigSourceDTO.fromPartial(e)) || [];
     message.runtime_overrides = object.runtime_overrides?.map((e) => e) || [];
-    message.schema_vrn = object.schema_vrn ?? undefined;
+    message.schema_uri = object.schema_uri ?? undefined;
     return message;
   },
 };
@@ -7594,7 +7594,7 @@ function createBaseSessionContextItemDTO(): SessionContextItemDTO {
     raw_record: undefined,
     truncated: undefined,
     resource_identity: undefined,
-    vrn: undefined,
+    uri: undefined,
     scope: undefined,
     assembly_ref: undefined,
   };
@@ -7617,7 +7617,7 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
       raw_record: isObject(object.raw_record) ? object.raw_record : undefined,
       truncated: isSet(object.truncated) ? globalThis.Boolean(object.truncated) : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : undefined,
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : undefined,
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
       scope: isSet(object.scope) ? globalThis.String(object.scope) : undefined,
       assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
     };
@@ -7661,8 +7661,8 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     if (message.resource_identity !== undefined) {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== undefined) {
-      obj.vrn = message.vrn;
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
     }
     if (message.scope !== undefined) {
       obj.scope = message.scope;
@@ -7690,7 +7690,7 @@ export const SessionContextItemDTO: MessageFns<SessionContextItemDTO> = {
     message.raw_record = object.raw_record ?? undefined;
     message.truncated = object.truncated ?? undefined;
     message.resource_identity = object.resource_identity ?? undefined;
-    message.vrn = object.vrn ?? undefined;
+    message.uri = object.uri ?? undefined;
     message.scope = object.scope ?? undefined;
     message.assembly_ref = object.assembly_ref ?? undefined;
     return message;
@@ -7744,7 +7744,7 @@ function createBaseSessionContextReadRequest(): SessionContextReadRequest {
     max_chars: undefined,
     revision: undefined,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
     record_index: undefined,
     assembly_ref: undefined,
@@ -7767,7 +7767,7 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
       max_chars: isSet(object.max_chars) ? globalThis.Number(object.max_chars) : undefined,
       revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
       assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
@@ -7803,8 +7803,8 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -7832,7 +7832,7 @@ export const SessionContextReadRequest: MessageFns<SessionContextReadRequest> = 
     message.max_chars = object.max_chars ?? undefined;
     message.revision = object.revision ?? undefined;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     message.record_index = object.record_index ?? undefined;
     message.assembly_ref = object.assembly_ref ?? undefined;
@@ -7856,7 +7856,7 @@ function createBaseSessionContextReadResultDTO(): SessionContextReadResultDTO {
     partial_errors: [],
     omitted_partial_error_count: undefined,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
     record_index: undefined,
     assembly_ref: undefined,
@@ -7888,7 +7888,7 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
         ? globalThis.Number(object.omitted_partial_error_count)
         : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       record_index: isSet(object.record_index) ? globalThis.Number(object.record_index) : undefined,
       assembly_ref: isSet(object.assembly_ref) ? globalThis.String(object.assembly_ref) : undefined,
@@ -7939,8 +7939,8 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -7973,7 +7973,7 @@ export const SessionContextReadResultDTO: MessageFns<SessionContextReadResultDTO
     message.partial_errors = object.partial_errors?.map((e) => SessionContextPartialErrorDTO.fromPartial(e)) || [];
     message.omitted_partial_error_count = object.omitted_partial_error_count ?? undefined;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     message.record_index = object.record_index ?? undefined;
     message.assembly_ref = object.assembly_ref ?? undefined;
@@ -7990,7 +7990,7 @@ function createBaseSessionContextSearchMatchDTO(): SessionContextSearchMatchDTO 
     match_start: 0,
     match_end: 0,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
   };
 }
@@ -8005,7 +8005,7 @@ export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchD
       match_start: isSet(object.match_start) ? globalThis.Number(object.match_start) : 0,
       match_end: isSet(object.match_end) ? globalThis.Number(object.match_end) : 0,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
@@ -8033,8 +8033,8 @@ export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchD
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -8054,7 +8054,7 @@ export const SessionContextSearchMatchDTO: MessageFns<SessionContextSearchMatchD
     message.match_start = object.match_start ?? 0;
     message.match_end = object.match_end ?? 0;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     return message;
   },
@@ -8071,7 +8071,7 @@ function createBaseSessionContextSearchRequest(): SessionContextSearchRequest {
     cursor: undefined,
     revision: undefined,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
   };
 }
@@ -8090,7 +8090,7 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
       cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
       revision: isSet(object.revision) ? globalThis.String(object.revision) : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
@@ -8124,8 +8124,8 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -8147,7 +8147,7 @@ export const SessionContextSearchRequest: MessageFns<SessionContextSearchRequest
     message.cursor = object.cursor ?? undefined;
     message.revision = object.revision ?? undefined;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     return message;
   },
@@ -8167,7 +8167,7 @@ function createBaseSessionContextSearchResultDTO(): SessionContextSearchResultDT
     partial_errors: [],
     omitted_partial_error_count: undefined,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
   };
 }
@@ -8193,7 +8193,7 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
         ? globalThis.Number(object.omitted_partial_error_count)
         : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
     };
   },
@@ -8236,8 +8236,8 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -8264,7 +8264,7 @@ export const SessionContextSearchResultDTO: MessageFns<SessionContextSearchResul
     message.partial_errors = object.partial_errors?.map((e) => SessionContextPartialErrorDTO.fromPartial(e)) || [];
     message.omitted_partial_error_count = object.omitted_partial_error_count ?? undefined;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     return message;
   },
@@ -8363,7 +8363,7 @@ function createBaseSessionDTO(): SessionDTO {
     kind: undefined,
     generation_origin: undefined,
     resource_identity: "",
-    vrn: "",
+    uri: "",
     scope: "",
     thread_id: undefined,
   };
@@ -8391,7 +8391,7 @@ export const SessionDTO: MessageFns<SessionDTO> = {
         ? SessionGenerationOriginDTO.fromJSON(object.generation_origin)
         : undefined,
       resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
-      vrn: isSet(object.vrn) ? globalThis.String(object.vrn) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
@@ -8438,8 +8438,8 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     if (message.resource_identity !== "") {
       obj.resource_identity = message.resource_identity;
     }
-    if (message.vrn !== "") {
-      obj.vrn = message.vrn;
+    if (message.uri !== "") {
+      obj.uri = message.uri;
     }
     if (message.scope !== "") {
       obj.scope = message.scope;
@@ -8470,7 +8470,7 @@ export const SessionDTO: MessageFns<SessionDTO> = {
       ? SessionGenerationOriginDTO.fromPartial(object.generation_origin)
       : undefined;
     message.resource_identity = object.resource_identity ?? "";
-    message.vrn = object.vrn ?? "";
+    message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     message.thread_id = object.thread_id ?? undefined;
     return message;

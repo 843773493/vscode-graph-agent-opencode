@@ -44,7 +44,7 @@ class SessionContextReadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resource_identity: SessionResourceIdentity
-    vrn: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
     scope: SessionContextScope
     view: SessionContextView = "overview"
     record_index: int | None = Field(default=None, ge=0)
@@ -64,7 +64,7 @@ class SessionContextSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resource_identity: SessionResourceIdentity
-    vrn: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
     scope: SessionContextScope
     query: str = Field(min_length=1)
     sources: list[SessionContextSearchSource] = Field(
@@ -81,7 +81,7 @@ class SessionContextSearchRequest(BaseModel):
 class SessionContextItemDTO(BaseModel):
     kind: str
     resource_identity: SessionResourceIdentity | None = None
-    vrn: str | None = None
+    uri: str | None = None
     scope: SessionContextScope | None = None
     assembly_ref: SessionResourceIdentity | None = None
     role: str | None = None
@@ -103,7 +103,7 @@ class SessionContextPartialErrorDTO(BaseModel):
 
 class SessionContextReadResultDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    vrn: str
+    uri: str
     scope: SessionContextScope
     view: SessionContextView
     record_index: int | None = None
@@ -124,7 +124,7 @@ class SessionContextReadResultDTO(BaseModel):
 
 class SessionContextSearchMatchDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    vrn: str
+    uri: str
     scope: SessionContextScope
     preview: str
     source: SessionContextSearchSource
@@ -136,7 +136,7 @@ class SessionContextSearchMatchDTO(BaseModel):
 
 class SessionContextSearchResultDTO(BaseModel):
     resource_identity: SessionResourceIdentity
-    vrn: str
+    uri: str
     scope: SessionContextScope
     query: str
     match_mode: SessionContextMatchMode

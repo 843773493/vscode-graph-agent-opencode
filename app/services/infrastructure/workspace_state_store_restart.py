@@ -213,12 +213,12 @@ class WorkspaceStateStoreRestartMixin:
                 )
             for row in current_rows:
                 detail = expected_sources[str(row[0])]
-                actual_vrn = str(row[1]) if row[1] is not None else None
-                expected_vrn = (
-                    str(detail.get("vrn")) if detail.get("vrn") is not None else None
+                actual_uri = str(row[1]) if row[1] is not None else None
+                expected_uri = (
+                    str(detail.get("uri")) if detail.get("uri") is not None else None
                 )
                 if (
-                    expected_vrn != actual_vrn
+                    expected_uri != actual_uri
                     or str(detail.get("presence")) != str(row[2])
                     or int(detail["layer_revision"]) != int(row[3])
                     or (

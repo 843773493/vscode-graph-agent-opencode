@@ -86,7 +86,7 @@ def build_config_snapshot(
         source_details=source_details
         or tuple(
             ConfigSource(
-                vrn=None,
+                uri=None,
                 layer="user",
                 precedence=index,
                 loaded=True,

@@ -24,7 +24,7 @@
 
 **非目标**
 
-- 不定义 VRN / ResourceIdentity / scope / 拒绝码（归 `add-unified-virtual-resource-addressing` 等）。
+- 不定义 URI / ResourceIdentity / scope / 拒绝码（归 `add-unified-virtual-resource-addressing` 等）。
 - 不实现任何生产代码；本 change 只产出规划产物。
 - 不把 revision/hash 编码进 id；不引入第二套 id 语法。
 - 不为浏览器与 Node 服务进程伪造 v7 能力。
@@ -88,7 +88,7 @@
 
 **理由**：
 
-- 与本仓既有纪律一致（AGENTS.md 第 1 条「彻底根除双轨」：运行时开关造成的窗口期双接受**本身就是双轨**，即使声明有终态也不接受；`migrate-session-context-uri-to-vrn` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
+- 与本仓既有纪律一致（AGENTS.md 第 1 条「彻底根除双轨」：运行时开关造成的窗口期双接受**本身就是双轨**，即使声明有终态也不接受；`migrate-session-context-resource-uri` 的「入口破坏性拒绝 + 新写字段」；`add-multi-workspace-backend-mounting` D7；`add-workspace-persistent-resource-management` 第 6 条）。
 - `validate_session_id` 只接受 v7 位 profile；任何「放宽读到 `v4|v7`」都必须新增第二套接受分支，正是双轨，故**否决**窗口期方案。
 - 存量数据确实会与 v7-only 校验不兼容：id 是 `.boxteam/sessions/YYYY/MM/DD/{session_id}` 的目录叶名、SQLite 主键，也会内嵌进 rollout/message_stream/trace/llm_request 等持久文件。当前变更选择显式拒绝并保留原件；没有 Session Catalog importer，也不提供自动隔离或重编号路径。用户从当前格式备份恢复或人工处理旧工作区。
 
@@ -160,12 +160,12 @@
 
 **决定**：本 change 是 id **生成位 profile** 的唯一 owner。具名引用：
 
-- `add-unified-virtual-resource-addressing`：VRN 语法、scope 闭集、`kind` 闭集、拒绝码、ResourceIdentity 定义归它。
-- `migrate-session-context-uri-to-vrn`：会话上下文寻址归它。
+- `add-unified-virtual-resource-addressing`：URI 语法、scope 闭集、`kind` 闭集、拒绝码、ResourceIdentity 定义归它。
+- `migrate-session-context-resource-uri`：会话上下文寻址归它。
 - `add-multi-workspace-backend-mounting`：workspace 身份与 `scope_id` 推导归它。
-- `add-workspace-persistent-resource-management`：资源身份/VRN 持久化归它。
+- `add-workspace-persistent-resource-management`：资源身份/URI 持久化归它。
 
-**理由**：VRN/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」；两者不可混为一谈，必须显式声明以避免制造第二套定义。
+**理由**：URI/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」；两者不可混为一谈，必须显式声明以避免制造第二套定义。
 
 **待 owner 处理的收口项（本 change 不代改）**：`add-itemized-rollout-context` 的 `specs/itemized-rollout-context/spec.md`（写死 `payload` 第 13 个 hex MUST 为 `4`、拒绝「非 v4 bit profile」）、`specs/rollout-checkpoint-storage/spec.md`（同款 v4 断言）与 `add-context-injection-lifecycle` 的 `specs/context-injection-lifecycle/spec.md`、`tasks.md`（同款 `4` 与「非 v4 bit profile」文本）与本 change 冲突，MUST 由其 owner 收口为 v7（列为待处理项，见「待确认问题」）。
 **待 owner 处理的收口项（本 change 不代改）**：四处在途文本仍写死 v4，需由各自 owner 收口为本 change 的 v7 定义，具名清单与 owner 声明见 D11。

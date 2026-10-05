@@ -62,8 +62,8 @@ from app.services.infrastructure.config import ConfigReloadStatus as ConfigReloa
 from app.services.infrastructure.config.policy import (
     gateway_config_policy as gateway_config_policy,
 )
-from app.services.infrastructure.config.source_vrn import (
-    inline_config_source_vrn as inline_config_source_vrn,
+from app.services.infrastructure.config.source_uri import (
+    inline_config_source_uri as inline_config_source_uri,
 )
 from app.services.infrastructure.config.state import (
     ConfigConflictError as ConfigConflictError,

@@ -702,7 +702,7 @@ class ReloadLifecycleMixin:
         for source in config.source_details:
             key = source.source_key or f"{source.layer}:{source.precedence}"
             baseline[key] = {
-                "vrn": source.vrn,
+                "uri": source.uri,
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,

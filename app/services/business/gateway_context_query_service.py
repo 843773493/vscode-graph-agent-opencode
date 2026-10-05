@@ -23,7 +23,7 @@ from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
     gateway_session_inventory_identity,
-    gateway_session_inventory_vrn,
+    gateway_session_inventory_uri,
     parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
@@ -32,7 +32,7 @@ from app.services.business.session_context_resource import (
     set_exact_returned_chars,
     validate_session_context_read_view,
     workspace_session_inventory_identity,
-    workspace_session_inventory_vrn,
+    workspace_session_inventory_uri,
 )
 
 _SEARCH_CONCURRENCY = 8
@@ -73,7 +73,7 @@ class GatewayContextQueryService:
     ) -> SessionContextReadResultDTO:
         resource = _require_gateway_inventory(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
         )
         validate_session_context_read_view(
@@ -88,7 +88,7 @@ class GatewayContextQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             revision=revision,
             operation=session_context_read_operation(
@@ -103,7 +103,7 @@ class GatewayContextQueryService:
         require_cursor_offset_in_range(
             offset,
             len(inventory.items),
-            vrn=request.vrn,
+            uri=request.uri,
         )
         candidates = [
             SessionContextItemDTO(
@@ -111,7 +111,7 @@ class GatewayContextQueryService:
                 resource_identity=workspace_session_inventory_identity(
                     _backend_workspace_id(item)
                 ),
-                vrn=workspace_session_inventory_vrn(_backend_workspace_id(item)),
+                uri=workspace_session_inventory_uri(_backend_workspace_id(item)),
                 scope="workspace",
                 data=_workspace_public_data(item),
             )
@@ -150,7 +150,7 @@ class GatewayContextQueryService:
     ) -> SessionContextSearchResultDTO:
         _require_gateway_inventory(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
         )
         inventory = await self._transport.list_gateway_workspaces()
@@ -166,7 +166,7 @@ class GatewayContextQueryService:
                     "resource_identity": str(
                         workspace_session_inventory_identity(backend_workspace_id)
                     ),
-                    "vrn": workspace_session_inventory_vrn(backend_workspace_id),
+                    "uri": workspace_session_inventory_uri(backend_workspace_id),
                     "scope": "workspace",
                     "cursor": None,
                     "revision": None,
@@ -226,7 +226,7 @@ class GatewayContextQueryService:
                     )
                 )
 
-        matches.sort(key=lambda item: (item.vrn, item.match_start, item.match_end))
+        matches.sort(key=lambda item: (item.uri, item.match_start, item.match_end))
         revision = _content_revision(
             {
                 "inventory_revision": _workspace_inventory_revision(inventory),
@@ -245,14 +245,14 @@ class GatewayContextQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             revision=revision,
             operation=f"search:{query_hash}",
         )
         if char_offset:
             raise ValueError("Gateway context search 不支持 item 内字符偏移")
-        require_cursor_offset_in_range(offset, len(matches), vrn=request.vrn)
+        require_cursor_offset_in_range(offset, len(matches), uri=request.uri)
         selected = matches[offset : offset + request.max_results]
         accepted_matches: list[SessionContextSearchMatchDTO] = []
         accepted_errors: list[SessionContextPartialErrorDTO] = []
@@ -316,7 +316,7 @@ def _build_gateway_read_result(
     has_more = offset + len(items) < total_items
     result = SessionContextReadResultDTO(
         resource_identity=request.resource_identity,
-        vrn=request.vrn,
+        uri=request.uri,
         scope=request.scope,
         view=request.view,
         record_index=request.record_index,
@@ -327,7 +327,7 @@ def _build_gateway_read_result(
         next_cursor=(
             SessionContextCursorCodec.encode(
                 resource_identity=request.resource_identity,
-                vrn=request.vrn,
+                uri=request.uri,
                 scope=request.scope,
                 revision=revision,
                 operation=session_context_read_operation(
@@ -364,7 +364,7 @@ def _build_gateway_search_result(
     omitted_error_count = total_error_count - len(errors)
     result = SessionContextSearchResultDTO(
         resource_identity=request.resource_identity,
-        vrn=request.vrn,
+        uri=request.uri,
         scope=request.scope,
         query=request.query,
         match_mode=request.match_mode,
@@ -374,7 +374,7 @@ def _build_gateway_search_result(
         next_cursor=(
             SessionContextCursorCodec.encode(
                 resource_identity=request.resource_identity,
-                vrn=request.vrn,
+                uri=request.uri,
                 scope=request.scope,
                 revision=revision,
                 operation=f"search:{_search_query_hash(request)}",
@@ -439,12 +439,12 @@ def _content_revision(value: object) -> str:
 def _require_gateway_inventory(
     *,
     resource_identity: str,
-    vrn: str,
+    uri: str,
     scope: str,
 ) -> ParsedSessionContextResource:
     resource = parse_session_context_ref(
         resource_identity=resource_identity,
-        vrn=vrn,
+        uri=uri,
         scope=scope,
     )
     gateway_id = require_current_gateway_id("gateway session inventory")
@@ -453,10 +453,10 @@ def _require_gateway_inventory(
         or resource.scope_id != gateway_id
         or resource.kind != "workspace_sessions"
         or resource.resource_identity != gateway_session_inventory_identity(gateway_id)
-        or resource.vrn != gateway_session_inventory_vrn(gateway_id)
+        or resource.uri != gateway_session_inventory_uri(gateway_id)
     ):
         raise WorkspaceSessionContextAccessError(
-            "Gateway session inventory resource_identity/VRN 与当前真实 Gateway 身份不匹配"
+            "Gateway session inventory resource_identity/URI 与当前真实 Gateway 身份不匹配"
         )
     return resource
 
@@ -465,7 +465,7 @@ def _backend_workspace_id(item: GatewayWorkspaceDTO) -> str:
     backend_workspace_id = item.backend_workspace_id
     if not isinstance(backend_workspace_id, str) or not backend_workspace_id:
         raise WorkspaceSessionContextAccessError(
-            "Gateway workspace 缺少真实 backend_workspace_id，无法构造 Workspace VRN: "
+            "Gateway workspace 缺少真实 backend_workspace_id，无法构造 Workspace URI: "
             f"workspace_id={item.workspace_id}"
         )
     return backend_workspace_id
@@ -479,7 +479,7 @@ def _validate_workspace_search_result(
 ) -> None:
     if (
         result.resource_identity != request.resource_identity
-        or result.vrn != request.vrn
+        or result.uri != request.uri
         or result.scope != request.scope
     ):
         raise WorkspaceSessionContextAccessError(
@@ -489,7 +489,7 @@ def _validate_workspace_search_result(
     for match in result.matches:
         resource = parse_session_context_ref(
             resource_identity=match.resource_identity,
-            vrn=match.vrn,
+            uri=match.uri,
             scope=match.scope,
         )
         if (
@@ -502,7 +502,7 @@ def _validate_workspace_search_result(
         ):
             raise WorkspaceSessionContextAccessError(
                 "Workspace context search 返回了其他 Workspace 的资源身份: "
-                f"workspace_scope_id={backend_workspace_id}, vrn={match.vrn}"
+                f"workspace_scope_id={backend_workspace_id}, uri={match.uri}"
             )
 
 

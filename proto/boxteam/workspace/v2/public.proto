@@ -86,8 +86,8 @@ message ConfigSourceDTO {
   optional int64 layer_revision = 7;
   optional string layer_digest = 8;
   optional int64 source_generation = 9;
-  // 可寻址来源文件的 VRN；没有稳定文件位置时不设置。
-  optional string vrn = 10;
+  // 可寻址来源文件的 URI；没有稳定文件位置时不设置。
+  optional string uri = 10;
 }
 
 message ConfigSourcesDTO {
@@ -97,8 +97,8 @@ message ConfigSourcesDTO {
   string revision = 1;
   repeated ConfigSourceDTO sources = 3;
   repeated string runtime_overrides = 4;
-  // 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。
-  optional string schema_vrn = 5;
+  // 配置 schema 文件的 URI；没有可寻址 schema 时不设置。
+  optional string schema_uri = 5;
 }
 
 message ConfigUpdateRequest {
@@ -863,7 +863,7 @@ message SessionContextItemDTO {
   optional google.protobuf.Struct raw_record = 11;
   optional bool truncated = 12;
   optional string resource_identity = 13;
-  optional string vrn = 14;
+  optional string uri = 14;
   optional string scope = 15;
   optional string assembly_ref = 16;
 }
@@ -887,7 +887,7 @@ message SessionContextReadRequest {
   optional int64 max_chars = 8;
   optional string revision = 9;
   string resource_identity = 10;
-  string vrn = 11;
+  string uri = 11;
   string scope = 12;
   optional int64 record_index = 13;
   optional string assembly_ref = 14;
@@ -910,7 +910,7 @@ message SessionContextReadResultDTO {
   repeated SessionContextPartialErrorDTO partial_errors = 13;
   optional int64 omitted_partial_error_count = 14;
   string resource_identity = 15;
-  string vrn = 16;
+  string uri = 16;
   string scope = 17;
   optional int64 record_index = 18;
   optional string assembly_ref = 19;
@@ -926,7 +926,7 @@ message SessionContextSearchMatchDTO {
   int64 match_start = 6;
   int64 match_end = 7;
   string resource_identity = 8;
-  string vrn = 9;
+  string uri = 9;
   string scope = 10;
 }
 
@@ -942,7 +942,7 @@ message SessionContextSearchRequest {
   optional string cursor = 8;
   optional string revision = 9;
   string resource_identity = 10;
-  string vrn = 11;
+  string uri = 11;
   string scope = 12;
 }
 
@@ -961,7 +961,7 @@ message SessionContextSearchResultDTO {
   repeated SessionContextPartialErrorDTO partial_errors = 11;
   optional int64 omitted_partial_error_count = 12;
   string resource_identity = 13;
-  string vrn = 14;
+  string uri = 14;
   string scope = 15;
 }
 
@@ -996,7 +996,7 @@ message SessionDTO {
   optional string kind = 11;
   optional SessionGenerationOriginDTO generation_origin = 13;
   string resource_identity = 14;
-  string vrn = 15;
+  string uri = 15;
   string scope = 16;
   optional string thread_id = 17;
 }

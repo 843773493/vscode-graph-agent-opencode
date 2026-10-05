@@ -104,7 +104,7 @@ def tool_summary(record: dict[str, object]) -> list[str]:
 def project_record_items(
     *,
     resource_identity: str,
-    vrn: str,
+    uri: str,
     scope: str,
     records: list[dict[str, object]],
     include: set[SessionContextInclude],
@@ -129,7 +129,7 @@ def project_record_items(
             SessionContextItemDTO(
                 kind="message" if messages_only else "record",
                 resource_identity=resource_identity,
-                vrn=vrn,
+                uri=uri,
                 scope=scope,
                 role=role,
                 record_index=index,
@@ -156,7 +156,7 @@ def paginate_read_items(
     raw_message_count: int = 0,
     effective_record_count: int = 0,
 ) -> SessionContextReadResultDTO:
-    require_cursor_offset_in_range(offset, len(items), vrn=request.vrn)
+    require_cursor_offset_in_range(offset, len(items), uri=request.uri)
     selected = items[offset:offset + request.limit]
     returned: list[SessionContextItemDTO] = []
     budget_truncated = False
@@ -288,7 +288,7 @@ def _chunk_item(
     return SessionContextItemDTO(
         kind=f"{item.kind}_chunk",
         resource_identity=item.resource_identity,
-        vrn=item.vrn,
+        uri=item.uri,
         scope=item.scope,
         assembly_ref=item.assembly_ref,
         role=item.role,
@@ -319,7 +319,7 @@ def _build_read_result(
     if has_more:
         next_cursor = SessionContextCursorCodec.encode(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             revision=revision,
             operation=session_context_read_operation(
@@ -335,7 +335,7 @@ def _build_read_result(
         )
     result = SessionContextReadResultDTO(
         resource_identity=request.resource_identity,
-        vrn=request.vrn,
+        uri=request.uri,
         scope=request.scope,
         view=request.view,
         record_index=request.record_index,

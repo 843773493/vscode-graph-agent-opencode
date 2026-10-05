@@ -60,7 +60,7 @@ function session(): Session {
     session_id: SESSION_ID,
     workspace_id: "ws_local",
     resource_identity: `fixture-${SESSION_ID}`,
-    vrn: `boxteam://workspace/ws_local/resources/session/${SESSION_ID}`,
+    uri: `boxteam://workspace/ws_local/resources/session/${SESSION_ID}`,
     scope: "workspace",
     title: "待处理队列错误语义",
     title_source: "user",

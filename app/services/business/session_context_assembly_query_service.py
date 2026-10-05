@@ -58,7 +58,7 @@ class SessionContextAssemblyQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             revision=revision,
             operation=session_context_read_operation(
@@ -74,7 +74,7 @@ class SessionContextAssemblyQueryService:
             SessionContextItemDTO(
                 kind="assembly",
                 resource_identity=resource.resource_identity,
-                vrn=resource.vrn,
+                uri=resource.uri,
                 scope=resource.scope,
                 assembly_ref=context_assembly_identity(
                     resource.resource_identity,
@@ -143,7 +143,7 @@ class SessionContextAssemblyQueryService:
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             revision=revision,
             operation=session_context_read_operation(
@@ -166,7 +166,7 @@ class SessionContextAssemblyQueryService:
             SessionContextItemDTO(
                 kind="assembly",
                 resource_identity=resource.resource_identity,
-                vrn=resource.vrn,
+                uri=resource.uri,
                 scope=resource.scope,
                 assembly_ref=request.assembly_ref,
                 data={
@@ -196,7 +196,7 @@ class SessionContextAssemblyQueryService:
             SessionContextItemDTO(
                 kind="selection",
                 resource_identity=resource.resource_identity,
-                vrn=resource.vrn,
+                uri=resource.uri,
                 scope=resource.scope,
                 assembly_ref=request.assembly_ref,
                 record_index=entry.plan_ordinal,
@@ -206,7 +206,7 @@ class SessionContextAssemblyQueryService:
         )
         for item in project_record_items(
             resource_identity=resource.resource_identity,
-            vrn=resource.vrn,
+            uri=resource.uri,
             scope=resource.scope,
             records=records,
             include=set(request.include),
@@ -224,7 +224,7 @@ class SessionContextAssemblyQueryService:
             SessionContextItemDTO(
                 kind="loss",
                 resource_identity=resource.resource_identity,
-                vrn=resource.vrn,
+                uri=resource.uri,
                 scope=resource.scope,
                 assembly_ref=request.assembly_ref,
                 data={"projection": projection, "ordinal": ordinal, "loss": loss},

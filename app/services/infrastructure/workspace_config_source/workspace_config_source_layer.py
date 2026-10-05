@@ -26,7 +26,7 @@ class WorkspaceConfigSourceLayerMixin:
         try:
             row = connection.execute(
                 """
-                SELECT config_key, vrn, presence, config_version,
+                SELECT config_key, uri, presence, config_version,
                        payload_json, layer_revision, layer_digest,
                        source_generation, previous_digest, updated_at,
                        previous_payload_json
@@ -44,7 +44,7 @@ class WorkspaceConfigSourceLayerMixin:
             )
             return ConfigSourceLayerRecord(
                 config_key=str(row[0]),
-                vrn=str(row[1]) if row[1] is not None else None,
+                uri=str(row[1]) if row[1] is not None else None,
                 presence=str(row[2]),  # type: ignore[arg-type]
                 config_version=int(row[3]),
                 payload=payload,
@@ -68,7 +68,7 @@ class WorkspaceConfigSourceLayerMixin:
         self,
         *,
         config_key: str,
-        vrn: str | None,
+        uri: str | None,
         config_version: int,
         presence: str,
         payload: dict[str, object] | None,
@@ -121,7 +121,7 @@ class WorkspaceConfigSourceLayerMixin:
                     )
             row = connection.execute(
                 """
-                SELECT vrn, presence, layer_revision, layer_digest,
+                SELECT uri, presence, layer_revision, layer_digest,
                        source_generation, payload_json
                 FROM config_source_layers
                 WHERE config_key = ?
@@ -138,7 +138,7 @@ class WorkspaceConfigSourceLayerMixin:
                 previous_digest = None
                 previous_payload_json = None
             else:
-                current_vrn = str(row[0]) if row[0] is not None else None
+                current_uri = str(row[0]) if row[0] is not None else None
                 current_presence = str(row[1])
                 current_revision = int(row[2])
                 current_digest = str(row[3]) if row[3] is not None else None
@@ -155,7 +155,7 @@ class WorkspaceConfigSourceLayerMixin:
                         f"current_digest={current_digest}"
                     )
                 if (
-                    current_vrn == vrn
+                    current_uri == uri
                     and current_presence == presence
                     and current_digest == layer_digest
                 ):
@@ -181,7 +181,7 @@ class WorkspaceConfigSourceLayerMixin:
                                 source_event_id
                                 or f"{config_key}:layer:{current_revision}"
                             ),
-                            vrn=vrn,
+                            uri=uri,
                             presence=presence,
                             layer_revision=current_revision,
                             layer_digest=layer_digest,
@@ -211,12 +211,12 @@ class WorkspaceConfigSourceLayerMixin:
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(config_key) DO UPDATE SET
-                    vrn=excluded.vrn,
+                    uri=excluded.uri,
                     presence=excluded.presence,
                     config_version=excluded.config_version,
                     payload_json=excluded.payload_json,
@@ -229,7 +229,7 @@ class WorkspaceConfigSourceLayerMixin:
                 """,
                 (
                     config_key,
-                    vrn,
+                    uri,
                     presence,
                     config_version,
                     payload_json,
@@ -248,7 +248,7 @@ class WorkspaceConfigSourceLayerMixin:
                     source_event_id=(
                         source_event_id or f"{config_key}:layer:{layer_revision}"
                     ),
-                    vrn=vrn,
+                    uri=uri,
                     presence=presence,
                     layer_revision=layer_revision,
                     layer_digest=layer_digest,
@@ -288,7 +288,7 @@ class WorkspaceConfigSourceLayerMixin:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT vrn, presence, config_version, payload_json,
+                SELECT uri, presence, config_version, payload_json,
                        layer_revision, layer_digest, source_generation,
                        previous_digest, updated_at, previous_payload_json
                 FROM config_source_layers

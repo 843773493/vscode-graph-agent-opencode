@@ -232,14 +232,14 @@ def test_gateway_state_keeps_config_in_control_database(tmp_path):
         store.close()
 
 
-def test_gateway_source_layer_records_vrn_and_drops_real_path(tmp_path):
-    """层行只记录来源 VRN 兄弟字段，真实路径与备份路径列被物理移除。"""
+def test_gateway_source_layer_records_uri_and_drops_real_path(tmp_path):
+    """层行只记录来源 URI 兄弟字段，真实路径与备份路径列被物理移除。"""
 
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
         record = state.sync_config_source(
             config_key="gateway_inline",
-            vrn=(
+            uri=(
                 "boxteam://inline/source-development-0_0_2/resources/config/"
                 "gateway_inline"
             ),
@@ -248,7 +248,7 @@ def test_gateway_source_layer_records_vrn_and_drops_real_path(tmp_path):
             payload={"ui": {"a": 1}},
             layer_digest="digest-1",
         )
-        assert record.vrn == (
+        assert record.uri == (
             "boxteam://inline/source-development-0_0_2/resources/config/gateway_inline"
         )
         columns = {
@@ -257,7 +257,7 @@ def test_gateway_source_layer_records_vrn_and_drops_real_path(tmp_path):
             .execute("PRAGMA table_info(config_source_layers)")
             .fetchall()
         }
-        assert "vrn" in columns
+        assert "uri" in columns
         assert "source_path" not in columns
         assert "backup_path" not in columns
     finally:
@@ -269,7 +269,7 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
     try:
         state.sync_config_source(
             config_key="workspace_mutable_override",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present",
             payload={"ui": {"a": 1}},
@@ -283,7 +283,7 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
             with pytest.raises(ConfigConflictError, match="source layer CAS"):
                 state.sync_config_source(
                     config_key="workspace_mutable_override",
-                    vrn=None,
+                    uri=None,
                     config_version=2,
                     presence="present",
                     payload={"ui": {"a": 2}},
@@ -294,7 +294,7 @@ def test_gateway_source_layer_cas_and_owner_generation_guard(tmp_path):
         with pytest.raises(ConfigConflictError, match="初始 CAS"):
             state.sync_config_source(
                 config_key="brand_new_key",
-                vrn=None,
+                uri=None,
                 config_version=1,
                 presence="present",
                 payload={"ui": {}},
@@ -311,7 +311,7 @@ def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
         state.append_config_source_journal(
             source_key="user",
             source_event_id="event-1",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=1,
             layer_digest="a",
@@ -333,7 +333,7 @@ def test_gateway_source_journal_owner_generation_guard_is_enforced(tmp_path):
             state.append_config_source_journal(
                 source_key="user",
                 source_event_id="event-2",
-                vrn=None,
+                uri=None,
                 presence="absent",
                 layer_revision=2,
                 layer_digest="b",
@@ -354,7 +354,7 @@ def test_gateway_source_high_water_mark_rejects_missing_owner_with_journal(tmp_p
         state.append_config_source_journal(
             source_key="user",
             source_event_id="event-1",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=1,
             layer_digest="a",
@@ -402,7 +402,7 @@ def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
         # 追加 journal，owner 水位不一致时必须在事务内 fail closed 并回滚整个 sync。
         state.sync_config_source(
             config_key="workspace_mutable_override",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present",
             payload={"ui": {"a": 1}},
@@ -422,7 +422,7 @@ def test_gateway_source_owner_guard_applies_inside_sync_transaction(tmp_path):
         with pytest.raises(ConfigConflictError, match="source owner generation CAS"):
             state.sync_config_source(
                 config_key="workspace_mutable_override",
-                vrn=None,
+                uri=None,
                 config_version=2,
                 presence="present",
                 payload={"ui": {"a": 2}},

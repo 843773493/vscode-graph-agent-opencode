@@ -48,7 +48,7 @@ def _gateway_source_detail(
     *,
     fallback_path: Path,
 ) -> ConfigSource:
-    """返回一条 Gateway 来源的 VRN 兄弟字段形态（有 state store 路径）。
+    """返回一条 Gateway 来源的 URI 兄弟字段形态（有 state store 路径）。
 
     逻辑来源层与 precedence 一律取自 `_GATEWAY_SOURCE_LAYER_AUTHORITY`，本函数 MUST NOT
     硬编码 `sqlite`：有 store 时 `gateway_mutable_override`/`gateway_local_mutable_override`
@@ -56,9 +56,9 @@ def _gateway_source_detail(
     """
     record = state_store.get_source_layer(config_key)
     layer, precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY[config_key]
-    # 不可寻址（共享 gateway.sqlite，且 real path 不持久化），vrn=None。
+    # 不可寻址（共享 gateway.sqlite，且 real path 不持久化），uri=None。
     return ConfigSource(
-        vrn=None,
+        uri=None,
         layer=layer,
         precedence=precedence,
         loaded=(
@@ -92,10 +92,10 @@ def _gateway_persisted_source_details(
         if not isinstance(raw_value, dict):
             raise TypeError(f"Gateway source baseline 必须是对象: key={source_key}")
         raw_value = cast(dict[str, object], raw_value)
-        raw_vrn = raw_value.get("vrn")
-        if raw_vrn is not None and (not isinstance(raw_vrn, str) or not raw_vrn):
+        raw_uri = raw_value.get("uri")
+        if raw_uri is not None and (not isinstance(raw_uri, str) or not raw_uri):
             raise ValueError(
-                f"Gateway source baseline vrn 必须是非空字符串或 None: key={source_key}"
+                f"Gateway source baseline uri 必须是非空字符串或 None: key={source_key}"
             )
         presence_value = raw_value.get("presence")
         if presence_value == "present":
@@ -109,7 +109,7 @@ def _gateway_persisted_source_details(
         layer, precedence = _resolve_gateway_persisted_layer(source_key)
         details.append(
             ConfigSource(
-                vrn=raw_vrn,
+                uri=raw_uri,
                 layer=layer,
                 precedence=precedence,
                 loaded=presence == "present",
@@ -178,7 +178,7 @@ def _load_or_migrate_gateway_override(
             verify_stable_config_file(file_snapshot)
             source_record = state_store.sync_config_source(
                 config_key=config_key,
-                vrn=None,
+                uri=None,
                 config_version=source_record.config_version,
                 presence="absent",
                 payload=None,
@@ -205,7 +205,7 @@ def _load_or_migrate_gateway_override(
         verify_stable_config_file(file_snapshot)
         source_record = state_store.sync_config_source(
             config_key=config_key,
-            vrn=None,
+            uri=None,
             config_version=int(payload.get("config_version", 1)),
             presence="present",
             payload=payload,
@@ -231,7 +231,7 @@ def _load_or_migrate_gateway_override(
     source_record = state_store.sync_config_source(
         config_key=config_key,
         config_version=int(payload.get("config_version", 1)),
-        vrn=None,
+        uri=None,
         presence="present",
         payload=payload,
         layer_digest=file_snapshot.digest,
@@ -258,7 +258,7 @@ def _record_gateway_source_journal(
         source_event_id=(
             f"{source_record.config_key}:layer:{source_record.layer_revision}"
         ),
-        vrn=source_record.vrn,
+        uri=source_record.uri,
         presence=source_record.presence,
         layer_revision=source_record.layer_revision,
         layer_digest=source_record.layer_digest,

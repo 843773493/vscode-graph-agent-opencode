@@ -186,12 +186,12 @@ class ConfigSnapshotMixin:
         for source_key, raw_value in sorted(baseline.items()):
             if not isinstance(raw_value, dict):
                 raise TypeError(f"source baseline 必须是对象: key={source_key}")
-            raw_vrn = raw_value.get("vrn")
+            raw_uri = raw_value.get("uri")
             raw_presence = raw_value.get("presence")
-            if raw_vrn is not None and (
-                not isinstance(raw_vrn, str) or not raw_vrn
+            if raw_uri is not None and (
+                not isinstance(raw_uri, str) or not raw_uri
             ):
-                raise ValueError(f"source baseline vrn 必须是非空字符串或 None: key={source_key}")
+                raise ValueError(f"source baseline uri 必须是非空字符串或 None: key={source_key}")
             if raw_presence not in {"present", "absent"}:
                 raise ValueError(f"source baseline presence 无效: key={source_key}")
             # source_key=None 的层（inline）在 `_source_baseline` 里退化成
@@ -201,7 +201,7 @@ class ConfigSnapshotMixin:
             layer, precedence = ConfigSnapshotMixin._resolve_persisted_layer(source_key)
             details.append(
                 ConfigSource(
-                    vrn=raw_vrn,
+                    uri=raw_uri,
                     layer=layer,
                     precedence=precedence,
                     loaded=raw_presence == "present",
@@ -414,7 +414,7 @@ class ConfigSnapshotMixin:
 
         source_details: list[ConfigSource] = [
             ConfigSource(
-                vrn=self._inline_source_vrn(),
+                uri=self._inline_source_uri(),
                 layer="inline",
                 precedence=0,
                 loaded=True,

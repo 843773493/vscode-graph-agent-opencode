@@ -566,11 +566,11 @@ export declare type GatewayConfigSourceDTO = Message<"boxteam.gateway.v1.Gateway
   sourceGeneration?: bigint | undefined;
 
   /**
-   * 可寻址来源文件的 VRN；没有稳定文件位置时不设置。
+   * 可寻址来源文件的 URI；没有稳定文件位置时不设置。
    *
-   * @generated from field: optional string vrn = 10;
+   * @generated from field: optional string uri = 10;
    */
-  vrn?: string | undefined;
+  uri?: string | undefined;
 };
 
 /**
@@ -594,11 +594,11 @@ export declare type GatewayConfigSourcesDTO = Message<"boxteam.gateway.v1.Gatewa
   sources: GatewayConfigSourceDTO[];
 
   /**
-   * 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。
+   * 配置 schema 文件的 URI；没有可寻址 schema 时不设置。
    *
-   * @generated from field: optional string schema_vrn = 4;
+   * @generated from field: optional string schema_uri = 4;
    */
-  schemaVrn?: string | undefined;
+  schemaUri?: string | undefined;
 };
 
 /**

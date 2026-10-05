@@ -38,7 +38,7 @@ def test_context_read_views_match_in_live_and_offline_openapi(
     if model == "SessionContextReadRequest":
         # 默认读取仍是 active overview，冻结查询必须显式选择。
         assert schema["properties"]["view"]["default"] == "overview"
-        assert set(schema["required"]) >= {"resource_identity", "vrn", "scope"}
+        assert set(schema["required"]) >= {"resource_identity", "uri", "scope"}
         assert "resource" not in schema["properties"]
         assert "assembly_ref" in schema["properties"]
         operation = openapi_document["paths"]["/api/v1/workspaces/{workspace_id}/context/read"]["post"]

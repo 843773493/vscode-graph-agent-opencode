@@ -91,7 +91,7 @@ function session() {
     session_id: SESSION_ID,
     workspace_id: WORKSPACE_ID,
     resource_identity: `fixture-${SESSION_ID}`,
-    vrn: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
+    uri: `boxteam://workspace/${WORKSPACE_ID}/resources/session/${SESSION_ID}`,
     scope: "workspace",
     title: "错误通道",
     current_agent_id: "default",

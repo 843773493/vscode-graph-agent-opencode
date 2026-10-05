@@ -30,7 +30,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
 )
 from app.services.business.session_context_resource import (
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.business.session_navigation import SessionCatalogService
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
@@ -83,7 +83,7 @@ class _SessionService:
                 payload["workspace_id"],
                 session_id,
             ),
-            vrn=session_resource_vrn(payload["workspace_id"], session_id),
+            uri=session_resource_uri(payload["workspace_id"], session_id),
             scope="workspace",
         )
         return SessionDTO.model_validate(payload)

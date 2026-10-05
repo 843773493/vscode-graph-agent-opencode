@@ -38,7 +38,7 @@ export type ChangePortForwardLabelRequest = Omit<OptionalFields<GatewayProtocol.
 export type DevelopmentRuntimeRestartDTO = OptionalFields<GatewayProtocol.DevelopmentRuntimeRestartDTO>;
 export type GatewayConfigSourceDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourceDTO>,
-  | "vrn"
+  | "uri"
   | "layer"
   | "source_key"
   | "presence"
@@ -46,7 +46,7 @@ export type GatewayConfigSourceDTO = Omit<
   | "layer_digest"
   | "source_generation"
 > & {
-  vrn: string | null;
+  uri: string | null;
   layer: ConfigSourceLayer;
   source_key: string | null;
   presence: "present" | "absent";
@@ -56,9 +56,9 @@ export type GatewayConfigSourceDTO = Omit<
 };
 export type GatewayConfigSourcesDTO = Omit<
   OptionalFields<GatewayProtocol.GatewayConfigSourcesDTO>,
-  "schema_vrn" | "sources"
+  "schema_uri" | "sources"
 > & {
-  schema_vrn: string | null;
+  schema_uri: string | null;
   sources: GatewayConfigSourceDTO[];
 };
 export type GatewayDiagnosticLogDTO = OptionalFields<GatewayProtocol.GatewayDiagnosticLogDTO>;

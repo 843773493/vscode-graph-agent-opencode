@@ -8,8 +8,8 @@ import pytest
 from app.services.infrastructure.config.state import ConfigConflictError
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
-# 存储层只承载 VRN（real path 不持久化）；用真实形态的 inline VRN 做往返断言。
-_VRN = "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
+# 存储层只承载 URI（real path 不持久化）；用真实形态的 inline URI 做往返断言。
+_URI = "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
 
 
 def _store(tmp_path) -> WorkspaceStateStore:
@@ -28,12 +28,12 @@ def _journal(
     origin: str = "file-watcher",
     fanout_id: str | None = None,
     expected: int | None = None,
-    vrn: str | None = None,
+    uri: str | None = None,
 ):
     return store.append_config_source_journal(
         source_key=source_key,
         source_event_id=event_id,
-        vrn=vrn if vrn is not None else _VRN,
+        uri=uri if uri is not None else _URI,
         presence=presence,
         layer_revision=layer_revision,
         layer_digest=layer_digest,
@@ -56,7 +56,7 @@ def test_journal_row_projection_preserves_every_column(tmp_path):
             presence="present",
             origin="api",
             fanout_id="fanout-full",
-            vrn="boxteam://workspace/ws-1/resources/config/workspace_mutable_override",
+            uri="boxteam://workspace/ws-1/resources/config/workspace_mutable_override",
         )
         listed = store.list_config_source_journal(source_key="user")
         assert len(listed) == 1
@@ -64,7 +64,7 @@ def test_journal_row_projection_preserves_every_column(tmp_path):
         assert projected == created
         assert (projected.source_key, projected.source_generation) == ("user", 1)
         assert projected.source_event_id == "ev-full"
-        assert projected.vrn == (
+        assert projected.uri == (
             "boxteam://workspace/ws-1/resources/config/workspace_mutable_override"
         )
         assert projected.layer_revision == 4
@@ -146,7 +146,7 @@ def test_journal_event_id_rebind_differs_between_public_and_in_transaction_paths
                         connection,
                         source_key="other",
                         source_event_id="ev1",
-                        vrn="boxteam://inline/source-development-0_0_2/resources/config/other_inline",
+                        uri="boxteam://inline/source-development-0_0_2/resources/config/other_inline",
                         presence="present",
                         layer_revision=7,
                         layer_digest="z",
@@ -210,7 +210,7 @@ def test_in_transaction_journal_helper_dedup_and_cas(tmp_path):
             kwargs = {
                 "source_key": "user",
                 "source_event_id": "ev-helper",
-                "vrn": _VRN,
+                "uri": _URI,
                 "presence": "present",
                 "layer_revision": 1,
                 "layer_digest": "a",
@@ -258,7 +258,7 @@ def test_in_transaction_journal_helper_rejects_source_key_rebind_alone(tmp_path)
                         connection,
                         source_key="other",
                         source_event_id="ev1",
-                        vrn="boxteam://inline/source-development-0_0_2/resources/config/other_inline",
+                        uri="boxteam://inline/source-development-0_0_2/resources/config/other_inline",
                         presence="present",
                         layer_revision=1,
                         layer_digest="a",
@@ -292,7 +292,7 @@ def test_source_layer_sync_get_and_cas(tmp_path):
     try:
         layer = store.sync_config_source(
             config_key="workspace",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present",
             payload={"logger": {"level": "info"}},
@@ -306,7 +306,7 @@ def test_source_layer_sync_get_and_cas(tmp_path):
 
         absent = store.sync_config_source(
             config_key="absent-key",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="absent",
             payload=None,
@@ -317,7 +317,7 @@ def test_source_layer_sync_get_and_cas(tmp_path):
         with pytest.raises(ConfigConflictError, match="CAS"):
             store.sync_config_source(
                 config_key="workspace",
-                vrn=None,
+                uri=None,
                 config_version=2,
                 presence="present",
                 payload={"logger": {"level": "warn"}},
@@ -327,28 +327,28 @@ def test_source_layer_sync_get_and_cas(tmp_path):
             )
         with pytest.raises(ValueError, match="presence"):
             store.sync_config_source(
-                config_key="workspace", vrn=None,
+                config_key="workspace", uri=None,
                 config_version=1, presence="maybe", payload={"a": 1}, layer_digest="d",
             )
         with pytest.raises(ValueError, match="必须有 payload"):
             store.sync_config_source(
-                config_key="workspace", vrn=None,
+                config_key="workspace", uri=None,
                 config_version=1, presence="present", payload=None, layer_digest="d",
             )
         with pytest.raises(ValueError, match="必须为空"):
             store.sync_config_source(
-                config_key="workspace", vrn=None,
+                config_key="workspace", uri=None,
                 config_version=1, presence="absent", payload={"a": 1}, layer_digest=None,
             )
         with pytest.raises(ValueError, match="active CAS 必须同时"):
             store.sync_config_source(
-                config_key="workspace", vrn=None,
+                config_key="workspace", uri=None,
                 config_version=1, presence="present", payload={"a": 1},
                 layer_digest="d", expected_active_revision=1,
             )
         with pytest.raises(ValueError, match="config_domain"):
             store.sync_config_source(
-                config_key="workspace", vrn=None,
+                config_key="workspace", uri=None,
                 config_version=1, presence="present", payload={"a": 1},
                 layer_digest="d", expected_active_revision=1, expected_active_digest="x",
             )
@@ -360,7 +360,7 @@ def test_source_layer_corrupt_payload_is_reported(tmp_path):
     store = _store(tmp_path)
     try:
         store.sync_config_source(
-            config_key="workspace", vrn=None,
+            config_key="workspace", uri=None,
             config_version=1, presence="present", payload={"a": 1}, layer_digest="ld1",
         )
         connection = sqlite3.connect(store.path)
@@ -382,7 +382,7 @@ def test_update_source_generation_binds_layer_to_shared_owner(tmp_path):
     store = _store(tmp_path)
     try:
         store.sync_config_source(
-            config_key="workspace", vrn=None,
+            config_key="workspace", uri=None,
             config_version=1, presence="present", payload={"a": 1}, layer_digest="ld1",
         )
         current = store.get_source_layer("workspace")
@@ -588,13 +588,13 @@ def test_source_water_mark_rejects_corrupt_owner_generation(tmp_path):
 
 
 def test_persisted_source_records_never_hold_real_path(tmp_path):
-    """5A.6：持久化记录只含 VRN 兄弟字段，物理表内不存在真实路径列。"""
+    """5A.6：持久化记录只含 URI 兄弟字段，物理表内不存在真实路径列。"""
 
     store = _store(tmp_path)
     try:
         store.sync_config_source(
             config_key="workspace_root_mutable_override",
-            vrn="boxteam://workspace/ws-1/resources/config/workspace_root_mutable_override",
+            uri="boxteam://workspace/ws-1/resources/config/workspace_root_mutable_override",
             config_version=1,
             presence="present",
             payload={"logger": {"level": "info"}},
@@ -609,50 +609,50 @@ def test_persisted_source_records_never_hold_real_path(tmp_path):
                 .execute(f"PRAGMA table_info({table})")
                 .fetchall()
             }
-            assert "vrn" in columns
+            assert "uri" in columns
             assert "source_path" not in columns
             assert "backup_path" not in columns
         layer = store.get_source_layer("workspace_root_mutable_override")
         assert layer is not None
-        assert layer.vrn == (
+        assert layer.uri == (
             "boxteam://workspace/ws-1/resources/config/"
             "workspace_root_mutable_override"
         )
-        assert str(tmp_path) not in layer.vrn
+        assert str(tmp_path) not in layer.uri
         journal = store.list_config_source_journal(source_key="user")[0]
-        assert journal.vrn == _VRN
-        assert str(tmp_path) not in journal.vrn
+        assert journal.uri == _URI
+        assert str(tmp_path) not in journal.uri
     finally:
         store.close()
 
 
-def test_source_layer_vrn_round_trips_and_sqlite_layer_is_unaddressable(tmp_path):
-    """可寻址层（inline/workspace）VRN 原样往返；sqlite 层 vrn 恒为 None。"""
+def test_source_layer_uri_round_trips_and_sqlite_layer_is_unaddressable(tmp_path):
+    """可寻址层（inline/workspace）URI 原样往返；sqlite 层 uri 恒为 None。"""
 
     store = _store(tmp_path)
     try:
         addressable = store.sync_config_source(
             config_key="workspace_inline",
-            vrn="boxteam://inline/source-development-0_0_2/resources/config/workspace_inline",
+            uri="boxteam://inline/source-development-0_0_2/resources/config/workspace_inline",
             config_version=1,
             presence="present",
             payload={"logger": {"level": "info"}},
             layer_digest="ld1",
         )
-        assert addressable.vrn == (
+        assert addressable.uri == (
             "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
         )
         unaddressable = store.sync_config_source(
             config_key="workspace_runtime_override",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present",
             payload={"logger": {"level": "debug"}},
             layer_digest="ld2",
         )
-        assert unaddressable.vrn is None
+        assert unaddressable.uri is None
         reloaded = store.get_source_layer("workspace_runtime_override")
         assert reloaded is not None
-        assert reloaded.vrn is None
+        assert reloaded.uri is None
     finally:
         store.close()

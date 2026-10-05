@@ -71,23 +71,23 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 新格式记录必须支持同版本进程重启后的恢复：保持 resource_id、来源 Thread、关联、原始孤儿期限和未收敛操作事实，核实外部实例后恢复；未知结果保留可发现的 unknown/reconcile_required 状态，不重复创建或盲目重放。旧格式输入必须明确失败，不能恢复第二套读写链路。
 
-### 7. 持久记录只承载身份与 VRN，逐条消除已确证的 real path 持久化
+### 7. 持久记录只承载身份与 URI，逐条消除已确证的 real path 持久化
 
-本 change 的工作区持久记录、API 响应体与模型可见载荷 MUST 只承载 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（必要时加并列 revision 字段），MUST NOT 承载 `真实路径 / real path`。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、VRN 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
+本 change 的工作区持久记录、API 响应体与模型可见载荷 MUST 只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（必要时加并列 revision 字段），MUST NOT 承载 `真实路径 / real path`。该 prohibition 与 `add-unified-virtual-resource-addressing` 的 requirement「三层职责必须严格分离」同源；{scope} 闭集、`scope_id` 取值、URI 语法、kind 与 `拒绝码 / rejection code` 均引该 change，本 change 不复述、不自造。
 
 **已确证与「real path 不持久化」冲突的字段与行为（逐条给出修正方向）**：
 
-1. 终端 owner 的持久状态文件把 `cwd`（真实绝对路径）写进每条终端记录：`src/workspace-services/terminal/server/terminalSession.js` 的 `toRecord()` 返回 `cwd: this.cwd`，经 `terminalManager.js` 的 `stateStore.write({ workspace_id, workspace_root, terminals })` 落到 `.boxteam/terminal-manager/terminals.json`。**修正方向**：终端工作目录是 owner 自身的运行态字段，按规范化边界不属于「资源所在位置」，因此落盘为工作区内相对路径 `cwd_relative`（`"."` 表示工作区根），绝对路径只在 PTY 启动调用栈内由工作区根重推导；不为此自造 VRN kind。
+1. 终端 owner 的持久状态文件把 `cwd`（真实绝对路径）写进每条终端记录：`src/workspace-services/terminal/server/terminalSession.js` 的 `toRecord()` 返回 `cwd: this.cwd`，经 `terminalManager.js` 的 `stateStore.write({ workspace_id, workspace_root, terminals })` 落到 `.boxteam/terminal-manager/terminals.json`。**修正方向**：终端工作目录是 owner 自身的运行态字段，按规范化边界不属于「资源所在位置」，因此落盘为工作区内相对路径 `cwd_relative`（`"."` 表示工作区根），绝对路径只在 PTY 启动调用栈内由工作区根重推导；不为此自造 URI kind。
 2. 同一 owner 的持久状态文件顶层还写 `workspace_root`（工作区真实根路径）。**修正方向**：工作区身份改用 `add-multi-workspace-backend-mounting` 的显式 `workspace_id`；`workspace_root` 不得落盘。
 3. 浏览器 owner 的持久状态文件把 checkpoint 真实文件路径写进资源记录：`browserSession.js` 的 `this.record.checkpoint = { path: checkpointWrite.path, ... }`，而 `checkpointWrite.path` 来自 `browserStateStore.js` 的 `filePath = path.join(this.checkpointDir, ...)`，经 `session.snapshot()` 落到 `.boxteam/browser-manager/browsers.json`。**修正方向**：checkpoint 是资源产物位置，位置可由 owner 身份（`browser_id`）确定性推导，故该位置 MUST NOT 落盘（裁定 D-A2）；文件路径只在同一次读取/写入调用栈内重推导。
 4. 浏览器 owner 的下载记录把真实文件绝对路径写进资源记录：`browserStateStore.js` 的 `writeDownload` 返回 `path: filePath`，由 `browserSession.js` 追加到 `this.record.downloads`（上限 50 条）并持久化；读取侧又把它当可解析路径消费。**修正方向**：下载产物位置由 `(browser_id, download_id, filename)` 在调用栈内重推导（裁定 D-A2）；越界校验改为在调用栈内由重推导出的 real path 上完成，不得把 real path 当作持久字段。
-5. 上述真实路径经投影上浮到 API 与模型可见载荷：`app/services/mapping/session_resource_mapper.py` 把 `cwd` 塞进 `SessionResourceDTO.metadata`、把 `checkpoint`（含 `path`）透传，`/{session_id}/resources` 响应体因此携带 real path；`browserSession.js` 的截图工具返回 `image_path`（`writeScreenshot` 产出的真实路径）。**修正方向**：投影层一律不承载 real path——终端 `cwd` 收窄为不含路径的 `cwd_relative`、checkpoint 收窄为显式布尔 `checkpoint_available`；截图产物无法由 owner 身份推导且必须对外可寻址，改用同族既有只读端点 `/api/browsers/{browser_id}/screenshots/{screenshot_id}` 引用（裁定 D-A3），不为此自造 VRN kind。本 change 的 `/api/v1/resources` 投影与模型可见载荷 MUST NOT 承载 real path。
+5. 上述真实路径经投影上浮到 API 与模型可见载荷：`app/services/mapping/session_resource_mapper.py` 把 `cwd` 塞进 `SessionResourceDTO.metadata`、把 `checkpoint`（含 `path`）透传，`/{session_id}/resources` 响应体因此携带 real path；`browserSession.js` 的截图工具返回 `image_path`（`writeScreenshot` 产出的真实路径）。**修正方向**：投影层一律不承载 real path——终端 `cwd` 收窄为不含路径的 `cwd_relative`、checkpoint 收窄为显式布尔 `checkpoint_available`；截图产物无法由 owner 身份推导且必须对外可寻址，改用同族既有只读端点 `/api/browsers/{browser_id}/screenshots/{screenshot_id}` 引用（裁定 D-A3），不为此自造 URI kind。本 change 的 `/api/v1/resources` 投影与模型可见载荷 MUST NOT 承载 real path。
 
 **已登记的行为变更（非零回归）**：终端工作目录改存相对路径后，工作区被移动时 restore 会把相对路径重锚定到新根，而旧实现落盘的绝对路径会指向旧位置。这是有意且有方向正确的行为变更，本节在此显式登记，不再声称「搬迁前后逐字节相同」；相对子目录、越界绝对路径（按 `path.relative` 的 `..` 表达保留原语义）与符号链接三类与旧实现逐字节等价。**旧开发格式下线**：仅接受新格式的 `cwd_relative` 与 PTY 事实记录；只有绝对 `cwd` 的旧开发记录不再隐式导入或物理升级。旧输入 MUST fail-closed，不回退进程 cwd；新格式同版本重启的资源核实义务保留。
 
 **经核实的正面结论（避免为收严而收严）**：本 change 的稳定 `resource_id` **不是** real path（`session_resource_mapper.py:21/80/156` 分别取 `handle.task_id`、`terminal_id`、`browser_id`，即 owner 生成的不透明 ID），故 proposal 层「`resource_id` 与身份/寻址政策不冲突」成立；收严不是纠正 `resource_id`，而是把这些**既存真实路径字段**纳入规范层 prohibition，使其从「proposal 意图」升格为可验证义务。
 
-**边界**：本 change 只新增约束与引用，不扩大既有能力边界；具体字段改名、VRN 化与投影清理的实现归属见 tasks 第 6 节，取值来源一律引 `add-unified-virtual-resource-addressing`。
+**边界**：本 change 只新增约束与引用，不扩大既有能力边界；具体字段改名、URI 化与投影清理的实现归属见 tasks 第 6 节，取值来源一律引 `add-unified-virtual-resource-addressing`。
 
 ## 风险与权衡
 

@@ -22,7 +22,7 @@ from app.core.path_utils import (
 from app.services.infrastructure.config import (
     SHARED_USER_WORKSPACE_SOURCE_KEY,
 )
-from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
+from app.services.infrastructure.config.source_uri import inline_config_source_uri
 from app.services.infrastructure.config.state import (
     SecretReferenceRequiredError,
     dump_json,
@@ -35,7 +35,7 @@ from app.services.infrastructure.config_service.config_agent_tools import (
 )
 from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
-    release_inline_config_vrn_for_file,
+    release_inline_config_uri_for_file,
 )
 from configs.layout_migrations import migrate_legacy_workspace_configuration
 from configs.runtime import merge_json_objects, read_jsonc_object
@@ -100,7 +100,7 @@ class ConfigSourceLayersMixin:
         source_paths: list[Path] = [self._inline_config_path]
         source_details: list[ConfigSource] = [
             ConfigSource(
-                vrn=self._inline_source_vrn(),
+                uri=self._inline_source_uri(),
                 layer="inline",
                 precedence=0,
                 loaded=True,
@@ -175,11 +175,11 @@ class ConfigSourceLayersMixin:
 
     def _runtime_override_source(self) -> ConfigSource:
         # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，
-        # 故 vrn=None。
+        # 故 uri=None。
         layer, precedence = _SOURCE_LAYER_AUTHORITY[self._RUNTIME_OVERRIDE_CONFIG_KEY]
         if self._workspace_state_store is None:
             return ConfigSource(
-                vrn=None,
+                uri=None,
                 layer=layer,
                 precedence=precedence,
                 loaded=bool(self._runtime_config_overrides),
@@ -190,7 +190,7 @@ class ConfigSourceLayersMixin:
             self._RUNTIME_OVERRIDE_CONFIG_KEY
         )
         return ConfigSource(
-            vrn=None,
+            uri=None,
             layer=layer,
             precedence=precedence,
             loaded=bool(self._runtime_config_overrides),
@@ -242,7 +242,7 @@ class ConfigSourceLayersMixin:
         payload = next_overrides or None
         record = self._workspace_state_store.sync_config_source(
             config_key=source_key,
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present" if payload is not None else "absent",
             payload=payload,
@@ -260,7 +260,7 @@ class ConfigSourceLayersMixin:
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
             source_event_id=f"{source_key}:layer:{record.layer_revision}",
-            vrn=record.vrn,
+            uri=record.uri,
             presence=record.presence,
             layer_revision=record.layer_revision,
             layer_digest=record.layer_digest,
@@ -272,12 +272,12 @@ class ConfigSourceLayersMixin:
             ),
         )
 
-    def _inline_source_vrn(self) -> str:
-        """构造发行包内 inline 层配置来源的 VRN（唯一可寻址的 config 层）。"""
-        return inline_config_source_vrn(logical_name=self._inline_logical_name)
+    def _inline_source_uri(self) -> str:
+        """构造发行包内 inline 层配置来源的 URI（唯一可寻址的 config 层）。"""
+        return inline_config_source_uri(logical_name=self._inline_logical_name)
 
-    def get_schema_source_vrn(self) -> str | None:
-        """仅当生效 schema 就是发行包 inline schema 时返回其 VRN，否则返回 None。
+    def get_schema_source_uri(self) -> str | None:
+        """仅当生效 schema 就是发行包 inline schema 时返回其 URI，否则返回 None。
 
         `_resolve_schema_path()` 有四个返回分支：工作区 `$schema` 相对引用解析出的
         文件、发行包内 `*_inline.jsonc` 的 `$schema` 引用、`config_dir` 下的 schema、
@@ -288,13 +288,13 @@ class ConfigSourceLayersMixin:
 
         用户自定义 `$schema`（内容与发行包不同）即判为不可寻址，返回 None。返回 None 由
         调用方以 null 对外表达；MUST NOT 在此抛错，故含点号或非法字符的自定义 stem
-        永不进入 VRN 构造。VRN 尾段取发行包 schema 的逻辑资源名，MUST NOT 取用户文件 stem。
+        永不进入 URI 构造。URI 尾段取发行包 schema 的逻辑资源名，MUST NOT 取用户文件 stem。
         """
         try:
             effective_schema = self._resolve_schema_path()
         except FileNotFoundError:
             return None
-        return release_inline_config_vrn_for_file(
+        return release_inline_config_uri_for_file(
             effective_schema,
             release_config_name="workspace_schema.jsonc",
         )
@@ -305,19 +305,19 @@ class ConfigSourceLayersMixin:
         path: Path,
         config_key: str,
     ) -> ConfigSource:
-        """返回一条来源的 VRN 兄弟字段形态；inline 之外的层不可寻址。
+        """返回一条来源的 URI 兄弟字段形态；inline 之外的层不可寻址。
 
         逻辑来源层与 precedence 一律取自 `_SOURCE_LAYER_AUTHORITY`，本方法 MUST NOT
         再接收调用方传入的层名：从源 JSONC 构建只影响 `loaded`/`presence`（读 `path`），
         绝不改变对外 `layer`。有 state store 时 user/user_local/workspace 三层共享同一
         个 `workspace.sqlite`，但共享只是**承载事实**，MUST NOT 有损改写成 `sqlite`
-        对外暴露——它们在权威轴上本就是三个不同层。不可寻址性以 `vrn=None` 表达。
+        对外暴露——它们在权威轴上本就是三个不同层。不可寻址性以 `uri=None` 表达。
         real path 只在本调用栈内用于判断 presence，MUST NOT 持久化或对外。
         """
         layer, resolved_precedence = _SOURCE_LAYER_AUTHORITY[config_key]
         if self._workspace_state_store is None:
             return ConfigSource(
-                vrn=None,
+                uri=None,
                 layer=layer,
                 precedence=resolved_precedence,
                 loaded=path.is_file(),
@@ -326,7 +326,7 @@ class ConfigSourceLayersMixin:
             )
         source_record = self._workspace_state_store.get_source_layer(config_key)
         return ConfigSource(
-            vrn=None,
+            uri=None,
             layer=layer,
             precedence=resolved_precedence,
             loaded=(
@@ -408,8 +408,8 @@ class ConfigSourceLayersMixin:
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
                 # user/user_local/workspace 层均不可寻址，依据是共享同一 workspace.sqlite
-                # 这一边界载体（非 scope 闭集），故 vrn 恒为 None。
-                vrn=None,
+                # 这一边界载体（非 scope 闭集），故 uri 恒为 None。
+                uri=None,
                 config_version=source_record.config_version,
                 presence="absent",
                 payload=None,
@@ -436,8 +436,8 @@ class ConfigSourceLayersMixin:
             source_record is not None
             and source_record.presence == "present"
             and source_record.layer_digest == file_snapshot.digest
-            # 该层不可寻址：持久化的 vrn 必为 None，与读取点的 None 一致才走复用分支。
-            and source_record.vrn is None
+            # 该层不可寻址：持久化的 uri 必为 None，与读取点的 None 一致才走复用分支。
+            and source_record.uri is None
         ):
             payload = parse_stable_config_file(file_snapshot)
             if payload is None:
@@ -447,7 +447,7 @@ class ConfigSourceLayersMixin:
             verify_stable_config_file(file_snapshot)
             source_record = self._workspace_state_store.sync_config_source(
                 config_key=config_key,
-                vrn=None,
+                uri=None,
                 config_version=int(payload.get("config_version", 1)),
                 presence="present",
                 payload=payload,
@@ -489,7 +489,7 @@ class ConfigSourceLayersMixin:
             shutil.copy2(path, backup_path)
         source_record = self._workspace_state_store.sync_config_source(
             config_key=config_key,
-            vrn=None,
+            uri=None,
             config_version=int(payload.get("config_version", 1)),
             presence="present",
             payload=payload,
@@ -519,7 +519,7 @@ class ConfigSourceLayersMixin:
         previous_source_generation: int = 0,
     ) -> None:
         # ``source_path`` 是最后访问点的真实路径，只在本调用栈内用于判定共享来源，
-        # MUST NOT 持久化（journal 只写 VRN 兄弟字段）。
+        # MUST NOT 持久化（journal 只写 URI 兄弟字段）。
         if self._workspace_state_store is None:
             return
         source_key = source_record.config_key
@@ -532,7 +532,7 @@ class ConfigSourceLayersMixin:
             if source_owner is None or workspace_id is None:
                 raise RuntimeError("共享 Workspace source 缺少 source owner 身份")
             owner_record = source_owner.observe(
-                vrn=source_record.vrn,
+                uri=source_record.uri,
                 presence=source_record.presence,
                 layer_digest=source_record.layer_digest,
                 origin=origin,
@@ -577,7 +577,7 @@ class ConfigSourceLayersMixin:
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
             source_event_id=f"{source_key}:layer:{source_record.layer_revision}",
-            vrn=source_record.vrn,
+            uri=source_record.uri,
             presence=source_record.presence,
             layer_revision=source_record.layer_revision,
             layer_digest=source_record.layer_digest,

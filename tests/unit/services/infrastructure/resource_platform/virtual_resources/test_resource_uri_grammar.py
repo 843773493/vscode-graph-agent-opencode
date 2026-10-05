@@ -1,12 +1,12 @@
-"""VRN 严格 grammar 单元测试：接受表与拒绝表。"""
+"""URI 严格 grammar 单元测试：接受表与拒绝表。"""
 
 from __future__ import annotations
 
 import pytest
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
-    VrnGrammarError,
-    parse_vrn,
+    ResourceUriGrammarError,
+    parse_resource_uri,
     resource_display_uri,
     skill_display_uri,
     workspace_agent_spec_display_uri,
@@ -17,7 +17,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 
 
 def test_parse_workspace_agent_spec() -> None:
-    parsed = parse_vrn("boxteam://workspace/ws-1/resources/agent-spec/root/AGENTS.md")
+    parsed = parse_resource_uri("boxteam://workspace/ws-1/resources/agent-spec/root/AGENTS.md")
     assert parsed.scope == "workspace"
     assert parsed.scope_id == "ws-1"
     assert parsed.kind == "agent-spec"
@@ -31,7 +31,7 @@ def test_parse_skill_three_scopes() -> None:
         ("gateway", "gw-1"),
         ("inline", "dist-1"),
     ):
-        parsed = parse_vrn(
+        parsed = parse_resource_uri(
             f"boxteam://{scope}/{scope_id}/resources/skills/code-review/SKILL.md"
         )
         assert parsed.scope == scope
@@ -43,7 +43,7 @@ def test_parse_skill_three_scopes() -> None:
 def test_parse_config_and_session_kinds() -> None:
     # config/session 为本次新增 kind：规范形态为 .../resources/{kind}/{...canonical
     # path segments}，logical_name 即尾段逐段拼接结果，且解析回自身。
-    parsed = parse_vrn("boxteam://inline/source-development-0_0_2/resources/config/workspace_inline")
+    parsed = parse_resource_uri("boxteam://inline/source-development-0_0_2/resources/config/workspace_inline")
     assert parsed.scope == "inline"
     assert parsed.scope_id == "source-development-0_0_2"
     assert parsed.kind == "config"
@@ -51,7 +51,7 @@ def test_parse_config_and_session_kinds() -> None:
     assert parsed.tail_segments == ("workspace_inline",)
     assert parsed.display_uri == "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"
 
-    parsed = parse_vrn("boxteam://workspace/ws-1/resources/session/sess-1/child")
+    parsed = parse_resource_uri("boxteam://workspace/ws-1/resources/session/sess-1/child")
     assert parsed.scope == "workspace"
     assert parsed.scope_id == "ws-1"
     assert parsed.kind == "session"
@@ -73,7 +73,7 @@ def test_resource_display_uri_round_trip_all_kinds() -> None:
         uri = resource_display_uri(
             scope=scope, scope_id=scope_id, kind=kind, tail_segments=tail
         )
-        parsed = parse_vrn(uri)
+        parsed = parse_resource_uri(uri)
         assert parsed.display_uri == uri
         assert parsed.kind == kind
 
@@ -81,7 +81,7 @@ def test_resource_display_uri_round_trip_all_kinds() -> None:
 def test_user_scope_is_in_closed_set() -> None:
     # ``user`` 是定稿 scope 闭集成员（workspace | user | gateway | inline）；其
     # scope_id 是单用户本地程序约定值 ``local``（app/core/user_identity.py），且
-    # 该 scope 的 VRN 能构造并解析回自身。
+    # 该 scope 的 URI 能构造并解析回自身。
     uri = resource_display_uri(
         scope="user",
         scope_id="local",
@@ -89,7 +89,7 @@ def test_user_scope_is_in_closed_set() -> None:
         tail_segments=("workspace_mutable_override",),
     )
     assert uri == "boxteam://user/local/resources/config/workspace_mutable_override"
-    parsed = parse_vrn(uri)
+    parsed = parse_resource_uri(uri)
     assert parsed.scope == "user"
     assert parsed.scope_id == "local"
     assert parsed.kind == "config"
@@ -98,12 +98,12 @@ def test_user_scope_is_in_closed_set() -> None:
 
 
 def test_resource_display_uri_rejects_unregistered_kind_and_scope() -> None:
-    with pytest.raises(VrnGrammarError) as excinfo:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
         resource_display_uri(
             scope="workspace", scope_id="ws-1", kind="plugins", tail_segments=("x",)
         )
     assert excinfo.value.reason_code == "unknown_resource_kind"
-    with pytest.raises(VrnGrammarError) as excinfo:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
         resource_display_uri(
             scope="memory", scope_id="local", kind="config", tail_segments=("a",)
         )
@@ -113,8 +113,8 @@ def test_resource_display_uri_rejects_unregistered_kind_and_scope() -> None:
 def test_config_and_session_require_canonical_tail() -> None:
     # 闭集内的新 kind 仍 fail-closed：缺少规范化尾段即 malformed_path。
     for kind in ("config", "session"):
-        with pytest.raises(VrnGrammarError) as excinfo:
-            parse_vrn(f"boxteam://workspace/ws-1/resources/{kind}")
+        with pytest.raises(ResourceUriGrammarError) as excinfo:
+            parse_resource_uri(f"boxteam://workspace/ws-1/resources/{kind}")
         assert excinfo.value.reason_code == "malformed_path"
 
 
@@ -126,7 +126,7 @@ def test_descriptor_closure_excludes_config_and_session() -> None:
         ("config", "boxteam://inline/source-development-0_0_2/resources/config/workspace_inline"),
         ("session", "boxteam://workspace/ws-1/resources/session/sess-1"),
     ):
-        parse_vrn(uri)  # 语法闭集接受
+        parse_resource_uri(uri)  # 语法闭集接受
         with pytest.raises(ValueError) as excinfo:
             SemanticResourceDescriptor(
                 resource_id="res-1",
@@ -140,9 +140,9 @@ def test_descriptor_closure_excludes_config_and_session() -> None:
 
 
 def test_memory_scope_is_rejected_fail_closed() -> None:
-    # memory 不是 VRN scope；任何 boxteam://memory/ URI 必须在解析层 fail-closed。
-    with pytest.raises(VrnGrammarError) as excinfo:
-        parse_vrn("boxteam://memory/session/preference")
+    # memory 不是 URI scope；任何 boxteam://memory/ URI 必须在解析层 fail-closed。
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri("boxteam://memory/session/preference")
     assert excinfo.value.reason_code == "unknown_scope"
 
 
@@ -233,22 +233,22 @@ def test_memory_scope_is_rejected_fail_closed() -> None:
     ],
 )
 def test_grammar_rejects(uri: str, reason_code: str) -> None:
-    with pytest.raises(VrnGrammarError) as excinfo:
-        parse_vrn(uri)
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
+        parse_resource_uri(uri)
     assert excinfo.value.reason_code == reason_code
 
 
 def test_display_builders_round_trip() -> None:
     uri = workspace_agent_spec_display_uri("ws-1")
-    assert parse_vrn(uri).display_uri == uri
+    assert parse_resource_uri(uri).display_uri == uri
     uri = skill_display_uri(scope="gateway", scope_id="gw-1", skill_name="review")
-    assert parse_vrn(uri).display_uri == uri
+    assert parse_resource_uri(uri).display_uri == uri
 
 
 def test_display_builders_reject_bad_names() -> None:
-    with pytest.raises(VrnGrammarError) as excinfo:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
         skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="../x")
     assert excinfo.value.reason_code == "invalid_character"
-    with pytest.raises(VrnGrammarError) as excinfo:
+    with pytest.raises(ResourceUriGrammarError) as excinfo:
         workspace_agent_spec_display_uri("ws/1")
     assert excinfo.value.reason_code == "invalid_character"

@@ -21,7 +21,7 @@ WHERE config_domain = ? AND candidate_id = ?
 """
 
 _SOURCE_LAYER_BASELINE_SELECT = """
-SELECT config_key, vrn, presence, layer_revision,
+SELECT config_key, uri, presence, layer_revision,
        layer_digest, source_generation
 FROM config_source_layers
 """

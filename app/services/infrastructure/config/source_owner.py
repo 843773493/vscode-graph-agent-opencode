@@ -46,7 +46,7 @@ class WorkspaceSourceOwner:
         source_key TEXT NOT NULL,
         source_generation INTEGER NOT NULL,
         source_event_id TEXT NOT NULL UNIQUE,
-        vrn TEXT,
+        uri TEXT,
         presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
         layer_revision INTEGER NOT NULL,
         layer_digest TEXT,
@@ -116,10 +116,10 @@ class WorkspaceSourceOwner:
 
     @staticmethod
     def _migrate_legacy_source_path(connection: sqlite3.Connection) -> None:
-        """把旧库的 ``config_source_journal.source_path`` 重建为 ``vrn``。
+        """把旧库的 ``config_source_journal.source_path`` 重建为 ``uri``。
 
         真实路径 MUST NOT 持久化（三层分离）：本 owner 只承载用户级 workspace.jsonc，
-        其 VRN 由调用方在访问点构造；旧列一律丢弃、不迁移其值，重建后写 ``NULL``。
+        其 URI 由调用方在访问点构造；旧列一律丢弃、不迁移其值，重建后写 ``NULL``。
         该 owner 的库不自带迁移账本，故用列存在性做幂等判定（旧库只迁移一次）。
         """
         columns = {
@@ -128,7 +128,7 @@ class WorkspaceSourceOwner:
                 "PRAGMA table_info(config_source_journal)"
             ).fetchall()
         }
-        if "source_path" not in columns or "vrn" in columns:
+        if "source_path" not in columns or "uri" in columns:
             return
         connection.executescript(
             """
@@ -139,7 +139,7 @@ class WorkspaceSourceOwner:
                 source_key TEXT NOT NULL,
                 source_generation INTEGER NOT NULL,
                 source_event_id TEXT NOT NULL UNIQUE,
-                vrn TEXT,
+                uri TEXT,
                 presence TEXT NOT NULL CHECK (presence IN ('present', 'absent')),
                 layer_revision INTEGER NOT NULL,
                 layer_digest TEXT,
@@ -150,7 +150,7 @@ class WorkspaceSourceOwner:
                 PRIMARY KEY (source_key, source_generation)
             );
             INSERT INTO config_source_journal__new(
-                source_key, source_generation, source_event_id, vrn, presence,
+                source_key, source_generation, source_event_id, uri, presence,
                 layer_revision, layer_digest, previous_digest, origin, fanout_id,
                 created_at
             )
@@ -168,7 +168,7 @@ class WorkspaceSourceOwner:
     def observe(
         self,
         *,
-        vrn: str | None,
+        uri: str | None,
         presence: str,
         layer_digest: str | None,
         origin: str,
@@ -191,7 +191,7 @@ class WorkspaceSourceOwner:
             connection.execute("BEGIN IMMEDIATE")
             latest = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, vrn,
+                SELECT source_key, source_generation, source_event_id, uri,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -232,7 +232,7 @@ class WorkspaceSourceOwner:
             connection.execute(
                 """
                 INSERT INTO config_source_journal(
-                    source_key, source_generation, source_event_id, vrn,
+                    source_key, source_generation, source_event_id, uri,
                     presence, layer_revision, layer_digest, previous_digest,
                     origin, fanout_id, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -241,7 +241,7 @@ class WorkspaceSourceOwner:
                     source_key,
                     generation,
                     event_id,
-                    vrn,
+                    uri,
                     presence,
                     next_layer_revision,
                     layer_digest,
@@ -280,7 +280,7 @@ class WorkspaceSourceOwner:
         try:
             row = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, vrn,
+                SELECT source_key, source_generation, source_event_id, uri,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -310,7 +310,7 @@ class WorkspaceSourceOwner:
         try:
             rows = connection.execute(
                 """
-                SELECT source_key, source_generation, source_event_id, vrn,
+                SELECT source_key, source_generation, source_event_id, uri,
                        presence, layer_revision, layer_digest, previous_digest,
                        origin, fanout_id, created_at
                 FROM config_source_journal
@@ -565,7 +565,7 @@ class WorkspaceSourceOwner:
             source_key=str(row[0]),
             source_generation=int(row[1]),
             source_event_id=str(row[2]),
-            vrn=str(row[3]) if row[3] is not None else None,
+            uri=str(row[3]) if row[3] is not None else None,
             presence=str(row[4]),  # type: ignore[arg-type]
             layer_revision=int(row[5]),
             layer_digest=str(row[6]) if row[6] is not None else None,

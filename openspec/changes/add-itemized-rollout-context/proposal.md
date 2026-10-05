@@ -71,7 +71,7 @@
 
 - 主要影响历史聚合入口所覆盖的 rollout storage、checkpoint saver/runtime、历史 reader/projection、`app/agents/providers/` 内容归一化，以及 LangChain/provider request adapter；最终模块归属和删除门槛见 design 1.1。
 - 需要新增 JSONL item schema/version、SQLite 分层 item 索引、context compiler、provenance/assembly metadata 和 LangChain projector；实时 message stream 协议继续作为展示增量通道。
-- 需要新增ResourceActivationSnapshotRef、ResourceProvenanceRef及其语义revision/source lineage/plan/assembly/hash/index/history投影；`add-context-injection-lifecycle`拥有来源观察、语义派生DAG、ResourceRegistry、VRN解析与CSM状态机，本change只持久化并投影其sealed selection，不建立第二套source/resource registry或reader；两者目标目录边界分别见各自design 5.3和1.1。
+- 需要新增ResourceActivationSnapshotRef、ResourceProvenanceRef及其语义revision/source lineage/plan/assembly/hash/index/history投影；`add-context-injection-lifecycle`拥有来源观察、语义派生DAG、ResourceRegistry、URI解析与CSM状态机，本change只持久化并投影其sealed selection，不建立第二套source/resource registry或reader；两者目标目录边界分别见各自design 5.3和1.1。
 - Provider ToolSetRef只封存少量直接工具与固定`invoke_extension_tool`信封；扩展目标目录和MCP派生指引分别以同边界封存的ExtensionCatalogBindingRef、CSM source revision表达，目录变化不冒充ToolSet hard rebase。普通同epoch来源变化只追加user-role item；合法新epoch才可按source owner声明的`root_placement`把合格受信来源合并成唯一system root，保留旧sealed请求与canonical lineage。存储、fork、retry、history和跨projector必须验证这两种独立binding及其hash，不按当前MCP目录重解旧请求。
 - 影响旧 session 的读取、恢复、fork、compaction、历史 API 和测试 fixture；旧数据必须通过显式版本识别后交给一次性的 `legacy_import_v1_to_v2` migration/import 命令处理，正常 runtime 不提供 v1 只读 fallback。
 - 影响 Session catalog、路径解析、checkpoint config、subagent delegation、AgentFactory/graph cache、context/runtime storage、Gateway 路由和 Web history/trace。Session 继续是产品导航与共享资源容器；它不再是 canonical context 的隐式 owner。

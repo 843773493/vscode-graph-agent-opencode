@@ -126,7 +126,7 @@ def test_workspace_config_read_reports_corrupt_payload_with_context(tmp_path):
     try:
         store.sync_config_source(
             config_key="user",
-            vrn=None,
+            uri=None,
             config_version=1,
             presence="present",
             payload={"a": 1},
@@ -170,7 +170,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(tmp_path):
         assert store.path == workspace_root / ".boxteam" / "state" / "workspace.sqlite"
         store.sync_config_source(
             config_key="workspace",
-            vrn=None,
+            uri=None,
             config_version=1,
             payload={"jobs": {"max_concurrency": 2}},
             presence="present",
@@ -856,7 +856,7 @@ def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(tmp
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES ('legacy-literal', NULL, 'present', 1, ?, 1, 'd1', 1, NULL,
@@ -867,7 +867,7 @@ def test_legacy_workspace_secret_migration_blocks_literal_and_normalizes_env(tmp
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES ('legacy-env', NULL, 'present', 1, ?, 1, 'd2', 1, NULL,
@@ -901,7 +901,7 @@ def test_legacy_workspace_secret_migration_blocks_irreversible_digest(tmp_path):
             connection.execute(
                 """
                 INSERT INTO config_source_layers(
-                    config_key, vrn, presence, config_version, payload_json,
+                    config_key, uri, presence, config_version, payload_json,
                     layer_revision, layer_digest, source_generation, previous_digest,
                     updated_at, previous_payload_json
                 ) VALUES ('legacy-digest', NULL, 'present', 1, ?, 1, 'd3', 1, NULL,
@@ -954,7 +954,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         first = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-1",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -965,7 +965,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         duplicate = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-duplicate",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -978,7 +978,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         second = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-2",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=2,
             layer_digest="digest-b",
@@ -990,7 +990,7 @@ def test_source_journal_distinguishes_a_b_a_and_deduplicates_a_a(tmp_path):
         third = store.append_config_source_journal(
             source_key="user",
             source_event_id="source-event-3",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=3,
             layer_digest="digest-a",
@@ -1019,7 +1019,7 @@ def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(tmp
         first = store.append_config_source_journal(
             source_key="shared-user-workspace",
             source_event_id="shared-1",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=1,
             layer_digest="digest-a",
@@ -1030,7 +1030,7 @@ def test_source_journal_replays_stopped_workspace_and_reports_partial_fanout(tmp
         second = store.append_config_source_journal(
             source_key="shared-user-workspace",
             source_event_id="shared-2",
-            vrn=None,
+            uri=None,
             presence="present",
             layer_revision=2,
             layer_digest="digest-b",

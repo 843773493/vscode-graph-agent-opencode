@@ -182,7 +182,7 @@ class GatewayConfigEventsDTO(BaseModel):
 
 
 class GatewayConfigSourceDTO(BaseModel):
-    vrn: str | None
+    uri: str | None
     layer: ConfigSourceLayer
     precedence: int
     loaded: bool
@@ -195,7 +195,7 @@ class GatewayConfigSourceDTO(BaseModel):
 
 class GatewayConfigSourcesDTO(BaseModel):
     revision: str
-    schema_vrn: str | None
+    schema_uri: str | None
     sources: list[GatewayConfigSourceDTO] = Field(default_factory=list)
     policy_manifest: list[dict[str, object]] = Field(default_factory=list)
 

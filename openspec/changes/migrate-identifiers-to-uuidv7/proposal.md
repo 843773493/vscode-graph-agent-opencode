@@ -20,7 +20,7 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
 - **日期桶由实际分配 ID 自推导且可校验**：新建 Session 与 child Thread 的 UUIDv7 内嵌 48 bit 毫秒时间戳 MUST 是各自 `created_at` 与 locator 时间分桶的唯一来源；Session 的 `sessions/YYYY/MM/DD` 日期由 `session_id` 推导，child Thread 日期 locator 由其自身的 `thread_id` 推导；main row 的 `created_at` 沿用 Session 创建时间，没有独立日期桶。本合同不扩展为全部 canonical ID 的业务创建时间定义。日期按 **UTC** 推导；不一致即 fail-closed 完整性错误。时钟回拨时保留自然 UUIDv7 allocation 的进程内非递减与唯一合同，不预读另一时间源再以显式时间戳生成 ID。
 - **校验层正名**：`_validate_uuid_v4_payload` / `_UUID_VERSION_HEX_INDEX` 一类把 `v4` 写进名字的标识、注释与 docstring MUST 一并正名为与「当前 profile」一致的单一名词，**MUST NOT** 同概念异名或保留第二套校验函数。
 - **JS / 前端边界必须诚实声明**：`src/workspace-services/**` 的 browser/terminal 后端进程实际由 **Node** 启动（`BOXTEAM_NODE_BIN`，见 `app/gateway/runtime/process.py`），Node 22 **无** `randomUUIDv7`（实测）；`src/clients/web` 是浏览器构建产物，**其生产代码**没有任何 `Bun.*` 引用（实测 `rg -n '\bBun\.' src/clients` 的 8 个命中**全部是 `*.test.ts(x)` 测试文件**，生产代码 0 命中；指向测试而非生产代码的表述才是准确的）。故：Node 服务进程与浏览器前端**拿不到原生 v7**，其生成的 id（`term_` / `browser_` / `screenshot_` / `page_` / `inline:` 附件 file id 等）MUST 被显式声明为**非 canonical 身份**并允许继续使用 v4；**MUST NOT** 假装两者已统一。
-- **显式边界**：本 change 是 **id 生成位 profile** 的唯一 owner，**不是** VRN / ResourceIdentity 的 owner。VRN/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」，两者 MUST NOT 混为一谈；具名引用在途 change。
+- **显式边界**：本 change 是 **id 生成位 profile** 的唯一 owner，**不是** URI / ResourceIdentity 的 owner。URI/ResourceIdentity 是「不可解析身份」，本 change 改的是「生成位 profile」，两者 MUST NOT 混为一谈；具名引用在途 change。
 
 ## Capabilities
 
@@ -42,5 +42,5 @@ UUIDv7（RFC 9562）前 48 bit 承载 Unix 毫秒时间戳，正好让 id 自带
   - 存量非 v7 ID 由 canonical validator fail closed；不提供运行时兼容、自动重编号或旧 Session Catalog 扫盘迁移。
   - 测试：`tests/unit/core/test_canonical_identifier_matrix.py`（docstring 写「非 v4 bits」、`make_session_id`/`make_thread_id` 用 `uuid.uuid4().hex`）等约 44 个测试文件含 v4 生成点。
   - JS：`src/workspace-services/browser/server/*.js`、`src/workspace-services/terminal/server/*.js`（Node 运行时 `randomUUID`）、`src/clients/web/src/utils/media/mediaAttachments.ts`（浏览器 `crypto.randomUUID()`）。
-- **依赖与 owner**：`uuid-utils>=0.16` 必须成为显式直接依赖。VRN 语法、scope 闭集、kind 闭集与拒绝码归 `add-unified-virtual-resource-addressing`；会话上下文寻址归 `migrate-session-context-uri-to-vrn`；工作区身份与 `scope_id` 推导归 `add-multi-workspace-backend-mounting`；资源身份/VRN 持久化归 `add-workspace-persistent-resource-management`。本 change 只拥有 id **生成位 profile**，只具名引用，不复述、不自造。
-- **不做**：不引入第二套 id 语法；不引入任何运行时维护开关（如 `identity_profile_migration_active`）；不把 revision/hash 编码进 id；不长期同时接受 v4|v7；不提供旧 ID path alias；不扫盘重建 catalog；不改动 VRN/ResourceIdentity 的定义；不伪造「浏览器与 Node 服务进程已经产出 v7」。
+- **依赖与 owner**：`uuid-utils>=0.16` 必须成为显式直接依赖。URI 语法、scope 闭集、kind 闭集与拒绝码归 `add-unified-virtual-resource-addressing`；会话上下文寻址归 `migrate-session-context-resource-uri`；工作区身份与 `scope_id` 推导归 `add-multi-workspace-backend-mounting`；资源身份/URI 持久化归 `add-workspace-persistent-resource-management`。本 change 只拥有 id **生成位 profile**，只具名引用，不复述、不自造。
+- **不做**：不引入第二套 id 语法；不引入任何运行时维护开关（如 `identity_profile_migration_active`）；不把 revision/hash 编码进 id；不长期同时接受 v4|v7；不提供旧 ID path alias；不扫盘重建 catalog；不改动 URI/ResourceIdentity 的定义；不伪造「浏览器与 Node 服务进程已经产出 v7」。

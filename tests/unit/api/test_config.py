@@ -27,19 +27,19 @@ def test_config_source_dtos_share_the_closed_logical_layer_set() -> None:
 
     for source_model in (ConfigSourceDTO, GatewayConfigSourceDTO):
         source = source_model(
-            vrn=None,
+            uri=None,
             layer="runtime_override",
             precedence=4,
             loaded=True,
         )
-        assert source.vrn is None
+        assert source.uri is None
         assert "path" not in source.model_dump()
         assert source.layer == "runtime_override"
         with pytest.raises(ValidationError):
-            source_model(vrn=None, layer="sqlite", precedence=4, loaded=True)
+            source_model(uri=None, layer="sqlite", precedence=4, loaded=True)
 
-    sources = ConfigSourcesDTO(revision="rev-1", schema_vrn=None)
-    assert sources.schema_vrn is None
+    sources = ConfigSourcesDTO(revision="rev-1", schema_uri=None)
+    assert sources.schema_uri is None
     assert "schema_path" not in sources.model_dump()
 
 
@@ -93,8 +93,8 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
 
     assert response.request_id == "req-config-sources"
     assert response.data is not None
-    assert response.data.schema_vrn.startswith("boxteam://inline/")
-    assert response.data.schema_vrn.endswith("/resources/config/workspace_schema")
+    assert response.data.schema_uri.startswith("boxteam://inline/")
+    assert response.data.schema_uri.endswith("/resources/config/workspace_schema")
     assert [source.layer for source in response.data.sources] == [
         "inline",
         "user",
@@ -107,7 +107,7 @@ async def test_config_sources_endpoint_exposes_layers_and_schema(
 async def test_config_sources_endpoint_never_exposes_real_path(
     tmp_path: Path,
 ) -> None:
-    """响应体只含 nullable VRN locator 与来源兄弟字段，不泄漏真实路径。"""
+    """响应体只含 nullable URI locator 与来源兄弟字段，不泄漏真实路径。"""
 
     config_path = tmp_path / "workspace.jsonc"
     config_path.write_text(json.dumps(_base_config()), encoding="utf-8")
@@ -124,14 +124,14 @@ async def test_config_sources_endpoint_never_exposes_real_path(
 
     assert response.data is not None
     dumped = json.dumps(
-        [source.vrn for source in response.data.sources], ensure_ascii=False
+        [source.uri for source in response.data.sources], ensure_ascii=False
     )
     assert str(tmp_path) not in dumped
     assert str(Path.cwd() / "configs") not in dumped
-    assert response.data.sources[0].vrn.startswith("boxteam://inline/")
-    assert response.data.sources[0].vrn.endswith("/resources/config/workspace_inline")
-    assert response.data.sources[1].vrn is None
-    assert response.data.sources[2].vrn is None
+    assert response.data.sources[0].uri.startswith("boxteam://inline/")
+    assert response.data.sources[0].uri.endswith("/resources/config/workspace_inline")
+    assert response.data.sources[1].uri is None
+    assert response.data.sources[2].uri is None
     assert response.data.sources[0].layer == "inline"
     assert response.data.sources[0].precedence == 0
     assert response.data.sources[0].source_key is None
@@ -139,8 +139,8 @@ async def test_config_sources_endpoint_never_exposes_real_path(
     assert response.data.sources[1].precedence == 1
     assert response.data.sources[2].layer == "user_local"
     assert response.data.sources[2].precedence == 2
-    assert response.data.schema_vrn.startswith("boxteam://inline/")
-    assert response.data.schema_vrn.endswith("/resources/config/workspace_schema")
+    assert response.data.schema_uri.startswith("boxteam://inline/")
+    assert response.data.schema_uri.endswith("/resources/config/workspace_schema")
     body = response.model_dump_json()
     assert str(tmp_path) not in body
     assert str(Path.cwd() / "configs") not in body
@@ -162,13 +162,13 @@ _CUSTOM_SCHEMA = {
 
 
 @pytest.mark.asyncio
-async def test_config_sources_schema_vrn_only_for_release_inline_schema(
+async def test_config_sources_schema_uri_only_for_release_inline_schema(
     tmp_path: Path,
 ) -> None:
-    """非发行包 schema MUST NOT 编 inline VRN：返回 null 且端点不崩。
+    """非发行包 schema MUST NOT 编 inline URI：返回 null 且端点不崩。
 
-    点号 stem（`my.company.schema`，非法 VRN 字符）与普通自定义 schema 都走此判据；
-    改前实现直接以 `schema_path.stem` 编 inline VRN，点号 stem 会抛 `VrnGrammarError`
+    点号 stem（`my.company.schema`，非法 URI 字符）与普通自定义 schema 都走此判据；
+    改前实现直接以 `schema_path.stem` 编 inline URI，点号 stem 会抛 `ResourceUriGrammarError`
     令端点 500。本用例锁定「不可寻址返回 null、任何输入不 500」。
     """
 
@@ -193,7 +193,7 @@ async def test_config_sources_schema_vrn_only_for_release_inline_schema(
         )
 
         assert response.data is not None
-        assert response.data.schema_vrn is None
+        assert response.data.schema_uri is None
         assert str(tmp_path) not in response.model_dump_json()
 
 
@@ -240,8 +240,8 @@ async def test_config_endpoint_metadata_never_exposes_real_path(
     for leaked in (str(tmp_path), str(Path.cwd() / "configs"), ".sqlite"):
         assert leaked not in dumped
     assert _REAL_PATH_PATTERN.search(dumped) is None
-    # 来源位置仍以 VRN 兄弟字段对外，且只有可寻址层带值。
+    # 来源位置仍以 URI 兄弟字段对外，且只有可寻址层带值。
     sources = metadata["source_details"]
-    assert sources[0]["vrn"].startswith("boxteam://inline/")
-    assert sources[0]["vrn"].endswith("/resources/config/workspace_inline")
-    assert all(source["vrn"] is None for source in sources[1:])
+    assert sources[0]["uri"].startswith("boxteam://inline/")
+    assert sources[0]["uri"].endswith("/resources/config/workspace_inline")
+    assert all(source["uri"] is None for source in sources[1:])

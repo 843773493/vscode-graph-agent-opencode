@@ -17,7 +17,9 @@ from app.services.infrastructure.resource_platform.derivation.types import (
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
-from app.services.infrastructure.resource_platform.virtual_resources import parse_vrn
+from app.services.infrastructure.resource_platform.virtual_resources import (
+    parse_resource_uri,
+)
 
 
 def _write_skill(root: Path, name: str, description: str, body: str) -> None:
@@ -128,8 +130,8 @@ def test_catalog_binding_payload_contains_registry_owned_refs(layered_workspace)
         assert item["metadata_revision"] == item["metadata_revision"]
         metadata = registry.snapshot(item["metadata_resource_id"])
         assert metadata.revision == item["metadata_revision"]
-        # display URI 必须通过 C4 VRN grammar,且不是 identity/dedupe key。
-        parsed = parse_vrn(item["display_uri"])
+        # display URI 必须通过 C4 URI grammar,且不是 identity/dedupe key。
+        parsed = parse_resource_uri(item["display_uri"])
         assert parsed.kind == "skills"
         assert item["entry_identity"].startswith(f"skill-entry:{item['layer']}:")
 

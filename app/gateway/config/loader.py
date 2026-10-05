@@ -12,7 +12,7 @@ from app.core.path_utils import (
     get_user_gateway_schema_path,
 )
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.services.infrastructure.config.source_vrn import inline_config_source_vrn
+from app.services.infrastructure.config.source_uri import inline_config_source_uri
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     SecretReferenceRequiredError,
@@ -69,7 +69,7 @@ def load_gateway_config(
     inline_layer, inline_precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY["inline:0"]
     source_details: list[ConfigSource] = [
         ConfigSource(
-            vrn=inline_config_source_vrn(logical_name="gateway_inline"),
+            uri=inline_config_source_uri(logical_name="gateway_inline"),
             layer=inline_layer,
             precedence=inline_precedence,
             loaded=True,
@@ -138,7 +138,7 @@ def load_gateway_config(
             layer, precedence = _GATEWAY_SOURCE_LAYER_AUTHORITY[config_key]
             source_details.append(
                 ConfigSource(
-                    vrn=None,
+                    uri=None,
                     layer=layer,
                     precedence=precedence,
                     loaded=fallback_path.is_file(),

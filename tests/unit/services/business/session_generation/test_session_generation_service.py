@@ -23,7 +23,7 @@ from app.schemas.internal_v2.session_navigation import (
 )
 from app.services.business.session_context_resource import (
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.business.session_generation.providers import (
     AgentPromptGenerationProvider,
@@ -577,7 +577,7 @@ async def test_start_recovers_executing_run_with_same_session_message_and_job_id
         resource_identity=session_resource_identity(
             "00000000-0000-4000-8000-000000000001", "ses_restart_child"
         ),
-        vrn=session_resource_vrn(
+        uri=session_resource_uri(
             "00000000-0000-4000-8000-000000000001", "ses_restart_child"
         ),
         scope="workspace",

@@ -259,7 +259,7 @@ def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
             table="config_source_layers",
             fields=(
                 "config_key",
-                "vrn",
+                "uri",
                 "presence",
                 "config_version",
                 "layer_revision",
@@ -278,7 +278,7 @@ def _read_sqlite_diagnostic(*, path: Path) -> dict[str, object]:
                 "source_key",
                 "source_generation",
                 "source_event_id",
-                "vrn",
+                "uri",
                 "presence",
                 "layer_revision",
                 "layer_digest",

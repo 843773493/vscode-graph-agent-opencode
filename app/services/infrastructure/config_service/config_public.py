@@ -88,7 +88,7 @@ class ConfigPublicMixin:
         if not isinstance(baseline, dict) or source is None:
             return False
         if (
-            baseline.get("vrn") != source.vrn
+            baseline.get("uri") != source.uri
             or baseline.get("presence") != source.presence
             or baseline.get("layer_revision") != source.layer_revision
             or baseline.get("layer_digest") != source.layer_digest
@@ -131,15 +131,15 @@ class ConfigPublicMixin:
                 "source": "workspace",
                 "runtime_overrides": sorted(self._runtime_config_overrides.keys()),
                 "revision": snapshot.revision,
-                # 来源位置一律只以 VRN 表达：``source_details[].vrn`` 是唯一出处。
+                # 来源位置一律只以 URI 表达：``source_details[].uri`` 是唯一出处。
                 # 原先此处的 ``config_path``（真实 user 层路径）与 ``source_paths``
-                # （跨 user/user_local/workspace/runtime_override 四层的真实路径列表）既无 VRN
+                # （跨 user/user_local/workspace/runtime_override 四层的真实路径列表）既无 URI
                 # 替代（上述层共享同一 ``workspace.sqlite`` 边界载体，故不可寻址，与
-                # VRN scope 闭集无关），又会外泄真实路径，故 MUST 从对外响应体移除；
+                # URI scope 闭集无关），又会外泄真实路径，故 MUST 从对外响应体移除；
                 # 不得以空串/省略号做替身。
                 "source_details": [
                     {
-                        "vrn": source.vrn,
+                        "uri": source.uri,
                         "layer": source.layer,
                         "precedence": source.precedence,
                         "loaded": source.loaded,

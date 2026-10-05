@@ -45,10 +45,10 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
 )
 from app.services.infrastructure.resource_platform.virtual_resources import (
     ResolutionContext,
-    parse_vrn,
+    parse_resource_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    VrnResolveError,
+    ResourceUriResolveError,
     require_scope_binding,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
@@ -186,7 +186,7 @@ def test_gateway_scope_uri_passes_binding_with_injected_identity(
 
     catalog = build_workspace_skill_catalog(tmp_path, registry=ResourceRegistry())
     entry = catalog.entries[0]
-    parsed = parse_vrn(entry.display_uri)
+    parsed = parse_resource_uri(entry.display_uri)
     assert parsed.scope == "gateway"
     assert parsed.scope_id == FAKE_GATEWAY_ID
     assert parsed.scope_id != "local"
@@ -198,7 +198,7 @@ def test_gateway_scope_uri_passes_binding_with_injected_identity(
         ResolutionContext(workspace_id="ws-1", gateway_id=FAKE_GATEWAY_ID),
     )
     # 仅有 workspace principal（无 gateway_id）→ 绑定不成立，必然拒绝。
-    with pytest.raises(VrnResolveError) as excinfo:
+    with pytest.raises(ResourceUriResolveError) as excinfo:
         require_scope_binding(
             parsed.scope, parsed.scope_id, ResolutionContext(workspace_id="ws-1")
         )
@@ -258,7 +258,7 @@ def test_gateway_identity_flows_from_request_header_into_catalog(
             )
         except RuntimeError as error:
             return {"bound": bound, "error": str(error)}
-        parsed = parse_vrn(catalog.entries[0].display_uri)
+        parsed = parse_resource_uri(catalog.entries[0].display_uri)
         require_scope_binding(
             parsed.scope,
             parsed.scope_id,

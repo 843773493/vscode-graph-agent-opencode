@@ -347,11 +347,11 @@ export declare type ConfigSourceDTO = Message<"boxteam.workspace.v2.ConfigSource
   sourceGeneration?: bigint | undefined;
 
   /**
-   * 可寻址来源文件的 VRN；没有稳定文件位置时不设置。
+   * 可寻址来源文件的 URI；没有稳定文件位置时不设置。
    *
-   * @generated from field: optional string vrn = 10;
+   * @generated from field: optional string uri = 10;
    */
-  vrn?: string | undefined;
+  uri?: string | undefined;
 };
 
 /**
@@ -380,11 +380,11 @@ export declare type ConfigSourcesDTO = Message<"boxteam.workspace.v2.ConfigSourc
   runtimeOverrides: string[];
 
   /**
-   * 配置 schema 文件的 VRN；没有可寻址 schema 时不设置。
+   * 配置 schema 文件的 URI；没有可寻址 schema 时不设置。
    *
-   * @generated from field: optional string schema_vrn = 5;
+   * @generated from field: optional string schema_uri = 5;
    */
-  schemaVrn?: string | undefined;
+  schemaUri?: string | undefined;
 };
 
 /**
@@ -3879,9 +3879,9 @@ export declare type SessionContextItemDTO = Message<"boxteam.workspace.v2.Sessio
   resourceIdentity?: string | undefined;
 
   /**
-   * @generated from field: optional string vrn = 14;
+   * @generated from field: optional string uri = 14;
    */
-  vrn?: string | undefined;
+  uri?: string | undefined;
 
   /**
    * @generated from field: optional string scope = 15;
@@ -3971,9 +3971,9 @@ export declare type SessionContextReadRequest = Message<"boxteam.workspace.v2.Se
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 11;
+   * @generated from field: string uri = 11;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 12;
@@ -4072,9 +4072,9 @@ export declare type SessionContextReadResultDTO = Message<"boxteam.workspace.v2.
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 16;
+   * @generated from field: string uri = 16;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 17;
@@ -4138,9 +4138,9 @@ export declare type SessionContextSearchMatchDTO = Message<"boxteam.workspace.v2
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 9;
+   * @generated from field: string uri = 9;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 10;
@@ -4204,9 +4204,9 @@ export declare type SessionContextSearchRequest = Message<"boxteam.workspace.v2.
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 11;
+   * @generated from field: string uri = 11;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 12;
@@ -4285,9 +4285,9 @@ export declare type SessionContextSearchResultDTO = Message<"boxteam.workspace.v
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 14;
+   * @generated from field: string uri = 14;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 15;
@@ -4423,9 +4423,9 @@ export declare type SessionDTO = Message<"boxteam.workspace.v2.SessionDTO"> & {
   resourceIdentity: string;
 
   /**
-   * @generated from field: string vrn = 15;
+   * @generated from field: string uri = 15;
    */
-  vrn: string;
+  uri: string;
 
   /**
    * @generated from field: string scope = 16;

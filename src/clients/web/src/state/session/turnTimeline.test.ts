@@ -106,7 +106,7 @@ function bootstrap(latestTurn: TurnSummary, epoch = 1): SessionTurnBootstrap {
       session_id: SESSION_ID,
       workspace_id: "workspace",
       resource_identity: `fixture-${SESSION_ID}`,
-      vrn: `boxteam://workspace/workspace/resources/session/${SESSION_ID}`,
+      uri: `boxteam://workspace/workspace/resources/session/${SESSION_ID}`,
       scope: "workspace",
       title: "Turn 测试",
       current_agent_id: "default",

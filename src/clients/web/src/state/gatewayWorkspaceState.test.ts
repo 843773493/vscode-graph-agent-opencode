@@ -34,7 +34,7 @@ function session(sessionId: string): Session {
     session_id: sessionId,
     workspace_id: "workspace",
     resource_identity: `fixture-${sessionId}`,
-    vrn: `boxteam://workspace/workspace/resources/session/${sessionId}`,
+    uri: `boxteam://workspace/workspace/resources/session/${sessionId}`,
     scope: "workspace",
     title: sessionId,
     title_source: "user",

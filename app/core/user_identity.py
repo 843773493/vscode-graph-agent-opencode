@@ -1,4 +1,4 @@
-"""VRN ``user`` scope 的身份推导：单用户本地程序约定值。
+"""URI ``user`` scope 的身份推导：单用户本地程序约定值。
 
 ``user`` scope 的 ``scope_id`` 由 owner change
 ``add-unified-virtual-resource-addressing`` 的 requirement「scope 必须取自定稿闭集且

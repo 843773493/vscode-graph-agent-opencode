@@ -20,7 +20,7 @@ function session(): Session {
     session_id: "ses_changes_loader",
     workspace_id: "ws_changes_loader",
     resource_identity: "fixture-ses_changes_loader",
-    vrn: "boxteam://workspace/ws_changes_loader/resources/session/ses_changes_loader",
+    uri: "boxteam://workspace/ws_changes_loader/resources/session/ses_changes_loader",
     scope: "workspace",
     title: "变更加载器测试",
     title_source: "user",

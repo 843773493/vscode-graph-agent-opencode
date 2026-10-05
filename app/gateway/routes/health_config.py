@@ -62,7 +62,7 @@ from app.services.infrastructure.config.state import (
     ConfigEventCursorGoneError,
 )
 from app.services.infrastructure.config_service import (
-    release_inline_config_vrn_for_file,
+    release_inline_config_uri_for_file,
 )
 
 router = APIRouter()
@@ -195,13 +195,13 @@ async def gateway_config_sources(
     return APIResponse(
         data=GatewayConfigSourcesDTO(
             revision=config.revision,
-            schema_vrn=release_inline_config_vrn_for_file(
+            schema_uri=release_inline_config_uri_for_file(
                 config.schema_path,
                 release_config_name="gateway_schema.jsonc",
             ),
             sources=[
                 GatewayConfigSourceDTO(
-                    vrn=source.vrn,
+                    uri=source.uri,
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,

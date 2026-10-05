@@ -24,7 +24,7 @@ from app.core.path_utils import get_user_config_root
 # `inline:0`→`inline`、`gateway_mutable_override`→`user` 与
 # `gateway_local_mutable_override`→`user_local` 与无 store 分支逐字一致；有 store 时
 # 共享 `gateway.sqlite` 只是**承载事实**，MUST NOT 有损改写成 carrier 名对外暴露；
-# 不可寻址性一律以 `vrn=None` 表达。
+# 不可寻址性一律以 `uri=None` 表达。
 _GATEWAY_SOURCE_LAYER_AUTHORITY: dict[str, tuple[ConfigSourceLayer, int]] = {
     "inline:0": ("inline", 0),
     "gateway_mutable_override": ("user", 1),

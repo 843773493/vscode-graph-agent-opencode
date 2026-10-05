@@ -19,7 +19,7 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
   访问器、5 个类常量与 `__all__`。
 - 可以维护各方法族 mixin 文件中的方法体与族内私有静态方法。
 - 可以维护 `config_service_common.py` 中的 `logger`、`ConfigCandidateApplier`、
-  `_INLINE_SOURCE_KEY`、`_SOURCE_LAYER_AUTHORITY` 与 `release_inline_config_vrn_for_file`。
+  `_INLINE_SOURCE_KEY`、`_SOURCE_LAYER_AUTHORITY` 与 `release_inline_config_uri_for_file`。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/services/infrastructure/` 下。
 
@@ -27,10 +27,10 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
 
 - 不得改变对外契约：`ConfigService` 类名、构造签名、公开方法名与语义、模块导入路径
   `app.services.infrastructure.config_service.ConfigService`，以及 `__init__.py` 对
-  `release_inline_config_vrn_for_file` 的再导出，均 MUST 保持不变。
+  `release_inline_config_uri_for_file` 的再导出，均 MUST 保持不变。
 - 不得为兼容旧调用点保留转发方法、旧模块 shim 或双套实现；跨族协作必须走同一 `self`。
 - 不得在 `config_service_common.py` 之外重复定义 `logger`、`ConfigCandidateApplier`、
-  `_SOURCE_LAYER_AUTHORITY` 或 `release_inline_config_vrn_for_file`；其它族一律从本模块导入。
+  `_SOURCE_LAYER_AUTHORITY` 或 `release_inline_config_uri_for_file`；其它族一律从本模块导入。
 - 不得静默改动搬迁方法的异常类型、错误消息或注释；搬迁必须逐字保留语义。
 - 不得在本目录实现 `config/` 子包已承载的聚焦组件（快照模型、文件监听器、状态模型、
   事件游标族等），本包只组合并消费它们。

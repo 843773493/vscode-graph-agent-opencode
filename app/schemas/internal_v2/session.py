@@ -54,7 +54,7 @@ class SessionDTO(TimestampedDTO):
     session_id: str
     workspace_id: str
     resource_identity: SessionResourceIdentity
-    vrn: str
+    uri: str
     scope: SessionContextScope
     title: str
     title_source: TitleSource = "default"

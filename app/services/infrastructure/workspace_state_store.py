@@ -64,7 +64,7 @@ def _migrate_workspace_config_into_source_layers(
     """一次性显式迁移：把 legacy ``workspace_config`` 残留行并入权威 layer 表后删表。
 
     - 只有当 ``workspace_config`` 有行、``config_source_layers`` 无同 key 行时，
-      才补一条等价 present layer 行（``layer_revision``/``source_generation``/``vrn``
+      才补一条等价 present layer 行（``layer_revision``/``source_generation``/``uri``
       按下标初始化，digest 由 payload 计算）——这是运行时覆盖读从旧表迁到权威表的
       唯一活兼容来源，必须还原语义。
     - 同 key 两表都在时必须逐字等价，冲突即 fail-closed，绝不静默择一。
@@ -114,7 +114,7 @@ def _migrate_workspace_config_into_source_layers(
         connection.execute(
             """
             INSERT INTO config_source_layers(
-                config_key, vrn, presence, config_version, payload_json,
+                config_key, uri, presence, config_version, payload_json,
                 layer_revision, layer_digest, source_generation, previous_digest,
                 updated_at, previous_payload_json
             ) VALUES (?, NULL, 'present', ?, ?, 1, ?, 1, NULL, ?, NULL)
@@ -349,14 +349,14 @@ _WORKSPACE_MIGRATIONS = (
     ALTER TABLE config_pending_candidate ADD COLUMN secret_bindings_json TEXT
         NOT NULL DEFAULT '{}';
     """,
-    # 配置来源位置改以 VRN 表达（real path 不持久化）：丢弃旧真实路径列、新增 VRN 列。
+    # 配置来源位置改以 URI 表达（real path 不持久化）：丢弃旧真实路径列、新增 URI 列。
     # 旧值一律不迁移（列本身即被删除）；新列可空，sqlite 层不可寻址即写 NULL。
     """
     ALTER TABLE config_source_layers DROP COLUMN source_path;
     ALTER TABLE config_source_layers DROP COLUMN backup_path;
-    ALTER TABLE config_source_layers ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_layers ADD COLUMN uri TEXT;
     ALTER TABLE config_source_journal DROP COLUMN source_path;
-    ALTER TABLE config_source_journal ADD COLUMN vrn TEXT;
+    ALTER TABLE config_source_journal ADD COLUMN uri TEXT;
     """,
     # 一次性显式迁移：把 legacy workspace_config 残留行并入权威 config_source_layers
     # 后物理 DROP 该镜像表（彻底根除表级双轨）。遇同 key 语义冲突 fail-closed。

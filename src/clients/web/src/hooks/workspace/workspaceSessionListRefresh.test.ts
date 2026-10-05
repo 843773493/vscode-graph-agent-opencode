@@ -23,7 +23,7 @@ const session = {
   session_id: "ses_catalog_only",
   workspace_id: "ws-test",
   resource_identity: "fixture-ses_catalog_only",
-  vrn: "boxteam://workspace/ws-test/resources/session/ses_catalog_only",
+  uri: "boxteam://workspace/ws-test/resources/session/ses_catalog_only",
   scope: "workspace",
   title: "只在目录索引中的会话",
   current_agent_id: "test-agent",

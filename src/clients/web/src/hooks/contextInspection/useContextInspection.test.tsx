@@ -31,9 +31,9 @@ function controlledReader() {
 function finish(pending: Pending, items: ContextItem[] = []) {
   const session = pending.session;
   if (!session) throw new Error("测试 Session 缺失");
-  pending.resolve({ resource_identity: session.resource_identity, vrn: session.vrn,
+  pending.resolve({ resource_identity: session.resource_identity, uri: session.uri,
     scope: session.scope, view: pending.view, assembly_ref: pending.assemblyRef ?? undefined,
-    revision: pending.assemblyRef ?? session.vrn,
+    revision: pending.assemblyRef ?? session.uri,
     items, partial_errors: [], has_more: false });
 }
 
@@ -43,7 +43,7 @@ function assemblyItem(pending: Pending, assemblyId: string, assemblyRef: string)
   return {
     kind: "assembly",
     resource_identity: session.resource_identity,
-    vrn: session.vrn,
+    uri: session.uri,
     scope: session.scope,
     assembly_ref: assemblyRef,
     data: { assembly_id: assemblyId },
@@ -67,7 +67,7 @@ const owner: InspectionOwner = {
   session: {
     session_id: "session",
     resource_identity: "session-identity",
-    vrn: "boxteam://workspace/backend-workspace/resources/session/session",
+    uri: "boxteam://workspace/backend-workspace/resources/session/session",
     scope: "workspace",
   } as InspectionOwner["session"],
   active: true,

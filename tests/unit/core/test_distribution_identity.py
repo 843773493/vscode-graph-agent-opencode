@@ -15,7 +15,7 @@ from app.core.distribution_identity import (
     load_distribution_id,
 )
 from app.services.infrastructure.resource_platform.virtual_resources import (
-    parse_vrn,
+    parse_resource_uri,
     skill_display_uri,
 )
 
@@ -104,7 +104,7 @@ def test_blank_field_is_rejected(tmp_path: Path, field: str) -> None:
 def test_illegal_distribution_is_rejected(tmp_path: Path, bad: str) -> None:
     manifest = _valid_manifest(tmp_path, distribution=bad)
     with pytest.raises(
-        ValueError, match="runtime manifest\\.distribution 含 VRN charset 之外的字符"
+        ValueError, match="runtime manifest\\.distribution 含 URI charset 之外的字符"
     ):
         load_distribution_id(manifest)
 
@@ -158,14 +158,14 @@ def test_env_var_path_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_legal_manifest_yields_grammar_valid_scope_id(tmp_path: Path) -> None:
-    """输出必须能作为真实 VRN scope_id 被 parse_vrn 解析（接上真实 grammar）。"""
+    """输出必须能作为真实 URI scope_id 被 parse_resource_uri 解析（接上真实 grammar）。"""
     manifest = _valid_manifest(tmp_path)
     distribution_id = load_distribution_id(manifest)
     assert distribution_id == "source-development-0_0_2"
     uri = skill_display_uri(
         scope="inline", scope_id=distribution_id, skill_name="gateway-context"
     )
-    parsed = parse_vrn(uri)
+    parsed = parse_resource_uri(uri)
     assert parsed.scope == "inline"
     assert parsed.scope_id == distribution_id
     assert parsed.kind == "skills"

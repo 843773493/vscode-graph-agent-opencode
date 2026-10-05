@@ -13,7 +13,7 @@ test("上下文请求透传 Session API 身份与目录返回的 assembly_ref", 
   const session: SessionContextSession = {
     session_id: "ses_context",
     resource_identity: "0c06a4d2-9bd5-5b60-8058-d75ad747331d",
-    vrn: "boxteam://workspace/backend-a/session/ses_context",
+    uri: "boxteam://workspace/backend-a/session/ses_context",
     scope: "workspace",
   };
   let requestBody: unknown;
@@ -48,7 +48,7 @@ test("上下文请求透传 Session API 身份与目录返回的 assembly_ref", 
 
   expect(requestBody).toMatchObject({
     resource_identity: session.resource_identity,
-    vrn: session.vrn,
+    uri: session.uri,
     scope: session.scope,
     assembly_ref: "assembly-ref-from-catalog",
   });

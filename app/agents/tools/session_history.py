@@ -22,10 +22,10 @@ from app.schemas.internal_v2.session_context import (
 )
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
-    gateway_session_inventory_vrn,
+    gateway_session_inventory_uri,
     parse_session_context_ref,
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 
 ResultModel = TypeVar("ResultModel", bound=BaseModel)
@@ -33,9 +33,9 @@ ResultModel = TypeVar("ResultModel", bound=BaseModel)
 
 class ReadContextInput(BaseModel):
     resource_identity: str = Field(description="目标上下文资源的稳定身份")
-    vrn: str = Field(description="目标上下文资源的 VRN 地址")
+    uri: str = Field(description="目标上下文资源的 URI 地址")
     scope: Literal["workspace", "user", "gateway", "inline"] = Field(
-        description="与 VRN 一致的资源作用域"
+        description="与 URI 一致的资源作用域"
     )
     view: Literal[
         "overview", "messages", "records", "information", "inventory", "assembly", "assemblies"
@@ -56,9 +56,9 @@ class ReadContextInput(BaseModel):
 
 class SearchContextInput(BaseModel):
     resource_identity: str = Field(description="搜索范围的稳定身份")
-    vrn: str = Field(description="搜索范围的 VRN 地址")
+    uri: str = Field(description="搜索范围的 URI 地址")
     scope: Literal["workspace", "user", "gateway", "inline"] = Field(
-        description="与 VRN 一致的资源作用域"
+        description="与 URI 一致的资源作用域"
     )
     query: str = Field(min_length=1, description="要搜索的文本或正则表达式。")
     sources: list[SessionContextSearchSource] = Field(
@@ -73,17 +73,17 @@ class SearchContextInput(BaseModel):
 
 
 def _request_identity(
-    *, resource_identity: str, vrn: str, scope: str
+    *, resource_identity: str, uri: str, scope: str
 ) -> tuple[str, str, str]:
     try:
         resource = parse_session_context_ref(
             resource_identity=resource_identity,
-            vrn=vrn,
+            uri=uri,
             scope=scope,
         )
     except ValueError as error:
         raise ToolException(str(error)) from error
-    return str(resource.resource_identity), resource.vrn, resource.scope
+    return str(resource.resource_identity), resource.uri, resource.scope
 
 
 def _target_request_identity(
@@ -93,7 +93,7 @@ def _target_request_identity(
 ) -> tuple[str, str, str]:
     return (
         str(session_resource_identity(backend_workspace_id, session_id)),
-        session_resource_vrn(backend_workspace_id, session_id),
+        session_resource_uri(backend_workspace_id, session_id),
         "workspace",
     )
 
@@ -139,18 +139,18 @@ async def _resolve_workspace_target(
 def _validate_target_identity(
     *,
     resource_identity: str,
-    vrn: str,
+    uri: str,
     scope: str,
     backend_workspace_id: str,
     session_id: str,
 ) -> None:
-    expected_identity, expected_vrn, expected_scope = _target_request_identity(
+    expected_identity, expected_uri, expected_scope = _target_request_identity(
         session_id=session_id,
         backend_workspace_id=backend_workspace_id,
     )
     if (
         resource_identity != expected_identity
-        or vrn != expected_vrn
+        or uri != expected_uri
         or scope != expected_scope
     ):
         raise ToolException(
@@ -170,7 +170,7 @@ async def _result_json(operation: Awaitable[ResultModel]) -> str:
 def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def read_context(
         resource_identity: str,
-        vrn: str,
+        uri: str,
         scope: Literal["workspace", "user", "gateway", "inline"],
         view: Literal[
             "overview", "messages", "records", "information", "inventory", "assembly", "assemblies"
@@ -185,19 +185,19 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         max_chars: int = 16_384,
         revision: str | None = None,
     ) -> str:
-        identity, canonical_vrn, canonical_scope = _request_identity(
+        identity, canonical_uri, canonical_scope = _request_identity(
             resource_identity=resource_identity,
-            vrn=vrn,
+            uri=uri,
             scope=scope,
         )
         resource = parse_session_context_ref(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
         )
         request = SessionContextReadRequest(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
             view=view,
             record_index=record_index,
@@ -214,13 +214,13 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         if resource.scope == "gateway":
             gateway_id = require_current_gateway_id("read_context")
             expected_identity = gateway_session_inventory_identity(gateway_id)
-            expected_vrn = gateway_session_inventory_vrn(gateway_id)
+            expected_uri = gateway_session_inventory_uri(gateway_id)
             if (
                 resource.kind != "workspace_sessions"
                 or resource.resource_identity != expected_identity
-                or resource.vrn != expected_vrn
+                or resource.uri != expected_uri
             ):
-                raise ToolException("Gateway inventory VRN 必须绑定当前真实 gateway_id")
+                raise ToolException("Gateway inventory URI 必须绑定当前真实 gateway_id")
             return await _result_json(
                 context.workspace_session_context_client.read_gateway_context(request)
             )
@@ -242,10 +242,10 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             )
 
         if resource.kind != "session" or resource.session_id is None:
-            raise ToolException(f"read_context 不支持该资源 kind: {resource.vrn!r}")
+            raise ToolException(f"read_context 不支持该资源 kind: {resource.uri!r}")
         _validate_target_identity(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
             backend_workspace_id=resource.scope_id,
             session_id=resource.session_id,
@@ -277,7 +277,7 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         coroutine=read_context,
         name="read_context",
         description=(
-            "像 read 一样读取由 resource_identity、VRN 和 scope 指定的 Session、"
+            "像 read 一样读取由 resource_identity、URI 和 scope 指定的 Session、"
             "工作区 inventory 或 Gateway inventory。视图选择和 revision 均为独立字段。"
         ),
         args_schema=ReadContextInput,
@@ -288,7 +288,7 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
 def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def search_context(
         resource_identity: str,
-        vrn: str,
+        uri: str,
         scope: Literal["workspace", "user", "gateway", "inline"],
         query: str,
         sources: list[SessionContextSearchSource] | None = None,
@@ -299,19 +299,19 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         cursor: str | None = None,
         revision: str | None = None,
     ) -> str:
-        identity, canonical_vrn, canonical_scope = _request_identity(
+        identity, canonical_uri, canonical_scope = _request_identity(
             resource_identity=resource_identity,
-            vrn=vrn,
+            uri=uri,
             scope=scope,
         )
         resource = parse_session_context_ref(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
         )
         request = SessionContextSearchRequest(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
             query=query,
             sources=sources or ["effective_context"],
@@ -328,9 +328,9 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             if (
                 resource.kind != "workspace_sessions"
                 or resource.resource_identity != gateway_session_inventory_identity(gateway_id)
-                or resource.vrn != gateway_session_inventory_vrn(gateway_id)
+                or resource.uri != gateway_session_inventory_uri(gateway_id)
             ):
-                raise ToolException("Gateway inventory VRN 必须绑定当前真实 gateway_id")
+                raise ToolException("Gateway inventory URI 必须绑定当前真实 gateway_id")
             return await _result_json(
                 context.workspace_session_context_client.search_gateway_context(request)
             )
@@ -352,10 +352,10 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             )
 
         if resource.kind != "session" or resource.session_id is None:
-            raise ToolException(f"search_context 不支持该资源 kind: {resource.vrn!r}")
+            raise ToolException(f"search_context 不支持该资源 kind: {resource.uri!r}")
         _validate_target_identity(
             resource_identity=identity,
-            vrn=canonical_vrn,
+            uri=canonical_uri,
             scope=canonical_scope,
             backend_workspace_id=resource.scope_id,
             session_id=resource.session_id,
@@ -388,7 +388,7 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
         name="search_context",
         description=(
             "像 grep 一样搜索结构化资源范围；返回短预览和可供 read_context 再读取的身份、"
-            "VRN、scope 与独立 revision。"
+            "URI、scope 与独立 revision。"
         ),
         args_schema=SearchContextInput,
         handle_tool_error=True,

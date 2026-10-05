@@ -1,6 +1,6 @@
 ## Purpose
 
-定义「一个后端进程挂载多个工作区」这一运行形态的**workspace 身份层**：进程内权威的已挂载工作区注册表、workspace 身份在 HTTP API 上的显式寻址载体、工作区根目录与 `.boxteam/` 数据目录的定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化，以及破坏性迁移与回滚边界。本 capability 是 workspace 身份在寻址层的唯一 owner，只引用「统一虚拟资源寻址」change 的 `作用域 / scope`、`拒绝码 / rejection code` 与术语（含`资源身份 / ResourceIdentity`、`虚拟资源地址 / VRN`、`真实路径 / real path`、`三层分离 / three-layer separation`、`网关授权段 / gateway authority`、`星型解析 / star-topology resolution`），不重新定义 VRN 语法。
+定义「一个后端进程挂载多个工作区」这一运行形态的**workspace 身份层**：进程内权威的已挂载工作区注册表、workspace 身份在 HTTP API 上的显式寻址载体、工作区根目录与 `.boxteam/` 数据目录的定位规则、按 workspace_id 分区的进程级资源边界、Gateway 显式传目标的角色变化，以及破坏性迁移与回滚边界。本 capability 是 workspace 身份在寻址层的唯一 owner，只引用「统一资源寻址」change 的 `作用域 / scope`、`拒绝码 / rejection code` 与术语（含`资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`三层分离 / three-layer separation`、`网关授权段 / gateway authority`、`星型解析 / star-topology resolution`），不重新定义 URI 语法。
 
 ## ADDED Requirements
 
@@ -42,27 +42,27 @@
 - **WHEN** 后端处理一个工作区维度请求
 - **THEN** 其语义 MUST 只由请求中显式的 workspace 身份决定，与进程内任何「激活」状态无关
 
-### Requirement: workspace_id 必须与 VRN workspace scope 使用同一份身份
+### Requirement: workspace_id 必须与 URI workspace scope 使用同一份身份
 
-`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与**虚拟资源地址 / VRN** 的 `workspace` **作用域 / scope** 里**必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id，是 requirement「`scope_id` 必须推导自该 scope 的稳定身份，禁止硬编码」的一个实例；语法本体与取值来源表属「统一虚拟资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 VRN 语法、`作用域 / scope` 闭合集、`scope_id` 语义或`拒绝码 / rejection code`，只引用其 owner change。
+`workspace_id` MUST 是**寻址层身份**。HTTP API 中显式携带的 `workspace_id` 与**资源 URI** 的 `workspace` **作用域 / scope** 里**必填**的 `scope_id` MUST 是同一个稳定 `workspace_id`（`workspace` scope 的 `scope_id` 必填且等于 workspace_id，是 requirement「`scope_id` 必须推导自该 scope 的稳定身份，禁止硬编码」的一个实例；语法本体与取值来源表属「统一资源寻址」change）；两处 MUST NOT 各自为政或存在换算层。跨 gateway 引用另一工作区时，MUST 使用同一台机器上那个稳定 `workspace_id`，否则跨 gateway 寻址从根上不成立。本 capability MUST NOT 定义 URI 语法、`作用域 / scope` 闭合集、`scope_id` 语义或`拒绝码 / rejection code`，只引用其 owner change。
 
 #### Scenario: 同一工作区在两处取值一致
 
-- **WHEN** 一个工作区同时被 HTTP 请求显式寻址与 VRN 显式寻址
-- **THEN** 两处使用的 `workspace_id` MUST 相等（VRN 侧即 `workspace` scope 的必填 `scope_id`），且 MUST 能被同一注册表解析到同一根
+- **WHEN** 一个工作区同时被 HTTP 请求显式寻址与 URI 显式寻址
+- **THEN** 两处使用的 `workspace_id` MUST 相等（URI 侧即 `workspace` scope 的必填 `scope_id`），且 MUST 能被同一注册表解析到同一根
 
 #### Scenario: 不定义第二套身份
 
 - **WHEN** 需要表达「另一个工作区」
-- **THEN** 系统 MUST 复用同一 `workspace_id` 身份与 VRN `workspace` scope 的 `scope_id`，MUST NOT 引入第二套工作区标识、别名或映射表
+- **THEN** 系统 MUST 复用同一 `workspace_id` 身份与 URI `workspace` scope 的 `scope_id`，MUST NOT 引入第二套工作区标识、别名或映射表
 
 ### Requirement: scope_id 必须推导自该 scope 的稳定身份，禁止硬编码
 
-**虚拟资源地址 / VRN** 的 `scope_id` 段对所有 scope MUST 必填，且 MUST **推导自该 scope 的稳定身份**；MUST NOT 使用硬编码字面量、进程级单例或「当前激活」态补齐。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id（本 capability 的核心），此原则对其它 scope **同构**：`gateway` scope 的 `scope_id` MUST 推导自真实 gateway_id，`inline` scope 的 `scope_id` MUST 推导自真实 distribution_id（其来源与编码 MUST 按「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从发行包 runtime manifest 推导，本 capability 只引用、不复述取值规则）。本 capability 只声明该推导原则与两个既存违反点的归属；`作用域 / scope` 闭合集终值、各 scope 的 `scope_id` 取值表与 `拒绝码 / rejection code` 登记，以「统一虚拟资源寻址」change 的权威表为准。
+**资源 URI** 的 `scope_id` 段对所有 scope MUST 必填，且 MUST **推导自该 scope 的稳定身份**；MUST NOT 使用硬编码字面量、进程级单例或「当前激活」态补齐。`workspace` **作用域 / scope** 的 `scope_id` MUST 等于显式 workspace_id（本 capability 的核心），此原则对其它 scope **同构**：`gateway` scope 的 `scope_id` MUST 推导自真实 gateway_id，`inline` scope 的 `scope_id` MUST 推导自真实 distribution_id（其来源与编码 MUST 按「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」从发行包 runtime manifest 推导，本 capability 只引用、不复述取值规则）。本 capability 只声明该推导原则与两个既存违反点的归属；`作用域 / scope` 闭合集终值、各 scope 的 `scope_id` 取值表与 `拒绝码 / rejection code` 登记，以「统一资源寻址」change 的权威表为准。
 
 #### Scenario: scope_id 推导自稳定身份而非硬编码
 
-- **WHEN** 系统为任一 scope 构造**虚拟资源地址 / VRN**
+- **WHEN** 系统为任一 scope 构造**资源 URI**
 - **THEN** `scope_id` MUST 由该 scope 的稳定身份推导得到，MUST NOT 是硬编码字面量、进程级单例或「当前激活」态
 
 #### Scenario: workspace scope 是同一推导原则的实例
@@ -77,7 +77,7 @@
 
 ### Requirement: gateway 身份与 workspace 身份同属寻址层身份，且 gateway_id 必须真实
 
-**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；`distribution_id` 与 `gateway` scope 的 `scope_id` **均已装配**（`distribution_id` 由 `298ef599`+`f3bd8213` 落地、`app/core/distribution_identity.py::load_distribution_id` 为生产赋值方并被 `app/agents/skill_runtime.py::_layer_scope_identity` 消费；`gateway` scope_id 的请求级注入由 `64ba30c8`/`53befbfc`/`9881a3b2` 落地，**2026-10-01 第四轮复核更正**）。`distribution_id` 的**来源为**发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），**已装配**；**`gateway_id` 的来源与注入 owner 亦已裁定**：owner = Gateway 侧按请求注入，取值按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 capability 只引用、不复述取值规则），**通道与装配均已落地**。两者均已就绪，可支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
+**网关授权段 / gateway authority** 承载稳定 gateway_id；gateway 身份与 workspace 身份 MUST 同属**寻址层身份**、遵循同一显式化原则：两者 MUST 都能由请求或持久化记录显式表达，MUST NOT 依赖进程级单例或「当前激活」态。作为本 capability 的**接口前提**：跨 gateway 的**星型解析 / star-topology resolution** 要求 gateway_id 真实可用；`distribution_id` 与 `gateway` scope 的 `scope_id` **均已装配**（`distribution_id` 由 `298ef599`+`f3bd8213` 落地、`app/core/distribution_identity.py::load_distribution_id` 为生产赋值方并被 `app/agents/skill_runtime.py::_layer_scope_identity` 消费；`gateway` scope_id 的请求级注入由 `64ba30c8`/`53befbfc`/`9881a3b2` 落地，**2026-10-01 第四轮复核更正**）。`distribution_id` 的**来源为**发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），**已装配**；**`gateway_id` 的来源与注入 owner 亦已裁定**：owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导（本 capability 只引用、不复述取值规则），**通道与装配均已落地**。两者均已就绪，可支撑跨 gateway 寻址。本 capability 只登记该前提与影响面，不实现其取值来源。
 
 #### Scenario: gateway 身份与 workspace 身份同属寻址层身份
 
@@ -87,12 +87,12 @@
 #### Scenario: gateway_id 通道与装配已落地
 
 - **WHEN** 跨 gateway 寻址依赖 `gateway` scope 的 `scope_id`
-- **THEN** 该值 MUST 是真实 gateway_id，取值与注入按「统一虚拟资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」建立（owner = Gateway 侧按请求注入），**当前装配已落地**（提交 `64ba30c8`/`53befbfc`/`9881a3b2`，原硬编码字面量分支已物理删除），MUST NOT 被当作靠硬编码字面量已成立
+- **THEN** 该值 MUST 是真实 gateway_id，取值与注入按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」建立（owner = Gateway 侧按请求注入），**当前装配已落地**（提交 `64ba30c8`/`53befbfc`/`9881a3b2`，原硬编码字面量分支已物理删除），MUST NOT 被当作靠硬编码字面量已成立
 
 #### Scenario: distribution_id 装配已落地
 
 - **WHEN** 系统需要为 `inline` scope 推导 `scope_id`
-- **THEN** 其来源 MUST 取发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一虚拟资源寻址」change 的 requirement），**当前装配已落地**（提交 `298ef599`+`f3bd8213`），MUST NOT 以硬编码字面量冒充已推导
+- **THEN** 其来源 MUST 取发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一资源寻址」change 的 requirement），**当前装配已落地**（提交 `298ef599`+`f3bd8213`），MUST NOT 以硬编码字面量冒充已推导
 
 ### Requirement: 进程级资源必须按 workspace_id 分区
 
@@ -115,7 +115,7 @@
 
 ### Requirement: Gateway 必须显式传目标工作区且后端不得猜
 
-Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。跨 gateway 时**网关授权段 / gateway authority**承载**稳定 gateway_id**，拓扑是**星型解析 / star-topology resolution**（hub-spoke）；解析命中 MUST 只返回稳定的**资源身份 / ResourceIdentity** 与内容，MUST NOT 返回或携带 locator（locator 是输入不是输出）；不可解析 MUST fail-closed。解析链本体属「统一虚拟资源寻址」change，本 capability 只要求 Gateway 的目标传递与其一致。
+Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传递给后端（经本 capability 规定的显式载体）。后端 MUST NOT 猜测、推断或回退目标工作区。Gateway 的生命周期所有权 MUST NOT 再以「一个工作区一个后端进程」为隐含前提。跨 gateway 时**网关授权段 / gateway authority**承载**稳定 gateway_id**，拓扑是**星型解析 / star-topology resolution**（hub-spoke）；解析命中 MUST 只返回稳定的**资源身份 / ResourceIdentity** 与内容，MUST NOT 返回或携带 locator（locator 是输入不是输出）；不可解析 MUST fail-closed。解析链本体属「统一资源寻址」change，本 capability 只要求 Gateway 的目标传递与其一致。
 
 #### Scenario: Gateway 显式传目标
 
@@ -140,11 +140,11 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 #### Scenario: 跨 gateway 不可解析时 fail-closed
 
 - **WHEN** 目标 gateway 未登记、不可达或未共享目标资源
-- **THEN** 系统 MUST fail-closed 返回「统一虚拟资源寻址」change 登记的结构化**拒绝码 / rejection code**，MUST NOT 用本机同名资源、空结果或缓存猜值替代
+- **THEN** 系统 MUST fail-closed 返回「统一资源寻址」change 登记的结构化**拒绝码 / rejection code**，MUST NOT 用本机同名资源、空结果或缓存猜值替代
 
 ### Requirement: 持久化数据不得以「当前激活工作区」为前提
 
-新增或迁移的持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。真实路径 / real path MUST NOT 出现在持久化记录或 API 响应体中。
+新增或迁移的持久化字段 MUST NOT 以「当前激活工作区」作为隐含前提；凡引用工作区资源者，MUST 遵守**三层分离 / three-layer separation**：记录只承载 `资源身份 / ResourceIdentity` 与 `资源 URI`（及独立 revision 字段），其含义 MUST 只由记录内显式的 workspace 身份决定，与写入时或读取时的进程激活态无关。真实路径 / real path MUST NOT 出现在持久化记录或 API 响应体中。
 
 #### Scenario: 记录自带工作区身份
 
@@ -154,16 +154,16 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 #### Scenario: 真实路径 / real path 不落盘
 
 - **WHEN** 系统写入一条引用工作区资源的持久化记录或返回一个 API 响应体
-- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`虚拟资源地址 / VRN`（必要时加独立 revision 字段）
+- **THEN** 其中 MUST NOT 出现**真实路径 / real path**，只允许 `资源身份 / ResourceIdentity` 与`资源 URI`（必要时加独立 revision 字段）
 
 ### Requirement: 破坏性迁移与回滚必须有明确边界
 
-本形态迁移 MUST 提供破坏性迁移步骤，但 MUST NOT 虚构不存在的存量数据：权威表实测**虚拟资源地址 / VRN 零落盘**（live 安装工作区 157 个 SQLite 与 dev/temp 44 个库对 `boxteam://` 零命中、无 `resource_activation*` 表；唯一 `display_uri` 列的写入方全在测试、container 无装配、生产 seal 恒为 `None`），故本 change 的 workspace 身份显式化**不涉及存量 VRN 数据迁移**，只需新写字段与读路径切换。既有**只描述单工作区前提**的非 VRN 持久化字段仍 MUST 显式迁移或显式失效，MUST NOT 保留旧形态兼容层、双读或别名。迁移 MUST 声明可回滚到何种程度（含不可回滚点与其理由）。旧客户端调用（依赖「当前激活工作区」或旧工作区维度地址者）MUST 被视为破坏范围内。
+本形态迁移 MUST 提供破坏性迁移步骤，但 MUST NOT 虚构不存在的存量数据：权威表实测**资源 URI 零落盘**（live 安装工作区 157 个 SQLite 与 dev/temp 44 个库对 `boxteam://` 零命中、无 `resource_activation*` 表；唯一 `display_uri` 列的写入方全在测试、container 无装配、生产 seal 恒为 `None`），故本 change 的 workspace 身份显式化**不涉及存量 URI 数据迁移**，只需新写字段与读路径切换。既有**只描述单工作区前提**的非 URI 持久化字段仍 MUST 显式迁移或显式失效，MUST NOT 保留旧形态兼容层、双读或别名。迁移 MUST 声明可回滚到何种程度（含不可回滚点与其理由）。旧客户端调用（依赖「当前激活工作区」或旧工作区维度地址者）MUST 被视为破坏范围内。
 
-#### Scenario: 无存量 VRN 数据需要迁移
+#### Scenario: 无存量 URI 数据需要迁移
 
 - **WHEN** 本形态迁移启动并核对磁盘
-- **THEN** 依据实测的 VRN 零落盘事实，迁移 MUST 不引入任何 VRN 存量读取/改写步骤，只做新写字段与读路径切换；若实施时实测发现存量，MUST 显式迁移或显式失效，MUST NOT 双读
+- **THEN** 依据实测的 URI 零落盘事实，迁移 MUST 不引入任何 URI 存量读取/改写步骤，只做新写字段与读路径切换；若实施时实测发现存量，MUST 显式迁移或显式失效，MUST NOT 双读
 
 #### Scenario: 旧字段显式失效
 

@@ -1,6 +1,6 @@
 # 目录用途
 
-`resource_platform/virtual_resources/` 提供 `boxteam://` 虚拟资源命名空间（VRN）的严格 grammar、纯值对象与 typed resolver。URI 只是安全展示/引用层，不是 identity、capability、dedupe 或幂等 key，也不携带物理路径、endpoint 或 credential。
+`resource_platform/virtual_resources/` 提供 `boxteam://` 统一资源寻址的严格 grammar、纯值对象与 typed resolver。URI 只是安全展示/引用层，不是 identity、capability、dedupe 或幂等 key，也不携带物理路径、endpoint 或 credential。
 
 # 可修改内容
 

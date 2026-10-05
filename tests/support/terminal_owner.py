@@ -10,7 +10,7 @@ from pathlib import Path
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_context_resource import (
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
 )
 from app.services.business.terminal_resources.owner import (
     TerminalResourceOwner,
@@ -61,7 +61,7 @@ class Sessions:
     async def get(self, session_id: str) -> SessionDTO:
         return SessionDTO(session_id=session_id, workspace_id=WORKSPACE_ID,
                           resource_identity=session_resource_identity(WORKSPACE_ID, session_id),
-                          vrn=session_resource_vrn(WORKSPACE_ID, session_id), scope="workspace",
+                          uri=session_resource_uri(WORKSPACE_ID, session_id), scope="workspace",
                           title="测试会话", current_agent_id="default",
                           created_at=datetime(2026, 10, 5, tzinfo=UTC),
                           updated_at=datetime(2026, 10, 5, tzinfo=UTC),

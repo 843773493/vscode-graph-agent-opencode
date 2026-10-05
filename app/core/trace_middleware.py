@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
-# Gateway 身份头：由 Gateway 侧按请求注入（见「统一虚拟资源寻址」change 的
+# Gateway 身份头：由 Gateway 侧按请求注入（见「统一资源寻址」change 的
 # requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」）。
 # 与 ``X-Request-ID`` 共用 TraceMiddleware 这一套请求级上下文，不新建第二套机制。
 GATEWAY_ID_HEADER = "X-BoxTeam-Gateway-Id"

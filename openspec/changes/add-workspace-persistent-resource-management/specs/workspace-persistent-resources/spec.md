@@ -30,19 +30,19 @@
 - **WHEN** 用户明确要求持久化，或 Agent 工具调用显式指定 `retention_scope=workspace`
 - **THEN** owner 创建 `workspace` 范围资源并关联来源 Thread；后续 Thread unload 不会删除该资源
 
-### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 虚拟资源地址 / VRN」引用资源，禁止持久化 real path
+### Requirement: 工作区持久记录必须用「资源身份 / ResourceIdentity + 资源 URI」引用资源，禁止持久化 real path
 
-**归属与引用**：本 capability 的持久记录引用政策（含「位置一律以 `资源身份 / ResourceIdentity` + `虚拟资源地址 / VRN` 表达、禁持久化 `真实路径 / real path`、覆盖 API 响应体与模型可见载荷」）的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 VRN 为默认形式」；「位置 vs 非位置」的判定（D-A2 可由 owner 身份推导者不落盘、D-A3 不可推导者用既有 API 端点、owner 自身运行态字段以工作区内相对路径持久化这一唯一例外）的正名出处为该 change 的 requirement「「位置」必须有可机械判定的统一判据」。本 capability 只**具名引用**上述两条 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套判据。`作用域 / scope` 闭集与 `scope_id` 取值语义、VRN 语法、kind 闭集与 `拒绝码 / rejection code` 登记同样由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。
+**归属与引用**：本 capability 的持久记录引用政策（含「位置一律以 `资源身份 / ResourceIdentity` + `资源 URI` 表达、禁持久化 `真实路径 / real path`、覆盖 API 响应体与模型可见载荷」）的正名 normative 出处为 `add-unified-virtual-resource-addressing` 的 requirement「默认寻址政策必须以 URI 为默认形式」；「位置 vs 非位置」的判定（D-A2 可由 owner 身份推导者不落盘、D-A3 不可推导者用既有 API 端点、owner 自身运行态字段以工作区内相对路径持久化这一唯一例外）的正名出处为该 change 的 requirement「「位置」必须有可机械判定的统一判据」。本 capability 只**具名引用**上述两条 requirement，MUST NOT 复述其正文、MUST NOT 另立第二套判据。`作用域 / scope` 闭集与 `scope_id` 取值语义、URI 语法、kind 闭集与 `拒绝码 / rejection code` 登记同样由 `add-unified-virtual-resource-addressing` change 唯一 owner 定义，本 capability 只引用。本 capability 的稳定 `resource_id` 与该身份/寻址政策不冲突，继续作为资源身份使用。
 
-#### Scenario: 持久记录只承载身份与 VRN
+#### Scenario: 持久记录只承载身份与 URI
 
 - **WHEN** owner 写入一条引用外部资源的工作区持久记录
-- **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `虚拟资源地址 / VRN` 指向资源；`真实路径 / real path` 只作为 owner 在本次 fs/进程调用栈内的局部变量出现，不进入任何持久化记录
+- **THEN** 该记录以 `资源身份 / ResourceIdentity` 与 `资源 URI` 指向资源；`真实路径 / real path` 只作为 owner 在本次 fs/进程调用栈内的局部变量出现，不进入任何持久化记录
 
-#### Scenario: 需要位置时必须用 VRN 而非文件系统路径
+#### Scenario: 需要位置时必须用 URI 而非文件系统路径
 
 - **WHEN** 一条持久记录需要表达资源或资源产物的所在位置
-- **THEN** 该位置 MUST 编码为 `虚拟资源地址 / VRN`；MUST NOT 写入绝对路径、工作区根路径、checkpoint 文件路径、下载/截图文件路径或等价的文件系统路径
+- **THEN** 该位置 MUST 编码为 `资源 URI`；MUST NOT 写入绝对路径、工作区根路径、checkpoint 文件路径、下载/截图文件路径或等价的文件系统路径
 
 #### Scenario: 位置可由 owner 身份推导时不落盘
 
@@ -52,12 +52,12 @@
 #### Scenario: 位置不可推导时用既有 API 端点承载可寻址性
 
 - **WHEN** 一条持久记录或模型可见载荷需要对外寻址一个无法由 owner 身份推导的资源产物
-- **THEN** 可寻址性 MUST 由承载该能力的既有后端 API 端点引用提供；MUST NOT 为此自造 VRN kind、MUST NOT 裸拼接 VRN、MUST NOT 暴露文件系统路径（裁定 D-A3）
+- **THEN** 可寻址性 MUST 由承载该能力的既有后端 API 端点引用提供；MUST NOT 为此自造 URI kind、MUST NOT 裸拼接 URI、MUST NOT 暴露文件系统路径（裁定 D-A3）
 
 #### Scenario: owner 自身运行态字段按工作区内相对路径持久化
 
 - **WHEN** 持久记录需要保存 owner 自身的运行态字段（典型为终端 shell 的当前工作目录）
-- **THEN** 该字段 MUST 以工作区内相对路径持久化，MUST NOT 落盘绝对路径或工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也不因此豁免「位置一律以 VRN 表达」；此边界只覆盖 owner 自身运行态字段，MUST NOT 扩张到任何位置表达
+- **THEN** 该字段 MUST 以工作区内相对路径持久化，MUST NOT 落盘绝对路径或工作区根路径；该字段 MUST NOT 被当作「资源所在位置」的位置引用，也不因此豁免「位置一律以 URI 表达」；此边界只覆盖 owner 自身运行态字段，MUST NOT 扩张到任何位置表达
 
 #### Scenario: 检出 real path 持久化即 fail-closed
 
@@ -67,7 +67,7 @@
 #### Scenario: 不新增第二套寻址语法
 
 - **WHEN** 实现本 capability 的持久记录引用
-- **THEN** 它 MUST 复用 `add-unified-virtual-resource-addressing` 的 VRN 语法与 `作用域 / scope` 定义，MUST NOT 定义第二套 URI 语法、scope 名或 `scope_id` 取值
+- **THEN** 它 MUST 复用 `add-unified-virtual-resource-addressing` 的 URI 语法与 `作用域 / scope` 定义，MUST NOT 定义第二套 URI 语法、scope 名或 `scope_id` 取值
 
 ### Requirement: Thread unload 和删除按资源保留范围释放资源
 

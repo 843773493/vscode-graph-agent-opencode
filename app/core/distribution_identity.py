@@ -1,6 +1,6 @@
 """发行包运行时身份：从 runtime manifest 推导稳定的 distribution_id。
 
-``distribution_id`` 是 VRN ``inline`` scope 的 ``scope_id``，其唯一 owner 是
+``distribution_id`` 是 URI ``inline`` scope 的 ``scope_id``，其唯一 owner 是
 ``add-unified-virtual-resource-addressing`` 的 requirement「inline scope 的
 scope_id 由 manifest 的 distribution 与 version 定稿推导」：只依赖发行包
 runtime manifest 的 ``distribution`` 与 ``version`` 两个字段，因此同一发行包
@@ -19,7 +19,7 @@ from pathlib import Path
 
 MANIFEST_ENV = "BOXTEAM_RUNTIME_MANIFEST"
 
-# VRN 动段的闭合 charset 是 ``[A-Za-z0-9_-]``（grammar 的 _NAME_CHARSET 单点
+# URI 动段的闭合 charset 是 ``[A-Za-z0-9_-]``（grammar 的 _NAME_CHARSET 单点
 # 定义）；点号不在内，故 version 必须编码。distribution 本身落在该 charset 内。
 _DISTRIBUTION_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # version 只接受 semver 允许的形态：pre-release/build 标识的字符集是
@@ -29,7 +29,7 @@ _VERSION_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
 
 
 def encode_version(version: str) -> str:
-    """把 version 编码进 VRN charset：``.`` → ``_``。
+    """把 version 编码进 URI charset：``.`` → ``_``。
 
     因 version 字符集已排除 ``_``（见 _VERSION_PATTERN），``_`` 只可能来自原点号，
     故本映射在合法输入上是单射：不同的 version 必得不同编码，且可由编码唯一还原
@@ -53,7 +53,7 @@ def load_distribution_id(manifest_path: Path | str | None = None) -> str:
     version = _require_field(payload, "version", resolved_path)
     if _DISTRIBUTION_PATTERN.fullmatch(distribution) is None:
         raise ValueError(
-            "runtime manifest.distribution 含 VRN charset 之外的字符: "
+            "runtime manifest.distribution 含 URI charset 之外的字符: "
             f"{distribution!r} ({resolved_path})"
         )
     if _VERSION_PATTERN.fullmatch(version) is None:

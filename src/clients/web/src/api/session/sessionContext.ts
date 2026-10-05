@@ -4,7 +4,7 @@ import { requestJson, unwrapApiData, workspaceHeader } from "../http";
 
 export type SessionContextSession = Pick<
   Session,
-  "session_id" | "resource_identity" | "vrn" | "scope"
+  "session_id" | "resource_identity" | "uri" | "scope"
 >;
 
 export async function readSessionContext(
@@ -20,7 +20,7 @@ export async function readSessionContext(
   },
 ): Promise<SessionContextReadResultDTO> {
   if (!gatewayWorkspaceId) throw new Error("上下文检查缺少 Gateway workspace 路由 ID");
-  if (!session.session_id || !session.resource_identity || !session.vrn || !session.scope) {
+  if (!session.session_id || !session.resource_identity || !session.uri || !session.scope) {
     throw new Error("Session API 响应缺少上下文资源身份");
   }
   if (view === "assembly" && !options.assemblyRef) throw new Error("assembly view 缺少 assembly_ref");
@@ -31,7 +31,7 @@ export async function readSessionContext(
       signal: options.signal,
       body: JSON.stringify({
         resource_identity: session.resource_identity,
-        vrn: session.vrn,
+        uri: session.uri,
         scope: session.scope,
         view,
         assembly_ref: options.assemblyRef,
@@ -47,7 +47,7 @@ export async function readSessionContext(
   if (page.view !== view) throw new Error("上下文响应 view 不匹配");
   if (
     page.resource_identity !== session.resource_identity
-    || page.vrn !== session.vrn
+    || page.uri !== session.uri
     || page.scope !== session.scope
   ) {
     throw new Error("上下文响应资源身份与 Session API 不一致");

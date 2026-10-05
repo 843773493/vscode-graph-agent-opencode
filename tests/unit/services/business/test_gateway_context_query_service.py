@@ -23,14 +23,14 @@ from app.services.business.gateway_context_query_service import (
 )
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,
-    gateway_session_inventory_vrn,
+    gateway_session_inventory_uri,
     session_resource_identity,
-    session_resource_vrn,
+    session_resource_uri,
     workspace_session_inventory_identity,
-    workspace_session_inventory_vrn,
+    workspace_session_inventory_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
-    VrnResolveError,
+    ResourceUriResolveError,
 )
 
 GATEWAY_ID = "gateway_control_1"
@@ -74,7 +74,7 @@ def _workspace(
 def _gateway_read_request(**kwargs: object) -> SessionContextReadRequest:
     return SessionContextReadRequest(
         resource_identity=gateway_session_inventory_identity(GATEWAY_ID),
-        vrn=gateway_session_inventory_vrn(GATEWAY_ID),
+        uri=gateway_session_inventory_uri(GATEWAY_ID),
         scope="gateway",
         **kwargs,
     )
@@ -83,7 +83,7 @@ def _gateway_read_request(**kwargs: object) -> SessionContextReadRequest:
 def _gateway_search_request(**kwargs: object) -> SessionContextSearchRequest:
     return SessionContextSearchRequest(
         resource_identity=gateway_session_inventory_identity(GATEWAY_ID),
-        vrn=gateway_session_inventory_vrn(GATEWAY_ID),
+        uri=gateway_session_inventory_uri(GATEWAY_ID),
         scope="gateway",
         **kwargs,
     )
@@ -103,7 +103,7 @@ def _workspace_search_result(
     backend_workspace_id = _backend_workspace_id(index)
     return SessionContextSearchResultDTO(
         resource_identity=workspace_session_inventory_identity(backend_workspace_id),
-        vrn=workspace_session_inventory_vrn(backend_workspace_id),
+        uri=workspace_session_inventory_uri(backend_workspace_id),
         scope="workspace",
         query=query,
         match_mode="literal",
@@ -124,7 +124,7 @@ def _session_match(
 ) -> SessionContextSearchMatchDTO:
     return SessionContextSearchMatchDTO(
         resource_identity=session_resource_identity(backend_workspace_id, session_id),
-        vrn=session_resource_vrn(backend_workspace_id, session_id),
+        uri=session_resource_uri(backend_workspace_id, session_id),
         scope="workspace",
         preview=preview,
         source="effective_context",
@@ -180,7 +180,7 @@ class _FakeTransport:
     ) -> SessionContextReadResultDTO:
         return SessionContextReadResultDTO(
             resource_identity=request.resource_identity,
-            vrn=request.vrn,
+            uri=request.uri,
             scope=request.scope,
             view=request.view,
             revision=f"rev-{workspace_id}",
@@ -218,7 +218,7 @@ async def test_gateway_inventory_cursor_ignores_dynamic_checked_at() -> None:
 
     item = second.items[0]
     assert item.scope == "workspace"
-    assert item.vrn == workspace_session_inventory_vrn(_backend_workspace_id(2))
+    assert item.uri == workspace_session_inventory_uri(_backend_workspace_id(2))
     assert item.resource_identity == workspace_session_inventory_identity(
         _backend_workspace_id(2)
     )
@@ -266,7 +266,7 @@ async def test_gateway_inventory_uses_workspace_unsupported_view_contract() -> N
     transport = _FakeTransport([_workspace_id(1)])
     service = GatewayContextQueryService(transport=transport)
 
-    with pytest.raises(VrnResolveError) as error:
+    with pytest.raises(ResourceUriResolveError) as error:
         await service.read_gateway_context(_gateway_read_request(view="overview"))
 
     assert error.value.reason_code == "unsupported_view"
@@ -338,7 +338,7 @@ async def test_gateway_inventory_rolls_back_item_when_final_cursor_exceeds_budge
 
 
 @pytest.mark.asyncio
-async def test_gateway_search_routes_by_control_id_but_uses_backend_uuid_for_vrn() -> (
+async def test_gateway_search_routes_by_control_id_but_uses_backend_uuid_for_uri() -> (
     None
 ):
     control_workspace_id = _workspace_id(1)
@@ -352,13 +352,13 @@ async def test_gateway_search_routes_by_control_id_but_uses_backend_uuid_for_vrn
 
     workspace_request = transport.search_requests[control_workspace_id]
     assert workspace_request.scope == "workspace"
-    assert workspace_request.vrn == workspace_session_inventory_vrn(
+    assert workspace_request.uri == workspace_session_inventory_uri(
         backend_workspace_id
     )
     assert workspace_request.resource_identity == workspace_session_inventory_identity(
         backend_workspace_id
     )
-    assert control_workspace_id not in workspace_request.vrn
+    assert control_workspace_id not in workspace_request.uri
     assert result.partial_errors == []
 
 

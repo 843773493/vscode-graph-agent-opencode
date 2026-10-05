@@ -14,7 +14,7 @@ export type ConfigSourceLayer =
   | "runtime_override";
 export type ConfigSourceDTO = Omit<
   WorkspaceProtocol.ConfigSourceDTO,
-  | "vrn"
+  | "uri"
   | "layer"
   | "source_key"
   | "presence"
@@ -22,7 +22,7 @@ export type ConfigSourceDTO = Omit<
   | "layer_digest"
   | "source_generation"
 > & {
-  vrn: string | null;
+  uri: string | null;
   layer: ConfigSourceLayer;
   source_key: string | null;
   presence: "present" | "absent";
@@ -32,9 +32,9 @@ export type ConfigSourceDTO = Omit<
 };
 export type ConfigSourcesDTO = Omit<
   WorkspaceProtocol.ConfigSourcesDTO,
-  "schema_vrn" | "sources"
+  "schema_uri" | "sources"
 > & {
-  schema_vrn: string | null;
+  schema_uri: string | null;
   sources: ConfigSourceDTO[];
 };
 

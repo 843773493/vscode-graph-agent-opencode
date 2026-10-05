@@ -501,8 +501,8 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
 
     assert response.request_id == "req-gateway-config-sources"
     assert response.data is not None
-    assert response.data.schema_vrn.startswith("boxteam://inline/")
-    assert response.data.schema_vrn.endswith("/resources/config/gateway_schema")
+    assert response.data.schema_uri.startswith("boxteam://inline/")
+    assert response.data.schema_uri.endswith("/resources/config/gateway_schema")
     body = response.model_dump_json()
     assert str(tmp_path) not in body
     assert '"path"' not in body
@@ -514,10 +514,10 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     ]
     assert response.data.sources[1].loaded is True
     assert response.data.policy_manifest
-    assert response.data.sources[0].vrn.startswith("boxteam://inline/")
-    assert response.data.sources[0].vrn.endswith("/resources/config/gateway_inline")
-    assert response.data.sources[1].vrn is None
-    assert response.data.sources[2].vrn is None
+    assert response.data.sources[0].uri.startswith("boxteam://inline/")
+    assert response.data.sources[0].uri.endswith("/resources/config/gateway_inline")
+    assert response.data.sources[1].uri is None
+    assert response.data.sources[2].uri is None
     assert response.data.sources[0].layer == "inline"
     assert response.data.sources[0].precedence == 0
     assert response.data.sources[0].source_key is None
@@ -528,14 +528,14 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
 
 
 @pytest.mark.asyncio
-async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
+async def test_gateway_config_sources_schema_uri_only_for_release_inline_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """非发行包 gateway schema MUST NOT 编 inline VRN：返回 null 且端点不崩。
+    """非发行包 gateway schema MUST NOT 编 inline URI：返回 null 且端点不崩。
 
-    改前实现直接以 `config.schema_path.stem` 编 inline VRN，点号 stem 会抛
-    `VrnGrammarError` 令端点 500，普通自定义 schema 会被谎报成 inline 来源。
+    改前实现直接以 `config.schema_path.stem` 编 inline URI，点号 stem 会抛
+    `ResourceUriGrammarError` 令端点 500，普通自定义 schema 会被谎报成 inline 来源。
     """
 
     config_path, schema_path = _write_gateway_config(tmp_path, [])
@@ -566,7 +566,7 @@ async def test_gateway_config_sources_schema_vrn_only_for_release_inline_schema(
         )
 
         assert response.data is not None
-        assert response.data.schema_vrn is None
+        assert response.data.schema_uri is None
         assert str(tmp_path) not in response.model_dump_json()
         assert '"path"' not in response.model_dump_json()
         assert '"schema_path"' not in response.model_dump_json()
@@ -690,7 +690,7 @@ def test_gateway_persisted_source_details_reject_snapshot_and_carrier_keys(
         _gateway_persisted_source_details(
             {
                 source_key: {
-                    "vrn": None,
+                    "uri": None,
                     "presence": "present",
                     "layer_revision": None,
                     "layer_digest": None,
@@ -704,21 +704,21 @@ def test_gateway_persisted_source_details_restores_absence_and_precedence() -> N
     details = _gateway_persisted_source_details(
         {
             "gateway_local_mutable_override": {
-                "vrn": None,
+                "uri": None,
                 "presence": "absent",
                 "layer_revision": 3,
                 "layer_digest": None,
                 "source_generation": 4,
             },
             "inline:0": {
-                "vrn": "boxteam://inline/distribution/resources/config/gateway_inline",
+                "uri": "boxteam://inline/distribution/resources/config/gateway_inline",
                 "presence": "present",
                 "layer_revision": None,
                 "layer_digest": None,
                 "source_generation": None,
             },
             "gateway_mutable_override": {
-                "vrn": None,
+                "uri": None,
                 "presence": "present",
                 "layer_revision": 2,
                 "layer_digest": "digest-user",
@@ -988,7 +988,7 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
         for source in restored.source_details:
             baseline = active.source_baseline[source.source_key]
             assert isinstance(baseline, dict)
-            assert source.vrn == baseline["vrn"]
+            assert source.uri == baseline["uri"]
             assert source.presence == baseline["presence"]
             assert source.layer_revision == baseline["layer_revision"]
             assert source.layer_digest == baseline["layer_digest"]
@@ -1094,7 +1094,7 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
         for source in restored.source_details:
             baseline = pending.source_baseline[source.source_key]
             assert isinstance(baseline, dict)
-            assert source.vrn == baseline["vrn"]
+            assert source.uri == baseline["uri"]
             assert source.presence == baseline["presence"]
             assert source.layer_revision == baseline["layer_revision"]
             assert source.layer_digest == baseline["layer_digest"]

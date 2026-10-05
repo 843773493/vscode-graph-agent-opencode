@@ -317,7 +317,7 @@ def _safe_identity(value: object, field_name: str) -> str:
 def _display_uri(value: object, field_name: str) -> str:
     """校验模型可见的安全虚拟 URI；它不是 identity，也不得解析回当前资源。
 
-    完整 VRN grammar 由资源平台单一 owner 维护，本模块只校验 provenance
+    完整 URI grammar 由资源平台单一 owner 维护，本模块只校验 provenance
     安全投影不变量，避免在 domain 复制第二套 URI 语法。
     """
 

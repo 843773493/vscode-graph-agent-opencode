@@ -97,10 +97,10 @@ async def get_config_sources(
     return APIResponse(
         data=ConfigSourcesDTO(
             revision=revision,
-            schema_vrn=config_service.get_schema_source_vrn(),
+            schema_uri=config_service.get_schema_source_uri(),
             sources=[
                 ConfigSourceDTO(
-                    vrn=source.vrn,
+                    uri=source.uri,
                     layer=source.layer,
                     precedence=source.precedence,
                     loaded=source.loaded,

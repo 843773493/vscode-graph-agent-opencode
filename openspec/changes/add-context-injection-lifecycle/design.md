@@ -33,7 +33,7 @@ optional stateless framework dispatch bridge -> Provider adapter
 - 把任意有效 ToolSet 变化定义为 model-call safe boundary 上的 hard rebase，并让同一 Turn 可以跨多个 prefix epoch。
 - 统一 AGENTS、Skill metadata/activation、团队状态和其它内部 source 的 identity、revision、diff、追踪及恢复语义。
 - 用代码内显式装配的资源观察流水线统一已知文件、Gateway内部快照和权威内存状态的稳定读取、语义diff与不可变snapshot发布；正常model-call preparation只消费内存revision/snapshot。
-- 建立Virtual Resource Namespace（VRN），让模型能够引用和理解资源的逻辑来源，同时隐藏物理路径、endpoint、credential和provider locator。
+- 建立统一资源寻址，让模型能够引用和理解资源的逻辑来源，同时隐藏物理路径、endpoint、credential和provider locator。
 - 让资源变化的观察、业务desired state与某个SessionThread的context activation相互解耦，并支持默认`turn`、可选`model_call`两种确定性激活边界。
 - 删除 PromptReplay 及所有 request-time 反向捕获，让 Provider dispatch只消费已封存 assembly；framework middleware 若不可避免，只承担无状态 bridge 职责。
 - 提供只暴露名称的 `skill_load`，完整定义 `snapshot`、`tracked` 和 `untrack`。
@@ -158,7 +158,7 @@ hard rebase不修改已有 canonical item identity、正文或因果顺序，也
 
 合法新epoch重建时，compiler可从已提交active view及冻结的受信ResourceSnapshot，把`root_eligible`来源的base+delta物化为新root中的当前完整状态；必须记录确定性顺序、source refs/hash、覆盖的revision链和旧item lineage，避免同一语义在新root与tail重复投影。旧canonical item/detail/assembly字节不变，历史读取仍是旧sealed selection；fork只对目标新thread首次assembly应用此规则，不重编译source历史。`tail_only`即使在新epoch也不得借摘要或合并进入system。任何source变化本身不得制造epoch；若无合法重建边界，不能为提高优先级而前插system。为Anthropic中途system只保留关闭的capability TODO。
 
-### 5. Resource Observation Platform、VRN 与 SkillCatalog
+### 5. Resource Observation Platform、URI 与 SkillCatalog
 
 SkillCatalog 合并三层来源：
 
@@ -233,9 +233,9 @@ SemanticResourceDescriptor {       # 公开部分不含provider locator
 
 SourceReconciler经代码内装配的来源适配稳定读取候选并按来源类型校验，发布不可变`ObservedSourceRevision(source_id, source_revision, raw_hash_or_version, snapshot_ref, availability, diagnostics)`；完整原始byte hash是file source的要求，Gateway内部snapshot与权威内存状态使用各自可验证的版本与一致性token，不能假装拥有文件的双读语义（**当前已回收**：`gateway_snapshot` version token 通路与 `memory_state` source kind 已随 `remove-agent-memory` 移除，生产 `_SOURCE_KINDS` 只剩 `file`；本条仅保留「缺少文件双读语义的来源 MUST 使用其自身版本 token」的通用义务，不要求当前存在该类来源）。`ResourceDerivationGraph`只消费已接受的来源revision及其它语义resource revision，执行版本化解析/facet extraction、依赖拓扑排序、typed semantic diff和CAS，发布不可变`ResourceSnapshot(resource_id, semantic_revision, semantic_hash, source_lineage, parsed_ref, availability, diagnostics)`。依赖图必须拒绝环与缺失required依赖；多输入快照必须在一致的generation/vector上导出，不能混合新旧来源。原始来源变化但目标facet payload不变时，不推进该语义resource revision，也不追加context item；多次未激活变化可由CSM相对最新可见已提交revision合并成一个delta。watch事件只标脏，不能直接增加任一revision。读取/解析失败保留上一份valid snapshot并显式发布unavailable/diagnostic状态；依赖required资源的新dispatch fail closed，不能用旧valid快照、空值或当前文件偷偷替代。
 
-#### 5.1 Virtual Resource Namespace
+#### 5.1 统一资源寻址
 
-VRN是模型与工具可见的逻辑地址层，不是provider文件系统。规范URI复用现有`boxteam://` scheme：
+URI是模型与工具可见的逻辑地址层，不是provider文件系统。规范URI复用现有`boxteam://` scheme：
 
 ```text
 # 段序、scope 名、scope_id 与 kind 取值以 add-unified-virtual-resource-addressing 的契约（及其已下发权威表）为唯一定义；以下仅为示意
@@ -245,13 +245,13 @@ boxteam://gateway/{gateway_id}/resources/skills/{skill_name}/SKILL.md
 boxteam://inline/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 ```
 
-**注意**：`memory` 已确证**不是 VRN scope**（零生产构造方、resolver 不比对 scope_id、container 未装配）。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 只作**非 VRN 示意**，MUST NOT 被当合法 VRN；本 capability 不给出 memory 的 VRN 示意，也不为其定义 scope_id。（该两点式特例分支已由提交 `32bc6256` 物理删除，解析侧以 `unknown_scope` 类拒绝码 fail-closed 拒绝。）
+**注意**：`memory` 已确证**不是 URI scope**（零生产构造方、resolver 不比对 scope_id、container 未装配）。既有两点式 `boxteam://memory/{scope}/{name}`（无 `resources` 固定段、无 kind、恰好两段）MUST 只作**非 URI 示意**，MUST NOT 被当合法 URI；本 capability 不给出 memory 的 URI 示意，也不为其定义 scope_id。（该两点式特例分支已由提交 `32bc6256` 物理删除，解析侧以 `unknown_scope` 类拒绝码 fail-closed 拒绝。）
 
 同一资源同时具有四种不能混用的标识/定位：模型可见且可安全展示的`display_uri`；来源registry内稳定的`source_id`；语义Registry内稳定、跨rename/locator变化保持不变的`resource_id`；实际owner私有的`provider_locator`（绝对路径、Gateway内部snapshot引用、credential ref等；provider locator 举例中的 memory key 已随 remove-agent-memory 回收，不再存在）。`display_uri`表达逻辑scope/kind/name，但不是任一内部identity、授权凭据、dedupe key或业务幂等键。URI不携带revision；精确revision/hash/snapshot_ref由activation/assembly provenance另存。解析必须通过`VirtualResourceResolver.resolve(uri, operation, ResolutionContext)`得到绑定`resource_id/source_id/provider/语义revision/snapshot_ref/capabilities`的typed handle，不能percent-decode后直接join到文件系统。
 
 规范parser只接受注册的authority/path grammar，percent decode恰好一次，拒绝userinfo、credential、未知query/fragment、控制字符、反斜杠、空segment、`.`/`..`、编码歧义和越界scope。核心功能的policy默认允许不等于取消这些identity/integrity约束。每次实际operation仍按当前principal、workspace/gateway binding、resource capability和activation snapshot校验；URI本身不授予读取、激活、监视或跨workspace权限。provider locator、内部handle、credential和绝对路径不得进入模型prompt、普通工具结果、history projection、日志或URI。
 
-`skill_load`保持name-only：模型输入`name + mode`，软件在当前冻结的SkillCatalogSnapshot中把name解析为精确resource handle。成功结果和context item envelope可以返回`display_uri`说明来源，但`source_uri`属于ResourceProvenance而不是Skill metadata；name/description仍是唯一模型可见metadata。通用`read_file`只处理普通workspace文件，不能接受Skill VRN来建立activation；其它工具若要消费VRN，必须显式声明typed operation/capability，不能提供一个绕过loader/CSM的万能虚拟文件读写口。
+`skill_load`保持name-only：模型输入`name + mode`，软件在当前冻结的SkillCatalogSnapshot中把name解析为精确resource handle。成功结果和context item envelope可以返回`display_uri`说明来源，但`source_uri`属于ResourceProvenance而不是Skill metadata；name/description仍是唯一模型可见metadata。通用`read_file`只处理普通workspace文件，不能接受Skill URI来建立activation；其它工具若要消费URI，必须显式声明typed operation/capability，不能提供一个绕过loader/CSM的万能虚拟文件读写口。
 
 #### 5.2 Resource activation boundary
 
@@ -569,7 +569,7 @@ team board、member、task和coordinator是Session级协作ledger，不属于任
 
 ledger mutation先通过Session生命周期准入，并在同一`session-control.sqlite`事务内以`CollaborationFanoutRecord`冻结捕获的fence generation、`ledger_revision`、事件hash、recipient `(session_id, thread_id)`集合和每个recipient的delivery state；该record在全部recipient terminal前承担operation lease，不得在提交后按“当前成员”重新计算收件人。独立fanout worker按`(ledger_revision, recipient_thread_id)`幂等地向各thread ContextStore提交pending source observation，并在每次提交时验证原fanout lease/generation；不跨thread事务，也不唤醒cold runtime。recipient在配置的resource activation boundary冻结`source_reconciliation_snapshot`并从fanout状态索引拉取/reconcile全部required revision；默认execution snapshot的上界不得早于取得active slot时的ledger revision，不能使用queue acceptance时刻，同一Turn后续tool-loop保持该上界；只有team resource显式配置为`model_call`时才重新捕获Registry内存snapshot。连续未seal revision可按CSM规则合并，已提交revision不可重写。进程崩溃、child cold/删除或单recipient失败不得让其它recipient重复注入；fence关闭后未提交recipient以明确terminal delivery outcome收敛，不能产生晚到source append，snapshot内required team state未追平时该thread不得dispatch模型请求。
 
-跨Session目标接受裸`session_id`或会话上下文资源引用；其虚拟资源地址（VRN）语法、作用域/scope、网关授权段/gateway authority与解析由 `migrate-session-context-uri-to-vrn` change 拥有，本 change 只消费解析结果、不复述旧形态；这些引用只是locator而不是bearer capability。联邦拓扑固定为一个中心Gateway hub和其直接spoke：hub保留现有SSH `-L`作为可达、加密和主机认证层，并通过本机loopback转发地址连接spoke的`ws://.../api/gateway/federation/channel`，建立长期全双工WebSocket对等RPC channel。SSH/WebSocket均由hub主动建立，但channel内hub与spoke都能发起带request ID的request/response/event；`B → A → C`最多经过一个hub transit，spoke不得继续转发到第四个Gateway。workspace-qualified link使用当前Gateway catalog identity，federated link以持久`gateway_id + workspace_id`定位拓扑中的Gateway；来源thread按真实invocation保存，即使来自child或经hub中继也不能伪造成source main/hub，目标始终由target workspace解析main thread。
+跨Session目标接受裸`session_id`或会话上下文资源引用；其资源 URI语法、作用域/scope、网关授权段/gateway authority与解析由 `migrate-session-context-resource-uri` change 拥有，本 change 只消费解析结果、不复述旧形态；这些引用只是locator而不是bearer capability。联邦拓扑固定为一个中心Gateway hub和其直接spoke：hub保留现有SSH `-L`作为可达、加密和主机认证层，并通过本机loopback转发地址连接spoke的`ws://.../api/gateway/federation/channel`，建立长期全双工WebSocket对等RPC channel。SSH/WebSocket均由hub主动建立，但channel内hub与spoke都能发起带request ID的request/response/event；`B → A → C`最多经过一个hub transit，spoke不得继续转发到第四个Gateway。workspace-qualified link使用当前Gateway catalog identity，federated link以持久`gateway_id + workspace_id`定位拓扑中的Gateway；来源thread按真实invocation保存，即使来自child或经hub中继也不能伪造成source main/hub，目标始终由target workspace解析main thread。
 
 现有`connection_id`保持Gateway本地、持久的连接配置身份，不改作socket实例ID。每次channel实例另有瞬时`channel_instance_id`、`connection_epoch`、`connected_at/last_seen`和epoch内`seq/ack`；单次route lease保存稳定origin/target gateway、可选唯一transit gateway、所用channel epoch、remote workspace route、route revision和expiry。Session link、`ResolvedSessionMainTarget`、`GlobalThreadAddress`、outbox/inbox preimage及业务幂等键不得包含`connection_id`、channel实例、epoch、seq/ack或remote route locator。WebSocket断开、SSH重连或hub进程重启只刷新这些瞬时状态，不能改变业务identity。
 
@@ -656,7 +656,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与后续受支持版本的显式schema migration，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
 2. 增加 stable-prefix epoch/reason/manifest、ToolSet compatibility key、desired/applied revision和 CSM source/tracking contract。
 3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle（原「权威memory状态」适配已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_state` source kind；`gateway_snapshot` version token 通路亦被同一 change 回收，不再存在 Gateway 内部 snapshot 来源接入步骤）。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
-4. 建立VRN grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
+4. 建立URI grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。
 5. 实现`skill_load`的snapshot/tracked/untrack及checkpoint-versioned control state，删除通用read激活、模型可见`/.boxteam/...`Skill路径/挂载、旧Skills/AGENTS request-time middleware和任何即时移除规划/入口。
 6. 接入 `add-itemized-rollout-context` 的 Thread generation/lease/idle-unload/lazy-rehydrate 边界；在其唯一生命周期验收中证明 main 与 child unload/rebuild 不改变 CSM state、ToolSet binding、stable prefix 或历史。
 7. Goal限定main thread，清理旧跨Sessionteam开发数据；完成当前Session内child ledger/fanout和公开fork/copy的发布、恢复、删除验证，不实现旧board物化。

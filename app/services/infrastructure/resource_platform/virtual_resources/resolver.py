@@ -1,4 +1,4 @@
-"""VRN typed resolver：在任何 owner/provider 访问前完成全部拒绝校验。
+"""URI typed resolver：在任何 owner/provider 访问前完成全部拒绝校验。
 
 resolver 是纯门卫：输入 URI、operation 与 principal 绑定上下文，查注入的
 catalog 快照，产出 typed handle。它不读文件、不访问网络、不触碰 memory
@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
-    parse_vrn,
+    parse_resource_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ALL_OPERATIONS,
@@ -39,12 +39,12 @@ _RESOLVE_REASON_CODES = frozenset(
 )
 
 
-class VrnResolveError(RuntimeError):
+class ResourceUriResolveError(RuntimeError):
     """resolver 显式拒绝；reason_code 是闭合集合。"""
 
     def __init__(self, reason_code: str, message: str) -> None:
         if reason_code not in _RESOLVE_REASON_CODES:
-            raise ValueError(f"未知 VrnResolveError reason_code: {reason_code}")
+            raise ValueError(f"未知 ResourceUriResolveError reason_code: {reason_code}")
         super().__init__(message)
         self.reason_code = reason_code
 
@@ -111,7 +111,7 @@ class TrackedResourceBinding:
     def resolve_frozen(self) -> ResolvedResourceHandle:
         """从封存事实恢复 handle；不查当前 catalog，不重解 display URI。"""
         if self.binding.snapshot_ref is None:
-            raise VrnResolveError(
+            raise ResourceUriResolveError(
                 "historical_snapshot_missing",
                 f"tracked 绑定缺失封存 snapshot_ref，无法恢复历史资源: name={self.name!r}",
             )
@@ -133,7 +133,7 @@ class TrackedResourceBinding:
 def require_scope_binding(
     scope: str, scope_id: str, context: ResolutionContext
 ) -> None:
-    """校验 VRN scope 与该 principal 绑定一致；不一致显式结构化拒绝。"""
+    """校验 URI scope 与该 principal 绑定一致；不一致显式结构化拒绝。"""
     bound = {
         "workspace": context.workspace_id,
         "user": context.user_scope_id,
@@ -141,9 +141,9 @@ def require_scope_binding(
         "inline": context.distribution_id,
     }.get(scope)
     if bound != scope_id:
-        raise VrnResolveError(
+        raise ResourceUriResolveError(
             "scope_mismatch",
-            f"VRN scope 与 principal 绑定不一致: scope={scope!r} "
+            f"URI scope 与 principal 绑定不一致: scope={scope!r} "
             f"uri_id={scope_id!r} bound={bound!r}",
         )
 
@@ -161,26 +161,26 @@ class VirtualResourceResolver:
         operation: str,
         context: ResolutionContext,
     ) -> ResolvedResourceHandle:
-        parsed = parse_vrn(uri)
+        parsed = parse_resource_uri(uri)
         self._check_scope(parsed.scope, parsed.scope_id, context)
         try:
             binding = self._catalog.bindings[uri]
         except KeyError as error:
-            raise VrnResolveError(
-                "unknown_resource", f"VRN 未在当前 catalog 登记: {uri!r}"
+            raise ResourceUriResolveError(
+                "unknown_resource", f"URI 未在当前 catalog 登记: {uri!r}"
             ) from error
         if operation not in ALL_OPERATIONS:
-            raise VrnResolveError(
-                "unknown_operation", f"VRN operation 未登记: {operation!r}"
+            raise ResourceUriResolveError(
+                "unknown_operation", f"URI operation 未登记: {operation!r}"
             )
         if operation not in binding.capabilities:
-            raise VrnResolveError(
+            raise ResourceUriResolveError(
                 "capability_denied",
-                f"VRN 绑定不具备 operation {operation!r}: uri={uri!r}",
+                f"URI 绑定不具备 operation {operation!r}: uri={uri!r}",
             )
         if binding.snapshot_ref is None:
-            raise VrnResolveError(
-                "snapshot_unavailable", f"VRN 绑定当前快照不可用: uri={uri!r}"
+            raise ResourceUriResolveError(
+                "snapshot_unavailable", f"URI 绑定当前快照不可用: uri={uri!r}"
             )
         descriptor = binding.descriptor
         return ResolvedResourceHandle(
@@ -208,7 +208,7 @@ class VirtualResourceResolver:
         try:
             uri = self._catalog.name_index[(scope, logical_name)]
         except KeyError as error:
-            raise VrnResolveError(
+            raise ResourceUriResolveError(
                 "unknown_resource",
                 f"名称未在当前 catalog 登记: scope={scope!r} name={logical_name!r}",
             ) from error
