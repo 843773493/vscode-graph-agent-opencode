@@ -148,7 +148,10 @@ class RegistryProjectionMixin:
             self._active_workspace_id = self._default_workspace_id()
         self._validate_parent_graph()
         try:
-            self._save(owner="remote_projection")
+            self._save(
+                owner="remote_projection",
+                remote_gateway_connection_ids=(connection.connection_id,),
+            )
         except Exception:
             self._restore_registry_state(previous_snapshot)
             self._route_signatures = previous_signatures

@@ -36,6 +36,25 @@ __all__ = [
 ]
 
 
+def _registry_connection_index(value: object) -> dict[str, dict[str, object]]:
+    """连接身份与 source owner 只有 registry metadata 这一份权威记录。"""
+    if not isinstance(value, list):
+        raise ValueError("Gateway registry remote_gateway_connections 必须是数组")
+    result: dict[str, dict[str, object]] = {}
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("Gateway registry 远程连接必须是对象")
+        identity = entry.get("connection_id")
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("Gateway registry 远程连接缺少 connection_id")
+        if entry.get("source_owner") not in {"config", "manual"}:
+            raise ValueError(f"Gateway registry 远程连接 source owner 非法: {identity}")
+        if identity in result:
+            raise ValueError(f"Gateway registry 远程连接 identity 重复: {identity}")
+        result[identity] = entry
+    return result
+
+
 class GatewayRegistryMixin:
     @staticmethod
     def _registry_meta_record_exists(connection: sqlite3.Connection) -> bool:
@@ -316,6 +335,7 @@ class GatewayRegistryMixin:
         *,
         expected_revision: int | None = None,
         owner: str = "registry",
+        remote_gateway_connection_ids: tuple[str, ...] = (),
     ) -> int:
         targets = payload.get("targets", [])
         remote_connections = payload.get("remote_gateway_connections", [])
@@ -378,22 +398,67 @@ class GatewayRegistryMixin:
                     if scope_owner == "config"
                     else {scope_owner}
                 )
-                if scope_owner is not None:
-                    current_meta_row = connection.execute(
-                        """
-                        SELECT payload_json
-                        FROM gateway_config
-                        WHERE config_key = 'workspace_registry_meta'
-                        """
-                    ).fetchone()
-                    if current_meta_row is not None:
-                        current_metadata = json.loads(str(current_meta_row[0]))
-                        if isinstance(current_metadata, dict) and isinstance(
-                            current_metadata.get("remote_gateway_connections"), list
-                        ):
-                            metadata["remote_gateway_connections"] = current_metadata[
-                                "remote_gateway_connections"
-                            ]
+                current_meta_row = connection.execute(
+                    """
+                    SELECT payload_json
+                    FROM gateway_config
+                    WHERE config_key = 'workspace_registry_meta'
+                    """
+                ).fetchone()
+                current_metadata = (
+                    json.loads(str(current_meta_row[0]))
+                    if current_meta_row is not None
+                    else {}
+                )
+                if not isinstance(current_metadata, dict):
+                    raise ValueError("Gateway registry 已有 metadata 必须是对象")
+                current_connections = _registry_connection_index(
+                    current_metadata.get("remote_gateway_connections", [])
+                )
+                incoming_connections = _registry_connection_index(remote_connections)
+                if scope_owner is None:
+                    connection_scope = set(current_connections) | set(
+                        incoming_connections
+                    )
+                elif scope_owner == "config":
+                    connection_scope = {
+                        identity
+                        for identity, entry in {
+                            **current_connections,
+                            **incoming_connections,
+                        }.items()
+                        if entry["source_owner"] == "config"
+                    }
+                elif scope_owner == "remote_projection":
+                    connection_scope = set(remote_gateway_connection_ids)
+                else:
+                    connection_scope = set()
+                final_connections = {
+                    identity: entry
+                    for identity, entry in current_connections.items()
+                    if identity not in connection_scope
+                }
+                for identity, entry in incoming_connections.items():
+                    existing_connection = current_connections.get(identity)
+                    if (
+                        existing_connection is not None
+                        and existing_connection["source_owner"] != entry["source_owner"]
+                    ):
+                        raise PermissionError(
+                            f"Gateway registry 不允许改变 connection source owner: {identity}"
+                        )
+                    if (
+                        identity not in connection_scope
+                        and entry != existing_connection
+                    ):
+                        raise PermissionError(
+                            f"Gateway registry 批处理不能修改其他 connection owner: {owner}:{identity}"
+                        )
+                    if identity in connection_scope:
+                        final_connections[identity] = entry
+                metadata["remote_gateway_connections"] = list(
+                    final_connections.values()
+                )
                 if scope_owner is not None:
                     for target in targets:
                         if not isinstance(target, dict):
@@ -524,6 +589,15 @@ class GatewayRegistryMixin:
                 final_target_ids: set[str] = set()
                 target_identity_keys: set[tuple[str, str, str]] = set()
                 for position, target in enumerate(final_targets):
+                    if (
+                        target.get("connection_kind") == "remote_gateway"
+                        and target.get("remote_gateway_connection_id")
+                        not in final_connections
+                    ):
+                        raise ValueError(
+                            "Gateway registry 远程投影工作区引用未知 Gateway 连接: "
+                            + str(target.get("remote_gateway_connection_id"))
+                        )
                     workspace_id = target.get("workspace_id")
                     if not isinstance(workspace_id, str) or not workspace_id:
                         raise ValueError(

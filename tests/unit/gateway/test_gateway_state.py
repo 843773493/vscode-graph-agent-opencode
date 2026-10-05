@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -17,6 +18,138 @@ from app.services.infrastructure.config.state import (
     ConfigEventCursorGoneError,
     ConfigEventInput,
 )
+
+
+@pytest.fixture
+def registry_remote_connection_payload():
+    return {
+        "schema_version": 11,
+        "targets": [],
+        "remote_gateway_connections": [
+            {
+                "connection_id": "config",
+                "source_owner": "config",
+                "remote_config_event_cursor": 1,
+            },
+            {
+                "connection_id": "manual",
+                "source_owner": "manual",
+                "remote_config_event_cursor": 1,
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("owner", "scope_ids", "changed_id", "incoming_ids", "expected_ids"),
+    [
+        ("config_batch", (), "config", ("config",), {"config", "manual"}),
+        ("remote_projection", ("manual",), "manual", ("manual",), {"config", "manual"}),
+        ("manual_crud", (), None, (), {"config", "manual"}),
+        ("system", (), None, (), {"config", "manual"}),
+        ("config_batch", (), None, (), {"manual"}),
+        ("remote_projection", ("manual",), None, (), {"config"}),
+    ],
+)
+def test_gateway_registry_connection_scope_persists_without_overwriting_peers(
+    tmp_path,
+    registry_remote_connection_payload,
+    owner,
+    scope_ids,
+    changed_id,
+    incoming_ids,
+    expected_ids,
+):
+    path = tmp_path / "gateway.sqlite"
+    payload = deepcopy(registry_remote_connection_payload)
+    with GatewayStateStore(path=path) as state:
+        state.replace_workspace_registry(payload, expected_revision=0)
+        incoming = deepcopy(payload)
+        incoming["remote_gateway_connections"] = [
+            entry
+            for entry in incoming["remote_gateway_connections"]
+            if entry["connection_id"] in incoming_ids
+        ]
+        for entry in incoming["remote_gateway_connections"]:
+            if entry["connection_id"] == changed_id:
+                entry["remote_config_event_cursor"] = 2
+        assert (
+            state.replace_workspace_registry(
+                incoming,
+                expected_revision=1,
+                owner=owner,
+                remote_gateway_connection_ids=scope_ids,
+            )
+            == 2
+        )
+    with GatewayStateStore(path=path) as reopened:
+        saved = reopened.load_workspace_registry()
+        assert saved is not None
+        connections = {
+            entry["connection_id"]: entry
+            for entry in saved["remote_gateway_connections"]
+        }
+        assert set(connections) == expected_ids
+        for identity, entry in connections.items():
+            assert entry["remote_config_event_cursor"] == (
+                2 if identity == changed_id else 1
+            )
+        assert saved["registry_revision"] == reopened.get_registry_revision() == 2
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type", "message"),
+    [
+        ("source_owner", PermissionError, "改变 connection source owner"),
+        ("foreign_connection", PermissionError, "其他 connection owner"),
+        ("missing_connection", ValueError, "引用未知 Gateway 连接"),
+        ("stale_revision", ConfigConflictError, "revision CAS"),
+    ],
+)
+def test_gateway_registry_failed_connection_publication_is_atomic(
+    tmp_path,
+    registry_remote_connection_payload,
+    failure,
+    error_type,
+    message,
+):
+    path = tmp_path / "gateway.sqlite"
+    payload = deepcopy(registry_remote_connection_payload)
+    payload["targets"] = [
+        {
+            "workspace_id": "projection",
+            "owner": "remote_projection",
+            "target_namespace": "remote",
+            "connection_kind": "remote_gateway",
+            "connection_id": "manual",
+            "remote_gateway_connection_id": "manual",
+            "remote_workspace_id": "remote-workspace",
+        }
+    ]
+    with GatewayStateStore(path=path) as state:
+        state.replace_workspace_registry(payload, expected_revision=0)
+        before = state.load_workspace_registry()
+        incoming = deepcopy(payload)
+        if failure == "source_owner":
+            incoming["remote_gateway_connections"][1]["source_owner"] = "config"
+        elif failure == "foreign_connection":
+            incoming["remote_gateway_connections"][0]["remote_config_event_cursor"] = 2
+        elif failure == "missing_connection":
+            incoming["remote_gateway_connections"].pop()
+        else:
+            incoming["remote_gateway_connections"][1]["remote_config_event_cursor"] = 2
+        with pytest.raises(error_type, match=message):
+            state.replace_workspace_registry(
+                incoming,
+                expected_revision=0 if failure == "stale_revision" else 1,
+                owner="remote_projection",
+                remote_gateway_connection_ids=("manual",),
+            )
+        assert state.load_workspace_registry() == before
+        assert state.get_registry_revision() == 1
+    with GatewayStateStore(path=path) as reopened:
+        assert reopened.load_workspace_registry() == before
+        assert reopened.get_registry_revision() == 1
 
 
 def test_gateway_config_source_mirror_migrates_but_keeps_control_plane_kv(

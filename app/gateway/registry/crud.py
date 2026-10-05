@@ -170,7 +170,13 @@ class RegistryCrudMixin:
         self._close_unused_remote_gateway(target.remote_gateway_connection_id)
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
-        self._save(owner=mutation_owner)
+        self._save(
+            owner=mutation_owner,
+            remote_gateway_connection_ids=(target.remote_gateway_connection_id,)
+            if target.remote_gateway_connection_id is not None
+            and scope_owner == "remote_projection"
+            else (),
+        )
 
     def remove_system_default_aliases(self, *, keep_workspace_id: str) -> None:
         for workspace_id, target in self._targets.items():

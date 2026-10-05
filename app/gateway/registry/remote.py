@@ -45,12 +45,13 @@ class RegistryRemoteMixin:
                         ).append(previous)
             self._remote_gateway_runtimes[connection.connection_id] = runtime
             for target in self._targets.values():
-                if (
-                    target.remote_gateway_connection_id
-                    == connection.connection_id
-                ):
+                if target.remote_gateway_connection_id == connection.connection_id:
                     self.invalidate_route(target.workspace_id)
-        self._save(owner="remote_projection")
+        self._save(
+            owner="remote_projection",
+            remote_gateway_connection_ids=(connection.connection_id,),
+        )
+
     def remote_gateway_connection(
         self,
         connection_id: str,

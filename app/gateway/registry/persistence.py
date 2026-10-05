@@ -58,6 +58,25 @@ class RegistryPersistenceMixin:
                     f"connection_id={item.get('connection_id')}, "
                     f"source_owner={source_owner!r}"
                 )
+            remote_config_event_cursor = item.get("remote_config_event_cursor")
+            if remote_config_event_cursor is not None and (
+                isinstance(remote_config_event_cursor, bool)
+                or not isinstance(remote_config_event_cursor, int)
+                or remote_config_event_cursor < 0
+            ):
+                raise ValueError(
+                    "Gateway registry 远程连接 remote_config_event_cursor 必须是非负整数或 null"
+                )
+            for field in ("remote_config_state", "remote_candidate_ref"):
+                if item.get(field) is not None and not isinstance(item[field], str):
+                    raise ValueError(
+                        f"Gateway registry 远程连接 {field} 必须是字符串或 null"
+                    )
+            remote_restart_required = item.get("remote_restart_required", False)
+            if not isinstance(remote_restart_required, bool):
+                raise ValueError(
+                    "Gateway registry 远程连接 remote_restart_required 必须是布尔值"
+                )
             connection = RemoteGatewayConnection(
                 connection_id=str(item["connection_id"]),
                 name=str(item["name"]),
@@ -88,11 +107,17 @@ class RegistryPersistenceMixin:
                     else None
                 ),
                 source_owner=source_owner,
+                remote_config_event_cursor=remote_config_event_cursor,
+                remote_config_state=item.get("remote_config_state"),
+                remote_restart_required=remote_restart_required,
+                remote_candidate_ref=item.get("remote_candidate_ref"),
             )
             self._remote_gateway_connections[connection.connection_id] = connection
         targets = payload.get("targets", [])
         if not isinstance(targets, list):
-            raise ValueError(f"Gateway registry targets 必须是数组: {self._storage_path}")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
+            raise ValueError(
+                f"Gateway registry targets 必须是数组: {self._storage_path}"
+            )  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
         persisted_active_id = payload.get("active_workspace_id")
         workspace_id_remap: dict[str, str] = {}
         parent_workspace_ids: dict[str, str | None] = {}
@@ -307,7 +332,13 @@ class RegistryPersistenceMixin:
                 if not backup_path.exists():
                     shutil.copy2(self._storage_path, backup_path)
             self._save()
-    def _save(self, *, owner: str = "registry") -> None:
+
+    def _save(
+        self,
+        *,
+        owner: str = "registry",
+        remote_gateway_connection_ids: tuple[str, ...] = (),
+    ) -> None:
         previous_state = getattr(self, "_last_committed_snapshot", None)
         payload = {
             "schema_version": _REGISTRY_SCHEMA_VERSION,
@@ -326,6 +357,7 @@ class RegistryPersistenceMixin:
                     payload,
                     expected_revision=self._registry_revision,
                     owner=owner,
+                    remote_gateway_connection_ids=remote_gateway_connection_ids,
                 )
             except Exception:
                 if previous_state is not None:

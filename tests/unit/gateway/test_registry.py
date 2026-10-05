@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,208 @@ from app.gateway.workspace_ids import (
     build_managed_local_workspace_id,
     build_workspace_id,
 )
+from app.services.infrastructure.config.state import ConfigConflictError
+
+
+@pytest.fixture
+def remote_registry_connection() -> RemoteGatewayConnection:
+    return RemoteGatewayConnection(
+        connection_id="rgw_persisted",
+        name="持久化远程连接",
+        host="remote.example",
+        port=22,
+        username="user",
+        private_key_path=None,
+        ssh_config_host="remote",
+        remote_gateway_port=8014,
+        remote_gateway_id="remote-gateway",
+        protocol_version=1,
+        source_owner="manual",
+        remote_config_event_cursor=7,
+        remote_config_state="restart_required",
+        remote_restart_required=True,
+        remote_candidate_ref="remote-candidate",
+    )
+
+
+@pytest.mark.parametrize("publication", ["config_batch", "snapshot", "upsert"])
+def test_remote_gateway_sqlite_publication_survives_registry_reopen(
+    tmp_path: Path,
+    remote_registry_connection: RemoteGatewayConnection,
+    publication: str,
+) -> None:
+    connection = remote_registry_connection
+    if publication == "config_batch":
+        connection = replace(connection, source_owner="config")
+    target = WorkspaceTarget(
+        workspace_id=build_projected_workspace_id(
+            connection.connection_id, "remote-workspace"
+        ),
+        name="持久化远程工作区",
+        root_path="/remote/project",
+        backend_url="http://127.0.0.1:43100",
+        connection_kind="remote_gateway",
+        backend_workspace_id="00000000-0000-4000-8000-000000000002",
+        owner="remote_projection",
+        connection_id=connection.connection_id,
+        remote_gateway_connection_id=connection.connection_id,
+        remote_workspace_id="remote-workspace",
+        remote_service_names=("workspace_api",),
+    )
+    state_path = tmp_path / "gateway.sqlite"
+    registry_path = tmp_path / "gateway.json"
+    with GatewayStateStore(path=state_path) as state:
+        registry = GatewayWorkspaceRegistry(
+            storage_path=registry_path, state_store=state
+        )
+        try:
+            if publication == "config_batch":
+                registry.apply_remote_projection_batch(
+                    connections=(connection,),
+                    runtimes={
+                        connection.connection_id: WorkspaceRuntime(
+                            service_urls={"workspace_api": target.backend_url}
+                        )
+                    },
+                    projections={connection.connection_id: (target,)},
+                )
+            elif publication == "snapshot":
+                registry.apply_remote_projection_snapshot(
+                    connection=connection, projections=(target,), activate=True
+                )
+            else:
+                registry.upsert_remote_gateway(connection)
+                registry.upsert(target)
+            revision = registry.registry_revision
+            saved = state.load_workspace_registry()
+            assert saved is not None
+            assert saved["remote_gateway_connections"] == [asdict(connection)]
+            assert (
+                saved["targets"][0]["backend_workspace_id"]
+                == target.backend_workspace_id
+            )
+        finally:
+            registry.close()
+    assert not registry_path.exists()
+    with GatewayStateStore(path=state_path) as reopened_state:
+        reopened = GatewayWorkspaceRegistry(
+            storage_path=registry_path, state_store=reopened_state
+        )
+        try:
+            assert reopened.registry_revision == revision
+            assert (
+                reopened.remote_gateway_connection(connection.connection_id)
+                == connection
+            )
+            restored = reopened.resolve(target.workspace_id)
+            assert restored.owner == "remote_projection"
+            assert restored.remote_gateway_connection_id == connection.connection_id
+            assert restored.backend_workspace_id == target.backend_workspace_id
+            with pytest.raises(ConfigConflictError, match="游标回退"):
+                reopened.apply_remote_projection_snapshot(
+                    connection=replace(connection, remote_config_event_cursor=6),
+                    projections=(restored,),
+                )
+            assert reopened_state.load_workspace_registry() == saved
+        finally:
+            reopened.close()
+
+
+def test_removing_last_projection_deletes_connection_in_same_sqlite_publication(
+    tmp_path: Path,
+    remote_registry_connection: RemoteGatewayConnection,
+) -> None:
+    connection = remote_registry_connection
+    state_path = tmp_path / "gateway.sqlite"
+    registry_path = tmp_path / "gateway.json"
+    with GatewayStateStore(path=state_path) as state:
+        registry = GatewayWorkspaceRegistry(
+            storage_path=registry_path, state_store=state
+        )
+        try:
+            registry.upsert_remote_gateway(connection)
+            for workspace_id in ("projection-a", "projection-b"):
+                registry.upsert(
+                    WorkspaceTarget(
+                        workspace_id=workspace_id,
+                        name=workspace_id,
+                        root_path="/remote/" + workspace_id,
+                        backend_url="http://127.0.0.1:43100",
+                        connection_kind="remote_gateway",
+                        backend_workspace_id="00000000-0000-4000-8000-000000000002",
+                        owner="remote_projection",
+                        connection_id=connection.connection_id,
+                        remote_gateway_connection_id=connection.connection_id,
+                        remote_workspace_id=workspace_id,
+                    )
+                )
+            registry.remove("projection-a")
+            assert (
+                registry.remote_gateway_connection(connection.connection_id)
+                == connection
+            )
+            registry.remove("projection-b")
+            revision = registry.registry_revision
+            saved = state.load_workspace_registry()
+            assert saved is not None
+            assert saved["remote_gateway_connections"] == []
+            assert saved["targets"] == []
+        finally:
+            registry.close()
+    with GatewayStateStore(path=state_path) as reopened_state:
+        reopened = GatewayWorkspaceRegistry(
+            storage_path=registry_path, state_store=reopened_state
+        )
+        try:
+            assert reopened.registry_revision == revision
+            assert reopened.remote_gateway_connections() == ()
+            assert reopened.active_workspace_id is None
+            assert reopened.targets() == ()
+        finally:
+            reopened.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("remote_config_event_cursor", True),
+        ("remote_config_event_cursor", -1),
+        ("remote_config_event_cursor", "7"),
+        ("remote_config_state", 7),
+        ("remote_restart_required", "false"),
+        ("remote_candidate_ref", 7),
+    ],
+)
+def test_registry_reopen_rejects_invalid_persisted_connection_fields(
+    tmp_path: Path,
+    remote_registry_connection: RemoteGatewayConnection,
+    field: str,
+    invalid_value: object,
+) -> None:
+    state_path = tmp_path / "gateway.sqlite"
+    registry_path = tmp_path / "gateway.json"
+    with GatewayStateStore(path=state_path) as state:
+        registry = GatewayWorkspaceRegistry(
+            storage_path=registry_path, state_store=state
+        )
+        try:
+            registry.upsert_remote_gateway(remote_registry_connection)
+            record = state.get_config("workspace_registry_meta")
+            assert record is not None
+            # 模拟绕过 registry owner 损坏持久记录；重开必须暴露非法值。
+            record.payload["remote_gateway_connections"][0][field] = invalid_value
+            state.set_config(
+                config_key="workspace_registry_meta",
+                config_version=record.config_version,
+                payload=record.payload,
+            )
+        finally:
+            registry.close()
+    with GatewayStateStore(path=state_path) as reopened_state:
+        with pytest.raises(ValueError, match=field):
+            GatewayWorkspaceRegistry(
+                storage_path=registry_path, state_store=reopened_state
+            )
 
 
 class _HealthResponse:
