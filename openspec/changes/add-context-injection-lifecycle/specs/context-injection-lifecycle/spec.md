@@ -358,9 +358,11 @@ URI resolver MUST在当前principal、workspace/gateway binding、resource activ
 
 ### Requirement: 资源上下文激活边界必须可配置且确定
 
-系统 SHALL只支持`turn`和`model_call`两种resource context activation boundary，默认值 MUST为`turn`，并允许按resource kind覆盖。queued Turn取得active execution slot时 MUST冻结一个`ResourceActivationPolicySnapshot`及有序`TurnResourceSnapshot`；policy snapshot保存revision/hash与每个resource kind的effective boundary，并在整个Turn内不可变，配置热更新只影响后续Turn。`TurnResourceSnapshot`固定全部turn-bound binding；若存在model-call-bound kind，每次tool protocol收敛后的安全model-call preparation MUST建立引用parent Turn snapshot的`ModelCallResourceSnapshot`，逐字节复用turn-bound binding并只重新冻结model-call-bound binding。已经sealed或in-flight的call始终不可变。
+系统 SHALL只支持`turn`和`model_call`两种resource context activation boundary，默认值 MUST为`turn`，并允许按resource kind覆盖。queued execution取得active execution slot时 MUST取得一个`ResourceActivationPolicySnapshot`及有序`ExecutionResourceSnapshot`；policy snapshot保存revision/hash与每个resource kind的effective boundary，按唯一冻结合同在当前 execution及同用户Turn的retry/resume内不可变，配置热更新只影响后续首次取得冻结事实的新用户Turn或独立internal execution。`ExecutionResourceSnapshot`固定全部turn-bound binding；若存在model-call-bound kind，每次tool protocol收敛后的安全model-call preparation MUST建立引用parent execution snapshot的`ModelCallResourceSnapshot`，逐字节复用turn-bound binding并只重新冻结model-call-bound binding。已经sealed或in-flight的call始终不可变。
 
-effective boundary MUST记录在每个resource binding中；系统不得以一个assembly级`boundary=turn|model_call`单值表示可能混合的资源。`skill_load` MUST使用产生该tool invocation的Turn/ModelCall snapshot解析Skill名称、entry与revision，不得在工具真正执行时改用更新的catalog snapshot。
+真实 execution、可空 Turn、parent与默认冻结复用只引用 `add-itemized-rollout-context` 的「Context plan 必须绑定精确资源激活快照和安全来源」合同。配置名 `turn` 也适用于无 Turn 的 internal execution：以其真实 active execution为冻结边界，禁止创建或借用用户 Turn。该唯一合同约束 user Turn 的 retry/resume 与 internal 恢复，本 change 不维护第二份身份模型。
+
+effective boundary MUST记录在每个resource binding中；系统不得以一个assembly级`boundary=turn|model_call`单值表示可能混合的资源。`skill_load` MUST使用产生该tool invocation的Execution/ModelCall snapshot解析Skill名称、entry与revision，不得在工具真正执行时改用更新的catalog snapshot。
 
 ResourceActivationCoordinator MUST只通过唯一Saver/ContextStore port提交typed snapshot；SQLite/JSONL/detail持久化、assembly binding、hash和恢复由itemized rollout owner实现。CSM、资源观察流水线或MCP适配不得建立第二snapshot writer/catalog。
 
@@ -381,7 +383,7 @@ ResourceActivationCoordinator MUST只通过唯一Saver/ContextStore port提交ty
 #### Scenario: 同一 assembly 混合两种边界
 
 - **WHEN** 最终policy配置`agent_spec=turn`且`tracked_skill_activation=model_call`，同一Turn执行第二次model call
-- **THEN** 新ModelCallResourceSnapshot引用parent Turn snapshot，逐字节复用agent spec binding并只更新tracked Skill binding；每个binding分别标记effective boundary，assembly不得用单值boundary覆盖二者
+- **THEN** 新ModelCallResourceSnapshot引用parent execution snapshot，逐字节复用agent spec binding并只更新tracked Skill binding；每个binding分别标记effective boundary，assembly不得用单值boundary覆盖二者
 
 #### Scenario: activation policy 热更新不改变当前 Turn
 
@@ -745,7 +747,7 @@ catalog整树deleting后，即使某Session local fence仍active，普通thread 
 #### Scenario: 排队 execution 只在取得 active slot 后组装上下文
 
 - **WHEN**同一child已有active execution，另一个真实用户Turn或内部wakeup已进入持久FIFO queue，排队期间tracked source或desired ToolSet发生变化
-- **THEN**pending entry的queued root及entry-scoped seed/notice由旧execution的ExecutionContextFence按causal admission排除，不提前为该entry运行CSM或seal assembly；即使旧execution随后提交的tool/final item在物理sequence上晚于queued root，model/history仍按execution/Turn因果排序。与未来entry无关的ambient文件/Skill/team revision由ResourceRegistry异步发布，但默认`turn`边界下旧active Turn继续使用自己在active slot冻结的ResourceActivationSnapshot，只有显式`model_call`边界才在后续model-call preparation从Registry内存snapshot激活新revision；两者都不在请求路径读源。pending entry在前序终态、原子推进visibility并取得active slot后才冻结自己的Turn snapshot并执行首次reconcile/rebase，sibling thread仍可并行
+- **THEN**pending entry的queued root及entry-scoped seed/notice由旧execution的ExecutionContextFence按causal admission排除，不提前为该entry运行CSM或seal assembly；即使旧execution随后提交的tool/final item在物理sequence上晚于queued root，model/history仍按execution/Turn因果排序。与未来entry无关的ambient文件/Skill/team revision由ResourceRegistry异步发布，但默认`turn`边界下旧active Turn继续使用自己在active slot冻结的ResourceActivationSnapshot，只有显式`model_call`边界才在后续model-call preparation从Registry内存snapshot激活新revision；两者都不在请求路径读源。pending entry在前序终态、原子推进visibility并取得active slot后才冻结自己的execution snapshot并执行首次reconcile/rebase，sibling thread仍可并行
 
 #### Scenario: 附件正文不成为 CSM source detail
 
@@ -777,7 +779,7 @@ catalog整树deleting后，即使某Session local fence仍active，普通thread 
 
 系统 SHALL 将Goal限定为Session main thread的能力；durable child thread MUST 不启用Goal，但仍拥有独立ContextStore、CSM、历史和真实用户Turn。team member、task、role和coordinator状态 MUST 只存于单个Session的协作状态中，并通过稳定member identity引用该Session的child thread；每个接收thread的CSM只能提交属于自己owner的相关状态revision/delta，不得共享另一个thread的source control state。
 
-每次collaboration ledger mutation MUST先通过Session生命周期准入，并在同一`session-control.sqlite`事务中创建承担operation lease的`CollaborationFanoutRecord`，冻结fence generation、ledger revision、event hash、精确recipient thread集合和逐recipient delivery state；提交后不得按当前membership重算收件人。fanout worker按`(ledger_revision, recipient_thread_id)`幂等提交各owner的pending source observation，每次提交验证原lease/generation，不使用跨thread事务且不唤醒cold runtime。任一thread MUST在team_state配置的resource activation boundary冻结ledger revision为`source_reconciliation_snapshot`并从状态索引reconcile其中全部required revision；默认turn snapshot不得早于取得active slot时的ledger revision，不能使用queue acceptance时刻且同一Turn后续tool-loop不得漂移，只有显式`model_call`配置才可在后续call重新捕获。未seal连续变化可合并，已提交source item不可改写。崩溃、单recipient失败、cold或删除不得导致其它thread重复注入；fence关闭后未提交recipient写明确terminal delivery outcome且不得晚到append，snapshot内required revision未追平时禁止该thread dispatch。
+每次collaboration ledger mutation MUST先通过Session生命周期准入，并在同一`session-control.sqlite`事务中创建承担operation lease的`CollaborationFanoutRecord`，冻结fence generation、ledger revision、event hash、精确recipient thread集合和逐recipient delivery state；提交后不得按当前membership重算收件人。fanout worker按`(ledger_revision, recipient_thread_id)`幂等提交各owner的pending source observation，每次提交验证原lease/generation，不使用跨thread事务且不唤醒cold runtime。任一thread MUST在team_state配置的resource activation boundary冻结ledger revision为`source_reconciliation_snapshot`并从状态索引reconcile其中全部required revision；默认execution snapshot不得早于取得active slot时的ledger revision，不能使用queue acceptance时刻且同一Turn后续tool-loop不得漂移，只有显式`model_call`配置才可在后续call重新捕获。未seal连续变化可合并，已提交source item不可改写。崩溃、单recipient失败、cold或删除不得导致其它thread重复注入；fence关闭后未提交recipient写明确terminal delivery outcome且不得晚到append，snapshot内required revision未追平时禁止该thread dispatch。
 
 跨Session协作 MUST 只通过面向目标main thread的显式send/read/wait操作。目标引用只接受裸`session_id`或会话上下文资源引用；**会话上下文资源引用的虚拟资源地址（VRN）语法、作用域/scope、网关授权段/gateway authority与解析 MUST 以 `migrate-session-context-uri-to-vrn` change 为准；本 change MUST NOT 自行定义会话上下文 URI 形态。** 引用只是locator而非bearer capability。联邦部署 MUST支持一个中心Gateway hub通过SSH `-L`主动连接多个spoke，并在隧道内建立长期全双工WebSocket对等RPC channel；channel建立后hub与spoke均可主动发起request/response/event，不要求反向SSH隧道或spoke之间直连。跨spoke路径最多为`B → A → C`，只允许一个hub transit且不得继续多级转发。workspace-qualified link使用当前Gateway catalog identity，federated link使用稳定`gateway_id + workspace_id`；现有持久`connection_id`只作本地连接配置身份，瞬时channel instance/epoch/seq/ack和route locator均不得进入link、resolved target、GlobalThreadAddress、outbox/inbox preimage或业务幂等key。实际source Session/thread MUST贯穿中继，hub不得伪装成业务source。`send_message_to_session(target, content, kind="result", reply_to_communication_id?, delivery_policy="after_turn")`的`content`必须非空，`kind=question|reply|progress|result`，`delivery_policy=after_turn|after_tool_result|after_interrupt`；输入 MUST NOT暴露`communication_id`、`send_operation_id`或`simulate_user`，source outbox按软件持久化的稳定operation identity唯一分配communication，可信UI/API重试复用软件idempotency key。send MUST 由target workspace解析main thread并注册带真实source provenance的ambient/pending event和独立wakeup，不得创建目标真实user Turn。可信用户Turn只能由UI/API ingress owner创建。
 

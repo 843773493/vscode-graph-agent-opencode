@@ -1330,11 +1330,13 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: Context plan 必须绑定精确资源激活快照和安全来源
 
-每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=turn|model_call`、model-call snapshot的`parent_turn_snapshot_id`、activation policy revision/hash、Registry generation、owner SessionThread、Turn、按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
+每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=execution|model_call`、model-call snapshot的`parent_execution_snapshot_id`、activation policy revision/hash、Registry generation、owner SessionThread、真实execution identity、按admission kind可空的Turn及按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
 
-Turn取得active execution slot时 MUST冻结整个Turn不可变的activation policy与`TurnResourceSnapshot`，其中固定turn-bound binding。若没有model-call-bound kind，该Turn全部model call复用同一snapshot；若存在override，每次安全model-call preparation MUST建立parent-linked`ModelCallResourceSnapshot`并绑定该model call，逐字节复用parent中的turn-bound binding，只重新冻结model-call-bound binding。同一assembly可以包含两类binding，必须由每个ResourceProvenanceRef的effective boundary区分，不能用单个assembly boundary覆盖。ResourceRegistry或activation配置后续变化不得改写已经sealed的plan、hash、selection或Provider bytes，policy变化只在下一个Turn生效。
+真实execution取得active slot时 MUST按下述唯一冻结合同取得不可变的activation policy与`ExecutionResourceSnapshot`，其中固定turn-bound binding。若没有model-call-bound kind，该Turn全部model call复用同一snapshot；若存在override，每次安全model-call preparation MUST建立parent-linked`ModelCallResourceSnapshot`并绑定该model call，逐字节复用parent中的turn-bound binding，只重新冻结model-call-bound binding。同一assembly可以包含两类binding，必须由每个ResourceProvenanceRef的effective boundary区分，不能用单个assembly boundary覆盖。ResourceRegistry或activation配置后续变化不得改写已经sealed的plan、hash、selection或Provider bytes，policy变化只在下一个新用户Turn或独立internal execution生效；同用户Turn retry/resume保持原冻结事实。
 
-`bindings_hash` MUST只覆盖按activation ordinal排列的resource identity/kind/scope/facet/revision/integrity token/availability/display URI等实际选择语义，provider-neutral`plan_hash`只使用该bindings hash及其它实际context selection。独立`activation_provenance_hash` MUST覆盖snapshot kind、`parent_kind + parent_bindings_hash`关系描述、activation policy revision/hash、Registry generation及各binding effective boundary/captured generation；具体`parent_turn_snapshot_id`由typed relation/FK及turn-bound binding逐字节复用校验保护。`activation_snapshot_id`、Turn/model-call identity和captured_at只作typed relation，不进入内容hash。policy/effective boundary/generation不得进入bindings/plan hash；相同wire选择不能因为无关resource event、新Turn identity、policy发布或重启generation而改变hash。display URI只作provenance，不得替代resource identity、capability、dedupe或幂等key；URI不包含revision。恢复、replay、history、fork和Provider projection MUST使用已封存resource identity/revision/hash/snapshot ref，不得把display URI解析为当前资源，不得访问当前文件、network endpoint或ResourceRegistry补造历史。owner、parent/policy、ordinal、URI/resource binding、integrity或required snapshot任一缺失/冲突时必须显式失败。
+冻结归属 MUST 使用真实 admission 的 `(session_id, thread_id, execution_id)`，根为 `ExecutionResourceSnapshot(snapshot_kind=execution)`，model-call snapshot 使用 `parent_execution_snapshot_id` 并验证相同 owner、execution 与可空 `turn_id`。`user_turn` 的 `turn_id` 必须等于已接受的真实 Turn；`internal` 必须为 NULL，不创建或借用 source Turn/root，也不得把 execution ID 填入 Turn 字段。配置边界名称仍为 `turn|model_call`：默认 `turn` 对真实用户 Turn 在首次 active slot 冻结一次 policy/turn-bound binding；同 Turn 的 retry/resume execution 由唯一持久冻结 owner 取得原字节并建立自己的真实 execution 关联，不因当前 Registry/config 变化重新冻结。无 Turn 的 internal execution 在自己的 active slot 冻结一次，后续 call 复用；新独立 internal execution 可取得新 published revision。pending entry 不提前冻结。恢复缺失/冲突显式拒绝，不读取当前源回填。execution/Turn/model-call ID只参与 typed relation 与完整性约束，不进入内容 hash。
+
+`bindings_hash` MUST只覆盖按activation ordinal排列的resource identity/kind/scope/facet/revision/integrity token/availability/display URI等实际选择语义，provider-neutral`plan_hash`只使用该bindings hash及其它实际context selection。独立`activation_provenance_hash` MUST覆盖snapshot kind、`parent_kind + parent_bindings_hash`关系描述、activation policy revision/hash、Registry generation及各binding effective boundary/captured generation；具体`parent_execution_snapshot_id`由typed relation/FK及turn-bound binding逐字节复用校验保护。`activation_snapshot_id`、Turn/model-call identity和captured_at只作typed relation，不进入内容hash。policy/effective boundary/generation不得进入bindings/plan hash；相同wire选择不能因为无关resource event、新Turn identity、policy发布或重启generation而改变hash。display URI只作provenance，不得替代resource identity、capability、dedupe或幂等key；URI不包含revision。恢复、replay、history、fork和Provider projection MUST使用已封存resource identity/revision/hash/snapshot ref，不得把display URI解析为当前资源，不得访问当前文件、network endpoint或ResourceRegistry补造历史。owner、parent/policy、ordinal、URI/resource binding、integrity或required snapshot任一缺失/冲突时必须显式失败。
 
 模型可见或普通history projection只能返回策略允许的display URI、resource kind/scope/facet、revision安全标识、availability和typed provenance ref；绝对路径、provider locator、network endpoint、credential、内部handle和受保护正文 MUST NOT进入JSONL、普通history、模型请求日志或工具结果。Skill source URI属于resource/context envelope而不是Skill metadata。正常v2 runtime不得从旧`.boxteam/.../SKILL.md`、`read_file_path`、middleware location字符串或当前catalog反推resource provenance，也不得双写兼容字段。
 
@@ -1346,6 +1348,16 @@ Turn取得active execution slot时 MUST冻结整个Turn不可变的activation po
 
 - **WHEN** Turn取得active slot时冻结resource revision A，第一次call后Registry发布revision B且该Turn继续第二次call
 - **THEN** 默认turn配置下两个plan引用同一activation snapshot和A；B只影响后续Turn，旧plan hash和Provider bytes不变化
+
+#### Scenario: 无用户 Turn 的内部执行冻结与恢复
+
+- **WHEN** internal admission 的 `turn_id=NULL` 取得 active slot，在 Registry 发布新 revision 后继续 tool loop 或由同一 execution 恢复
+- **THEN** typed root/model-call snapshot 都绑定该真实 execution、保持 NULL Turn，不创建用户 root，不借用 source completed Turn；默认 turn-bound binding 与 policy保持原冻结字节，只有显式 model_call kind按安全边界更新。重放沿持久 snapshot/ref恢复，缺失时失败而不取当前 Registry
+
+#### Scenario: 同一用户 Turn 的 retry/resume 保留冻结事实
+
+- **WHEN** 用户 Turn 已冻结 policy/binding，Registry 或配置变化后该 Turn 以新 execution ID retry/resume
+- **THEN** 唯一冻结 owner 为新 execution 建立真实归属并保留同一真实 Turn，复用原 policy/turn-bound字节；model-call parent属于该 execution，不能伪造 identity、借其它 execution/Turn 的快照或读当前资源重造旧事实
 
 #### Scenario: 来源变化但选中语义facet不变
 
@@ -1360,12 +1372,12 @@ Turn取得active execution slot时 MUST冻结整个Turn不可变的activation po
 #### Scenario: model_call边界产生新快照
 
 - **WHEN** resource kind配置为model_call且Registry在两次安全call之间发布revision B
-- **THEN** 第二次call保存引用原TurnResourceSnapshot的ModelCallResourceSnapshot并可以为该kind选择B；turn-bound binding逐字节复用，第一次assembly继续绑定A，两个snapshot和resource provenance的lineage可独立恢复
+- **THEN** 第二次call保存引用原ExecutionResourceSnapshot的ModelCallResourceSnapshot并可以为该kind选择B；turn-bound binding逐字节复用，第一次assembly继续绑定A，两个snapshot和resource provenance的lineage可独立恢复
 
 #### Scenario: 混合边界和policy revision可恢复
 
 - **WHEN**同一assembly包含`agent_spec=turn`与`tracked_skill_activation=model_call`，且当前Turn执行期间activation配置又发布新revision
-- **THEN**assembly的snapshot保存原policy revision/hash和parent Turn snapshot；agent spec binding标记turn并复用parent，tracked Skill binding标记model_call并记录自己的captured generation。配置新revision不改变当前Turn，restore可逐字段验证而不猜测单一boundary
+- **THEN**assembly的snapshot保存原policy revision/hash和parent execution snapshot；agent spec binding标记turn并复用parent，tracked Skill binding标记model_call并记录自己的captured generation。配置新revision不改变当前Turn，restore可逐字段验证而不猜测单一boundary
 
 #### Scenario: 历史资源位置已经改变
 

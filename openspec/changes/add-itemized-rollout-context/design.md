@@ -423,15 +423,16 @@ ResourceRegistry、monitor/provider、Virtual Resource Namespace（VRN）resolve
 ```text
 ResourceActivationSnapshotRef {
   activation_snapshot_id
-  snapshot_kind            # turn | model_call
-  parent_turn_snapshot_id? # model_call必填，turn为空
+  snapshot_kind            # execution | model_call
+  parent_execution_snapshot_id? # model_call必填，execution为空
   activation_policy_revision
   activation_policy_hash
   registry_generation
   owner_session_id
   owner_thread_id
-  turn_id
-  model_call_id?            # model_call snapshot必填，turn snapshot为空
+  execution_id             # 真实execution owner，必填
+  turn_id?                 # user_turn为真实Turn，internal为空
+  model_call_id?            # model_call snapshot必填，execution snapshot为空
   captured_at
   bindings_hash
   activation_provenance_hash
@@ -458,13 +459,13 @@ ResourceProvenanceRef {
 
 `display_uri`不含revision且不是ContextRef/resource identity、capability、dedupe或业务幂等key；同一URI可以在不同revision出现，provider locator变化也不能修改已提交URI或resource identity。`source_lineage_ref`只指向受保护、不可变的source_id/revision向量和derivation版本；它支持审计与完整性校验，不允许据此重新读当前来源。一个SKILL.md可对应两个语义resource，多层配置可合成一个effective resource；raw source revision变化而选中facet未变时，不得改变该binding的语义revision、bindings hash、plan hash或旧source lineage ref。`provider_locator`、绝对路径、network endpoint、credential ref和内部handle永远不进入上述record、JSONL、普通history或模型请求日志。需要受保护正文时只用typed snapshot/detail ref和integrity manifest读取，不能把URI转成本地Path或重新请求当前provider。
 
-Turn取得active execution slot时建立一个`TurnResourceSnapshot(snapshot_kind=turn)`并冻结activation policy revision/hash及所有turn-bound binding。若冻结policy没有model-call-bound kind，该Turn全部model call的plan都引用同一snapshot id和bindings hash；若存在override，每个安全model-call preparation建立`ModelCallResourceSnapshot(snapshot_kind=model_call, parent_turn_snapshot_id, model_call_id)`，逐字节复用parent的turn-bound binding，只为model-call-bound kind取得新的Registry generation/binding。每条ResourceProvenanceRef保存自己的`effective_boundary`和captured generation，因此同一assembly可安全混合两种边界。policy本身整个Turn不变；热发布的新policy只影响下一个Turn。任一模式下snapshot只来自ResourceRegistry已发布内存revision，sealing后观察到的新resource/config revision不修改旧record、plan hash、request hash或Provider bytes。
+真实execution取得active slot时按唯一冻结合同建立或恢复一个`ExecutionResourceSnapshot(snapshot_kind=execution)`并冻结activation policy revision/hash及所有turn-bound binding。若冻结policy没有model-call-bound kind，该Turn全部model call的plan都引用同一snapshot id和bindings hash；若存在override，每个安全model-call preparation建立`ModelCallResourceSnapshot(snapshot_kind=model_call, parent_execution_snapshot_id, model_call_id)`，逐字节复用parent的turn-bound binding，只为model-call-bound kind取得新的Registry generation/binding。每条ResourceProvenanceRef保存自己的`effective_boundary`和captured generation，因此同一assembly可安全混合两种边界。policy本身整个Turn不变；热发布的新policy只影响下一个新用户Turn或独立internal execution，同Turn retry/resume复用原policy。任一模式下snapshot只来自ResourceRegistry已发布内存revision，sealing后观察到的新resource/config revision不修改旧record、plan hash、request hash或Provider bytes。
 
-`ContextRequestPlan`保存`resource_activation_snapshot_ref`，每个被选择的source contribution保存exact `resource_provenance_ref`和activation ordinal。`bindings_hash`只覆盖按ordinal排列的resource id/kind/scope/facet/revision/integrity token/availability/display URI等实际选择语义，provider-neutral`plan_hash`只引用该bindings hash和其它实际context selection；安全display URI进入manifest用于防止投影来源漂移，但不能替代resource id。独立`activation_provenance_hash`覆盖snapshot kind、`parent_kind + parent_bindings_hash`关系描述、activation policy revision/hash、Registry generation及每个binding的effective boundary/captured generation，用于恢复一致性和审计；具体`parent_turn_snapshot_id`另由typed relation/FK和turn-bound binding逐字节复用校验保护，不进入hash preimage。`activation_snapshot_id`、Turn/model-call identity、captured_at等运行identity不进入任一内容hash；policy/effective boundary/generation也不得进入bindings/plan hash，否则相同wire选择会因无关观察或policy发布产生hash抖动。`request_hash`继续覆盖实际wire投影。required resource provenance缺失、owner不匹配、parent或policy不一致、URI与resource identity manifest冲突、snapshot不可用或hash不符时阻止seal/restore/dispatch，不从当前Registry、当前URI或当前文件回填。
+`ContextRequestPlan`保存`resource_activation_snapshot_ref`，每个被选择的source contribution保存exact `resource_provenance_ref`和activation ordinal。`bindings_hash`只覆盖按ordinal排列的resource id/kind/scope/facet/revision/integrity token/availability/display URI等实际选择语义，provider-neutral`plan_hash`只引用该bindings hash和其它实际context selection；安全display URI进入manifest用于防止投影来源漂移，但不能替代resource id。独立`activation_provenance_hash`覆盖snapshot kind、`parent_kind + parent_bindings_hash`关系描述、activation policy revision/hash、Registry generation及每个binding的effective boundary/captured generation，用于恢复一致性和审计；具体`parent_execution_snapshot_id`另由typed relation/FK和turn-bound binding逐字节复用校验保护，不进入hash preimage。`activation_snapshot_id`、Turn/model-call identity、captured_at等运行identity不进入任一内容hash；policy/effective boundary/generation也不得进入bindings/plan hash，否则相同wire选择会因无关观察或policy发布产生hash抖动。`request_hash`继续覆盖实际wire投影。required resource provenance缺失、owner不匹配、parent或policy不一致、URI与resource identity manifest冲突、snapshot不可用或hash不符时阻止seal/restore/dispatch，不从当前Registry、当前URI或当前文件回填。
 
 上述`revision`与`integrity token`均指语义资源payload；`source_lineage_digest/ref`是额外的provenance完整性字段，必须进入`activation_provenance_hash`与ref校验，但不得进入`bindings_hash`、`plan_hash`或wire bytes。这样只改Skill未使用metadata或raw文件签名时不会导致模型选择抖动；发生真实语义变化时才由CSM以新resource revision追加尾部item。source lineage manifest缺失、摘要不符或声称的derivation版本无法验证时，required binding必须fail closed，不得从当前source或Registry补造。
 
-SQLite至少建立activation snapshot catalog、snapshot-to-resource binding和assembly/selection reference索引；大型正文仍只存在受保护detail/snapshot store，不复制进SQLite。Turn/ModelCall、fork、rewind、compaction和copy必须使用target-local typed refs和明确lineage；复制到新SessionThread时为target分配新的activation snapshot/reference identity并复制或claim所需sealed detail，不能让target直接读取source thread或重新解析display URI。
+SQLite至少建立activation snapshot catalog、snapshot-to-resource binding和assembly/selection reference索引；大型正文仍只存在受保护detail/snapshot store，不复制进SQLite。Execution/ModelCall、fork、rewind、compaction和copy必须使用target-local typed refs和明确lineage；复制到新SessionThread时为target分配新的activation snapshot/reference identity并复制或claim所需sealed detail，不能让target直接读取source thread或重新解析display URI。
 
 history/live projection只能返回策略允许的`display_uri`、resource kind/scope、facet、revision安全标识、availability和typed provenance ref；不得返回resource id（除非受信诊断明确需要）、provider locator、路径、endpoint、credential或受保护正文。Skill的source URI属于context/resource envelope，不扩展只含name/description的Skill metadata。live、terminal history和刷新恢复必须投影同一已提交provenance，不能从DOM、tool result字符串、middleware prompt或当前catalog重算。
 
@@ -635,7 +636,7 @@ ContextRequestPlan 保留 prompt contribution 的独立 ref、顺序、来源及
 
 #### 5.1.2 Provider ToolSetRef 与扩展目录 binding 的封存边界
 
-`ToolSetRef`及其`tool_set_manifest[]`只包含Provider `tools`实际可见的直接工具和固定`invoke_extension_tool(tool_name, arguments)`信封；内层MCP/内置/自定义target的名称、schema、策略和连接generation不得混进ToolSetRef或信封description。MCP工具目录变化是独立`ExtensionCatalogBindingRef`与其派生CSM指引revision变化，不是Provider tool schema变化，不单独创建`toolset_changed` epoch。只有直接工具或信封本身有效改变时才按生命周期change做ToolSet hard rebase。`ExtensionCatalogBindingRef`由统一Saver/ContextStore owner随model-call assembly seal持久化，至少绑定owner thread、Turn/ModelCall资源激活snapshot、catalog semantic revision/hash、指引revision/source ref、effective boundary、稳定target identity/schema hash、server generation验证ref与policy快照；连接实例ID不得成为业务identity。catalog正文/映射在受保护snapshot/detail中保存，不泄露endpoint或credential。sealed调用以这个ref解析目标；tool invocation/result另保存内层target identity、schema revision和调用generation，原Provider tool name仍是信封。
+`ToolSetRef`及其`tool_set_manifest[]`只包含Provider `tools`实际可见的直接工具和固定`invoke_extension_tool(tool_name, arguments)`信封；内层MCP/内置/自定义target的名称、schema、策略和连接generation不得混进ToolSetRef或信封description。MCP工具目录变化是独立`ExtensionCatalogBindingRef`与其派生CSM指引revision变化，不是Provider tool schema变化，不单独创建`toolset_changed` epoch。只有直接工具或信封本身有效改变时才按生命周期change做ToolSet hard rebase。`ExtensionCatalogBindingRef`由统一Saver/ContextStore owner随model-call assembly seal持久化，至少绑定owner thread、Execution/ModelCall资源激活snapshot、catalog semantic revision/hash、指引revision/source ref、effective boundary、稳定target identity/schema hash、server generation验证ref与policy快照；连接实例ID不得成为业务identity。catalog正文/映射在受保护snapshot/detail中保存，不泄露endpoint或credential。sealed调用以这个ref解析目标；tool invocation/result另保存内层target identity、schema revision和调用generation，原Provider tool name仍是信封。
 
 catalog binding与指引source在同一`turn|model_call`边界冻结：默认Turn不漂移；选用`model_call`时下一安全preparation先收敛旧call/result，再共同选中最新已发布目录与增量指引。catalog变化可改变新assembly的binding/provenance与plan selection/hash，但在Provider `tools`和已经提交的wire context前缀不变时，不得将其误判为ToolSet hard rebase；指引只作为独立user-role source item尾部追加。request-only binding不计入Turn的`item_count`或`elapsed_ms`。retry/exact replay只使用已封存目录与指引，不按当前MCP server或URI重新解析；fork target复制或重新封存target-local binding和历史lineage，不复制可执行旧connection handle。旧assembly字节及ToolSetRef不变。
 

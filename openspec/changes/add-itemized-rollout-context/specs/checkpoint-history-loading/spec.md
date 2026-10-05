@@ -183,7 +183,7 @@ checkpoint restore、history loading、detail lookup 和 ContextRequestPlan mate
 
 ### Requirement: checkpoint/history restore 必须复用 sealed resource activation snapshot
 
-checkpoint restore、history loading、retry、rewind、compaction 和 exact replay SHALL 通过 `RolloutCheckpointSaver` 读取 assembly 已提交的 `ResourceActivationSnapshotRef` 与 `ResourceProvenanceRef`，不能调用 ResourceRegistry、Virtual Resource Resolver、resource loader 或 monitor provider 获取当前内容。`snapshot_kind=turn`时恢复原policy与turn-bound binding；`snapshot_kind=model_call`时必须恢复其`parent_turn_snapshot_id`、逐字节相同的turn-bound binding和该call自己的model-call-bound binding。loader不能把最新Registry generation或配置policy批量覆盖到历史assembly，也不能用一个boundary单值重建混合binding。
+checkpoint restore、history loading、retry、rewind、compaction 和 exact replay SHALL 通过 `RolloutCheckpointSaver` 读取 assembly 已提交的 `ResourceActivationSnapshotRef` 与 `ResourceProvenanceRef`，不能调用 ResourceRegistry、Virtual Resource Resolver、resource loader 或 monitor provider 获取当前内容。`snapshot_kind=execution`时恢复原policy与turn-bound binding；`snapshot_kind=model_call`时必须恢复其`parent_execution_snapshot_id`、逐字节相同的turn-bound binding和该call自己的model-call-bound binding。loader不能把最新Registry generation或配置policy批量覆盖到历史assembly，也不能用一个boundary单值重建混合binding。
 
 loader MUST 校验 resource ref 的 owner session/thread、assembly、activation ordinal、resource identity、revision、availability、length/hash marker 和 protected detail capability。`display_uri` 只用于安全展示和经授权的显式新解析，不是 restore lookup key；历史正文必须按 sealed `snapshot_ref|detail_ref` 定点读取。ref 缺失、owner 冲突、hash 不匹配或正文已被 retention 清理时返回 `source-mismatch`、`detail-unavailable` 或明确 loss，禁止回退文件系统、网络、内存源、当前 Registry 或旧 path 字段。
 
