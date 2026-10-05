@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **d06a8673103f2c9f9de67b56bd508099595a10e8**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。当前固定180d累计75owned业务路径已物化ROOT、业务未提交；从fresh d06组合tree=`40ac91c3f3b9c4bfc4d05a68d3c16fd70f213cf7`。75路径含两项预期删除与候选一致，默认index未变，证据 `r-current-composition/after-skill-d06.json`。b086退休早包只在私有index严格重建/组合，尚未物化ROOT，不把作者live绿灯归给ROOT。主补业务源码为0；下次恢复重新核HEAD/候选/preimage，三保护未变。
+本文更新前ROOT HEAD **dc31c1736be440ca9263d81a38a0edd9bcfd7dd0**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。当前固定180d累计75owned业务路径已物化ROOT、业务未提交；从fresh dc31组合tree=`5afef36d369288f5faa127851d541b74ffcc2102`。75路径含两项预期删除与候选一致，默认index未变，证据 `r-current-composition/after-skill-dc31.json`。b086退休早包只在私有index严格重建/组合，尚未物化ROOT，不把作者live绿灯归给ROOT。主补业务源码为0；下次恢复重新核HEAD/候选/preimage，三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -162,4 +162,8 @@ checkpoint全文首次14pass/29fail中28项因作者猜用不存在的Saver.main
 
 空选择reader受影响原组 `test_internal_display_view_order.py` 仍import/call已删validate_item_storage_metadata，主固定b086独核两处并读完整fixture，已授权同Sol在当前终包固定后迁完整typed fixture，保分页/顺序/owner/corruption断言，单独交窄包，不复活alias。新增文件工具规划四组与当前HEAD逐字一致，复用strict41/0与独审；本轮不再改规划、不启动其实施，证据 `file-tools-openspec-plan/current-reuse-attempt-8/`。
 
-主线程删除边界独审另识别P2：新增schema_transactions单函数进程内测试应在unit，已交同Sol物理迁移且保七项断言。初次误将schema_v4_fixtures/AGENTS owned路径当删除，随后实际fixed diff反证、立刻撤单，原四节说明已正确更新；此误派单归主协调成本。独审报告 `r-legacy-v2-retirement-primary-review/deletion-closure-attempt-1/report.md`，final差异待验。
+主线程删除边界独审另识别P2：新增schema_transactions单函数进程内测试应在unit，已交同Sol物理迁移且保六项断言。初次误将schema_v4_fixtures/AGENTS owned路径当删除，随后实际fixed diff反证、立刻撤单，原四节说明已正确更新；此误派单归主协调成本。独审报告 `r-legacy-v2-retirement-primary-review/deletion-closure-attempt-1/report.md`，final差异待验。
+
+Sol另一次真实停顿已定位：在分配WT中执行`rg -l legacy-v2-checkpoint-replay / --max-count 1 -g !proc | head -20`，最新检查/源码停在21:40 UTC，主于21:52 UTC核PID、cmdline、cwd后只对rg发SIGTERM；进程停顿约534.29秒，无测试/服务writer被终止。该命令既无分配检索根也无外部超时，主已回发完整WT/index/A坐标并修技能原路径条款。证据 `sol-unbounded-search-correction/attempt-1/`；恢复与后续效果待验，延迟列为本轮调度/工具使用失败，不以它单独推模型能力。
+
+搜索停后主恢复同Sol turn，复用原模型/effort与独有源码，并初始化绝对状态index `TEMP/coordinator/git/r-sol-retirement-resume-b086.idx` 于固定b086；明确重发WT/A/保护范围和最小replay→固定终包顺序，不换实现者、不扩业务范围。恢复后的目录/外部超时规则效果尚待新交付证明。
