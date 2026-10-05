@@ -103,6 +103,40 @@ def clear_remote_listeners(
     )
 
 
+def _remote_runtime_manifest_command(
+    target: GatewaySshTarget, manifest_path: str
+) -> str:
+    """测试启动器在远端生成与源码 Launcher 相同形态的真实 manifest。"""
+    script = """import json, os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+output = Path(sys.argv[2])
+package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+manifest = {
+    "schema_version": 1, "distribution": "source-development", "version": package["version"],
+    "python_executable": sys.executable, "application_root": str(root),
+    "config_resources": {name: str(root / "configs" / (name + ".jsonc")) for name in (
+        "gateway_inline", "gateway_schema", "workspace_inline", "workspace_schema"
+    )},
+    "skill_resources": str(root / "resources" / "skills"), "web_assets": None,
+    "chromium_executable": os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH"),
+    "node": {"source": "launcher", "executable": None},
+}
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
+"""
+    return " ".join(
+        shlex.quote(value)
+        for value in (
+            f"{target.python_environment}/bin/python",
+            "-c",
+            script,
+            target.repository_path,
+            manifest_path,
+        )
+    )
+
+
 def start_remote_backend_via_ssh(
     *,
     target: GatewaySshTarget,
@@ -127,9 +161,16 @@ def start_remote_backend_via_ssh(
         timeout=60,
     )
     if identity_result.stderr:
-        raise RuntimeError(f"远端 Workspace backend UUID CLI 成功时 stderr 必须为空: {identity_result.stderr!r}")
-    if not identity_result.stdout.endswith("\n") or identity_result.stdout.count("\n") != 1:
-        raise TypeError(f"远端 Workspace backend UUID CLI 必须只输出一行 UUID: {identity_result.stdout!r}")
+        raise RuntimeError(
+            f"远端 Workspace backend UUID CLI 成功时 stderr 必须为空: {identity_result.stderr!r}"
+        )
+    if (
+        not identity_result.stdout.endswith("\n")
+        or identity_result.stdout.count("\n") != 1
+    ):
+        raise TypeError(
+            f"远端 Workspace backend UUID CLI 必须只输出一行 UUID: {identity_result.stdout!r}"
+        )
     backend_workspace_id = validate_workspace_id(identity_result.stdout[:-1])
     mounted_workspaces = json.dumps(
         [
@@ -149,6 +190,7 @@ def start_remote_backend_via_ssh(
         f"{target.repository_path}/configs/tests/workspace/default.jsonc"
     )
     config_schema_source = f"{target.repository_path}/configs/workspace_schema.jsonc"
+    runtime_manifest_path = f"{remote_boxteam_home}/runtime/runtime-manifest.json"
     quoted_remote_schema_path = shlex.quote(remote_schema_path)
     env_parts = [
         f"{key}={shlex.quote(value)}" for key, value in (extra_env or {}).items()
@@ -165,7 +207,9 @@ def start_remote_backend_via_ssh(
             f"cp {target.repository_path}/configs/workspace_schema.jsonc",
             f"{shlex.quote(remote_config_root + '/workspace_schema.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
+            _remote_runtime_manifest_command(target, runtime_manifest_path) + ";",
             f"WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
+            f"BOXTEAM_RUNTIME_MANIFEST={shlex.quote(runtime_manifest_path)}",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
             f"BOXTEAM_PROJECT_ROOT={shlex.quote(target.repository_path)}",
             f"BOXTEAM_MOUNTED_WORKSPACES={shlex.quote(mounted_workspaces)}",
@@ -219,6 +263,7 @@ def start_remote_gateway_via_ssh(
         ],
     )
     remote_config_root = f"{remote_boxteam_home}/config"
+    runtime_manifest_path = f"{remote_boxteam_home}/runtime/runtime-manifest.json"
     gateway_root = shlex.quote(f"{remote_boxteam_home}/state/gateway")
     python_executable = shlex.quote(f"{target.python_environment}/bin/python")
     command = " ".join(
@@ -238,6 +283,8 @@ def start_remote_gateway_via_ssh(
             f"cp {target.repository_path}/configs/workspace_schema.jsonc",
             f"{shlex.quote(remote_config_root + '/workspace_schema.jsonc')};",
             f"cd {shlex.quote(target.repository_path)};",
+            _remote_runtime_manifest_command(target, runtime_manifest_path) + ";",
+            f"BOXTEAM_RUNTIME_MANIFEST={shlex.quote(runtime_manifest_path)}",
             f"BOXTEAM_HOME={shlex.quote(remote_boxteam_home)}",
             f"BOXTEAM_GATEWAY_ROOT={gateway_root}",
             f"BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT={shlex.quote(remote_workspace_path)}",
@@ -274,6 +321,7 @@ def start_remote_gateway_via_ssh(
         target=target,
         remote_gateway_port=remote_gateway_port,
         process_id=process_id,
+        remote_boxteam_home=remote_boxteam_home,
     )
     return process_id
 
@@ -283,6 +331,7 @@ def wait_for_remote_gateway_ready(
     target: GatewaySshTarget,
     remote_gateway_port: int,
     process_id: str,
+    remote_boxteam_home: str,
 ) -> None:
     deadline = time.monotonic() + TARGET_READY_TIMEOUT_SECONDS
     last_error = ""
@@ -291,15 +340,26 @@ def wait_for_remote_gateway_ready(
             ssh_command(
                 target,
                 (
-                    f"kill -0 {shlex.quote(process_id)} "
-                    f"&& curl -fsS http://127.0.0.1:{remote_gateway_port}"
+                    f"process_state=$(ps -o stat= -p {shlex.quote(process_id)} 2>/dev/null); "
+                    'case "$process_state" in ""|Z*) '
+                    f"cat {shlex.quote(remote_boxteam_home + '/logs/gateway.stdout.log')} "
+                    f"{shlex.quote(remote_boxteam_home + '/logs/gateway.stderr.log')}; "
+                    "exit 73;; esac; "
+                    f"curl -fsS --max-time 5 http://127.0.0.1:{remote_gateway_port}"
                     "/api/gateway/health"
                 ),
             ),
             capture_output=True,
             text=True,
+            timeout=15,
             check=False,
         )
+        if result.returncode == 73:
+            raise RuntimeError(
+                "容器内远程 Gateway 进程已退出: "
+                f"pid={process_id}, port={remote_gateway_port}, "
+                f"stdout={result.stdout.strip()}, stderr={result.stderr.strip()}"
+            )
         if result.returncode == 0:
             return
         last_error = result.stderr.strip() or result.stdout.strip()
@@ -326,7 +386,9 @@ def start_remote_auxiliary_services_via_ssh(
             timeout=15,
         ).stdout
     )
-    if not isinstance(identity, dict) or not isinstance(identity.get("workspace_id"), str):
+    if not isinstance(identity, dict) or not isinstance(
+        identity.get("workspace_id"), str
+    ):
         raise TypeError(f"远端工作区身份文件缺少 workspace_id: {remote_identity_path}")
     workspace_id = validate_workspace_id(identity["workspace_id"])
     clear_remote_listeners(target, [terminal_port, browser_port])
