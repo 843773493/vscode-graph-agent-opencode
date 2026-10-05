@@ -319,6 +319,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     # 同一回滚边界内，绝不留下「assembly 已 dispatch 但无
                     # provenance」或反之的半发布状态。
                     activation_binding(connection)
+                self._apply_sealed_context_sources(connection, snapshot)
                 self._validate_context_assembly_manifest(
                     connection, snapshot, header_detail_ref=detail_key,
                     checkpoint_ns=checkpoint_ns,

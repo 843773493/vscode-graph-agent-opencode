@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from app.domain.itemized.epoch.prefix_epoch import (
+    PendingPrefixEpochTransition,
+    PrefixEpochState,
     SealedPrefixAssembly,
     append_items,
     initial_epoch_state,
+    seal_assembly,
     stable_prefix_bytes,
     stable_prefix_digest,
     verify_stable_prefix,
 )
 from app.domain.itemized.epoch.root_compilation import CompiledRootItem
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import validate_hash_token
+from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
 from app.domain.itemized.validation import _non_empty_string
 
 
@@ -25,10 +29,76 @@ class AppliedSourceRevision:
     source_id: str
     revision: str
     decision_id: str
+    previous_revision: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("source_id", "revision", "decision_id"):
             _non_empty_string(getattr(self, name), f"AppliedSourceRevision.{name}")
+        if self.previous_revision is not None:
+            _non_empty_string(self.previous_revision, "AppliedSourceRevision.previous_revision")
+            if self.previous_revision == self.revision:
+                raise ItemSchemaError("source seal 不得重复应用同一 revision")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSealPreparation:
+    """model-call 冻结的准备值；成功的唯一 seal 才能将它变为 applied。"""
+
+    prefix_state: PrefixEpochState
+    root: CompiledRootItem | None
+    tool_set: ToolSetSnapshot
+    previous_assembly_id: str | None
+    source_revisions: tuple[AppliedSourceRevision, ...] = ()
+    transition: PendingPrefixEpochTransition | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.prefix_state, PrefixEpochState):
+            raise ItemSchemaError("ContextSealPreparation.prefix_state 类型非法")
+        if not isinstance(self.tool_set, ToolSetSnapshot):
+            raise ItemSchemaError("ContextSealPreparation.tool_set 类型非法")
+        if self.previous_assembly_id is not None:
+            _non_empty_string(self.previous_assembly_id, "previous_assembly_id")
+        if self.root is not None and (
+            not isinstance(self.root, CompiledRootItem)
+            or self.root.epoch != self.prefix_state.epoch
+            or self.root.provider_profile != self.prefix_state.provider_profile
+            or self.root.tool_compatibility_key != self.prefix_state.tool_compatibility_key
+        ):
+            raise ItemSchemaError("prepared root 与 prefix epoch 不一致")
+        if not isinstance(self.source_revisions, tuple) or not all(
+            isinstance(source, AppliedSourceRevision) for source in self.source_revisions
+        ):
+            raise ItemSchemaError("prepared source revisions 必须是 typed tuple")
+        identities = [source.source_id for source in self.source_revisions]
+        if len(identities) != len(set(identities)):
+            raise ItemSchemaError("一次 prepare 不得携带同一 source 的中间 revision")
+
+    def input_hash(self) -> str:
+        """随机 assembly identity 分配前冻结完整准备 preimage。"""
+        return sha256_jcs({
+            "schema": "context-seal-preparation:v1",
+            "prefix_state": asdict(self.prefix_state),
+            "root": self.root.frame_manifest() if self.root is not None else None,
+            "tool_set_snapshot_id": self.tool_set.snapshot_id,
+            "selection_revision": self.tool_set.selection_revision,
+            "previous_assembly_id": self.previous_assembly_id,
+            "source_revisions": [asdict(source) for source in self.source_revisions],
+            "transition": asdict(self.transition) if self.transition is not None else None,
+        })
+
+    def bind(self, assembly_id: str) -> ContextSealBinding:
+        """仅生成候选绑定；持久 owner 提交前不改变准备值或 applied 状态。"""
+        return ContextSealBinding(
+            prefix=seal_assembly(
+                self.prefix_state, assembly_id=assembly_id, transition=self.transition,
+            ),
+            root=self.root,
+            tool_set_snapshot_id=self.tool_set.snapshot_id,
+            applied_toolset_revision=self.tool_set.revision,
+            selection_revision=self.tool_set.selection_revision,
+            previous_assembly_id=self.previous_assembly_id,
+            source_revisions=self.source_revisions,
+        )
 
 
 @dataclass(frozen=True, slots=True)

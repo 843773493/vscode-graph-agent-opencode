@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from uuid import uuid4
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
@@ -32,6 +33,7 @@ def seal_registered_plan(
     request_only_content: Mapping[str, object] | None,
     request_input_hash: str | None,
     activation_snapshot=None,
+    context_preparation: ContextSealPreparation | None = None,
 ) -> ContextAssemblySnapshot:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     with owner._lock:
@@ -54,6 +56,10 @@ def seal_registered_plan(
             assembly_options,
             request_input_hash,
             activation_bindings_hash,
+            context_preparation_hash=(
+                context_preparation.input_hash()
+                if context_preparation is not None else None
+            ),
         )
         retry = committed_retry(
             owner,
@@ -104,6 +110,10 @@ def seal_registered_plan(
                 session_id=session_id,
                 thread_id=thread_id,
                 request_detail_refs=detail_refs,
+                seal_binding=(
+                    context_preparation.bind(assembly_id)
+                    if context_preparation is not None else None
+                ),
                 **assembly_options,
             )
         except BaseException as error:

@@ -36,6 +36,8 @@ def seal_input_hash(
     assembly_options: Mapping[str, object],
     request_input_hash: str | None,
     activation_bindings_hash: str | None = None,
+    *,
+    context_preparation_hash: str | None = None,
 ) -> str:
     preimage = {
         "schema": "saver-context-seal-input:v1",
@@ -53,6 +55,8 @@ def seal_input_hash(
     # 的 input hash 仍需可幂等复用）；只有携带 activation binding 时才扩键。
     if activation_bindings_hash is not None:
         preimage["activation_bindings_hash"] = activation_bindings_hash
+    if context_preparation_hash is not None:
+        preimage["context_preparation_hash"] = context_preparation_hash
     return sha256_jcs(preimage)
 
 
@@ -121,6 +125,7 @@ def committed_retry(
             session_id=draft.session_id,
             thread_id=draft.thread_id,
             request_detail_refs=detail_refs,
+            seal_binding=committed.seal_binding,
             **assembly_options,
         )
     except (ValueError, TypeError) as error:

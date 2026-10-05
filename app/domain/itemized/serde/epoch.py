@@ -175,7 +175,8 @@ def context_seal_binding_from_dict(payload: object) -> ContextSealBinding:
     revisions = []
     for value in _array(raw["source_revisions"], "source_revisions"):
         revision = _object(
-            value, {"source_id", "revision", "decision_id"}, "AppliedSourceRevision"
+            value, {"source_id", "revision", "decision_id", "previous_revision"},
+            "AppliedSourceRevision",
         )
         revisions.append(AppliedSourceRevision(**revision))
     return ContextSealBinding(

@@ -247,12 +247,12 @@ def test_restart_recovery_keeps_threads_isolated(
 def test_owner_rejects_bare_session_id_as_thread(
     rollout_storage: RolloutStorage,
 ) -> None:
-    with pytest.raises(ValueError, match="thread_id 形态非法"):
+    with pytest.raises(RuntimeError, match="拒绝 thread alias"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id=SESSION_ID,
         )
-    with pytest.raises(ValueError, match="thread_id 形态非法"):
+    with pytest.raises(RuntimeError, match="拒绝 thread alias"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="main",
@@ -305,7 +305,7 @@ def test_synthetic_session_has_no_restorable_control_state(
     manager.register(_descriptor())
     assert manager.metadata() == ({"name": "debugging", "description": "调试工作流"},)
     # 写入仍必须显式失败：没有 durable owner 时不允许伪造持久化成功。
-    with pytest.raises(KeyError):
+    with pytest.raises(RuntimeError, match="不是 canonical Session 身份"):
         rollout_storage.write_context_source_control_state(
             ContextSourceControlState(
                 owner=owner,
@@ -374,13 +374,13 @@ def test_owner_rejects_non_canonical_thread_id_shape(
     这是「越界 thread」之外的另一条真实拒绝路径：它既不是可寻址 session
     节点，也不是合法 canonical thread id，最终由 validate_thread_id 拒绝。
     """
-    with pytest.raises(ValueError, match="thread_id 形态非法"):
+    with pytest.raises(RuntimeError, match="不是 canonical Thread 身份"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="../escape",
         )
     # 非法但形态近似 canonical 的短 thr_ id 同样必须显式拒绝，不能短路成空。
-    with pytest.raises(ValueError, match="thread_id 形态非法"):
+    with pytest.raises(RuntimeError, match="不是 canonical Thread 身份"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id="thr_short",

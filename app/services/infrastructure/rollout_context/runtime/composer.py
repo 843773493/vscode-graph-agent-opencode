@@ -14,6 +14,7 @@ from app.domain.itemized.enums import (
     SelectionKind,
     SemanticKind,
 )
+from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
@@ -172,6 +173,7 @@ class ContextPlanComposer:
         wire_request: object | None = None,
         omitted_ref_ids: Iterable[str] = (),
         request_detail_refs: Mapping[str, DetailRef] | None = None,
+        seal_binding: ContextSealBinding | None = None,
     ) -> ContextAssemblySnapshot:
         if (plan.session_id, plan.thread_id) != (session_id, thread_id):
             raise ValueError("source-mismatch: plan 与 assembly session/thread 不一致")
@@ -434,6 +436,7 @@ class ContextPlanComposer:
                 if wire_request is not None
                 else None
             ),
+            seal_binding=seal_binding,
         )
 
 __all__ = ["ContextPlanComposer"]

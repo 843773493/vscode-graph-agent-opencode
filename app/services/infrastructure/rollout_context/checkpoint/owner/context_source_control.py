@@ -29,10 +29,13 @@ from dataclasses import replace
 from typing import cast
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import CommitKind
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.assembly.validation import json_text
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceControlState,
     ContextSourceOwnerKey,
@@ -145,6 +148,105 @@ class ContextSourceControlStorageMixin:
         resolved_thread_id = self._resolve_thread_identity(session_id, thread_id)
         self._resolve_thread_node(session_id, resolved_thread_id)
         return resolved_thread_id
+
+    def _apply_sealed_context_sources(
+        self,
+        connection: sqlite3.Connection,
+        snapshot: ContextAssemblySnapshot,
+    ) -> None:
+        """由唯一 assembly_sealed 事务确认 source-applied 与 prefix predecessor。
+
+        ToolSet/PrefixEpoch 的 applied 真值就是不可变 assembly binding；这里
+        不另建可改写的状态表。source 控制行只在同一事务内按 from revision
+        推进可见基准，失败由调用方回滚整个 assembly。
+        """
+        binding = snapshot.seal_binding
+        if binding is None:
+            return
+        previous_row = connection.execute(
+            "SELECT snapshot_json FROM context_assemblies "
+            "WHERE session_id = ? AND thread_id = ? "
+            "AND status IN ('sealed','terminal') AND assembly_id <> ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (snapshot.session_id, snapshot.thread_id, snapshot.assembly_id),
+        ).fetchone()
+        previous = None
+        if previous_row is not None:
+            previous = ContextAssemblySnapshot.from_dict(
+                json_text(previous_row[0], field="snapshot_json")
+            )
+        previous_id = previous.assembly_id if previous is not None else None
+        if binding.previous_assembly_id != previous_id:
+            raise RuntimeError(
+                "context-seal-predecessor-conflict: applied assembly 已变化，拒绝半提交"
+            )
+        if previous is not None and previous.seal_binding is None:
+            raise ItemSchemaError(
+                "context-seal-binding-required: 既有 assembly 缺少 applied epoch binding"
+            )
+        if previous is not None:
+            previous_binding = previous.seal_binding
+            previous_epoch = previous_binding.prefix.state.epoch
+            current_epoch = binding.prefix.state.epoch
+            if current_epoch.ordinal == previous_epoch.ordinal:
+                if (
+                    current_epoch != previous_epoch
+                    or binding.prefix.parent != previous_binding.prefix.state.parent
+                    or binding.root != previous_binding.root
+                    or binding.prefix.state.provider_profile != previous_binding.prefix.state.provider_profile
+                    or binding.prefix.state.tool_compatibility_key != previous_binding.prefix.state.tool_compatibility_key
+                ):
+                    raise ItemSchemaError("context-seal-epoch-conflict: 同 epoch applied binding 被重写")
+            elif current_epoch.ordinal != previous_epoch.ordinal + 1:
+                raise ItemSchemaError("context-seal-epoch-conflict: rebuild ordinal 必须连续")
+        elif binding.prefix.state.epoch.ordinal != 1:
+            raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
+        self._ensure_context_source_control_schema(connection)
+        for source in binding.source_revisions:
+            row = connection.execute(
+                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+                "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
+                (snapshot.session_id, snapshot.thread_id, source.source_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(
+                    "context-source-seal-conflict: source 未由 owner 登记: " + source.source_id
+                )
+            stored = _state_from_row(tuple(row))
+            if (
+                stored.latest_revision != source.revision
+                or stored.latest_visible_committed_revision != source.previous_revision
+            ):
+                raise RuntimeError(
+                    "context-source-seal-conflict: observed/applied revision 已变化: "
+                    + source.source_id
+                )
+            selected_source = any(
+                provenance.source_identity == source.source_id
+                and provenance.revision == source.revision
+                for provenance in (() if binding.root is None else binding.root.sources)
+            ) or any(
+                frame.item_ref.source_identity == source.source_id
+                and frame.item_ref.source_revision == source.revision
+                for frame in binding.prefix.state.frames
+            )
+            if not selected_source:
+                raise ItemSchemaError(
+                    "context-source-seal-conflict: applied source 没有真实 selected frame: "
+                    + source.source_id
+                )
+            cursor = connection.execute(
+                f"UPDATE {_TABLE_NAME} SET latest_visible_committed_revision = ?, "
+                "state_revision = state_revision + 1, updated_at = ? "
+                "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
+                "AND state_revision = ?",
+                (
+                    source.revision, _now(), snapshot.session_id, snapshot.thread_id,
+                    source.source_id, stored.state_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("context-source-seal-conflict: source applied CAS 未命中")
 
     def _context_source_rollout_owner_or_none(
         self,

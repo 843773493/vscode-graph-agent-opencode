@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.resource_activation import (
@@ -43,6 +44,7 @@ class ContextDetailOwnerMixin:
         omitted_ref_ids: Iterable[str] = (),
         checkpoint_ns: str = "",
         activation_snapshot: ResourceActivationSnapshotRef | None = None,
+        context_preparation: ContextSealPreparation | None = None,
     ) -> ContextAssemblySnapshot:
         """只封存显式注册的 draft；重复请求在分配 detail 之前校验并返回。
 
@@ -70,6 +72,7 @@ class ContextDetailOwnerMixin:
             request_only_content=request_only_content,
             request_input_hash=request_input_hash,
             activation_snapshot=activation_snapshot,
+            context_preparation=context_preparation,
         )
 
     def seal_context_assembly(
