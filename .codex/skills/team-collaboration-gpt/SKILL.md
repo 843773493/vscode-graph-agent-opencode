@@ -7,7 +7,7 @@ description: 使用用户选择的 GPT 主模型与 gpt-6-luna/max subagent 开�
 
 主模型由用户选择 GPT 系列；技能不能切换正在运行的主模型。
 
-执行前读取 [共同调度流程](memory/2026/10/05/team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。继续实施或处理报错时，再读取 [实时状态与实测改进](memory/2026/10/05/team-collaboration-state.md)。
+执行前读取 [共同调度流程](memory/2026/10/06/team-collaboration-workflow.md)。队伍人数、派单、目录、提交和验收只在共同流程维护；模型配置只在本入口维护，不写回 `AGENTS.md`。继续实施或处理报错时，再读取 [实时状态与实测改进](memory/2026/10/06/team-collaboration-state.md)。
 
 创建 subagent 时显式传入：
 
@@ -45,11 +45,11 @@ start_delegated_task({
 
 ## 需要记住的严重失败
 
-本入口只保留影响下一次决策的原因；当前效果与证据见[实时台账](memory/2026/10/05/team-collaboration-state.md)，历史细节保留在原报告。
+本入口只保留影响下一次决策的原因；当前效果与证据见[实时台账](memory/2026/10/06/team-collaboration-state.md)，历史细节保留在原报告。
 
 - **交付残缺、漏真实入口。** 手筛 hunk 曾漏签名、删除和 Web caller；CLI stdout迁移漏启动脚本，依赖迁移漏子项目lock。用[交付校验脚本](scripts/verify_delivery.py)从固定树严格重建并核 blob/hash，清点候选外源码。调用图包括 UI/API、CLI、进程入口、恢复、协议与间接消费者，必要时真实定向调用；mock/build不代入口验收。旧 d164cf6 Web直连Terminal Manager缺owner body的P1在当前持久资源owner入口已闭合，不能沿用旧finding。
 - **合同与基线错配。** live、旧 HEAD和固定候选混读曾误判接口；只给接口名称未交完整依赖又形成循环等待。核共同祖先、完整 preimage、真实构造注入/MRO与caller/callee，唯一提供者先固定完整合同，主串行同步。消费者尚待实现的必填字段不能成为获得前置的循环准入条件。
-- **身份与异步writer漏项。** Thread/Session混用、只在create带UUID、取消等待却未收`to_thread`writer均曾过helper测试。核所有HTTP/WS、真实user/internal/child及恢复入口；只用已校验admission，internal不造user Turn。幂等先比durable原请求；typed迁移还要在真实writer核owner/slot/revision CAS及未封存约束；R早审又发现descriptor→observation丢root policy，以及prefix/ToolSet各自合法但缺联合校验。核字段完整传递与同一事实的跨载体约束，round-trip或各自hash合法不足以验收。
+- **身份与异步writer漏项。** Thread/Session混用、只在create带UUID、取消等待却未收`to_thread`writer均曾过helper测试。核所有HTTP/WS、真实user/internal/child及恢复入口；只用已校验admission，internal不造user Turn。幂等先比durable原请求；typed迁移还要在真实writer核owner/slot/revision CAS及未封存约束；R早审又发现descriptor→observation丢root policy，以及prefix/ToolSet各自合法但缺联合校验。核字段完整传递与同一事实的跨载体约束，round-trip或各自hash合法不足以验收；修公共hash联校又误用脱敏后空policy，须核public/protected真实manifest token及旧binding不可复用，不能跳校验求绿。
 - **拒绝、未知结果与执行镜像脱节。** 确定拒绝漏失败回执污染owner；资源存活又被误当未知动作已完成。回滚或释放失败不能发布verified/closed或先丢句柄。由现有owner在真实转换边界记录结果并同步既有镜像；未知副作用保持阻断，定点核实身份/revision/终态后结清，普通列表不能清unknown。复验受影响资源，不只补单一状态码或伪payload。
 - **生命周期被缓存或监听器遮蔽。** LRU曾驱逐仍被服务持有的catalog，关闭listener又漏Goal/Job派生writer，卸载await窗口允许新claim落盘。唯一registry持有到真实释放；持久写前消费同一closing准入，先收finalizer/后台writer再关catalog。scope构建前交owner，cleanup失败保重试句柄与generation fence；不能删guard求绿。重启/失败重试共用真实owner核实，不缓存一次性恢复结论。
 - **路径与索引误操作。** 相对编辑、默认cwd、裸Git、自建archive/.venv反复错根，私有index只隔离暂存。每次给绝对workdir/index/产物路径，审查用固定tree，运行复用指定完整WT，不`/tmp`或复制整树。共享index从`--absolute-git-dir`定位；主曾误认私有index，成本单列。无精确备份不声称精确恢复，重复误操作者收窄写权限。

@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 23:44（北京时间）。goal **active、无预算上限**；交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 00:11（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
 
 ## 授权与恢复坐标
 
@@ -11,13 +11,13 @@
 - WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。R 切片基线 **7f8dc1e385d5e430e4e7a497a03c070a0408a255**；状态 index=TEMP/coordinator/git/r-producers-status.idx，主已实际初始化。WT HEAD 不代表 live 或固定候选。
 - 主串行集成，作者仅编辑、freeze/export，不改 refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
-- 另一聊天未跟踪草稿 `docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md` 不碰。
+- 另一聊天草稿 `docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md` 按用户新授权只读参考，其原件仍不改写。
 
 已裁定：assembly_ref=ResourceIdentity；unsupported_view；Gateway 创建拒绝保留 ID current；config layer=runtime_override、原 precedence 保留、active/pending 分开；delegate publication 使用 Session SQLite 同事务，不造 Team JSON 权威；internal admission 无 Turn/accepted ingress，保真实 execution link。精确决定见 TEMP/coordinator/artifacts/owner-decisions.json。
 
 ## 当前主树与真实运行
 
-ROOT 当前核验 HEAD **4d966c747b186df84fd0503c20d29191d38251c3**；业务源码最后提交 **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。后续三笔仅文档，下次恢复重新核 HEAD，不把本文值当 live。
+ROOT 当前核验 HEAD **c8b332fadce60320675e82fec32e844e19937749**；业务源码最后提交 **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724cef1da73951d6a96bf4b16d6a7ad3d6`。后续仅文档，下次恢复重新核 HEAD，不把本文值当 live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。当前整组 **active**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs。
 
@@ -68,3 +68,9 @@ ROOT 当前核验 HEAD **4d966c747b186df84fd0503c20d29191d38251c3**；业务源�
 已关闭阶段查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65` 及上述原产物。本次压缩前台账快照保留于 `skill-state-maintenance/pre-compaction-68d597bf20f6.md`，其中“未集成”等记述已被本文当前状态替代；不作为现行指令，不复制回入口。
 
 本地URI task复核：ROOT4d966三服务consumer组合实际1/9.255秒，28项通过、GatewaySessionContextClient三个旧test构造漏必填local_token_supplier失败（maxfail3，不能称整组绿）；14项公开DTO/中央grammar/view/cursor边界探针全过/0.962秒。来源 `local-uri-task-acceptance/attempt-1/`。local模型/入口已实现的旧注释已主修，完整入口验收保持未勾；测试迁移纳同Sol后续消费者，不恢复None认证旁路。config5.4已有源码/原C03及URI317证据，已核记录为完成，source control/activation5.6仍待。ConfigCandidateApplier旧双定义已由中性config/contracts.py单owner闭合，已更正陈旧登记。
+
+2026-10-06 公共合同后续：6dd forward修复前两个P2，但独审发现redacted/protected ToolSetRef的tool_policy={}不能重算原policy hash；同Sol交独立3path候选0e2a56433c3b9c48b11e86c152592dfb546ff813，统一消费最终manifest非正文token，作者86项通过/真实0，主strict cached apply重建一致，独立增量审查仍待，尚未集成ROOT。12 owner fixture setup errors的完整基线归因未证，不计整面通过。证据r-public-primary-review/protected-attempt-3/mechanical.json及作者public-contract-protected-attempt-3；未变审复用。
+
+用户新要求已入规划：统一寻址第8组拥有directory/file/domain_object、files/root与技能包导航、身份/文件分段编码、Session产物单文件模板和轻量读取；context第8组修通用Skill读取与激活分离；Session第9组补send/read/wait目标归一。独立add-unified-resource-file-tools拥有目标端执行、条件写入/部分与未知效果及boxteam-session旧scheme消费迁移，全部新实现保持未勾，不插当前R。严格全量41/0已过，规范差异复核仍进行。保留原handoff草稿，不称新增功能已实现；终端/浏览器/团队继续各自业务ID。活跃memory按北京时间跨日移动到06唯一节点，两个入口引用同步，无重复旧副本。
+
+文件规划已串行提交3940db07805f171580e1a190c72ba75f10ac1719（17路径），严格41/0、guard/双祖先/sharedindex不变；证据file-tools-openspec-plan/attempt-1/integration.json。未修改业务源码或旧handoff草稿。
