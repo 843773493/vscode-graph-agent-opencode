@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 19:28（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 20:01（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
 本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
@@ -18,7 +18,7 @@
 
 ## ROOT 已集成与真实产品
 
-activation规划合同：`4e49b7c30c250e8eddd662e3014b10f4cb5c51f2`；术语收口计划：`81a084572e470ad2d017dc87ca355f1c0e02d934`。Browser主体源码 `11a925b0d6ba7f880517947d3b5207c0300cf3c9`（树 f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5）；后续锁 c5a4、remote launcher e78c、远端UUID145759与正式WS helper5fef已串行集成，fresh连接元数据修复待同Sol交付。此前主体 0b355979（893路径）及启动器 c525e346 已集成。Browser 最终 111 路径严格应用并保留四份主独有文档，含 AGENTS.md；preimage、guard、双祖先与共享 index 均通过。
+activation规划合同：`4e49b7c30c250e8eddd662e3014b10f4cb5c51f2`；术语收口计划：`81a084572e470ad2d017dc87ca355f1c0e02d934`。Browser主体源码 `11a925b0d6ba7f880517947d3b5207c0300cf3c9`（树 f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5）；后续锁 c5a4、remote launcher e78c、远端UUID145759与正式WS helper5fef已串行集成，fresh连接元数据修复8989dbb2与重启认证consumer1de54734已集成，正式attempt7完整远端资源恢复通过。此前主体 0b355979（893路径）及启动器 c525e346 已集成。Browser 最终 111 路径严格应用并保留四份主独有文档，含 AGENTS.md；preimage、guard、双祖先与共享 index 均通过。
 
 主服务 unit=boxteam-dev-cff6686cbc5b0e76.service，active/running，MainPID1274667；offset16，frontend8027/Gateway8030；BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。恢复时重新核验。
 
@@ -93,3 +93,11 @@ attempt5初次端口预检尚未启动测试，发现attempt4孤儿SSH2323641占
 只读独审进一步确认 fresh连接元数据覆盖源于 ecf7e62（2026-09-22），属于继承源码缺陷，非本轮Sol。修复仍由唯一Sol闭合；attempt4孤儿的源码因果尚未证实，不将猜测当交付缺陷。
 
 固定树独审另确认正式fixture的继承清理风险：terminate_process10秒后静默kill Gateway父进程，产品lifespan先await多个stop/aclose，再关闭独立SSH组及Browser最长120秒owner；外部预算与真实关闭链不匹配。attempt4孤儿的具体因果未证，attempt5正常close无遗留；同Sol后续定点修harness有界关闭与透明失败/精确handle回收，不按端口批杀、不改受控handoff语义。报告A/remote-cleanup-review/attempt-1/report.md，尚未修复验收。
+
+2026-10-05 fresh registry修复：固定baseline80889→tree8cf679a，7path标准包SHA256 b647eaaf9e7aba42a75f940cd39721cd9260691adff134b9cefca65ab7e1dcb9；主严格cached重建、全部pre/postblob与hash、7Python AST、固定差异独审和作用域Ruff通过后集成8989dbb255acfcc08f3a843ad897185fb781f20c，guard/双祖先/sharedindex f2afa293均通过。首次真实SQLite组82pass/3fail保留，发现reader漏恢复connection的cursor/state/restart/candidate；第二轮85pass（pytest16.89秒，actual0/18.512秒），再加严格非法类型/负cursor反证后受影响组10pass（pytest2.17秒，actual0/3.700秒）。结果来自作者live，不与ROOT产品结果相加；WorkspaceTarget同名cursor未改。正式attempt6正在8989运行，尚不算产品验收。A/remote-registry-connection-publication/保留全部raw/exit/manifest和root-integration/attempt-1/receipt；127其他源码逐path deferred，typed仍由同Sol继续。主补业务源码0。
+
+正式remote attempt6：ROOT8989 actual1/103.204秒（pytest101.54秒）；SQLite恢复与Gateway重启就绪已通过，随后新restarted_client GET资源收到401 user_session_required。主固定读f838与现行cookie owner，确认既有正式测试只在首次client获取guest、重启新client漏获取；local token不能代替用户身份，不放宽生产认证。同Sol在typed可停点补唯一正式test重启登录，原资源200/id断言保留，待attempt7。A/root-product-verification/remote-browser-terminal-attempt-6/保留原raw/exit/facts与10原日志；结束时精确测试端口无残留监听。该继承consumer遗漏与metadata修复效果分开计量，不称整项通过。
+
+正式remote attempt7：guest consumer固定b25b→treee05c/唯一+1行，主strict/blob/preimage/AST/Ruff/固定差异独审/guard/双祖先/sharedindex不变后集成1de54734cab6047369a0d9ea1513dd9e432345ab。ROOT1de547正式实际0/74.575秒（pytest1pass/72.89秒），真实联邦ready、Browser附加/分离、Terminal命令输出、Gateway关闭/重启和fresh SQLite恢复后资源访问全部通过。target前后status0；精确测试监听无残留、ROOT无.boxteam，10份原日志保留。A/root-product-verification/remote-browser-terminal-attempt-7/acceptance.json；不再重跑这些未变绿项，也不据此勾typed/R/activation/delegate/federated资源URI或通用强杀harness安全。修订技能的事务/完整重开/重启认证规则已获得此次正式效果证据。
+
+typed阶段报告：唯一Sol修复structured tool_result.result_id在唯一收集阶段映射，remap_finalize从已校验message locator取anchor sequence，移除可空projection_message_id推导。有限fork8pass（pytest30.23秒，actual0/34.476秒），覆盖fullcopy→删source→二次fork及omitted四形态重开/损坏反证；未改hash/compare。其余81pass/5fail组消费者复验、opaque成员extensions/derived_from的checkpoint重开/retry拒绝、indexed raw tool-call跨modelscope和v1显式importer闭合仍待；无完整typed固定包，不作验收。
