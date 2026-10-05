@@ -102,6 +102,7 @@ export interface FederationWorkspaceDTO {
   managed: boolean;
   connection_kind: string;
   services: string[];
+  backend_workspace_id: string;
 }
 
 export interface FederationWorkspaceListDTO {
@@ -1399,7 +1400,15 @@ export const FederationProtocolManifestDTO: MessageFns<FederationProtocolManifes
 };
 
 function createBaseFederationWorkspaceDTO(): FederationWorkspaceDTO {
-  return { workspace_id: "", name: "", root_path: "", managed: false, connection_kind: "", services: [] };
+  return {
+    workspace_id: "",
+    name: "",
+    root_path: "",
+    managed: false,
+    connection_kind: "",
+    services: [],
+    backend_workspace_id: "",
+  };
 }
 
 export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
@@ -1413,6 +1422,7 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
       services: globalThis.Array.isArray(object?.services)
         ? object.services.map((e: any) => globalThis.String(e))
         : [],
+      backend_workspace_id: isSet(object.backend_workspace_id) ? globalThis.String(object.backend_workspace_id) : "",
     };
   },
 
@@ -1436,6 +1446,9 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     if (message.services?.length) {
       obj.services = message.services;
     }
+    if (message.backend_workspace_id !== "") {
+      obj.backend_workspace_id = message.backend_workspace_id;
+    }
     return obj;
   },
 
@@ -1450,6 +1463,7 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     message.managed = object.managed ?? false;
     message.connection_kind = object.connection_kind ?? "";
     message.services = object.services?.map((e) => e) || [];
+    message.backend_workspace_id = object.backend_workspace_id ?? "";
     return message;
   },
 };

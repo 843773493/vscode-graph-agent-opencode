@@ -26,12 +26,12 @@ from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
 )
-from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerStage,
     GatewayRuntimeConsumerTransaction,
     GatewayRuntimeHealthProof,
 )
+from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 def _synchronize_projected_workspaces(
@@ -49,54 +49,21 @@ def _synchronize_projected_workspaces(
         connection.connection_id,
         remote_config_event_cursor,
     )
-    projected: list[WorkspaceTarget] = []
-    for remote in remote_workspaces:
-        remote_workspace_id = str(remote["workspace_id"])
-        workspace_id = build_projected_workspace_id(
-            connection.connection_id,
-            remote_workspace_id,
-        )
-        existing = (
-            registry.resolve(workspace_id)
-            if registry.has_target(workspace_id)
-            else None
-        )
-        keep_existing_name = bool(
-            preserve_custom_names and existing and existing.name_customized
-        )
-        effective_cursor = (
-            remote_config_event_cursor
-            if remote_config_event_cursor is not None
-            else (
-                existing.remote_config_event_cursor
-                if existing is not None
-                else None
-            )
-        )
-        target = WorkspaceTarget(
-            workspace_id=workspace_id,
-            name=existing.name if keep_existing_name and existing else str(remote["name"]),
-            name_customized=existing.name_customized if keep_existing_name and existing else False,
-            root_path=str(remote["root_path"]),
-            backend_url=gateway_url,
-            connection_kind="remote_gateway",
-            owner="remote_projection",
-            connection_id=connection.connection_id,
-            managed=bool(remote.get("managed", False)),
-            remote_gateway_connection_id=connection.connection_id,
-            remote_workspace_id=remote_workspace_id,
-            remote_config_event_cursor=effective_cursor,
-            remote_service_names=tuple(remote.get("services", ("workspace_api",))),
-            connection_error=None,
-        )
-        projected.append(target)
+    projected = _projected_workspace_targets(
+        registry=registry,
+        connection=connection,
+        gateway_url=gateway_url,
+        remote_workspaces=remote_workspaces,
+        remote_config_event_cursor=remote_config_event_cursor,
+        preserve_custom_names=preserve_custom_names,
+    )
     registry.apply_remote_projection_snapshot(
         connection=connection,
-        projections=tuple(projected),
+        projections=projected,
         runtime=runtime,
         activate=activate,
     )
-    return tuple(projected)
+    return projected
 
 
 def _projected_workspace_targets(
@@ -128,15 +95,12 @@ def _projected_workspace_targets(
         effective_cursor = (
             remote_config_event_cursor
             if remote_config_event_cursor is not None
-            else (
-                existing.remote_config_event_cursor
-                if existing is not None
-                else None
-            )
+            else (existing.remote_config_event_cursor if existing is not None else None)
         )
         projected.append(
             WorkspaceTarget(
                 workspace_id=workspace_id,
+                backend_workspace_id=remote["backend_workspace_id"],
                 name=(
                     existing.name
                     if keep_existing_name and existing is not None
@@ -181,7 +145,10 @@ async def _prepare_remote_gateway(
         if configured.private_key_path
         else None
     )
-    if resolved_private_key_path is not None and not resolved_private_key_path.is_file():
+    if (
+        resolved_private_key_path is not None
+        and not resolved_private_key_path.is_file()
+    ):
         raise FileNotFoundError(f"SSH 私钥不存在: {resolved_private_key_path}")
     if resolved_private_key_path is None and not configured.ssh_config_host:
         raise ValueError("显式 SSH 连接必须提供 private_key_path")
@@ -388,8 +355,7 @@ async def reconcile_configured_remote_gateways(
         if not isinstance(service_urls, dict) or not service_urls:
             raise RuntimeError("远程 projection staged runtime 缺少服务地址")
         if any(
-            not isinstance(url, str) or not url.strip()
-            for url in service_urls.values()
+            not isinstance(url, str) or not url.strip() for url in service_urls.values()
         ):
             raise RuntimeError("远程 projection staged runtime 服务地址为空")
 
@@ -588,9 +554,7 @@ def _manifest_config_state(manifest: dict[str, object]) -> str | None:
 def _manifest_restart_required(manifest: dict[str, object]) -> bool:
     value = manifest.get("config_reload_restart_required", False)
     if not isinstance(value, bool):
-        raise RuntimeError(
-            "远程 Gateway manifest config_reload_restart_required 无效"
-        )
+        raise RuntimeError("远程 Gateway manifest config_reload_restart_required 无效")
     return value
 
 
@@ -614,4 +578,3 @@ def _connection_with_manifest_state(
         remote_restart_required=_manifest_restart_required(manifest),
         remote_candidate_ref=_manifest_candidate_ref(manifest),
     )
-

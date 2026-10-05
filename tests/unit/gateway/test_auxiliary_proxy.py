@@ -152,6 +152,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
             root_path=str(tmp_path / "bad"),
             backend_url="",
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="manual",
             remote_gateway_connection_id=None,
             remote_workspace_id=None,

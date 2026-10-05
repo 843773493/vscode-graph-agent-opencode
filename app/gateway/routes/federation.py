@@ -103,6 +103,7 @@ async def federation_workspaces(
     direct = [
         FederationWorkspaceDTO(
             workspace_id=target.workspace_id,
+            backend_workspace_id=target.backend_workspace_id,
             name=target.name,
             root_path=target.root_path,
             managed=target.managed,

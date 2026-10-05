@@ -55,6 +55,7 @@ def _registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
                 root_path=root_path,
                 backend_url="http://127.0.0.1:41000",
                 connection_kind="remote_gateway",
+                backend_workspace_id="00000000-0000-4000-8000-000000000002",
                 remote_gateway_connection_id="rgw_server",
                 remote_workspace_id=f"remote_{workspace_id}",
             ),
@@ -308,7 +309,6 @@ def test_port_forward_runtime_generation_protocol_is_reversible(
     proof = manager.runtime_health_proof(generation="gateway-generation")
     assert proof.details["runtime_generation"] == "gateway-generation"
     manager.rollback_runtime_generation("gateway-generation", None)
-
 
 
 def test_load_rejects_duplicate_persisted_local_port(tmp_path: Path) -> None:

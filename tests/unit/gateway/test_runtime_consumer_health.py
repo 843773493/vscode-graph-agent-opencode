@@ -102,6 +102,7 @@ def test_registry_health_rejects_configured_remote_projection_error(
             root_path="/remote",
             backend_url="http://remote",
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
             connection_id=connection.connection_id,
             remote_gateway_connection_id=connection.connection_id,

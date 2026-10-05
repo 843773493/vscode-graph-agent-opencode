@@ -36,9 +36,7 @@ class RegistryCrudMixin:
         preserve_generation = False
         self._validate_target_identity(target)
         if existing is not None:
-            if runtime is not None and self._has_route_references(
-                target.workspace_id
-            ):
+            if runtime is not None and self._has_route_references(target.workspace_id):
                 runtime.close()
                 raise RuntimeError(
                     "Gateway 不能替换仍有代理引用的工作区运行时，请先完成排空: "
@@ -103,6 +101,7 @@ class RegistryCrudMixin:
             self._active_workspace_id = target.workspace_id
         self._save(owner=mutation_owner or target.owner)
         return target
+
     @staticmethod
     def _validate_target_identity(target: WorkspaceTarget) -> None:
         if target.owner not in {"config", "manual", "system", "remote_projection"}:
@@ -112,8 +111,7 @@ class RegistryCrudMixin:
         if target.connection_id is not None and not target.connection_id.strip():
             raise ValueError("Gateway registry target connection_id 不能为空")
         if target.owner == "remote_projection" and (
-            target.connection_id is None
-            or target.remote_workspace_id is None
+            target.connection_id is None or target.remote_workspace_id is None
         ):
             raise ValueError(
                 "remote_projection target 必须包含 connection_id 和 remote_workspace_id"
@@ -133,13 +131,17 @@ class RegistryCrudMixin:
                     f"workspace_id={target.workspace_id}, "
                     f"backend_workspace_id={target.backend_workspace_id!r}"
                 )
-        if target.connection_kind == "remote_gateway" and target.backend_workspace_id is not None:
+        if (
+            target.connection_kind == "remote_gateway"
+            and target.backend_workspace_id is None
+        ):
             raise ValueError(
-                "远程 Gateway target 不得把 Gateway workspace_id 存作本地 backend UUID: "
+                "远程 Gateway target 缺少联邦导出的 backend UUID: "
                 f"workspace_id={target.workspace_id}"
             )
         if target.active_request_count < 0 or target.active_stream_count < 0:
             raise ValueError("Gateway registry 活动引用计数不能为负数")
+
     def remove(self, workspace_id: str, *, owner: str | None = None) -> None:
         target = self._targets.get(workspace_id)
         if target is None:
@@ -169,6 +171,7 @@ class RegistryCrudMixin:
         if self._active_workspace_id == workspace_id:
             self._active_workspace_id = self._default_workspace_id()
         self._save(owner=mutation_owner)
+
     def remove_system_default_aliases(self, *, keep_workspace_id: str) -> None:
         for workspace_id, target in self._targets.items():
             if (
@@ -193,6 +196,7 @@ class RegistryCrudMixin:
             changed = True
         if changed:
             self._save(owner="system")
+
     def ensure_default_workspace_first(self) -> None:
         if self._order_customized:
             return
@@ -211,6 +215,7 @@ class RegistryCrudMixin:
             },
         }
         self._save(owner="system")
+
     def reorder(self, workspace_ids: list[str]) -> None:
         if len(workspace_ids) != len(set(workspace_ids)):
             raise ValueError("Gateway 工作区排序列表包含重复 ID")
@@ -219,22 +224,28 @@ class RegistryCrudMixin:
         unknown_workspace_ids = sorted(requested_workspace_ids - known_workspace_ids)
         missing_workspace_ids = sorted(known_workspace_ids - requested_workspace_ids)
         if unknown_workspace_ids:
-            raise ValueError(f"Gateway 工作区排序包含未知 ID: {', '.join(unknown_workspace_ids)}")
+            raise ValueError(
+                f"Gateway 工作区排序包含未知 ID: {', '.join(unknown_workspace_ids)}"
+            )
         if missing_workspace_ids:
-            raise ValueError(f"Gateway 工作区排序缺少 ID: {', '.join(missing_workspace_ids)}")
+            raise ValueError(
+                f"Gateway 工作区排序缺少 ID: {', '.join(missing_workspace_ids)}"
+            )
         self._targets = {
-            workspace_id: self._targets[workspace_id]
-            for workspace_id in workspace_ids
+            workspace_id: self._targets[workspace_id] for workspace_id in workspace_ids
         }
         self._order_customized = True
         self._save(owner="manual_crud")
+
     def activate(self, workspace_id: str) -> None:
         if workspace_id not in self._targets:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
         self._active_workspace_id = workspace_id
         self._save(owner="manual_crud")
+
     def rename(self, workspace_id: str, name: str) -> WorkspaceTarget:
         return self.update(workspace_id, name=name)
+
     def set_parent(
         self,
         workspace_id: str,
@@ -244,6 +255,7 @@ class RegistryCrudMixin:
             workspace_id,
             parent_workspace_id=parent_workspace_id,
         )
+
     def update(
         self,
         workspace_id: str,
@@ -300,6 +312,7 @@ class RegistryCrudMixin:
             target.parent_workspace_id = normalized_parent_workspace_id
         self._save(owner="manual_crud")
         return target
+
     def resolve(self, workspace_id: str | None = None) -> WorkspaceTarget:
         target_id = workspace_id or self._active_workspace_id
         if target_id is None:
@@ -308,6 +321,7 @@ class RegistryCrudMixin:
         if target is None:
             raise LookupError(f"Gateway 工作区不存在: {target_id}")
         return target
+
     @staticmethod
     def _owner_scope(owner: str) -> str | None:
         return {
@@ -318,11 +332,13 @@ class RegistryCrudMixin:
             "system": "system",
             "remote_projection": "remote_projection",
         }.get(owner)
+
     def _default_workspace_id(self) -> str | None:
         for target in self._targets.values():
             if target.system_default:
                 return target.workspace_id
         return next(iter(self._targets), None)
+
     @staticmethod
     def _migrate_legacy_workspace_id(
         *,
@@ -347,6 +363,7 @@ class RegistryCrudMixin:
             root_path,
             backend_url,
         )
+
     def _validate_parent_graph(self) -> None:
         for workspace_id in self._targets:
             visited: set[str] = set()

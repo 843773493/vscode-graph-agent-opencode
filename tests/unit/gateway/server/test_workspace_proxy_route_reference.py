@@ -143,6 +143,7 @@ async def test_remote_credential_failure_releases_route_reference(
             root_path=str(tmp_path / "workspace"),
             backend_url="http://127.0.0.1:41001",
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             remote_gateway_connection_id="conn-missing",
             remote_workspace_id="remote-ws",
         ),

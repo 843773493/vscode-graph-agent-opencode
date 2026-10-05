@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config_sources import ConfigSourceLayer
+from app.core.workspace_identity import validate_workspace_id
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
 
 GatewayConnectionKind = Literal["local", "remote_gateway"]
@@ -251,6 +252,7 @@ class FederationProtocolManifestDTO(BaseModel):
 
 class FederationWorkspaceDTO(BaseModel):
     workspace_id: str
+    backend_workspace_id: str
     name: str
     root_path: str
     managed: bool
@@ -258,6 +260,15 @@ class FederationWorkspaceDTO(BaseModel):
     services: list[Literal["workspace_api", "terminal_manager", "browser_manager"]] = (
         Field(default_factory=list)
     )
+
+    @field_validator("backend_workspace_id")
+    @classmethod
+    def backend_uuid(cls, value: str) -> str:
+        try:
+            return validate_workspace_id(value)
+        except RuntimeError as error:
+            # 将唯一 UUID 校验器的拒绝转成 DTO 字段错误，保留原错误详情。
+            raise ValueError(str(error)) from error
 
 
 class FederationWorkspaceListDTO(BaseModel):

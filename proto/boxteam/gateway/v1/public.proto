@@ -102,6 +102,7 @@ message FederationWorkspaceDTO {
   bool managed = 4;
   string connection_kind = 5;
   repeated string services = 6;
+  string backend_workspace_id = 7;
 }
 
 message FederationWorkspaceListDTO {

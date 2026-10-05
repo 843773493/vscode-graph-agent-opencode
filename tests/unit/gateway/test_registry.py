@@ -77,9 +77,10 @@ class _OrderedCloseProcess:
 
     def close(self, *, timeout_seconds: float = 8) -> None:
         assert timeout_seconds == 8
-        assert len(
-            [event for event in self._events if event.startswith("terminate:")]
-        ) == self._process_count
+        assert (
+            len([event for event in self._events if event.startswith("terminate:")])
+            == self._process_count
+        )
         self._events.append(f"close:{self._name}")
 
     def detach(self) -> None:
@@ -266,6 +267,7 @@ def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
             root_path=str(tmp_path),
             backend_url="http://127.0.0.1:41000",
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
             connection_id=connection.connection_id,
             remote_gateway_connection_id=connection.connection_id,
@@ -317,6 +319,7 @@ def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
             root_path="/remote/project",
             backend_url=url,
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
             connection_id=connection.connection_id,
             remote_gateway_connection_id=connection.connection_id,
@@ -332,9 +335,7 @@ def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
                     service_urls={"workspace_api": "http://127.0.0.1:41000"}
                 )
             },
-            projections={
-                connection.connection_id: (target("http://127.0.0.1:41000"),)
-            },
+            projections={connection.connection_id: (target("http://127.0.0.1:41000"),)},
         )
         original_generation = registry.resolve("projected-batch").target_generation
         registry.acquire_route_reference("projected-batch", streaming=True)
@@ -354,8 +355,7 @@ def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
 
         assert registry.resolve("projected-batch").backend_url.endswith("41000")
         assert (
-            registry.resolve("projected-batch").target_generation
-            == original_generation
+            registry.resolve("projected-batch").target_generation == original_generation
         )
         registry.release_route_reference("projected-batch", streaming=True)
 
@@ -366,13 +366,10 @@ def test_remote_projection_config_batch_is_atomic_and_respects_route_lease(
                     service_urls={"workspace_api": "http://127.0.0.1:42000"}
                 )
             },
-            projections={
-                connection.connection_id: (target("http://127.0.0.1:42000"),)
-            },
+            projections={connection.connection_id: (target("http://127.0.0.1:42000"),)},
         )
         assert (
-            registry.resolve("projected-batch").target_generation
-            != original_generation
+            registry.resolve("projected-batch").target_generation != original_generation
         )
         assert state.get_registry_revision() == 2
     finally:
@@ -418,6 +415,7 @@ def test_remote_projection_batch_handoff_defers_old_runtime_and_can_rollback(
             root_path="/handoff",
             backend_url=url,
             connection_kind="remote_gateway",
+            backend_workspace_id="00000000-0000-4000-8000-000000000002",
             owner="remote_projection",
             connection_id=connection.connection_id,
             remote_gateway_connection_id=connection.connection_id,
@@ -496,6 +494,7 @@ def test_remote_projection_batch_handoff_closes_old_runtime_only_on_promotion(
         root_path="/promote",
         backend_url="http://127.0.0.1:43300",
         connection_kind="remote_gateway",
+        backend_workspace_id="00000000-0000-4000-8000-000000000002",
         owner="remote_projection",
         connection_id=connection.connection_id,
         remote_gateway_connection_id=connection.connection_id,
@@ -643,9 +642,7 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
                 backend_workspace_id="00000000-0000-4000-8000-000000000001",
             ),
             runtime=WorkspaceRuntime(
-                service_urls={
-                    "workspace_api": f"http://127.0.0.1:{8100 + index}"
-                },
+                service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"},
                 processes={"workspace_api": process},
             ),
             activate=index == 0,
@@ -884,7 +881,7 @@ def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
 
     assert restored.resolve("gw_browser_survival").local_service_urls == {
         "terminal_manager": "http://127.0.0.1:41001",
-        "browser_manager": "http://127.0.0.1:41002"
+        "browser_manager": "http://127.0.0.1:41002",
     }
     assert restored.resolve("gw_browser_survival").desired_running is False
 
@@ -911,16 +908,22 @@ def test_registry_persists_managed_runtime_intent_until_explicit_stop(
     )
 
     assert registry.resolve(target.workspace_id).desired_running is True
-    assert GatewayWorkspaceRegistry(
-        storage_path=storage_path
-    ).resolve(target.workspace_id).desired_running is True
+    assert (
+        GatewayWorkspaceRegistry(storage_path=storage_path)
+        .resolve(target.workspace_id)
+        .desired_running
+        is True
+    )
 
     registry.stop_managed_runtime(target.workspace_id)
 
     assert registry.resolve(target.workspace_id).desired_running is False
-    assert GatewayWorkspaceRegistry(
-        storage_path=storage_path
-    ).resolve(target.workspace_id).desired_running is False
+    assert (
+        GatewayWorkspaceRegistry(storage_path=storage_path)
+        .resolve(target.workspace_id)
+        .desired_running
+        is False
+    )
 
 
 @pytest.fixture
@@ -937,9 +940,7 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
                 backend_workspace_id="00000000-0000-4000-8000-000000000001",
             ),
             runtime=WorkspaceRuntime(
-                service_urls={
-                    "workspace_api": f"http://127.0.0.1:{8100 + index}"
-                }
+                service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"}
             ),
             activate=index == 0,
         )

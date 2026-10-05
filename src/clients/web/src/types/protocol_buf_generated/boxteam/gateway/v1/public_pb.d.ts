@@ -423,6 +423,11 @@ export declare type FederationWorkspaceDTO = Message<"boxteam.gateway.v1.Federat
    * @generated from field: repeated string services = 6;
    */
   services: string[];
+
+  /**
+   * @generated from field: string backend_workspace_id = 7;
+   */
+  backendWorkspaceId: string;
 };
 
 /**

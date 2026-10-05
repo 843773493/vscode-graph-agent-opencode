@@ -24,6 +24,7 @@ from app.gateway.runtime.process import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
+from app.schemas.gateway import FederationWorkspaceDTO
 
 FEDERATION_PROTOCOL_VERSION = 1
 #: SSH 配对是有界等待：对端 TCP 吞包时必须在有限时间内响亮失败，绝不无限挂起
@@ -36,7 +37,7 @@ WINDOWS_SOURCE_PAIR_COMMAND = (
     "Set-Location (Join-Path $env:LOCALAPPDATA 'boxteam-windows\\source'); "
     "& (Join-Path $env:LOCALAPPDATA "
     "'boxteam-windows\\venv\\Scripts\\python.exe') "
-    "-m app.gateway.federation_pairing {pairing_args}\""
+    '-m app.gateway.federation_pairing {pairing_args}"'
 )
 
 
@@ -111,9 +112,7 @@ def obtain_pairing_credential_over_ssh(
         f"--connection-id {connection_id}:{local_gateway_id} "
         f"--peer-gateway-id {local_gateway_id} --json"
     )
-    remote_command = pairing_command.replace(
-        "{pairing_args}", pairing_args
-    )
+    remote_command = pairing_command.replace("{pairing_args}", pairing_args)
     if remote_command == pairing_command:
         remote_command = f"{pairing_command} {pairing_args}"
     try:
@@ -213,7 +212,9 @@ async def discover_remote_gateway(
     }
     async with httpx.AsyncClient(timeout=10) as client:
         manifest_response, workspaces_response = await asyncio.gather(
-            client.get(f"{gateway_url}/api/gateway/federation/manifest", headers=headers),
+            client.get(
+                f"{gateway_url}/api/gateway/federation/manifest", headers=headers
+            ),
             client.get(
                 f"{gateway_url}/api/gateway/federation/workspaces",
                 headers=headers,
@@ -248,7 +249,7 @@ async def discover_remote_gateway(
             raise RuntimeError("远程 Gateway workspace 项必须是对象")
         if item.get("connection_kind") != "local":
             continue
-        direct_items.append(item)
+        direct_items.append(FederationWorkspaceDTO.model_validate(item).model_dump())
     return manifest, direct_items
 
 
