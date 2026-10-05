@@ -47,15 +47,15 @@ start_delegated_task({
 
 本入口只保留影响下一次决策的原因；当前效果与证据见[实时台账](memory/2026/10/06/team-collaboration-state.md)，历史细节保留在原报告。
 
-- **交付残缺、漏真实入口。** 手筛 hunk 曾漏签名、删除和 Web caller；CLI stdout迁移漏启动脚本，依赖迁移漏子项目lock。用[交付校验脚本](scripts/verify_delivery.py)从固定树严格重建并核 blob/hash，清点候选外源码。调用图包括 UI/API、CLI、进程入口、恢复、协议与间接消费者，必要时真实定向调用；mock/build不代入口验收。旧 d164cf6 Web直连Terminal Manager缺owner body的P1在当前持久资源owner入口已闭合，不能沿用旧finding。
-- **合同与基线错配。** live、旧 HEAD和固定候选混读曾误判接口；只给接口名称未交完整依赖又形成循环等待。核共同祖先、完整 preimage、真实构造注入/MRO与caller/callee，唯一提供者先固定完整合同，主串行同步。消费者尚待实现的必填字段不能成为获得前置的循环准入条件。
+- **交付残缺、漏真实入口。** 手筛 hunk 曾漏签名、删除和 Web caller；CLI stdout迁移漏启动脚本，依赖迁移漏子项目lock。用[交付校验脚本](scripts/verify_delivery.py)从固定树严格重建并核 blob/hash，清点候选外源码。调用图包括 UI/API、CLI、进程入口、恢复、协议与间接消费者，必要时真实定向调用；mock/build不代入口验收。迁移规划也核原合法输入/输出：新文件合同曾把 read_file 全限文本，漏已有图片结果，独审后在实施前纠正；新增范围不能废除原能力。旧 d164cf6 Web直连Terminal Manager缺owner body的P1在当前持久资源owner入口已闭合，不能沿用旧finding。
+- **合同与基线错配。** live、旧 HEAD和固定候选混读曾误判接口；只给接口名称未交完整依赖又形成循环等待。核共同祖先、完整 preimage、真实构造注入/MRO与caller/callee，唯一提供者先固定完整合同，主串行同步。消费者尚待实现的必填字段不能成为获得前置的循环准入条件。公共闭集只在owner维护，消费者具名引用；files规划扩集曾留下两份旧四值表，严格校验未发现语义矛盾，独审后删除重复表。
 - **身份与异步writer漏项。** Thread/Session混用、只在create带UUID、取消等待却未收`to_thread`writer均曾过helper测试。核所有HTTP/WS、真实user/internal/child及恢复入口；只用已校验admission，internal不造user Turn。幂等先比durable原请求；typed迁移还要在真实writer核owner/slot/revision CAS及未封存约束；R早审又发现descriptor→observation丢root policy，以及prefix/ToolSet各自合法但缺联合校验。核字段完整传递与同一事实的跨载体约束，round-trip或各自hash合法不足以验收；修公共hash联校又误用脱敏后空policy，须核public/protected真实manifest token及旧binding不可复用，不能跳校验求绿。
 - **拒绝、未知结果与执行镜像脱节。** 确定拒绝漏失败回执污染owner；资源存活又被误当未知动作已完成。回滚或释放失败不能发布verified/closed或先丢句柄。由现有owner在真实转换边界记录结果并同步既有镜像；未知副作用保持阻断，定点核实身份/revision/终态后结清，普通列表不能清unknown。复验受影响资源，不只补单一状态码或伪payload。
 - **生命周期被缓存或监听器遮蔽。** LRU曾驱逐仍被服务持有的catalog，关闭listener又漏Goal/Job派生writer，卸载await窗口允许新claim落盘。唯一registry持有到真实释放；持久写前消费同一closing准入，先收finalizer/后台writer再关catalog。scope构建前交owner，cleanup失败保重试句柄与generation fence；不能删guard求绿。重启/失败重试共用真实owner核实，不缓存一次性恢复结论。
 - **路径与索引误操作。** 相对编辑、默认cwd、裸Git、自建archive/.venv反复错根，私有index只隔离暂存。每次给绝对workdir/index/产物路径，审查用固定tree，运行复用指定完整WT，不`/tmp`或复制整树。共享index从`--absolute-git-dir`定位；主曾误认私有index，成本单列。无精确备份不声称精确恢复，重复误操作者收窄写权限。
 - **验证与候选脱节。** live绿灯不归缺装配的固定包，重试不覆盖raw/exit；Web build不代tsc。合法raw checkpoint被fixture预处理曾掩盖入口缺口，Struct往返又丢数值类型与工具最终回执。共享fixture先核domain枚举和真实callee、单例fail-fast，再有界集中收错；不能改golden、输入形态、默认值或增timeout求绿。测试与生产须来自完整一致组合，禁止只覆盖测试文件。
 - **崩溃测试漏首个持久化窗口。** importer首修只测完整临时文件，空/截断`.next.json`仍阻恢复。覆盖创建、部分写入含UTF-8、fsync、原子发布及另一进程重开；未发布与已发布损坏分开判定，不删审计求绿。真实退出反例四红、最小修复后固定64项绿已验证此调整。
-- **恢复后审查对象漂移、主诊断过早。** reviewer读错schema tree误撤缺陷；主未核当前caller就派“Gateway等待缺句柄”，实树已有两handle，探针也可见退出。只看上层`MessageRole.user`又漏掉下游已绑定的`InternalExecutionIntent`，误报真实user Turn。恢复先核基线/候选/报告根，结论引用同一对象完整调用链；反证成立即撤单，不补镜像测试。区分旧生成数据、源码缺陷与未证原因，不归错实现者或模型。
+- **恢复后审查对象漂移、主诊断过早。** reviewer读错schema tree误撤缺陷；主未核当前caller就派“Gateway等待缺句柄”，实树已有两handle，探针也可见退出。只看上层`MessageRole.user`又漏掉下游已绑定的`InternalExecutionIntent`，误报真实user Turn；R审查又把无caller的封存后脱敏转换和猜测的transition字段当缺陷。恢复先核基线/候选/报告根、真实类型与完整调用链；没有生产caller或规范依据的假设列未验项，未接消费者不阻塞已承诺前置。反证成立即撤单，不补镜像测试。区分旧生成数据、源码缺陷与未证原因，不归错实现者或模型。
 - **真实协议与重启权威遗漏。** 远端测试将合法Browser二进制帧当JSON；fresh SQLite只存投影未同事务保存owner元数据，reader漏恢复字段，新客户端又漏登录。按真实协议及认证上下文验收；引用与authority在同owner事务保存，重开核完整对象/游标、失败零副作用。正式远端WS与重启已绿，通用强杀关闭风险仍须另验，正常退出不能证明失败关闭安全。
 
 审查按tree、路径和依赖复用，只审新增差异及受影响入口。主未写实现的窄增量可由主直接独审；复杂公共事务用只读审查者，不为每包重复等待整队。严重失败先纠正具体任务，再简洁更新技能；后续相关交付验证有效才记为已解决，不叠加同义规则或把继承缺陷与主协调错误全归当前模型。

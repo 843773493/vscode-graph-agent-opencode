@@ -61,6 +61,10 @@
 - **本 change 归口的单文件 >800 行**：`app/container.py=992`（2.1 工作区服务图装配）、`app/gateway/runtime/controller.py=921`（托管后端启动、重启排空与远程重连）、`app/schemas/gateway.py=855`（Workspace、runtime与connection DTO）。`app/gateway/registry.py` 已物理下线为 `app/gateway/registry/` 包，原2222行快照失效，不重复实施已有拆分。
 - 跨 change 归属：`app/gateway/main.py` 当前59行；`app/gateway/control/gateway_state/`、`app/gateway/config/`、`app/services/infrastructure/config_service/` 已是职责包，旧单文件行数不再作为进度或缺陷依据。其主归属仍见「统一资源寻址」与会话上下文资源 URI change；本 change 只引用。**本节尚未收口**：数字核验不能代替要求的文件清单、owner映射、import graph与架构复核；实现期只针对真实职责混合补齐证据或拆分，不据旧统计重建已有能力。
 
+- [x] 9.1 固定1c20的63个直接Python文件已完成逐文件owner、LOC及反向import graph审查，report/inventory位于 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/mounting-architecture-review/attempt-1/`。container与Gateway runtime controller仍是连贯的装配/生命周期owner，保留；以下两项有职责证据，仍待实现，不因统计完成勾整节。
+- [ ] 9.2 按既有Gateway DTO领域owner拆分 `app/schemas/gateway.py` 为职责包；核全仓直接/间接import及测试，将消费者平移至具体模块后删除旧文件，不留re-export兼容层、不改公开字段或行为。审查固定树有32个生产import模块，实施前重新清点完整当前调用方。
+- [ ] 9.3 将 `message_stream_store.py` 中只计算传入state/event的纯reducer/helper提为领域明确模块；Store保留同一turn锁和 `_commit_locked` 的 reducer→durable append/fsync→cache→fanout 顺序与恢复/游标owner，验证原事件投影和持久化行为不变，不拆第二事务owner。
+
 ### 2026-09-30 补登记：gateway scope_id 的请求级注入通道（跨 change 落差审计 F3）
 
 本条补「登记了来源裁定、未登记载体」的缝隙（审计见 `out/tests/temp/cross_change_gap_audit/artifacts/`）：3.4 与本 change 的 gateway 身份裁定只说「剩装配」，但没有任何任务承接「Gateway 侧按请求注入 `X-BoxTeam-Gateway-Id`，并把它接进工作区后端的 `ResolutionContext` / `require_scope_binding`」。载体未闭合处已实测：`app/agents/skill_runtime.py:522` 的 `_layer_scope_identity` 对 `gateway` scope 仍返回字面量 `local` 与 `None`（跳过绑定校验），该文件 `:507-513` 的 TODO 自述需连锁改造全部 router。
