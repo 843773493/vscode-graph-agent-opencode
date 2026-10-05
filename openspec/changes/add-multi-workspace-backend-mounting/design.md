@@ -1,6 +1,6 @@
 ## Context
 
-现状（实测，`395bb60e`/`e050be42` 系列 HEAD）：
+原规划基线（实测，`395bb60e`/`e050be42` 系列 HEAD；以下描述不代表当前实现）：
 
 - `app/main.py` 的 `lifespan` 从 `WORKSPACE_ROOT` 环境变量取唯一根，交给 `app/container.py:348` 的 `build_app_container`；该函数在**构造期**把 `workspace_root` 解析为 `resolved_workspace_root`、`resolved_boxteam_root`、`resolved_sessions_root`，并据此装配**全进程唯一**的一份服务图（config/workspace/session/catalog/resource/…）。
 - `app/core/path_utils.py` 的 `get_workspace_root()`/`get_boxteam_root()`/`get_sessions_dir()` 直接读环境变量；`get_session_path_resolver()` 与 `get_session_creation_service()` 按会话根目录做 `lru_cache(maxsize=32)` 并让 SQLite catalog 连接**常开进程生命周期**（同文件注释：不提供单独关闭入口）。
@@ -16,6 +16,7 @@
 ## Goals / Non-Goals
 
 **Goals:**
+- 实现并验收本 change 的多工作区注册表、显式身份传递、服务图分区与生命周期；已有实现按固定证据复用，只补真实缺口。
 - 明确 workspace 身份在 HTTP API 上的显式载体，并给出选型理由。
 - 明确 workspace_id 与 URI `workspace` scope 的 `scope_id` 的身份同一性（不定义语法）。
 - 给出必须按 workspace_id 分区的进程级资源清单。
@@ -26,7 +27,6 @@
 - 不定义 URI 语法 / `作用域 / scope` 闭合集 / `scope_id` 语义 / `拒绝码 / rejection code`（引用「统一资源寻址」change 的权威表）。
 - 不改造会话上下文资源的承载（引用「会话上下文 URI 统一改造」change）。
 - 不实现跨 gateway 的**星型解析 / star-topology resolution** 转发（引用寻址 change 的解析链）。
-- 不落地任何生产代码；本 change 只写规划产物。
 
 ## Decisions
 
@@ -119,13 +119,13 @@
 - [**存量 URI 数据风险已消除**（权威表实测）] → URI 零落盘（157 live + 44 dev/temp SQLite 对 `boxteam://` 零命中、无 `resource_activation*` 表；`display_uri` 仅测试写入、container 无装配、生产 seal 恒为 `None`），迁移章节因此**不含存量 URI 迁移**，只需新写字段与读路径切换。
 - [**gateway_id 通道与装配已落地（2026-10-01 第八轮复核更正）**] → `gateway` scope 的 `scope_id` 由 Gateway 侧按请求注入真实 gateway_id（owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导），装配提交 `64ba30c8`/`53befbfc`/`9881a3b2`；原硬编码字面量 `local` 分支已物理删除，跨 gateway 寻址的接口前提已满足。
 - [**distribution_id 装配已落地（2026-10-01 第八轮复核更正）**] → `distribution_id` 来源为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一资源寻址」change 的 requirement），装配提交 `298ef599`+`f3bd8213`（`app/core/distribution_identity.py::load_distribution_id` 生产赋值、`app/agents/skill_runtime.py::_layer_scope_identity` 消费）；原「零赋值空洞」已消除。
-- [**gateway 与 inline 共用同一 scope_id 字面量**] → 二者当前 `scope_id` 逐字相同（`"local"`），与各自稳定身份（gateway_id / distribution_id）不一致；MUST 登记为既有违反点，不得升格为契约形态。
+- [**旧 scope_id 硬编码被误当现行合同**] → 原规划基线中 gateway 与 inline 共用 `"local"` 的违反点已由前述身份装配修复；后续依赖真实 gateway_id / distribution_id，不恢复硬编码，不重复派发已完成的装配。
 
 ## Migration Plan
 
 **不含数据迁移子步骤**：权威表实测 URI 零落盘，故本形态**无存量 URI 数据迁移**；下列步骤均为代码层/接口契约层动作，仅在盘点出「只描述单工作区前提的非 URI 持久化字段」时才产生一次性字段迁移。
 
-1. 引入注册表与显式身份载体（先不改语义，仅并存读取；但**不**长期保留旧路径）。
+1. 引入注册表与显式身份载体，按真实调用链同步迁移全部消费者；每个集成切片只保留一个身份解析入口，不引入新旧并存读取。
 2. 把所有工作区根/数据目录定位改为「显式 workspace_id → 注册表」。
 3. 把 `build_app_container` 改为「注册表 + 按需服务图」；把 `lru_cache` 键改为 workspace 维度。
 4. 按 `scope_id` 推导原则落实身份来源：`workspace` scope 的 `scope_id` 取真实 workspace_id；`gateway`/`inline` 的硬编码字面量 MUST 改为推导自真实 gateway_id / distribution_id（`distribution_id` 来源已裁定为 manifest 的 `distribution` + `version`；`gateway_id` 来源已裁定为 `identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求注入；两者均按「统一资源寻址」change 的编码/来源规则实施，缺失时 fail-closed，不得继续硬编码）。

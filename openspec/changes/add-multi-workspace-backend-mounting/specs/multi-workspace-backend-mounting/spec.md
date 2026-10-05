@@ -70,10 +70,10 @@
 - **WHEN** `workspace` scope 的 `scope_id` 被解析
 - **THEN** 它 MUST 等于显式 workspace_id，并与 HTTP 显式寻址载体同源（同一稳定身份）
 
-#### Scenario: gateway 与 inline 的既存硬编码必须被登记为违反点
+#### Scenario: gateway 与 inline 不恢复旧硬编码
 
 - **WHEN** 审视当前 `gateway` 与 `inline`（原 `builtin`）两个 scope 的 `scope_id` 生成
-- **THEN** 实测二者共用同一硬编码字面量（`"local"`）而各自稳定身份（gateway_id / distribution_id）未被推导；本 capability MUST 将其登记为违反「`scope_id` 必须推导自稳定身份」的既有点，MUST NOT 把该硬编码形态当作契约
+- **THEN** 二者 MUST 使用寻址 owner 已装配的真实稳定身份（gateway_id / distribution_id）；原规划基线共用 `"local"` 的违反点已修复，MUST NOT 恢复该硬编码、把历史描述当现行合同或重新建立一套身份推导
 
 ### Requirement: gateway 身份与 workspace 身份同属寻址层身份，且 gateway_id 必须真实
 

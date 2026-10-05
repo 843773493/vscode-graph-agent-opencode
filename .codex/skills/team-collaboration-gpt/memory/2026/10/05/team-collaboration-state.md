@@ -21,7 +21,7 @@ ROOT 源码 HEAD **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724c
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。当前整组 **active**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs。
 
-授权业务工作区只有 BOXTEAM_HOME/boxteam_workspace 与 `/data1/hyf/test_workspace/drive_bicicle`。typed-startup-attempt-3 整组启动实际0/25.811秒；通过既有 owner API重新登记并 start drive，两者均 managed/ready。从8027实际获取 health/workspaces 与两工作区 `/api/v1/workspace`，均200、响应头体 request_id 一致。证据 `root-product-verification/typed-startup-attempt-3/exit.json` 和 `frontend-api-acceptance-attempt-2.json`。这只证明启动/初始化，不代替后续完整 UI、R或activation验收。
+授权业务工作区只有 BOXTEAM_HOME/boxteam_workspace 与 `/data1/hyf/test_workspace/drive_bicicle`。typed-startup-attempt-3 整组启动实际0/25.811秒；通过既有 owner API重新登记并 start drive，两者均 managed/ready。从8027实际获取 health/workspaces 与两工作区 `/api/v1/workspace`，均200、响应头体 request_id 一致。证据 `root-product-verification/typed-startup-attempt-3/exit.json` 和 `frontend-api-acceptance-attempt-2.json`。这只证明启动/初始化，不代替后续完整 UI、R或activation验收。真实 Chromium 初始化亦通过（5.9秒、无page error/failed request），证据 `root-product-verification/typed-startup-attempt-3/browser-smoke-attempt-1/receipt.json`。
 
 此前两个120秒失败 raw/exit保留：确证旧生成 workspace/gateway SQLite与共享 `config/workspace-source.sqlite` 仍含旧列，停写与fuser核验后删除。JSONC/.env/identity hash保留。清理收据在启动attempt1与2；新库能实际读写。不保旧兼容，不把清旧数据称源修复。
 
@@ -59,16 +59,6 @@ ROOT 源码 HEAD **1c20cc572039e8905483c0c8646a46d69f38055f**，tree=`621b97724c
 - ROOT共享index当前观察98850fa4…；WT默认index e1cb50fd…。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
 - 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
 
-当前task勾选数仅用于恢复导航，不证明业务完成：
-
-| change | 已勾 | 未勾 |
-|---|---:|---:|
-| add-context-injection-lifecycle | 21 | 36 |
-| add-itemized-rollout-context | 50 | 37 |
-| add-multi-workspace-backend-mounting | 5 | 29 |
-| add-unified-virtual-resource-addressing | 7 | 34 |
-| add-workspace-persistent-resource-management | 17 | 4 |
-| migrate-identifiers-to-uuidv7 | 49 | 0 |
-| migrate-session-context-resource-uri | 20 | 15 |
+任务导航维护在 `current-task-index.json`，按实际文件刷新，编号任务（含嵌套和字母后缀）与未编号历史审计框分开；数量不证明业务完成。多工作区文档正在收回原规划阶段“不得写生产代码”的旧guard及并存读取表述，保持已授权实施与单链路原则；只读对表仍以固定1c20检验源码。
 
 已关闭阶段查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65` 及上述原产物。本次压缩前台账快照保留于 `skill-state-maintenance/pre-compaction-68d597bf20f6.md`，其中“未集成”等记述已被本文当前状态替代；不作为现行指令，不复制回入口。
