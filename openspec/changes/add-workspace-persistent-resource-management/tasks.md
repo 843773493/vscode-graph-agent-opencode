@@ -42,6 +42,8 @@
 判据沿用仓库既有门槛：目标目录 MUST 满足「直接源码文件 ≤20」「单文件 ≤800 行」「不与两个以上领域职责混合」，任一越界即 MUST 附拆分方案或含文件清单、职责/owner 映射、import graph、行数统计与复核结论的架构审查证据。豁免：生成目录（`src/workspace-services/protocol/generated/**`）由上层 `generated/AGENTS.md` 声明不可手改，不计越限。
 
 - 实测快照（提交 `7fe347dc`）：**本 change 归口的单文件 >800 行**：`src/workspace-services/browser/server/browserSession.js=2515`、`src/workspace-services/browser/client/main.js=1814`、`src/workspace-services/browser/server/backend.js=928`（本 change 6.2 已具名 `browserSession.js`/`browserStateStore.js` 并落地其 real path 收紧，三者均须在实施期按浏览器会话生命周期 / 客户端事件与传输装配 / server 协议与生命周期编排职责拆分）。
-- **本 change 归口的目录直接 `.js` >20**：`src/workspace-services/browser/server=23`（browser session 生命周期、frame/flow、input、device profile、resource governor 与各自 `*.test.js` 混居，本 change 的 browser 持久资源 owner 落点即在此目录，须按 session / runtime / resources / 测试下沉使直接源码文件数回到 ≤20）。同一范围内 `src/workspace-services/terminal/server=12`、`src/workspace-services/browser/client=11` 等其余目录均未越限。
+- **本 change 归口的目录直接 `.js` >20（含测试）**：`src/workspace-services/browser/server=23`，其中13个生产模块、10个测试模块；生产文件单独计数未越20，全部代码文件计数触发结构审查。下沉按真实职责与owner决定，不能为了数字搬移文件。历史同一范围内 `src/workspace-services/terminal/server=12`、`src/workspace-services/browser/client=11` 等其余目录均未越限。
+
+- 当前固定 `c58b6cab` 复核：三个生产文件分别为2586/1860/963行，测试`browserSessionOperations.test.js`为1014行；53路径/46JS完整清单、import graph、owner映射与职责拆分方向见 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/persistent-browser-architecture-review/attempt-1/report.md`、`inventory.json`。主核这五个目标文件至ROOT973098无差异。BrowserManager/BrowserSession继续拥有唯一生命周期；后续独立结构切片按session操作族、backend HTTP/WS、client view/connection拆分并全迁caller，纯workspace校验解除client/server对BrowserManager的反向依赖。只读审查证据完成，不表示结构实现已完成，不插当前R生产切片。
 
 - 上述登记只补录越限事实与归口，**本 change 不拆这些文件**；拆分与相应架构审查证据属后续独立实施。

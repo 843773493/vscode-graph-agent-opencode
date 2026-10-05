@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 01:07（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 01:31（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
 
 ## 授权与恢复坐标
 
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **c58b6cab5a6003031fcaac09e2cdc1d85dbe3d02**；业务源码 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；下次恢复重新核HEAD，不把本文值当live。后续文档另提交，三保护未变。
+本文更新前ROOT HEAD **9730983969c256cdf27359e28f037304a0f8f418**；业务源码 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；下次恢复重新核HEAD，不把本文值当live。后续文档另提交，三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。本轮systemctl核验 **active/running**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -87,3 +87,13 @@ R early 19path仍待固定交付；作者live新增7项通过（actual0/13.023�
 owner_contract当前ROOT c58定向89pass后首个setup error（actual1/15.834秒）来自owned_included_snapshot canonical ref public与entry默认internal冲突。独审已定位最小合法fixture迁移，保guard/断言，交唯一Sol随消费者完成；无独立旧baseline，不作继承归因。证据 `owner-contract-fixture-verification/attempt-1/fixture-review.md`。Browser6.4架构独审仍在途，不插当前R。
 
 旧验收7.3-L修订后，strict全量41pass/0fail、两版本skill quick_validate actual0；证据 `file-tools-openspec-plan/acceptance-coherence-attempt-6/`。这是规划/技能校验，不代文件工具实施或E2E验收。
+
+R真实Saver早包d29（58e1基线、19path）已主strict重建/hash/preimage/保护核验，ROOT组合e341物化固定blob，51pass actual0/25.575秒、AST19/Ruff0。独审在途；未提交，因为fixed Agent skill_runtime仍调用已删除commit_model_call_pending。同Sol优先补最小真实Agent/Bridge/factory消费闭包，无旧alias，不把提前审查等同允许悬空发布。主随后核固定postimage后按973已提交preimage精确恢复这19path，AST16/Ruff0；候选树/审查/测试证据保留，待最小真实caller组合一次集成，未改refs或默认index，不称整R完成；主手写业务实现0。证据 `r-production-prefix-primary-review/root-composed-attempt-1/`。
+
+受影响恢复验证又被必要fixture阻断：prepared_detail导入protected_detail在模块级parametrize取fixture字典字段，actual2/9.574秒；另schema4 assembly fixture硬编码version4而fresh为10，maxfail3 actual1/10.748秒，均未执行test body。没有旧baseline归因，交唯一Sol按当前schema/owner迁fixture，保恢复/篡改断言，不降guard或schema；不反复盲跑同失败。原raw/exit均保留。
+
+文件规划进一步对齐四产物：D13继续config、D14导航、D15轻量；历史URI零落盘盘点限定为原基线，当前source/activation按真实owner新写入与消费切换，不扫描升级旧开发数据。Browser6.4只读职责审查闭合：53路径/46JS、server13生产+10测试；三个生产大文件2586/1860/963及测试1014。主核fixed c58与ROOT973目标一致，登记独立后续结构方向，不插R、不称源码结构已拆。证据 `persistent-browser-architecture-review/attempt-1/`。
+
+Saver d29窄独审已完成，无actionable finding；ack重试窗口无正常受支持可达失败证据，不新增理论补丁，provider profile变更拒绝符合8.3-B。报告 `r-production-prefix-boundary-review/attempt-1/report.md`。未变19path审查与51项组合测试复用，继续同Sol最小caller候选。
+
+后续规划对齐与Browser登记再次strict41/0，两版本skill quick_validate0。主plan7曾未初始化新私有index就diff，产生3492假删除；从未据此改源码，fresh read-tree后只见7文档与保留handoff草稿，成本单列，不归作者。证据 `file-tools-openspec-plan/historical-coherence-attempt-7/`。

@@ -447,7 +447,7 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 软件内部的配置、skill、状态与资源引用 MUST 默认以 URI 传递；real path MUST 只在最后访问点出现。任何新增持久化字段若需定位资源，MUST 使用 `identity + URI(+ 独立 revision 字段)` 组合，MUST NOT 存储 real path。
 
-**迁移面 MUST 表达为「新写字段」而非「存量数据迁移」**：URI 已确证**零落盘**（157 live 库 + 44 dev/temp 库 0 命中），既有持久化挂点为 `context_source_control_states`（已存来源事实但无 URI 列）与 `resource_activation_bindings.display_uri`（已建表但生产从不写入）。因此实现 MUST 以「加列 + 写路径 + 切换读路径」落地，MUST NOT 写「扫描/规范化/失效既有 URI 实例」这类空转任务。
+**来源控制与activation迁移 MUST 表达为必要字段、新写入与读侧切换**，由各自唯一owner核对当前schema与真实producer，不以URI仍未落盘为准入条件。旧开发中间数据按已授权策略清理，MUST NOT 为其增加扫描升级、兼容双读或URI alias。新的URI持久化仍遵守本requirement的身份/地址/位置边界；附件和工具结果旧scheme的生成、读取及投影按 `add-unified-resource-file-tools` 的消费合同完整迁移，不因此扫描旧业务数据。
 
 #### Scenario: 新增持久化字段不得存 real path
 

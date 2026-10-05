@@ -27,7 +27,7 @@
 - 固化**默认寻址政策**：配置/skill/状态/资源引用默认用 URI 传递；新增持久化字段若需定位资源，一律用 `identity + URI(+ 独立 revision 字段)`，禁止存 real path。
 - 建立**可机械检查的 real path 不变量**：real path 出现在 API 响应体／持久化记录／模型可见载荷中即为缺陷，禁止用脱敏或截断静默掩盖。
 - **真实路径外泄（已消除，保留为可机械复核的不变量）**：配置来源层记录曾以 `ConfigSourceLayerRecord.source_path`/`backup_path` 把真实路径落进 SQLite，配置来源列表 API 曾以 `ConfigSourceDTO.path`/`ConfigSourcesDTO.schema_path` 把真实路径写进响应体；两处已分别由 `50bffa45`（持久化改 URI）与 `76ed0089`（响应体改 URI）消除，详见 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」。
-- **迁移面已确证为「新写字段」而非「存量迁移」**：URI **零落盘**（157 live + 44 dev/temp 库 0 命中 `boxteam://`）。持久化挂点 = `context_source_control_states`（已存来源事实但无 URI 列）与 `resource_activation_bindings.display_uri`（已建表但生产从不写）。迁移任务一律是「加列 + 写路径」，MUST NOT 写「扫描存量 URI 实例」。
+- **迁移面为新写入与消费切换，不迁旧开发数据**：历史基线取证为157 live + 44 dev/temp库中 `boxteam://` 零命中；当时挂点为来源控制状态与activation display_uri。该盘点只描述当时状态，不作为实施后仍零落盘的条件。当前字段、生产writer和读侧按各自唯一owner核对并接通；必要时按授权清理开发中间数据，不扫描或升级旧URI实例。新增附件/工具结果旧scheme的源码消费迁移在文件工具change验收。
 - **收口四个 change**：在途 `add-context-injection-lifecycle`、并行 `migrate-session-context-resource-uri` 与 `add-multi-workspace-backend-mounting`，以及第四个 `add-workspace-persistent-resource-management`；术语、scope、scope_id 语义、kind 与拒绝码写法一致，无同义异名。
 - 命名一致性硬约束：`资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；禁止 virtual url / VURI / 虚拟 URL 混用。
 

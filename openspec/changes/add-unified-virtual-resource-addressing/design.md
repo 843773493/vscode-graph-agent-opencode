@@ -173,13 +173,13 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 
 **理由**：`layer` 描述配置为何生效，carrier 描述状态存在哪里，snapshot 描述一次完整配置状态；把这些角色压进同一个 layer 既误报来源，也让 active/pending 状态伪装成可寻址的来源。
 
-### D13：导航类型、根模板与路径编码分开
+### D14：导航类型、根模板与路径编码分开
 
 本次按 spec「导航形态与操作能力必须由资源 owner 公布」定稿 directory/file/domain_object。skills/{name} 是技能包根，其后是文件 child path；files/root 是 workspace 源码树根。config/agent-spec既有地址为单文件，Session/assembly为领域对象，Session附件/工具结果由原owner公布单文件引用，不开放私有存储树。文件工具消费单独change，避免把目录工具、context激活和业务资源ID合成一种万能对象。
 
 身份段继续用既有严格profile，包括D4b distribution_id编码；该段不支持escape。文件段使用spec的单次UTF-8解码和规范重编码，保留原Unicode、大小写和字面百分号，不将filename套身份charset。中央grammar接收wire URI、构造器接收未编码segments；所有工具共用，不能各自unquote或把glob/grep pattern当路径。文件shape、child规则和operation由实际owner发布；roots只固定登记，不引入插件注册表。
 
-### D14：轻量导航与会话产物模板
+### D15：轻量导航与会话产物模板
 
 普通列目录/搜索/读取只需要可解析URI和内容，不要求子文件都持久注册ResourceIdentity/快照；显式追踪与历史恢复仍走来源owner。文件hash按需要计算，分页不依赖逐文件快照。本owner登记session/{session_id}/attachments/{attachment_id}和session/{session_id}/tool-results/{result_id}单文件模板；该处各段均是业务身份，不用文件编码放宽。attachments现有二进制接口仍归原owner。跨端普通文件读取/patch在目标端执行，联邦寻址不扩权，执行错误/部分或未知效果归文件操作合同。
 
@@ -201,7 +201,7 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 URI 解析，而非仅打印。
 5. 按 D10 把配置来源 real path 迁移为 URI 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；layer、precedence、URI 是否存在、内部 carrier 与 snapshot 边界均按 D13 及其 spec owner requirement 实施。
 6. 接入 gateway 层星型解析、policy 常量上界与集中登记的拒绝码。
-7. **迁移面**：全部为「加列 + 写路径 + 切读路径」（URI 零落盘，已确证）；MUST NOT 构造存量扫描或数据改写。
+7. **迁移面**：来源控制与activation按各自唯一owner落地「必要字段 + 新写入 + 切读路径」，不扫描或改写旧开发数据。此前157 live + 44 dev/temp库中boxteam URI为零是历史基线取证，不能当作实施后仍零落盘的前提；新增URI持久化、附件与工具结果旧scheme消费迁移分别按其owner合同验收。
 8. 与其它 change 对表：会话上下文 URI 与多工作区复用本 change 的 scope/scope_id/kind 归属；`memory` 在各方均按「非 URI scope」处理，解析器侧特例分支已物理移除（提交 32bc6256）并以 `unknown_scope` 类拒绝码 fail-closed 拒绝。
 9. **回滚策略**：本 change 为规划产物；实施若需回滚，回滚到「旧语法 + 单一打印用途」状态，但必须在同一原子步骤内恢复所有消费方，不得停留半接入态。
 
