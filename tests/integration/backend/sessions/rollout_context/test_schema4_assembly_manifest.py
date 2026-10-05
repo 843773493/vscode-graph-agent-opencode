@@ -24,7 +24,11 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
 )
@@ -107,10 +111,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
                 "prompt",
                 {"instructions": f"{plan_id}/{name} 的独立正文"},
             ),
-            metadata={
-                "owner": plan_id,
-                "source_ref": name,
-            },
+            extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": {'owner': plan_id}}} , source_binding=SourceBinding(source_ref=name),
             source_ordinal=ordinal,
         )
         for ordinal, name in enumerate(("included-source", "omitted-source"))

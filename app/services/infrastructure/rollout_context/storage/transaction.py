@@ -132,42 +132,13 @@ def _canonical_metadata_text(value: object, *, field: str) -> str:
 
 
 
-def _validate_item_storage_metadata(item: CanonicalItemRecord) -> tuple[str | None, int]:
-    """校验会影响 catalog/part locator 的 item metadata。"""
-    metadata = item.metadata
-    raw_revision = metadata.get("source_revision")
-    if raw_revision is None:
-        source_revision = None
-    elif isinstance(raw_revision, str) and raw_revision:
-        source_revision = raw_revision
-    else:
-        raise ItemSchemaError(
-            f"canonical item source_revision 必须是非空字符串: {item.item_id}"
-        )
-
-    has_block_id = "block_id" in metadata
-    has_block_index = "block_index" in metadata
-    if has_block_index and not has_block_id:
-        raise ItemSchemaError(
-            f"canonical item block_index 不得脱离 block_id: {item.item_id}"
-        )
-    if not has_block_id:
-        return source_revision, 0
-    block_id = metadata.get("block_id")
-    if not isinstance(block_id, str) or not block_id:
-        raise ItemSchemaError(
-            f"canonical item block_id 必须是非空字符串: {item.item_id}"
-        )
-    raw_index = metadata.get("block_index", 0)
-    if (
-        not isinstance(raw_index, int)
-        or isinstance(raw_index, bool)
-        or raw_index < 0
-    ):
-        raise ItemSchemaError(
-            f"canonical item block_index 必须是非负整数: {item.item_id}"
-        )
-    return source_revision, raw_index
+def _validate_item_storage_projection(item: CanonicalItemRecord) -> tuple[str | None, int]:
+    """typed domain 已校验 source manifest 与 stream block；存储不补造缺字段。"""
+    item.validate()
+    revision = item.source_manifest.source_revision if item.source_manifest is not None else None
+    identity = item.projection_identity
+    ordinal = identity.block_index if identity is not None and identity.block_id is not None else 0
+    return revision, ordinal
 
 
 def strict_non_negative_int(value: object, *, field: str) -> int:
@@ -195,11 +166,11 @@ def strict_optional_text(value: object, *, field: str) -> str | None:
     return strict_text(value, field=field)
 
 
-def validate_item_storage_metadata(
+def validate_item_storage_projection(
     item: CanonicalItemRecord,
 ) -> tuple[str | None, int]:
     """向 checkpoint item writer 暴露统一的 catalog metadata 校验。"""
-    return _validate_item_storage_metadata(item)
+    return _validate_item_storage_projection(item)
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,7 +436,7 @@ class V2ItemCommitCoordinator:
         offset = current_offset
         for item in items:
             item.validate()
-            _validate_item_storage_metadata(item)
+            _validate_item_storage_projection(item)
             expected_sequence = last_item_sequence + len(prepared) + 1
             if item.item_sequence != expected_sequence:
                 raise ValueError(
@@ -588,5 +559,5 @@ __all__ = [
     "strict_optional_text",
     "strict_text",
     "validate_commit_contract",
-    "validate_item_storage_metadata",
+    "validate_item_storage_projection",
 ]

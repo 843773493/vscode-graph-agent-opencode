@@ -21,6 +21,10 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+)
 from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
     MutationIntentOwner,
@@ -133,12 +137,7 @@ def test_dispatch_excludes_late_stream_shadow_after_checkpoint_result(
         payload_kind="tool_call",
         producer_ref={"producer_kind": "provider", "producer_id": model_call_id},
         payload={"tool_calls": [{"id": call_id, "name": "glob", "args": {}}]},
-        metadata={
-            "execution_confirmed": True,
-            "model_call_id": model_call_id,
-            "projection_message_id": f"lc_run--{model_call_id}",
-            "projection_group": {"ordinal": 0, "size": 1},
-        },
+        projection_identity=ItemProjectionIdentity(projection_message_id=f"lc_run--{model_call_id}", model_call_id=model_call_id),
         wire_role="assistant",
         **common,
     )
@@ -153,13 +152,9 @@ def test_dispatch_excludes_late_stream_shadow_after_checkpoint_result(
             "result_id": "result-late-shadow",
             "name": "glob",
             "content": "[]",
-            "tool_outcome": "success",
-        },
-        metadata={
-            "execution_confirmed": True,
-            "model_call_id": model_call_id,
-            "projection_message_id": "result-late-shadow",
-        },
+            "tool_outcome": "success"
+        , "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(projection_message_id="result-late-shadow", model_call_id=model_call_id),
         wire_role="tool",
         **common,
     )
@@ -174,11 +169,7 @@ def test_dispatch_excludes_late_stream_shadow_after_checkpoint_result(
             "name": "glob",
             "args": {},
         },
-        metadata={
-            "model_call_id": model_call_id,
-            "block_id": f"{model_call_id}:tool-call:{call_id}",
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(model_call_id=model_call_id, block_id=f"{model_call_id}:tool-call:{call_id}", block_index=0),
         wire_role="assistant",
         **common,
     )
@@ -216,11 +207,7 @@ def test_composition_preserves_checkpoint_supersession_for_tool_call(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={"producer_kind": "provider", "producer_id": "model-call-old"},
         payload={"tool_calls": [{"id": "call-old", "name": "glob", "args": {}}]},
-        metadata={
-            "execution_confirmed": True,
-            "projection_message_id": previous_message_id,
-            "projection_group": {"ordinal": 0, "size": 1},
-        },
+        projection_identity=ItemProjectionIdentity(projection_message_id=previous_message_id),
         turn_id=turn_id,
         turn_scope=TurnScope.TURN_MEMBER,
         wire_role="assistant",
@@ -233,10 +220,7 @@ def test_composition_preserves_checkpoint_supersession_for_tool_call(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={"producer_kind": "provider", "producer_id": "model-call-final"},
         payload="最终回答",
-        metadata={
-            "projection_message_id": "message-final-after-tool-call",
-            "supersedes_message_id": previous_message_id,
-        },
+        projection_identity=ItemProjectionIdentity(projection_message_id="message-final-after-tool-call"), provenance_relations=(ItemProvenanceRelation("replaces", "projection_message", previous_message_id),),
         turn_id=turn_id,
         turn_scope=TurnScope.TURN_MEMBER,
         wire_role="assistant",

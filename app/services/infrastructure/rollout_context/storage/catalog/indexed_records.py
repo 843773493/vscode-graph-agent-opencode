@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
-)
-from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
-    _raw_call_id_from_scoped,
 )
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
@@ -25,9 +26,6 @@ if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
         RolloutReadSnapshot,
     )
-
-
-
 
 
 def _positive_int(value: object, *, field: str) -> int:
@@ -159,26 +157,56 @@ class IndexedRecordQueryMixin:
         result = {
             _indexed_row(tuple(row), field="indexed_records.message") for row in rows
         }
-        selected_tool_call_ids = tuple(
-            dict.fromkeys(
-                # 前端定点详情携带的是 model-call scoped ID，而 SQLite
-                # tool_calls 表按 provider 原始 call ID 保存。两者必须在此
-                # 归一化，否则定点请求会查不到任何记录，参数/结果静默为空。
-                _raw_call_id_from_scoped(candidate) or candidate
-                for value in (tool_call_ids or ())
-                for candidate in (strict_text(value, field="indexed_records.tool_call_id"),)
-            )
+        tool_predicates: list[str] = []
+        tool_params: list[object] = []
+        selected_tool_ids = tuple(
+            strict_text(value, field="indexed_records.tool_call_id")
+            for value in dict.fromkeys(tool_call_ids or ())
         )
-        tool_id_filter = ""
-        tool_id_params: tuple[object, ...] = ()
-        if selected_tool_call_ids:
-            tool_id_filter = (
-                " AND tc.tool_call_id IN ("
-                + ",".join("?" for _ in selected_tool_call_ids)
-                + ")"
-            )
-            tool_id_params = tuple(selected_tool_call_ids)
-
+        if selected_tool_ids:
+            carriers = connection.execute(
+                "SELECT tc.tool_call_id, tc.assistant_message_sequence, carrier.projection_manifest_json "
+                "FROM tool_calls tc JOIN messages assistant "
+                "ON assistant.message_sequence = tc.assistant_message_sequence "
+                "JOIN item_catalog carrier ON carrier.jsonl_offset = assistant.jsonl_offset "
+                "AND carrier.jsonl_length = assistant.jsonl_length "
+                "WHERE assistant.turn_id IN ("
+                + ",".join("?" for _ in ids)
+                + ")",
+                ids,
+            ).fetchall()
+            for call_id, assistant_sequence, manifest_json in carriers:
+                call_id = strict_text(call_id, field="tool_calls.tool_call_id")
+                manifest = parse_item_projection_manifest(
+                    json.loads(
+                        strict_text(
+                            manifest_json,
+                            field="item_catalog.projection_manifest_json",
+                        )
+                    )
+                )
+                identity = (
+                    ItemProjectionIdentity.from_dict(manifest["projection_identity"])
+                    if manifest["projection_identity"] is not None
+                    else None
+                )
+                if any(
+                    matches_tool_call_id(identity, call_id, selected_id)
+                    for selected_id in selected_tool_ids
+                ):
+                    tool_predicates.append(
+                        "(tc.tool_call_id = ? AND tc.assistant_message_sequence = ?)"
+                    )
+                    tool_params.extend(
+                        (call_id, _positive_int(assistant_sequence, field="tool_calls.assistant_message_sequence"))
+                    )
+        tool_id_filter = (
+            " AND (" + " OR ".join(tool_predicates) + ")"
+            if tool_predicates
+            else " AND 0" if tool_call_ids is not None else ""
+        )
+        tool_id_params = tuple(tool_params)
+        if tool_predicates:
             # 一个 assistant message 可能同时声明多个工具；先取命中 call 所在的
             # assistant message，后续 mapper 再按 tool_call_id 过滤 payload。
             assistant_rows = connection.execute(

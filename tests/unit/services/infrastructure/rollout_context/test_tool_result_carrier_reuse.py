@@ -28,6 +28,9 @@ from app.domain.itemized.enums import (
     TurnScope,
 )
 from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.service import (
     RolloutStorage,
@@ -64,19 +67,9 @@ def _live_tool_result(sequence: int) -> CanonicalItemRecord:
             "result_id": LIVE_EXECUTION_ID,
             "name": "task",
             "content": RESULT_CONTENT,
-            "tool_outcome": "success",
-        },
-        metadata={
-            "execution_id": LIVE_EXECUTION_ID,
-            "model_call_id": MODEL_CALL_ID,
-            "tool_execution_id": LIVE_EXECUTION_ID,
-            "tool_call_id": SCOPED_TOOL_CALL_ID,
-            "tool_invocation_id": (
-                f"tool-invocation:{MODEL_CALL_ID}:{PROVIDER_TOOL_CALL_ID}"
-            ),
-            "tool_attempt_id": LIVE_EXECUTION_ID,
-            "execution_confirmed": True,
-        },
+            "tool_outcome": "success"
+        , "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL_ID),
         turn_id=TURN_ID,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id=f"message-{LIVE_EXECUTION_ID}",
@@ -107,15 +100,9 @@ def _request_carrier(
             "result_id": message_id,
             "name": "task",
             "content": content,
-            "tool_outcome": "success",
-        },
-        metadata={
-            "projection_message_id": message_id,
-            "wire_role": "tool",
-            "execution_confirmed": True,
-            "model_call_id": MODEL_CALL_ID,
-            "tool_call_id": PROVIDER_TOOL_CALL_ID,
-        },
+            "tool_outcome": "success"
+        , "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(projection_message_id=message_id, model_call_id=MODEL_CALL_ID),
         turn_id=TURN_ID,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id=f"message-{message_id}",
@@ -173,10 +160,10 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutStorage):
         if item.semantic_kind == SemanticKind.TOOL_RESULT
     }
     assert set(stored) == {live.item_id, carrier.item_id}
-    assert stored[carrier.item_id].metadata["projection_message_id"] == (
+    assert stored[carrier.item_id].projection_identity.projection_message_id == (
         "1b56a352-tool-msg"
     )
-    assert "projection_message_id" not in stored[live.item_id].metadata
+    assert stored[live.item_id].projection_identity.projection_message_id is None
 
 
 def test_equivalent_live_tool_results_still_reused(storage: RolloutStorage):
@@ -202,19 +189,9 @@ def test_equivalent_live_tool_results_still_reused(storage: RolloutStorage):
             "result_id": "other-execution",
             "name": "task",
             "content": RESULT_CONTENT,
-            "tool_outcome": "success",
-        },
-        metadata={
-            "execution_id": "other-execution",
-            "model_call_id": MODEL_CALL_ID,
-            "tool_execution_id": "other-execution",
-            "tool_call_id": SCOPED_TOOL_CALL_ID,
-            "tool_invocation_id": (
-                f"tool-invocation:{MODEL_CALL_ID}:{PROVIDER_TOOL_CALL_ID}"
-            ),
-            "tool_attempt_id": "other-execution",
-            "execution_confirmed": True,
-        },
+            "tool_outcome": "success"
+        , "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL_ID),
         turn_id=TURN_ID,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id="message-other-execution",

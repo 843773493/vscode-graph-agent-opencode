@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from app.domain.itemized.redaction import validate_hash_redaction
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.schema import validate_extensions
 from app.domain.itemized.serialization import _hash_safe_value
 
 _HTTP_CREDENTIAL_KEYS = frozenset(
@@ -65,7 +66,7 @@ def validate_draft_privacy(plan: ContextRequestPlan) -> None:
     if not isinstance(plan, ContextRequestPlan):
         raise TypeError("validate_draft_privacy 必须接收 ContextRequestPlan")
     for contribution in plan.contributions:
-        _validate_metadata(contribution.metadata, field="contribution.metadata")
+        validate_extensions(contribution.extensions, field="contribution.extensions")
     for tool_ref in plan.tool_set_refs:
         _validate_metadata(tool_ref.tool_policy, field="tool_policy")
 

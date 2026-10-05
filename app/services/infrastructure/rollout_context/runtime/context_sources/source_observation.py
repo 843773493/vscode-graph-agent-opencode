@@ -22,6 +22,7 @@ from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
     SourceActivationBoundary,
 )
+from app.domain.itemized.schema import validate_extensions
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -85,8 +86,7 @@ class SourceObservation:
                 raise ValueError(
                     "SourceObservation: from_revision 不得等于当前 revision"
                 )
-        if not isinstance(self.extensions, Mapping):
-            raise TypeError("SourceObservation.extensions 必须是 Mapping")
+        validate_extensions(self.extensions, field="SourceObservation.extensions")
 
     @property
     def observation_id(self) -> str:
@@ -203,6 +203,7 @@ def build_source_lifecycle_decision(
         pending_only=pending_only,
         content=content,
         item_id=item_id,
+        extensions=observation.extensions,
     )
 
 

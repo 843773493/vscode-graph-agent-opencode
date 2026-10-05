@@ -69,6 +69,15 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
     validate_hash_token,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ItemSourceManifest,
+    ProjectionGroup,
+    ProjectionPartRef,
+    ReasoningCarrier,
+    ToolResultEvidence,
+)
 from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
@@ -85,7 +94,11 @@ from app.domain.itemized.records import (
     ProducerRef,
     RuntimeNoticePayload,
 )
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.domain.itemized.runtime import (
     ExecutionRecord,
     ItemDraft,
@@ -134,7 +147,10 @@ __all__ = [
     "InternalDisplayProvenance",
     "InternalExecutionIntent",
     "ItemDraft",
+    "ItemProjectionIdentity",
+    "ItemProvenanceRelation",
     "ItemSchemaError",
+    "ItemSourceManifest",
     "ModelCallRecord",
     "ParentAssemblyRef",
     "PayloadKind",
@@ -142,9 +158,12 @@ __all__ = [
     "PrefixEpoch",
     "PrefixEpochState",
     "ProducerRef",
+    "ProjectionGroup",
+    "ProjectionPartRef",
     "ProvenanceEdge",
     "ProviderProfileChangeRequiresRebuildError",
     "ProviderProfileItemFrame",
+    "ReasoningCarrier",
     "RootCandidateSource",
     "RootCompileBoundaryError",
     "RootCompileConflictError",
@@ -154,9 +173,11 @@ __all__ = [
     "SealedPrefixAssembly",
     "SelectionKind",
     "SemanticKind",
+    "SourceBinding",
     "SourceIdentityConflictError",
     "StablePrefixDigest",
     "StablePrefixViolationError",
+    "ToolResultEvidence",
     "ToolSetRebaseRequiredError",
     "ToolSetRef",
     "TurnExecutionLink",

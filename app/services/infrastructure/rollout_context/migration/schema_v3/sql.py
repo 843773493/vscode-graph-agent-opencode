@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.migration.schema_v3.model impor
     rows,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v3.snapshots import (
-    remap_source_metadata,
+    remap_source_bindings,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     initialize_rollout_schema,
@@ -93,10 +93,10 @@ def build_sql(connection: sqlite3.Connection, details: tuple[DetailUpgrade, ...]
     typed = {detail.old_id: detail.record.detail_ref for detail in details}
     for table in ("context_contributions", "context_assembly_contributions"):
         for row in rows(connection, table):
-            value = object_json(row["metadata_json"], field=table + ".metadata_json")
-            remapped = remap_source_metadata(value, typed)
+            value = object_json(row["binding_manifest_json"], field=table + ".binding_manifest_json")
+            remapped = remap_source_bindings(value, typed)
             if value != remapped:
-                statements.append(_update(table, row, {"metadata_json": canonical_json_bytes(remapped).decode()}))
+                statements.append(_update(table, row, {"binding_manifest_json": canonical_json_bytes(remapped).decode()}))
     for row in rows(connection, "context_assemblies"):
         snapshot = snapshots[row["assembly_id"]]
         statements.append(_update("context_assemblies", row, {

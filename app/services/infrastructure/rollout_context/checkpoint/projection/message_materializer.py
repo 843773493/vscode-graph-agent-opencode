@@ -12,6 +12,9 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, BinaryIO
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    validate_catalog_projection,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -122,7 +125,7 @@ class RolloutMessageMaterializerMixin:
                 )
                 item = items[-1]
                 message = self._codec().project_message(items)
-                item_message_id = item.metadata.get("projection_message_id")
+                item_message_id = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
                 item_message_id = strict_optional_text(
                     item_message_id,
                     field="canonical item projection_message_id",
@@ -191,7 +194,7 @@ class RolloutMessageMaterializerMixin:
             )
         item = CanonicalItemRecord.from_dict(envelope)
         catalog = connection.execute(
-            "SELECT item_sequence, content_hash, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
+            "SELECT item_sequence, content_hash, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog WHERE item_id = ?",
             (item.item_id,),
         ).fetchone()
         if catalog is None:
@@ -219,6 +222,16 @@ class RolloutMessageMaterializerMixin:
             raise RuntimeError(
                 f"v2 item catalog 与 JSONL locator/hash 不一致: {item.item_id}"
             )
+        relations = connection.execute(
+            "SELECT canonical_relation_ordinal, relation, source_ref, target_ref "
+            "FROM item_relations WHERE canonical_item_id = ? ORDER BY canonical_relation_ordinal",
+            (item.item_id,),
+        ).fetchall()
+        validate_catalog_projection(
+            item, projection_manifest_json=strict_text(catalog[4], field="item_catalog.projection_manifest_json"),
+            tool_call_id=strict_optional_text(catalog[5], field="item_catalog.tool_call_id"),
+            relation_rows=relations,
+        )
         return item
 
 

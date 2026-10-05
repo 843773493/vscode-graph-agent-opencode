@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionPartRef,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
     _final_reasoning_source_refs,
     _finalize_activity_projection,
     _logical_activity_key,
-    _source_ref_matches,
 )
 
 
@@ -115,8 +118,8 @@ def test_checkpoint_shadow_uses_producer_identity_instead_of_text() -> None:
         "block_ordinal": 0,
     }
 
-    assert _logical_activity_key(provider) == _logical_activity_key(checkpoint_shadow)
-    assert _logical_activity_key(provider) != _logical_activity_key(different_model_call)
+    assert _logical_activity_key(provider, "model-call-1") == _logical_activity_key(checkpoint_shadow, "model-call-1")
+    assert _logical_activity_key(provider, "model-call-1") != _logical_activity_key(different_model_call, "model-call-2")
 
 
 def test_distinct_persisted_reasoning_blocks_keep_identity_with_same_block_ordinal() -> None:
@@ -133,7 +136,7 @@ def test_distinct_persisted_reasoning_blocks_keep_identity_with_same_block_ordin
         "block_id": "part-after-tool",
     }
 
-    assert _logical_activity_key(first) != _logical_activity_key(second)
+    assert _logical_activity_key(first, "model-call-1") != _logical_activity_key(second, "model-call-2")
 
 
 def test_reused_tool_call_id_keeps_distinct_model_call_provenance() -> None:
@@ -150,7 +153,7 @@ def test_reused_tool_call_id_keeps_distinct_model_call_provenance() -> None:
         "call_index": 0,
     }
 
-    assert _logical_activity_key(first) != _logical_activity_key(second)
+    assert _logical_activity_key(first, "model-call-1") != _logical_activity_key(second, "model-call-2")
 
 
 def test_checkpoint_tool_shadow_uses_model_call_provenance() -> None:
@@ -167,42 +170,39 @@ def test_checkpoint_tool_shadow_uses_model_call_provenance() -> None:
         "call_index": 0,
     }
 
-    assert _logical_activity_key(provider) == _logical_activity_key(checkpoint_shadow)
+    assert _logical_activity_key(provider, "model-call-1") == _logical_activity_key(checkpoint_shadow, "model-call-1")
 
 
 def test_final_reasoning_resolves_preserved_content_part_identity() -> None:
     refs = _final_reasoning_source_refs(
-        {
-            "content_part_refs": [
-                {"id": "part-reasoning", "index": 0, "type": "reasoning"},
-                {"id": "part-text", "index": 1, "type": "text"},
-            ]
-        },
+        ItemProjectionIdentity(model_call_id="model-call-1", content_part_refs=(
+            ProjectionPartRef("part-reasoning", 0, "reasoning"), ProjectionPartRef("part-text", 1, "text")
+        )),
         content_block_index=0,
         item_index=0,
         provider_item_id=None,
     )
 
-    assert refs == {"part-reasoning"}
+    assert refs == {("model-call-1", "part-reasoning")}
 
 
 def test_final_reasoning_keeps_distinct_provider_item_identity() -> None:
     refs = _final_reasoning_source_refs(
-        {
-            "content_part_refs": [
-                {"id": "outer-reasoning", "index": 0, "type": "reasoning_items"}
-            ]
-        },
+        ItemProjectionIdentity(model_call_id="model-call-1", content_part_refs=(
+            ProjectionPartRef("outer-reasoning", 0, "reasoning_items"),
+        )),
         content_block_index=0,
         item_index=1,
         provider_item_id="provider-reasoning-2",
     )
 
-    assert refs == {"provider-reasoning-2"}
+    assert refs == {("model-call-1", "provider-reasoning-2")}
 
 
-def test_final_reasoning_matches_raw_part_against_scoped_block_identity() -> None:
-    assert _source_ref_matches(
-        "part-after-tool",
-        {"model-call-2:block:part-after-tool"},
+def test_final_reasoning_scope_prevents_reused_part_cross_call_merge() -> None:
+    refs = _final_reasoning_source_refs(
+        ItemProjectionIdentity(model_call_id="model-call-2", content_part_refs=(ProjectionPartRef("part-reused", 0),)),
+        content_block_index=0, item_index=0, provider_item_id=None,
     )
+    assert refs == {("model-call-2", "part-reused")}
+    assert not refs & {("model-call-1", "part-reused")}

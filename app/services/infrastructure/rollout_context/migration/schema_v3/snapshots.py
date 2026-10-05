@@ -111,7 +111,7 @@ def typed_snapshot(
         if entry["detail_ref"] is not None:
             entry["detail_ref"] = mapped(entry["detail_ref"])
     for contribution in result["contributions"]:
-        contribution["metadata"] = remap_source_metadata(contribution["metadata"], detail_map)
+        contribution["metadata"] = remap_source_bindings(contribution["metadata"], detail_map)
     # wire request preimage 是 Provider 编码事实，不做字符串替换。没有实际
     # wire preimage 时，由 domain 使用新 selection 生成默认 hash preimage。
     snapshot = ContextAssemblySnapshot.from_dict(result)
@@ -127,18 +127,18 @@ def typed_snapshot(
     return snapshot
 
 
-def remap_source_metadata(value: object, detail_map: dict[str, DetailRef]) -> object:
-    """只映射显式 metadata 引用，不改正文/工具 schema 中恰好相等的文本。"""
+def remap_source_bindings(value: object, detail_map: dict[str, DetailRef]) -> object:
+    """只映射显式 typed source binding 引用，不改正文/工具 schema 中恰好相等的文本。"""
     if isinstance(value, list):
-        return [remap_source_metadata(child, detail_map) for child in value]
+        return [remap_source_bindings(child, detail_map) for child in value]
     if not isinstance(value, dict):
         return value
     result = {}
     for key, child in value.items():
-        if key in {"lineage", "legacy_source_ref", "source_lineage", "fork_lineage"}:
+        if key in {"extensions", "lineage", "legacy_source_ref", "source_lineage", "fork_lineage"}:
             result[key] = child
         elif key in {"detail_ref", "source_ref"} and isinstance(child, str) and child in detail_map:
             result[key] = detail_map[child].to_dict()
         else:
-            result[key] = remap_source_metadata(child, detail_map)
+            result[key] = remap_source_bindings(child, detail_map)
     return result

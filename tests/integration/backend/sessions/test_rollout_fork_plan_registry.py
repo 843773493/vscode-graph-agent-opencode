@@ -9,7 +9,11 @@ import pytest
 
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     draft_manifest,
 )
@@ -328,7 +332,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
             source_revision=f"revision-{text}",
             body=text,
             content_hash=contribution_content_hash("prompt", text),
-            metadata={"source_ref": "draft-alias"},
+            extensions={} , source_binding=SourceBinding(source_ref='draft-alias'),
             source_ordinal=0,
         )
         ref = ContextRef.request_only_ref(
@@ -365,7 +369,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
             assert ref.plan_id == target_id and ref.session_id == TARGET_SESSION_ID
             assert ref.ref_id != "same-request-id" and ref.source_ref != "draft-alias"
             assert contribution.contribution_id != "draft-contribution"
-            assert contribution.metadata["source_ref"] == ref.source_ref
+            assert contribution.source_binding.source_ref == ref.source_ref
             assert contribution.content_hash == contribution_content_hash(
                 "prompt", text
             )

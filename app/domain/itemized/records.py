@@ -15,7 +15,15 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import (
     _ensure_json_value,
+    canonical_json_bytes,
     content_hash,
+)
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ItemSourceManifest,
+    ProjectionGroup,
+    ToolResultEvidence,
 )
 from app.domain.itemized.schema import (
     CORE_FIELDS as _CORE_FIELDS,
@@ -25,13 +33,14 @@ from app.domain.itemized.schema import (
 )
 from app.domain.itemized.schema import (
     validate_extension_payload,
+    validate_extensions,
     validate_item_compatibility,
     validate_producer_ref,
 )
 from app.domain.itemized.validation import _non_empty_string
 
 _OPTIONAL_FIELDS = frozenset(
-    {"turn_id", "turn_scope", "message_group_id", "wire_role"}
+    {"turn_id", "turn_scope", "message_group_id", "wire_role", "projection_group", "projection_identity", "tool_result_evidence", "source_manifest", "provenance_relations"}
 )
 _INTERNAL_DISPLAY_KINDS = frozenset({"delegated_task", "generated_session_result"})
 _RUNTIME_NOTICE_PAYLOAD_FIELDS = frozenset({"prompt", "display_part"})
@@ -54,6 +63,27 @@ def _strict_mapping(value: object, allowed: frozenset[str], name: str) -> Mappin
     if unknown:
         raise ItemSchemaError(f"{name} 含未知字段: " + ",".join(unknown))
     return value
+
+
+
+def user_input_payload(content: object, attachments: object) -> object:
+    """用户正文与安全附件坐标属于 payload，不能靠扩展恢复业务输入。"""
+    if not isinstance(attachments, list):
+        return content
+    safe = []
+    for attachment in attachments:
+        if not isinstance(attachment, Mapping):
+            continue
+        file_id = attachment.get("file_id")
+        if not isinstance(file_id, str) or not file_id:
+            continue
+        record = {"file_id": file_id}
+        for key in ("name", "content_type", "path", "preview_status"):
+            child = attachment.get(key)
+            if isinstance(child, str) and child:
+                record[key] = child
+        safe.append(record)
+    return {"content": content, "attachments": safe} if safe else content
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +206,7 @@ def _validate_payload(
     payload_kind: str,
     status: str,
     payload: object,
-    metadata: Mapping[str, object],
+    tool_result_evidence: ToolResultEvidence | None,
 ) -> None:
     _ensure_json_value(payload)
     if payload_kind == PayloadKind.TEXT and not isinstance(payload, str):
@@ -228,44 +258,35 @@ def _validate_payload(
                 raise ItemSchemaError("tool_call payload 缺少 args")
     if semantic_kind == SemanticKind.TOOL_RESULT:
         if payload_kind == PayloadKind.TEXT:
-            # text 保持精确 Unicode 正文；identity 由 producer 显式写入 metadata。
-            # 不从 item_id、invocation_id 或正文推测 call/result identity。
-            identity = metadata
-            identity_path = "metadata"
+            if tool_result_evidence is None:
+                raise ItemSchemaError("text tool_result 缺少 typed ToolResultEvidence")
             outcome = None
+            confirmed = tool_result_evidence.execution_confirmed
+            if not confirmed:
+                raise ItemSchemaError("纯 text 无法承载 tool_outcome=unknown；未确认结果必须使用结构化 payload")
         elif isinstance(payload, Mapping):
-            identity = payload
-            identity_path = "payload"
+            if tool_result_evidence is not None:
+                raise ItemSchemaError("结构化 tool_result 不得同时携带文本结果 evidence")
+            _non_empty_string(payload.get("tool_call_id"), "payload.tool_call_id")
+            _non_empty_string(payload.get("result_id"), "payload.result_id")
+            confirmed = payload.get("execution_confirmed")
+            if type(confirmed) is not bool:
+                raise ItemSchemaError("payload.execution_confirmed 必须是 boolean")
             outcome = payload.get("tool_outcome")
         else:
-            raise ItemSchemaError("tool_result payload 必须是 object")
-        _non_empty_string(identity.get("tool_call_id"), f"{identity_path}.tool_call_id")
-        _non_empty_string(identity.get("result_id"), f"{identity_path}.result_id")
-        if "execution_confirmed" in metadata and type(metadata["execution_confirmed"]) is not bool:
-            raise ItemSchemaError("item-schema-incompatible: execution_confirmed 必须为 boolean")
+            raise ItemSchemaError("tool_result payload 必须是 object 或带 evidence 的 text")
         if outcome is not None and (not isinstance(outcome, str) or outcome not in _TOOL_OUTCOMES):
             raise ItemSchemaError("item-schema-incompatible: payload.tool_outcome 不是允许的 marker")
-        if metadata.get("execution_confirmed") is False and outcome != "unknown":
-            raise ItemSchemaError(
-                "item-schema-incompatible: 未确认工具结果必须在 typed payload 标记 unknown；"
-                "纯 text 无法承载 tool_outcome，必须选择 tool_result typed payload"
-            )
-        if outcome == "success":
-            if status != CanonicalItemStatus.COMPLETED.value:
-                raise ItemSchemaError(
-                    "item-schema-incompatible: 只有 completed tool_result 才能标记 tool_outcome=success"
-                )
-            if metadata.get("execution_confirmed") is not True:
-                raise ItemSchemaError(
-                    "item-schema-incompatible: tool_outcome=success 必须带 execution_confirmed=true"
-                )
-        elif (
-            outcome in {"failure", "cancelled"}
-            and status != CanonicalItemStatus.COMPLETED.value
+        if payload_kind != PayloadKind.TEXT and not confirmed and outcome != "unknown":
+            raise ItemSchemaError("item-schema-incompatible: 未确认结果必须显式标记 tool_outcome=unknown")
+        if outcome == "success" and (
+            status != CanonicalItemStatus.COMPLETED.value or not confirmed
         ):
-            raise ItemSchemaError(
-                "item-schema-incompatible: 非 completed tool_result 只能省略 tool_outcome 或使用 unknown"
-            )
+            raise ItemSchemaError("item-schema-incompatible: success 必须是 completed 且 execution_confirmed=true")
+        if outcome in {"failure", "cancelled"} and status != CanonicalItemStatus.COMPLETED.value:
+            raise ItemSchemaError("item-schema-incompatible: 非 completed 结果只能省略 outcome 或使用 unknown")
+    elif tool_result_evidence is not None:
+        raise ItemSchemaError("ToolResultEvidence 只能用于纯文本 tool_result")
     if semantic_kind == SemanticKind.ATTACHMENT:
         if not isinstance(payload, Mapping):
             raise ItemSchemaError("attachment_ref payload 必须是 object")
@@ -278,6 +299,29 @@ def _validate_payload(
             raise ItemSchemaError("compaction_summary payload 必须是 object")
         _non_empty_string(payload.get("summary_id"), "payload.summary_id")
         _non_empty_string(payload.get("view_revision"), "payload.view_revision")
+
+
+def parse_item_projection_manifest(value: object) -> dict[str, object]:
+    """恢复 catalogue 的无正文镜像；禁止扩展覆盖 typed owner。"""
+    fields = {"projection_group", "projection_identity", "tool_result_evidence", "source_manifest", "provenance_relations", "extensions"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ItemSchemaError("item projection manifest 字段缺失或含未知字段")
+    validate_extensions(value["extensions"])
+    types = {
+        "projection_group": ProjectionGroup,
+        "projection_identity": ItemProjectionIdentity,
+        "tool_result_evidence": ToolResultEvidence,
+        "source_manifest": ItemSourceManifest,
+    }
+    result = {"extensions": dict(value["extensions"])}
+    for name, target_type in types.items():
+        child = value[name]
+        result[name] = target_type.from_dict(child).to_dict() if child is not None else None
+    relations = value["provenance_relations"]
+    if not isinstance(relations, list):
+        raise ItemSchemaError("item provenance_relations 必须是有序 array")
+    result["provenance_relations"] = [ItemProvenanceRelation.from_dict(child).to_dict() for child in relations]
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,11 +360,22 @@ class CanonicalItemRecord:
     payload: object
     content_hash: str
     created_at: str
-    metadata: Mapping[str, object]
+    # 未知扩展保留版本与 value；禁止由它控制归属、去重、工具确认或恢复。
+    extensions: Mapping[str, object]
     turn_id: str | None = None
     turn_scope: str | None = None
     message_group_id: str | None = None
     wire_role: str | None = None
+    # 仅显式拆分的 carrier 成组；单 item 为 None，不从邻接猜测 group。
+    projection_group: ProjectionGroup | None = None
+    # checkpoint/stream 身份可空；不可从 item ID、正文或 extension 补造。
+    projection_identity: ItemProjectionIdentity | None = None
+    # 纯文本工具结果必须有 evidence，结构化结果由 payload 独占。
+    tool_result_evidence: ToolResultEvidence | None = None
+    # 语义 source revision/可见性/保护可空；不存在时使用 canonical 自身身份。
+    source_manifest: ItemSourceManifest | None = None
+    # 已提交替换与导入/fork 来源；item_relations 只镜像这份 typed 关系。
+    provenance_relations: tuple[ItemProvenanceRelation, ...] = ()
 
     def __post_init__(self) -> None:
         self.validate()
@@ -337,7 +392,12 @@ class CanonicalItemRecord:
         producer_ref: Mapping[str, object] | ProducerRef,
         payload: object,
         created_at: str | None = None,
-        metadata: Mapping[str, object] | None = None,
+        extensions: Mapping[str, object] | None = None,
+        projection_group: ProjectionGroup | None = None,
+        projection_identity: ItemProjectionIdentity | None = None,
+        tool_result_evidence: ToolResultEvidence | None = None,
+        source_manifest: ItemSourceManifest | None = None,
+        provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
         turn_id: str | None = None,
         turn_scope: str | TurnScope | None = None,
         message_group_id: str | None = None,
@@ -371,7 +431,12 @@ class CanonicalItemRecord:
             payload=payload,
             content_hash=content_hash(payload_value, payload),
             created_at=created_at_value,
-            metadata=metadata if metadata is not None else {},
+            extensions=extensions if extensions is not None else {},
+            projection_group=projection_group,
+            projection_identity=projection_identity,
+            tool_result_evidence=tool_result_evidence,
+            source_manifest=source_manifest,
+            provenance_relations=provenance_relations,
             turn_id=turn_id,
             turn_scope=turn_scope_value,
             message_group_id=message_group_id,
@@ -410,12 +475,49 @@ class CanonicalItemRecord:
             payload=value["payload"],
             content_hash=value["content_hash"],
             created_at=value["created_at"],
-            metadata=value["metadata"],
+            extensions=value["extensions"],
+            projection_group=ProjectionGroup.from_dict(value["projection_group"]) if value.get("projection_group") is not None else None,
+            projection_identity=ItemProjectionIdentity.from_dict(value["projection_identity"]) if value.get("projection_identity") is not None else None,
+            tool_result_evidence=ToolResultEvidence.from_dict(value["tool_result_evidence"]) if value.get("tool_result_evidence") is not None else None,
+            source_manifest=ItemSourceManifest.from_dict(value["source_manifest"]) if value.get("source_manifest") is not None else None,
+            provenance_relations=cls._parse_relations(value.get("provenance_relations", [])),
             turn_id=value.get("turn_id"),
             turn_scope=value.get("turn_scope"),
             message_group_id=value.get("message_group_id"),
             wire_role=value.get("wire_role"),
         )
+
+    @staticmethod
+    def _parse_relations(value: object) -> tuple[ItemProvenanceRelation, ...]:
+        if not isinstance(value, list):
+            raise ItemSchemaError("provenance_relations 必须是有序 array")
+        return tuple(ItemProvenanceRelation.from_dict(entry) for entry in value)
+
+    @property
+    def tool_call_id(self) -> str | None:
+        """派生目录索引；真实身份只来自 typed evidence 或工具 payload。"""
+        if self.tool_result_evidence is not None:
+            return self.tool_result_evidence.tool_call_id
+        if self.semantic_kind not in {SemanticKind.TOOL_CALL, SemanticKind.TOOL_RESULT} or not isinstance(self.payload, Mapping):
+            return None
+        call_id = self.payload.get("tool_call_id")
+        if isinstance(call_id, str):
+            return call_id
+        calls = self.payload.get("tool_calls")
+        if isinstance(calls, list) and len(calls) == 1:
+            return calls[0]["id"]
+        return None
+
+    def projection_manifest(self) -> dict[str, object]:
+        """SQLite 只保存无正文 typed 投影/关系镜像，由 JSONL 逐字段核对。"""
+        return {
+            "projection_group": self.projection_group.to_dict() if self.projection_group is not None else None,
+            "projection_identity": self.projection_identity.to_dict() if self.projection_identity is not None else None,
+            "tool_result_evidence": self.tool_result_evidence.to_dict() if self.tool_result_evidence is not None else None,
+            "source_manifest": self.source_manifest.to_dict() if self.source_manifest is not None else None,
+            "provenance_relations": [entry.to_dict() for entry in self.provenance_relations],
+            "extensions": dict(self.extensions),
+        }
 
     def validate(self) -> None:
         if type(self.format_version) is not int or self.format_version != 2:
@@ -434,12 +536,26 @@ class CanonicalItemRecord:
         status = _non_empty_string(self.status, "status")
         validate_item_compatibility(semantic, payload_type, status)
         producer = _validate_producer(self.producer_ref)
-        if not isinstance(self.metadata, Mapping):
-            raise ItemSchemaError("metadata 必须是 object")
-        _ensure_json_value(self.metadata, "metadata")
-        if "tool_outcome" in self.metadata:
-            raise ItemSchemaError("item-schema-incompatible: tool_outcome 只能位于 tool_result typed payload")
-        _validate_payload(semantic, payload_type, status, self.payload, self.metadata)
+        validate_extensions(self.extensions)
+        for name, expected_type in (
+            ("projection_group", ProjectionGroup),
+            ("projection_identity", ItemProjectionIdentity),
+            ("tool_result_evidence", ToolResultEvidence),
+            ("source_manifest", ItemSourceManifest),
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, expected_type):
+                raise ItemSchemaError(f"{name} 必须是 typed {expected_type.__name__}")
+        if self.projection_group is not None and self.message_group_id is None:
+            raise ItemSchemaError("projection_group 必须绑定显式 message_group_id")
+        if not isinstance(self.provenance_relations, tuple) or not all(
+            isinstance(entry, ItemProvenanceRelation) for entry in self.provenance_relations
+        ):
+            raise ItemSchemaError("provenance_relations 必须是 typed tuple")
+        relation_keys = [canonical_json_bytes(entry.to_dict()) for entry in self.provenance_relations]
+        if len(relation_keys) != len(set(relation_keys)):
+            raise ItemSchemaError("provenance_relations 不得重复")
+        _validate_payload(semantic, payload_type, status, self.payload, self.tool_result_evidence)
         expected_hash = content_hash(payload_type, self.payload)
         if self.content_hash != expected_hash:
             raise ItemSchemaError("content_hash 与 payload 不一致")
@@ -499,12 +615,18 @@ class CanonicalItemRecord:
             "payload": self.payload,
             "content_hash": self.content_hash,
             "created_at": self.created_at,
-            "metadata": dict(self.metadata),
+            "extensions": dict(self.extensions),
         }
         for field_name in ("turn_id", "turn_scope", "message_group_id", "wire_role"):
             value = getattr(self, field_name)
             if value is not None:
                 result[field_name] = value
+        for name in ("projection_group", "projection_identity", "tool_result_evidence", "source_manifest"):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value.to_dict()
+        if self.provenance_relations:
+            result["provenance_relations"] = [entry.to_dict() for entry in self.provenance_relations]
         return result
 
 
@@ -512,6 +634,11 @@ __all__ = [
     "CanonicalItemRecord",
     "InternalDisplayPart",
     "InternalDisplayProvenance",
+    "ItemProjectionIdentity",
+    "ItemProvenanceRelation",
+    "ItemSourceManifest",
     "ProducerRef",
+    "ProjectionGroup",
     "RuntimeNoticePayload",
+    "ToolResultEvidence",
 ]

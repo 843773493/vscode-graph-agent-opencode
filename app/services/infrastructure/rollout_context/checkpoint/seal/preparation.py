@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import fields, replace
+from dataclasses import replace
 
 from langchain_core.messages import BaseMessage
 
@@ -72,11 +72,7 @@ def prepare_registered_context(
                 message.model_dump(mode="json") for message in request_messages
             ],
             "prompt_contributions": [
-                {
-                    field.name: getattr(contribution, field.name)
-                    for field in fields(ContextContribution)
-                    if field.name != "body"
-                }
+                {name: value for name, value in contribution.to_dict().items() if name != "body"}
                 for contribution in contributions
             ],
             "tool_snapshot": [dict(tool) for tool in tool_snapshot],

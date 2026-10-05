@@ -323,7 +323,7 @@ class RolloutViewAnchorMixin:
             message_id = strict_text(message_id, field="messages.message_id")
             item_rows_for_message = connection.execute(
                 "SELECT item_id FROM item_catalog WHERE item_id = ? "
-                "OR json_extract(metadata_json, '$.projection_message_id') = ? "
+                "OR json_extract(projection_manifest_json, '$.projection_identity.projection_message_id') = ? "
                 "ORDER BY item_sequence",
                 (f"item-{message_id}", message_id),
             ).fetchall()

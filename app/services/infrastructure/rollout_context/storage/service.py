@@ -637,9 +637,6 @@ class RolloutStorage(
     def _ensure_namespace_state(self, connection: sqlite3.Connection, checkpoint_ns: str, timestamp: str) -> None:
         return self._maintenance_owner._ensure_namespace_state(connection, checkpoint_ns, timestamp)
 
-    def _initialize_schema(self, session_id: str, thread_id: str, checkpoint_ns: str) -> None:
-        return self._maintenance_owner._initialize_schema(session_id, thread_id, checkpoint_ns)
-
     def _commit_connection(self, connection: sqlite3.Connection) -> None:
         return self._maintenance_owner._commit_connection(connection)
 

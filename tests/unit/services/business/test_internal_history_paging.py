@@ -192,7 +192,7 @@ def _entry(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={"producer_kind": "runtime", "producer_id": execution_id},
         payload=payload,
-        metadata={"internal": True},
+        extensions={},
         turn_scope="ambient",
         wire_role="user",
         created_at="2026-10-04T00:00:00Z",

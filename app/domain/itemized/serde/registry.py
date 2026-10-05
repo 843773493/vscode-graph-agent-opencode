@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 
 # 非空字符串校验只有 validation.py 一份定义；此处沿用既有单一 owner，不再复制实现。
 from app.domain.itemized.validation import _non_empty_string as _required_string
@@ -174,7 +174,11 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         "protection",
         "assembly_id",
         "contribution_ordinal",
-        "metadata",
+        "extensions",
+        "source_binding",
+        "root_placement",
+        "selection_role",
+        "replacement_policy",
         "body",
     }
     missing_contribution_fields = sorted(required_contribution_fields - set(raw))
@@ -184,12 +188,9 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         )
     # source_ordinal 是可选 typed 字段（registry 分配值随 unsealed 清单
     # 往返；sealed manifest 不携带），只加入允许集，不进入必需集。
-    # root_placement 是 E1 typed 控制字段；旧 envelope 不携带时应用规范
-    # 文档化默认 tail_only（默认外部内容恒为 tail_only），不是旧别名兼容。
     # selection_role/replacement_policy 是规范定稿的 typed core 字段（替代
     # 自由 selection_only/replaceable_source flag）。它们随 unsealed registry/
-    # source manifest 与 sealed manifest 往返；旧 envelope 不携带时应用规范
-    # 默认 direct/immutable，不是旧别名兼容。
+    # source manifest 与 sealed manifest 往返；缺字段直接拒绝。
     allowed_contribution_fields = required_contribution_fields | {
         "source_ordinal",
         "root_placement",
@@ -204,8 +205,8 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         raise ItemSchemaError(
             "sealed ContextContribution 必须带 assembly_id/contribution_ordinal"
         )
-    if not isinstance(raw["metadata"], Mapping):
-        raise ItemSchemaError("ContextContribution.metadata 必须是 object")
+    if not isinstance(raw["extensions"], Mapping):
+        raise ItemSchemaError("ContextContribution.extensions 必须是 object")
     # source_ordinal 是 draft/source manifest 的可选 typed 字段；registry
     # 分配值随 unsealed 清单往返，sealed manifest 不携带（保持旧字节合同）。
     raw_source_ordinal = raw.get("source_ordinal")
@@ -217,17 +218,17 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         raise ItemSchemaError(
             "ContextContribution.source_ordinal 必须是非负整数或 NULL"
         )
-    raw_root_placement = raw.get("root_placement", "tail_only")
+    raw_root_placement = raw["root_placement"]
     if raw_root_placement not in ("root_eligible", "tail_only"):
         raise ItemSchemaError(
             f"未知 ContextContribution.root_placement: {raw_root_placement!r}"
         )
-    raw_selection_role = raw.get("selection_role", "direct")
+    raw_selection_role = raw["selection_role"]
     if raw_selection_role not in ("direct", "backing_only"):
         raise ItemSchemaError(
             f"未知 ContextContribution.selection_role: {raw_selection_role!r}"
         )
-    raw_replacement_policy = raw.get("replacement_policy", "immutable")
+    raw_replacement_policy = raw["replacement_policy"]
     if raw_replacement_policy not in ("immutable", "replaceable"):
         raise ItemSchemaError(
             f"未知 ContextContribution.replacement_policy: {raw_replacement_policy!r}"
@@ -244,7 +245,8 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         ),
         content_hash=_optional_string(raw, "content_hash", "ContextContribution.content_hash"),
         request_only=raw["request_only"],
-        metadata=dict(raw["metadata"]),
+        extensions=dict(raw["extensions"]),
+        source_binding=SourceBinding.from_dict(raw["source_binding"]) if raw["source_binding"] is not None else None,
         contribution_kind=_required_string(
             raw["contribution_kind"], "ContextContribution.contribution_kind"
         ),

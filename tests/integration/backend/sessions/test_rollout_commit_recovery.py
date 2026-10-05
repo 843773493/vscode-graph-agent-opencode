@@ -72,18 +72,34 @@ def committed_rollout(
         "UPDATE database_meta SET committed_jsonl_offset = 0",
         "UPDATE database_meta SET committed_jsonl_offset = committed_jsonl_offset - 1",
         "UPDATE database_meta SET last_commit_id = last_commit_id - 1",
-        ("UPDATE storage_commits SET jsonl_offset_before = jsonl_offset_before + 1 "
-         "WHERE commit_kind = 'terminal_convergence'"),
-        ("UPDATE storage_commits SET jsonl_offset_after = jsonl_offset_after + 1 "
-         "WHERE commit_kind = 'terminal_convergence'"),
-        ("UPDATE storage_commits SET jsonl_record_count = 1 "
-         "WHERE commit_kind = 'terminal_convergence'"),
-        ("UPDATE storage_commits SET jsonl_fsync_at = NULL "
-         "WHERE commit_kind = 'acceptance'"),
+        (
+            "UPDATE storage_commits SET jsonl_offset_before = jsonl_offset_before + 1 "
+            "WHERE commit_kind = 'terminal_convergence'"
+        ),
+        (
+            "UPDATE storage_commits SET jsonl_offset_after = jsonl_offset_after + 1 "
+            "WHERE commit_kind = 'terminal_convergence'"
+        ),
+        (
+            "UPDATE storage_commits SET jsonl_record_count = 1 "
+            "WHERE commit_kind = 'terminal_convergence'"
+        ),
+        (
+            "UPDATE storage_commits SET jsonl_fsync_at = NULL "
+            "WHERE commit_kind = 'acceptance'"
+        ),
         "DELETE FROM storage_commits WHERE commit_kind = 'terminal_convergence'",
     ],
-    ids=["zero-meta", "lower-meta", "last-commit", "chain-before", "chain-after",
-         "metadata-count", "missing-barrier", "missing-commit"],
+    ids=[
+        "zero-meta",
+        "lower-meta",
+        "last-commit",
+        "chain-before",
+        "chain-after",
+        "metadata-count",
+        "missing-barrier",
+        "missing-commit",
+    ],
 )
 def test_corrupt_commit_boundary_preserves_all_jsonl_bytes(
     committed_rollout: CommittedRollout,
@@ -132,8 +148,13 @@ def test_valid_commit_chain_reclaims_only_uncommitted_tail(
         ).fetchall()
     assert commits == [
         ("acceptance", "item_bearing", 0, len(rollout.committed), 1),
-        ("terminal_convergence", "metadata_only", len(rollout.committed),
-         len(rollout.committed), 0),
+        (
+            "terminal_convergence",
+            "metadata_only",
+            len(rollout.committed),
+            len(rollout.committed),
+            0,
+        ),
     ]
 
 
@@ -157,17 +178,24 @@ def test_invalid_catalog_preserves_committed_body_and_tail(
     [
         ("UPDATE item_catalog SET source_revision = ''", "source_revision"),
         ("UPDATE item_catalog SET source_revision = 'unrelated'", "source_revision"),
-        ("UPDATE item_catalog SET payload_length = payload_length + 1", "payload_length"),
+        (
+            "UPDATE item_catalog SET payload_length = payload_length + 1",
+            "payload_length",
+        ),
     ],
 )
 def test_startup_rejects_catalog_manifest_corruption_without_repair(
-    committed_rollout: CommittedRollout, corruption: str, match: str,
+    committed_rollout: CommittedRollout,
+    corruption: str,
+    match: str,
 ) -> None:
     rollout = committed_rollout
     with sqlite3.connect(rollout.index) as connection:
         connection.execute(corruption)
         damaged_catalog = connection.execute("SELECT * FROM item_catalog").fetchall()
-        damaged_projection = connection.execute("SELECT * FROM item_projections").fetchall()
+        damaged_projection = connection.execute(
+            "SELECT * FROM item_projections"
+        ).fetchall()
     with rollout.jsonl.open("ab") as stream:
         stream.write(b"uncommitted-tail")
     before = rollout.jsonl.read_bytes()
@@ -175,8 +203,14 @@ def test_startup_rejects_catalog_manifest_corruption_without_repair(
         RolloutCheckpointSaver(rollout.sessions)._storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == before
     with sqlite3.connect(rollout.index) as connection:
-        assert connection.execute("SELECT * FROM item_catalog").fetchall() == damaged_catalog
-        assert connection.execute("SELECT * FROM item_projections").fetchall() == damaged_projection
+        assert (
+            connection.execute("SELECT * FROM item_catalog").fetchall()
+            == damaged_catalog
+        )
+        assert (
+            connection.execute("SELECT * FROM item_projections").fetchall()
+            == damaged_projection
+        )
 
 
 def test_startup_does_not_rebuild_optional_item_projections(
@@ -196,7 +230,8 @@ def test_startup_does_not_rebuild_optional_item_projections(
 
 
 def test_summary_reads_never_open_jsonl_body(
-    committed_rollout: CommittedRollout, monkeypatch: pytest.MonkeyPatch,
+    committed_rollout: CommittedRollout,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rollout = committed_rollout
     original_open = Path.open
@@ -210,13 +245,16 @@ def test_summary_reads_never_open_jsonl_body(
     storage = RolloutCheckpointSaver(rollout.sessions)._storage
     projections = storage.read_item_projections(rollout.session_id)
     assert len(projections) == 1
-    with storage.open_read_snapshot(rollout.session_id) as snapshot:
-        assert snapshot.thread_id == rollout.session_id
+    thread_id = storage.main_thread_id(rollout.session_id)
+    with storage.open_read_snapshot(rollout.session_id, thread_id) as snapshot:
+        assert snapshot.thread_id == thread_id
+        assert snapshot.session_id == rollout.session_id
 
 
 @pytest.mark.parametrize("text_length", [65535, 65536, 65537])
 def test_bounded_projection_preserves_original_text_length(
-    committed_rollout: CommittedRollout, text_length: int,
+    committed_rollout: CommittedRollout,
+    text_length: int,
 ) -> None:
     rollout = committed_rollout
     saver = RolloutCheckpointSaver(rollout.sessions)
@@ -240,7 +278,8 @@ def test_bounded_projection_preserves_original_text_length(
 
 @pytest.mark.parametrize("operation", ["initialize", "snapshot"])
 def test_removed_physical_compaction_journal_is_rejected_without_recovery(
-    committed_rollout: CommittedRollout, operation: str,
+    committed_rollout: CommittedRollout,
+    operation: str,
 ) -> None:
     rollout = committed_rollout
     with sqlite3.connect(rollout.index) as connection:
@@ -250,11 +289,15 @@ def test_removed_physical_compaction_journal_is_rejected_without_recovery(
         stream.write(b"uncommitted-tail")
     before = rollout.jsonl.read_bytes()
     storage = RolloutCheckpointSaver(rollout.sessions)._storage
-    with pytest.raises(RuntimeError, match="recovery-required.*物理 compaction journal"):
+    with pytest.raises(
+        RuntimeError, match="recovery-required.*物理 compaction journal"
+    ):
         if operation == "initialize":
             storage.initialize(rollout.session_id)
         else:
-            with storage.open_read_snapshot(rollout.session_id):
+            with storage.open_read_snapshot(
+                rollout.session_id, storage.main_thread_id(rollout.session_id)
+            ):
                 pytest.fail("未完成的旧物理回收不能成为可读 snapshot")
     assert rollout.jsonl.read_bytes() == before
 
@@ -271,16 +314,25 @@ def test_nullable_source_revision_uses_stable_canonical_revision(
         job_id="nullable-source-job",
         admission_idempotency_key="nullable-source-admission",
         payload="没有外部 revision 的 canonical input",
-        acceptance_metadata={"source_revision": None},
+        extensions={
+            "test.nullable-source": {
+                "extension_version": "1",
+                "protection": "public",
+                "value": {"source_revision": None},
+            }
+        },
     )
     restarted = RolloutCheckpointSaver(rollout.sessions)._storage
     items = restarted.read_items(
-        rollout.session_id, item_ids=(accepted["root_input_item_id"],)
+        rollout.session_id,
+        restarted.main_thread_id(rollout.session_id),
+        item_ids=(accepted["root_input_item_id"],),
     )
     assert len(items) == 1
     with sqlite3.connect(rollout.index) as connection:
         revision = connection.execute(
-            "SELECT source_revision FROM item_catalog WHERE item_id = ?", (items[0].item_id,)
+            "SELECT source_revision FROM item_catalog WHERE item_id = ?",
+            (items[0].item_id,),
         ).fetchone()[0]
     assert revision == f"canonical:{items[0].item_id}:{items[0].content_hash}"
 
@@ -292,9 +344,11 @@ def test_startup_rejects_unpublished_migration_without_resetting_target(
     with sqlite3.connect(rollout.index) as connection:
         connection.execute("UPDATE database_meta SET database_state = 'migrating'")
         catalog = connection.execute("SELECT * FROM item_catalog").fetchall()
-    with pytest.raises(RuntimeError, match="migration-installation-incomplete"):
+    with pytest.raises(RuntimeError, match="rollout-publication-incomplete"):
         RolloutCheckpointSaver(rollout.sessions)._storage.initialize(rollout.session_id)
     assert rollout.jsonl.read_bytes() == rollout.committed
     with sqlite3.connect(rollout.index) as connection:
         assert connection.execute("SELECT * FROM item_catalog").fetchall() == catalog
-        assert connection.execute("SELECT database_state FROM database_meta").fetchone() == ("migrating",)
+        assert connection.execute(
+            "SELECT database_state FROM database_meta"
+        ).fetchone() == ("migrating",)

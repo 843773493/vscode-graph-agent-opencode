@@ -366,15 +366,9 @@ class ContextRef:
     ) -> ContextRef:
         if not isinstance(item, CanonicalItemRecord):
             raise TypeError("canonical ContextRef 只接受 CanonicalItemRecord")
-        if "source_revision" in item.metadata:
-            source_revision = _non_empty_string(
-                item.metadata["source_revision"],
-                "CanonicalItemRecord.metadata.source_revision",
-            )
-        else:
-            source_revision = f"canonical:{item.item_id}:{item.content_hash}"
-        visibility_value = item.metadata.get("visibility", "internal")
-        protection_value = item.metadata.get("protection", "public")
+        source_revision = item.source_manifest.source_revision if item.source_manifest is not None else f"canonical:{item.item_id}:{item.content_hash}"
+        visibility_value = item.source_manifest.visibility if item.source_manifest is not None else "internal"
+        protection_value = item.source_manifest.protection if item.source_manifest is not None else "public"
         return cls(
             ref_type="canonical_item",
             ref_id=item.item_id,
@@ -389,11 +383,11 @@ class ContextRef:
             content_hash=item.content_hash,
             visibility=_non_empty_string(
                 visibility_value,
-                "CanonicalItemRecord.metadata.visibility",
+                "CanonicalItemRecord.source_manifest.visibility",
             ),
             protection=_non_empty_string(
                 protection_value,
-                "CanonicalItemRecord.metadata.protection",
+                "CanonicalItemRecord.source_manifest.protection",
             ),
         )
 

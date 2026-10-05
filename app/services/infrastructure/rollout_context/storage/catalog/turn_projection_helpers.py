@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
@@ -64,6 +66,7 @@ def _finalize_activity_projection(projection: dict[str, object]) -> None:
                     ),
                     "call_index": item.get("call_index"),
                     "tool_call_id": item.get("tool_call_id"),
+                    "model_call_id": item.get("model_call_id"),
                     "tool_name": item.get("tool_name"),
                     "status": item.get("status"),
                 }
@@ -109,159 +112,50 @@ def _json_object(value: object, *, field: str) -> dict[str, object]:
     return decoded
 
 
-def _normalized_model_call_id(producer_ref: dict[str, object]) -> str:
-    producer_id = strict_text(
-        producer_ref.get("producer_id"), field="producer_ref.producer_id"
-    )
-    return producer_id.removeprefix("lc_run--")
-
-
-def _activity_model_call_id(
-    metadata: dict[str, object],
-    producer_ref: dict[str, object],
-) -> str:
-    # TODO: 旧 canonical item 补齐 model_call_id 后，删除 producer_ref 回退。
-    model_call_id = metadata.get("model_call_id")
-    if isinstance(model_call_id, str) and model_call_id:
-        return model_call_id
-    return _normalized_model_call_id(producer_ref)
-
-
 def _authoritative_tool_coordinates(
-    tool_by_call_id: dict[tuple[str, str], dict[str, object]],
+    tool_by_call_id: dict[tuple[str, str | None, str], dict[str, object]],
     turn_id: str,
-    block_id: object,
+    identity: ItemProjectionIdentity | None,
+    call_id: str | None,
 ) -> dict[str, object]:
-    """用 scoped block_id 内嵌的原始 call ID 回查 SQLite 权威工具坐标。
-
-    实时 canonical tool_call 只携带 model-call scoped block_id，且派生
-    ``tool_calls`` 表可能尚未提交，因此拿不到 ``assistant_message_sequence`` /
-    ``call_index`` / ``result_message_sequence``。这些坐标是后续定点详情按显式
-    位置回填参数/结果的唯一稳定依据；缺失时只能退化为“原始 call ID 全局唯一”
-    的脆弱匹配，一旦 ID 复用就会静默丢参数。这里从 scoped ID 反解 provider
-    原始 ID，再回查 SQLite 已提交的权威坐标。
-
-    TODO: 实时 canonical tool_call 直接携带坐标后，本回退即可删除。
-    """
-    if not isinstance(block_id, str) or not block_id:
+    """使用显式 model-call scope 回查派生工具坐标。"""
+    if call_id is None:
         return {}
-    raw_call_id = _raw_call_id_from_scoped(block_id)
-    if raw_call_id is None:
-        return {}
-    authoritative = tool_by_call_id.get((turn_id, raw_call_id))
+    scope = identity.model_call_id if identity is not None else None
+    authoritative = tool_by_call_id.get((turn_id, scope, provider_tool_call_id(identity, call_id)))
     if authoritative is None:
         return {}
     return {
-        "result_message_sequence": authoritative.get("result_message_sequence"),
-        "assistant_message_sequence": authoritative.get("assistant_message_sequence"),
-        "call_index": authoritative.get("call_index"),
+        name: authoritative.get(name) for name in (
+            "result_message_sequence", "assistant_message_sequence", "call_index"
+        )
     }
 
 
-def _logical_activity_key(item: dict[str, object]) -> tuple[object, ...]:
-    """只按持久 identity/provenance 合并同一逻辑 item，绝不比较正文。"""
+def _logical_activity_key(item: dict[str, object], model_call_id: str | None) -> tuple[object, ...]:
+    """合并只使用 typed scope 与持久身份；未绑定 scope 的 item 独立。"""
     kind = strict_text(item.get("kind"), field="activity_item.kind")
-    if kind == "tool_call":
-        producer_ref = item.get("producer_ref")
-        if not isinstance(producer_ref, dict):
-            raise TypeError("tool_call activity item 缺少 producer_ref")
-        return (
-            kind,
-            strict_text(item.get("tool_call_id"), field="tool_call_id"),
-            _normalized_model_call_id(producer_ref),
-            strict_non_negative_int(item.get("call_index"), field="call_index"),
-        )
-    if kind == "tool_result":
-        return (
-            kind,
-            strict_text(item.get("tool_call_id"), field="tool_call_id"),
-        )
-    if kind == "text":
-        return (kind, strict_text(item.get("item_id"), field="item_id"))
-    if kind == "compaction_summary":
-        return (kind, strict_text(item.get("item_id"), field="item_id"))
-    producer_ref = item.get("producer_ref")
-    if not isinstance(producer_ref, dict):
-        raise TypeError("reasoning activity item 缺少 producer_ref")
-    block_ordinal = item.get("block_ordinal")
-    if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
-        raise TypeError("reasoning activity item 缺少 block_ordinal")
+    if kind in {"text", "compaction_summary"} or model_call_id is None:
+        return kind, strict_text(item.get("item_id"), field="item_id")
+    if kind in {"tool_call", "tool_result"}:
+        return kind, model_call_id, strict_text(item.get("tool_call_id"), field="tool_call_id")
     block_id = item.get("block_id")
-    if isinstance(block_id, str) and block_id:
-        return (
-            kind,
-            _normalized_model_call_id(producer_ref),
-            "block_id",
-            block_id,
-        )
-    return (kind, _normalized_model_call_id(producer_ref), block_ordinal)
+    coordinate = block_id if block_id is not None else strict_non_negative_int(item.get("block_ordinal"), field="block_ordinal")
+    return kind, model_call_id, coordinate
 
 
 def _final_reasoning_source_refs(
-    final_item_metadata: dict[str, object],
+    identity: ItemProjectionIdentity | None,
     *,
     content_block_index: int,
     item_index: int,
     provider_item_id: object,
-) -> set[str]:
-    """解析最终 checkpoint reasoning 指向的持久 content part identity。"""
-    refs: set[str] = set()
+) -> set[tuple[str | None, str]]:
+    """最终 reasoning 只按显式 scope/part 坐标与流式块去重。"""
+    scope = identity.model_call_id if identity is not None else None
+    refs: set[tuple[str | None, str]] = set()
     if provider_item_id is not None:
-        refs.add(strict_text(provider_item_id, field="reasoning_blocks.item_id"))
-
-    # reasoning_items 中第二个及后续匿名子项不能只凭外层 block ref 合并；
-    # 它们没有足够精确的持久 identity，应继续作为独立逻辑 Item。
-    if item_index != 0:
-        return refs
-    raw_part_refs = final_item_metadata.get("content_part_refs")
-    if raw_part_refs is None:
-        return refs
-    if not isinstance(raw_part_refs, list):
-        raise TypeError("final item metadata.content_part_refs 必须是列表")
-    matching_ids: list[str] = []
-    for ordinal, raw_ref in enumerate(raw_part_refs):
-        if not isinstance(raw_ref, dict):
-            raise TypeError(
-                f"final item metadata.content_part_refs[{ordinal}] 必须是对象"
-            )
-        ref_index = raw_ref.get("index")
-        if not isinstance(ref_index, int) or isinstance(ref_index, bool):
-            raise TypeError(
-                f"final item metadata.content_part_refs[{ordinal}].index 必须是整数"
-            )
-        if ref_index != content_block_index:
-            continue
-        matching_ids.append(
-            strict_text(
-                raw_ref.get("id"),
-                field=f"final item metadata.content_part_refs[{ordinal}].id",
-            )
-        )
-    if len(matching_ids) > 1:
-        raise RuntimeError(
-            "final item metadata.content_part_refs 存在重复 content block index"
-        )
-    refs.update(matching_ids)
+        refs.add((scope, strict_text(provider_item_id, field="reasoning_blocks.item_id")))
+    if item_index == 0 and identity is not None:
+        refs.update((scope, ref.id) for ref in identity.content_part_refs if ref.index == content_block_index)
     return refs
-
-
-def _source_ref_matches(
-    source_ref: str,
-    seen_refs: set[str],
-) -> bool:
-    """同时匹配 provider 原始 part ID 与 scoped block ID。"""
-    # TODO: 历史 scoped block ID 完成迁移后，删除 scoped 后缀兼容匹配。
-    if source_ref in seen_refs:
-        return True
-    return any(
-        seen_ref.endswith(f":block:{source_ref}")
-        for seen_ref in seen_refs
-    )
-
-
-def _raw_call_id_from_scoped(block_id: str) -> str | None:
-    """从 model-call scoped block_id 取出 checkpoint 中的 provider 原始 call ID。"""
-    marker = ":tool-call:"
-    if marker not in block_id:
-        return None
-    return block_id.rsplit(marker, 1)[-1] or None

@@ -51,7 +51,7 @@ def metadata_plan(draft, redactor):
         contribution = replace(
             original,
             body=None,
-            metadata={**original.metadata, **metadata},
+            extensions={**original.extensions, "boxteam.test.annotation": {"extension_version": "future-7", "protection": protection, "value": metadata}},
             protection=protection,
             content_hash=original.content_hash if protection == "public" else None,
             redacted_stable_digest=None if protection == "public" else digest,
@@ -90,7 +90,7 @@ def assert_rejected_without_mutation(registry_db, private_value):
     _saver, _session, connection, _accepted = registry_db
 
     def check(plan):
-        metadata = tuple(contribution.metadata for contribution in plan.contributions)
+        metadata = tuple(contribution.extensions for contribution in plan.contributions)
         policies = tuple(ref.tool_policy for ref in plan.tool_set_refs)
         before_values = canonical_json_bytes([metadata, policies])
         before_sql = tuple(connection.iterdump())
@@ -98,7 +98,7 @@ def assert_rejected_without_mutation(registry_db, private_value):
             validate_draft_privacy(plan)
         assert canonical_json_bytes([metadata, policies]) == before_values
         assert all(
-            source.metadata is original
+            source.extensions is original
             for source, original in zip(plan.contributions, metadata, strict=True)
         )
         assert all(
@@ -300,7 +300,7 @@ def test_complete_markers_are_persisted_exactly_without_plaintext(
     assert recovered == registered
     assert validate_draft_privacy(recovered.draft) is None
     restored = (
-        recovered.draft.contributions[0].metadata
+        recovered.draft.contributions[0].extensions["boxteam.test.annotation"]["value"]
         if surface == "metadata"
         else recovered.draft.tool_set_refs[0].tool_policy
     )
@@ -341,7 +341,7 @@ def test_recovery_refuses_credentials_in_current_and_initial_manifests(
         registered = create_registration(connection, draft)
     raw = json.loads(canonical_json_bytes(registered.draft.to_dict()))
     if surface == "metadata":
-        raw["contributions"][0]["metadata"]["api_key"] = private_value
+        raw["contributions"][0]["extensions"]["boxteam.test.annotation"] = {"extension_version": "future-7", "protection": "public", "value": {"api_key": private_value}}
     else:
         # 保持真实 domain 工具 manifest/hash 一致，只注入不允许持久化的认证配置。
         changed = policy_plan({"headers": {"aUtHoRiZaTiOn": "Bearer " + private_value}})
@@ -397,7 +397,7 @@ def test_safe_provenance_and_noncredential_policy_remain_unchanged(
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         registered = create_registration(connection, plan)
-    assert registered.draft.contributions[0].metadata == provenance
+    assert registered.draft.contributions[0].extensions["boxteam.test.annotation"]["value"] == provenance
 
 
 def test_tool_schema_property_names_are_not_misclassified_as_credentials(draft):

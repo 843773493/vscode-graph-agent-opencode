@@ -9,12 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.execution_admission_context import require_current_execution_admission
-
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
-    SEMANTIC_FIELDS,
-    semantic_metadata,
-)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -58,8 +53,8 @@ def _compare_group(
     if len(expected) != len(actual):
         raise ValueError("canonical message group 成员数发生变化")
     for candidate, stored in zip(expected, actual, strict=True):
-        if any(
-            getattr(candidate, name) != getattr(stored, name)
+        differing = [
+            name
             for name in (
                 "item_id",
                 "semantic_kind",
@@ -68,24 +63,22 @@ def _compare_group(
                 "turn_id",
                 "turn_scope",
             )
+            if getattr(candidate, name) != getattr(stored, name)
+        ]
+        if differing:
+            raise ValueError(
+                f"canonical item 与 message projection 内容不一致: {stored.item_id}:"
+                + ",".join(
+                    f"{name}={getattr(candidate, name)!r}/{getattr(stored, name)!r}"
+                    for name in differing
+                )
+            )
+        if canonical_json_text(candidate.projection_manifest()) != canonical_json_text(
+            stored.projection_manifest()
         ):
             raise ValueError(
-                f"canonical item 与 message projection 内容不一致: {stored.item_id}"
+                f"canonical item typed provenance/extensions 不一致: {stored.item_id}"
             )
-        candidate_semantic_metadata = semantic_metadata(candidate.metadata)
-        stored_semantic_metadata = semantic_metadata(stored.metadata)
-        for name in SEMANTIC_FIELDS:
-            if candidate_semantic_metadata.get(name) != stored_semantic_metadata.get(
-                name
-            ):
-                raise ValueError(
-                    f"canonical item semantic/provenance metadata 不一致: {stored.item_id}:{name}"
-                )
-        for name in ("projection_group", "reasoning_carrier"):
-            if candidate.metadata.get(name) != stored.metadata.get(name):
-                raise ValueError(
-                    f"canonical item semantic/provenance metadata 不一致: {stored.item_id}:{name}"
-                )
 
 
 def prepare_messages(
@@ -155,8 +148,7 @@ def prepare_messages(
                         or not execution_row[0]
                     ):
                         raise RuntimeError(
-                            "canonical item 缺少 execution attribution: "
-                            f"{item.item_id}"
+                            f"canonical item 缺少 execution attribution: {item.item_id}"
                         )
                     stored_execution_ids.add(execution_row[0])
                 if len(stored_execution_ids) != 1:
@@ -165,16 +157,14 @@ def prepare_messages(
                     )
                 stored_execution_id = next(iter(stored_execution_ids))
                 if catalog is None or (
-                    catalog[2] != stored_turn_id
-                    or catalog[3] != stored_execution_id
+                    catalog[2] != stored_turn_id or catalog[3] != stored_execution_id
                 ):
                     raise RuntimeError(
                         "canonical item 与 message-root catalog attribution 不一致: "
                         f"{message_id}"
                     )
                 if indexed is not None and (
-                    indexed[1] != stored_turn_id
-                    or indexed[2] != stored_execution_id
+                    indexed[1] != stored_turn_id or indexed[2] != stored_execution_id
                 ):
                     raise RuntimeError(
                         "message projection 与 canonical item attribution 不一致: "
@@ -213,7 +203,7 @@ def prepare_messages(
                 codec.tool_message_model_call_id(message, messages[:index])
                 if message_role == "tool"
                 else codec.model_call_id(message)
-                if codec.tool_calls(message)
+                if message_role == "assistant"
                 else None
             )
             group = codec.items_for_message(

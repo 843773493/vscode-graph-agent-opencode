@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping
 
 from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.services.infrastructure.rollout_context.fork.source_snapshot import (
     ForkRequestOnlyContent,
     freeze_request_only_content,
@@ -144,13 +144,10 @@ class ContextSourceOverlayMixin:
                 content_hash=content_hash,
                 redacted_stable_digest=redacted_digest,
                 request_only=True,
-                metadata={
-                    "source_ref": ref,
-                    "overlay_ref": ref,
-                    "overlay_id": overlay_id,
-                    "overlay_role": role,
-                    "source_overlay_epoch": source_overlay_epoch,
-                },
+                source_binding=SourceBinding(
+                    source_ref=ref, overlay_ref=ref, overlay_id=overlay_id,
+                    overlay_role=role, source_overlay_epoch=source_overlay_epoch,
+                ),
                 contribution_kind=f"overlay_{role}",
                 body=content,
                 content_length=content_length,

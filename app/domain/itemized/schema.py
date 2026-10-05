@@ -7,6 +7,7 @@ LangChain 或 provider。所有 v2 reader/writer 必须使用这里的矩阵，�
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from app.domain.itemized.enums import (
@@ -31,7 +32,7 @@ CORE_FIELDS = (
     "payload",
     "content_hash",
     "created_at",
-    "metadata",
+    "extensions",
 )
 
 ITEM_STATUSES = frozenset(item.value for item in CanonicalItemStatus)
@@ -59,6 +60,32 @@ PROVENANCE_RELATIONS = frozenset(
 )
 VISIBILITIES = frozenset({"public", "internal", "private"})
 PROTECTIONS = frozenset({"public", "redacted", "protected"})
+
+
+def validate_extensions(value: object, *, field: str = "extensions") -> None:
+    """只校验非决策扩展信封；未知 value 保留，核心不得解释。"""
+    if not isinstance(value, Mapping):
+        raise ItemSchemaError(f"{field} 必须是 object")
+    for name, envelope in value.items():
+        if not isinstance(name, str) or re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_-]*(?:[.:/][A-Za-z0-9_-]+)+", name
+        ) is None:
+            raise ItemSchemaError(f"{field} key 必须是 namespaced schema identifier")
+        if not isinstance(envelope, Mapping):
+            raise ItemSchemaError(f"{field}.{name} 必须是 extension envelope")
+        if set(envelope) - {"extension_version", "value", "protection", "encoding"}:
+            raise ItemSchemaError(f"{field}.{name} 含未知 envelope 字段")
+        version = envelope.get("extension_version")
+        if not isinstance(version, str) or not version:
+            raise ItemSchemaError(f"{field}.{name}.extension_version 必须是非空字符串")
+        protection = envelope.get("protection")
+        if "value" not in envelope or not isinstance(protection, str) or protection not in PROTECTIONS:
+            raise ItemSchemaError(f"{field}.{name} 缺少 value 或有效 protection")
+        if "encoding" in envelope and (
+            not isinstance(envelope["encoding"], str) or not envelope["encoding"]
+        ):
+            raise ItemSchemaError(f"{field}.{name}.encoding 必须是非空字符串")
+    _ensure_json_value(value, field)
 
 SELECTION_COMPATIBILITY: dict[str, tuple[str, str]] = {
     SelectionKind.CANONICAL_HISTORY: ("canonical_item", BaseDeltaRole.NONE),

@@ -7,9 +7,13 @@ from dataclasses import replace
 import pytest
 from langchain_core.messages import HumanMessage
 
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.request_plan import ContextRequestPlan, SourceBinding
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -62,6 +66,97 @@ def test_unregistered_plan_is_rejected_without_allocating(
     with pytest.raises(KeyError, match="context plan 不存在"):
         _seal(saver, session, draft, accepted)
     assert _state(saver, session, connection) == before
+
+
+@pytest.mark.parametrize("source_ref", ["source-A", "source-B"])
+def test_overlay_source_binding_matches_before_real_plan_seal_writes(
+    registry_db, draft, source_ref
+):
+    """selection alias 与 source alias 可不同，错误 source 不得进入封存事务。"""
+    saver, session, connection, accepted = registry_db
+    contribution = replace(
+        draft.contributions[0],
+        contribution_id="overlay:logical-overlay:base",
+        contribution_kind="overlay_base",
+        content_hash=contribution_content_hash("overlay_base", draft.contributions[0].body),
+        source_binding=SourceBinding(
+            source_ref="source-A",
+            overlay_ref="selection-overlay-base",
+            overlay_id="logical-overlay",
+            overlay_role="base",
+            source_overlay_epoch=1,
+        ),
+        source_ordinal=None,
+        selection_role="backing_only",
+    )
+    saver.register_context_contribution(
+        session, draft.thread_id, contribution, request_content=contribution.body
+    )
+    ref = replace(
+        draft.refs[0],
+        ref_id="selection-overlay-base",
+        source_ref=source_ref,
+        base_delta_role="base",
+        source_overlay_epoch=1,
+        content_hash=contribution.content_hash,
+    )
+    plan = replace(
+        saver.compose_context_plan(
+            session_id=session,
+            thread_id=draft.thread_id,
+            plan_id=draft.plan_id,
+            refs=(ref,),
+            source_overlay_epoch=1,
+        ),
+        plan_creation_idempotency_key="overlay-source-create",
+    )
+    registered = saver.create_context_plan(session, plan)
+    before = _state(saver, session, connection)
+    if source_ref != "source-A":
+        with pytest.raises(ValueError, match="overlay ref 缺少唯一 contribution"):
+            bound, _records, detail_refs = saver._bind_request_detail_refs(
+                session,
+                plan.thread_id,
+                "",
+                registered.draft,
+                assembly_id="overlay-source-assembly",
+            )
+            snapshot = ContextPlanComposer().assembly(
+                plan=bound,
+                assembly_id="overlay-source-assembly",
+                session_id=session,
+                thread_id=plan.thread_id,
+                turn_id=accepted["turn_id"],
+                execution_id=accepted["initial_execution_id"],
+                provider_version="source-binding-provider",
+                request_detail_refs=detail_refs,
+            )
+            saver._storage.seal_context_assembly(
+                session,
+                plan.thread_id,
+                snapshot,
+                seal_idempotency_key="overlay-source-seal",
+                seal_input_hash=sha256_jcs("overlay-source-seal-input"),
+            )
+        assert _state(saver, session, connection) == before
+        return
+    snapshot = saver.seal_context_plan(
+        session,
+        plan.thread_id,
+        registered.draft,
+        turn_id=accepted["turn_id"],
+        execution_id=accepted["initial_execution_id"],
+        provider_version="source-binding-provider",
+        seal_idempotency_key="overlay-source-seal",
+    )
+    assert snapshot.selection[0].ref.ref_id == "selection-overlay-base"
+    assert snapshot.selection[0].ref.source_ref == "source-A"
+    assert snapshot.contributions[0].source_binding == contribution.source_binding
+    assert connection.execute("SELECT COUNT(*) FROM context_assemblies").fetchone() == (1,)
+    assert saver.get_context_plan_registration(
+        session, thread_id=plan.thread_id, plan_id=plan.plan_id
+    ).plan_state == "sealed"
+    assert saver._storage.jsonl_path(session).read_bytes() == before[0]
 
 
 @pytest.mark.parametrize("omitted", [(), ("tools",), ("request-ref", "tools")])

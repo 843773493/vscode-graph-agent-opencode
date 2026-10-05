@@ -17,7 +17,11 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_uuid_hex
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -76,7 +80,7 @@ def projection_draft(projection_saver):
         source_revision="environment-v1",
         body=body,
         content_hash=contribution_content_hash("prompt", body),
-        metadata={"source_ref": "contribution-z"},
+        extensions={} , source_binding=SourceBinding(source_ref='contribution-z'),
     )
     saver.register_context_contribution(session_id, contribution, request_content=body)
     plan = saver.compose_committed_context_plan(

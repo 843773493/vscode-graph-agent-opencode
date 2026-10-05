@@ -5,7 +5,22 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionGroup,
+    ReasoningCarrier,
+)
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    CANONICAL_GROUP_FIELD,
+    companion_extensions,
+    message_annotations,
+    project_annotations,
+)
 
 _REASONING = {
     "reasoning",
@@ -36,7 +51,13 @@ def expand_tool_message(
             return (primary,)
         return _expand_single_tool_message(primary, content)
 
-    parts = [] if content in ("", []) else [content] if isinstance(content, str) else content
+    parts = (
+        []
+        if content in ("", [])
+        else [content]
+        if isinstance(content, str)
+        else content
+    )
     content_form = "str" if isinstance(content, str) else "list"
     size = len(parts) + len(calls)
     result: list[CanonicalItemRecord] = []
@@ -52,24 +73,11 @@ def expand_tool_message(
         )
     for call_index, call in enumerate(calls):
         ordinal = len(parts) + call_index
-        metadata = {
-            **primary.metadata,
-            "projection_group": {
-                "ordinal": ordinal,
-                "size": size,
-                "content_form": content_form,
-            },
-        }
-        if ordinal != size - 1:
-            metadata.pop("projection_message_id", None)
-            metadata.pop("token_usage", None)
-            metadata.pop("content_part_refs", None)
-            # 非 anchor 伴随 item 失去消息级投影身份后，必须携带自身显式
-            # provider call id，才能让 turn projection 按真实工具身份解析；
-            # 仅有单个调用的 item 不存在歧义，禁止用 item_id 兜底猜测。
-            explicit_call_id = call.get("id") or call.get("tool_call_id")
-            if isinstance(explicit_call_id, str) and explicit_call_id:
-                metadata["tool_call_id"] = explicit_call_id
+        identity = primary.projection_identity
+        if ordinal != size - 1 and identity is not None:
+            identity = replace(
+                identity, projection_message_id=None, content_part_refs=()
+            )
         item_id = (
             primary.item_id
             if ordinal == size - 1
@@ -85,7 +93,13 @@ def expand_tool_message(
                 producer_ref=primary.producer_ref,
                 payload={"tool_calls": [dict(call)]},
                 created_at=primary.created_at,
-                metadata=metadata,
+                extensions=primary.extensions
+                if ordinal == size - 1
+                else companion_extensions(primary),
+                projection_identity=identity,
+                projection_group=ProjectionGroup(ordinal, size, content_form),
+                source_manifest=primary.source_manifest,
+                provenance_relations=primary.provenance_relations,
                 turn_id=primary.turn_id,
                 turn_scope=primary.turn_scope,
                 message_group_id=primary.message_group_id,
@@ -116,14 +130,11 @@ def _expand_single_tool_message(
         replace(
             primary,
             item_sequence=primary.item_sequence + len(parts),
-            metadata={
-                **primary.metadata,
-                "projection_group": {
-                    "ordinal": size - 1,
-                    "size": size,
-                    "content_form": "str" if isinstance(content, str) else "list",
-                },
-            },
+            projection_group=ProjectionGroup(
+                size - 1,
+                size,
+                "str" if isinstance(content, str) else "list",
+            ),
         )
     )
     return tuple(result)
@@ -169,20 +180,13 @@ def _content_item(
             }
     elif not isinstance(part, (str, Mapping)):
         raise TypeError("tool-call content part 必须是字符串或 object")
-    metadata = {
-        **primary.metadata,
-        "projection_group": {
-            "ordinal": ordinal,
-            "size": size,
-            "content_form": content_form,
-        },
-    }
-    metadata.pop("projection_message_id", None)
-    # 消息级统计与 part 引用只由 anchor 持有，避免每个 companion 重复计费。
-    metadata.pop("token_usage", None)
-    metadata.pop("content_part_refs", None)
-    if carrier:
-        metadata["reasoning_carrier"] = carrier
+    identity = primary.projection_identity or ItemProjectionIdentity()
+    identity = replace(
+        identity,
+        projection_message_id=None,
+        content_part_refs=(),
+        reasoning_carrier=ReasoningCarrier.from_dict(carrier) if carrier else None,
+    )
     return CanonicalItemRecord.create(
         item_sequence=primary.item_sequence + ordinal,
         item_id=f"{primary.item_id}-content-{ordinal}",
@@ -192,7 +196,11 @@ def _content_item(
         producer_ref=primary.producer_ref,
         payload=payload,
         created_at=primary.created_at,
-        metadata=metadata,
+        extensions=companion_extensions(primary),
+        projection_identity=identity,
+        projection_group=ProjectionGroup(ordinal, size, content_form),
+        source_manifest=primary.source_manifest,
+        provenance_relations=primary.provenance_relations,
         turn_id=primary.turn_id,
         turn_scope=primary.turn_scope,
         message_group_id=primary.message_group_id,
@@ -204,14 +212,14 @@ def validate_group(items: Sequence[CanonicalItemRecord]) -> CanonicalItemRecord:
     if not items:
         raise ValueError("canonical message group 不得为空")
     primary = items[-1]
-    manifest = primary.metadata.get("projection_group")
+    manifest = primary.projection_group
     if manifest is None:
         if len(items) != 1:
             raise ValueError("canonical message group 缺少显式有序 manifest")
         return primary
-    if not isinstance(manifest, Mapping) or manifest.get("size") != len(items):
+    if manifest.size != len(items):
         raise ValueError("canonical message group 不完整")
-    if primary.semantic_kind != "tool_call" or manifest.get("content_form") not in {
+    if primary.semantic_kind != "tool_call" or manifest.content_form not in {
         "str",
         "list",
     }:
@@ -219,12 +227,9 @@ def validate_group(items: Sequence[CanonicalItemRecord]) -> CanonicalItemRecord:
     previous_sequence = 0
     seen_tool_call = False
     for ordinal, item in enumerate(items):
-        part = item.metadata.get("projection_group")
+        part = item.projection_group
         if (
-            not isinstance(part, Mapping)
-            or type(part.get("ordinal")) is not int
-            or type(part.get("size")) is not int
-            or dict(part) != {**manifest, "ordinal": ordinal}
+            part != replace(manifest, ordinal=ordinal)
             or item.message_group_id != primary.message_group_id
             or item.turn_id != primary.turn_id
             or item.turn_scope != primary.turn_scope
@@ -243,6 +248,71 @@ def validate_group(items: Sequence[CanonicalItemRecord]) -> CanonicalItemRecord:
     return primary
 
 
+def restore_group_manifests(
+    items: Sequence[CanonicalItemRecord],
+    response: Mapping[str, object],
+) -> tuple[CanonicalItemRecord, ...]:
+    """临时 carrier 携带无正文 typed 镜像，逐成员恢复并拒绝展示坐标冲突。"""
+    raw = response.get(CANONICAL_GROUP_FIELD)
+    if raw is None:
+        return tuple(items)
+    if not isinstance(raw, list) or len(raw) != len(items):
+        raise ValueError("checkpoint canonical group manifest 成员数不一致")
+    restored: list[CanonicalItemRecord] = []
+    for item, entry in zip(items, raw, strict=True):
+        if not isinstance(entry, Mapping) or entry.get("item_id") != item.item_id:
+            raise ValueError("checkpoint canonical group manifest item identity 不一致")
+        manifest = parse_item_projection_manifest(
+            {key: value for key, value in entry.items() if key != "item_id"}
+        )
+        values = {**item.to_dict(), **manifest}
+        evidence = manifest["tool_result_evidence"]
+        if evidence is not None:
+            if item.semantic_kind != "tool_result" or not isinstance(
+                item.payload, Mapping
+            ):
+                raise ValueError(
+                    "checkpoint text tool_result evidence 与消息角色不一致"
+                )
+            if item.payload["tool_call_id"] != evidence[
+                "tool_call_id"
+            ] or not isinstance(item.payload["content"], str):
+                raise ValueError(
+                    "checkpoint text tool_result evidence 与消息调用/正文不一致"
+                )
+            values["payload_kind"], values["payload"] = "text", item.payload["content"]
+            values["content_hash"] = content_hash("text", values["payload"])
+        candidate = CanonicalItemRecord.from_dict(values)
+        if candidate.projection_group != item.projection_group:
+            raise ValueError("checkpoint canonical group manifest 有序坐标不一致")
+        if candidate.projection_identity is not None:
+            visible_identity = replace(
+                candidate.projection_identity, block_id=None, block_index=None
+            )
+            if visible_identity != item.projection_identity:
+                raise ValueError(
+                    "checkpoint canonical projection identity 与消息展示坐标不一致"
+                )
+        if (
+            candidate.source_manifest.source_revision
+            if candidate.source_manifest
+            else None
+        ) != (item.source_manifest.source_revision if item.source_manifest else None):
+            raise ValueError(
+                "checkpoint canonical source manifest 与消息 revision 不一致"
+            )
+        restored.append(candidate)
+    anchor = restored[-1]
+    if anchor.provenance_relations != items[-1].provenance_relations:
+        raise ValueError("checkpoint canonical provenance 与消息声明不一致")
+    if message_annotations(project_annotations(anchor)) != message_annotations(
+        response
+    ):
+        raise ValueError("checkpoint canonical annotations 与消息展示字段不一致")
+    validate_group(restored)
+    return tuple(restored)
+
+
 def group_content(items: Sequence[CanonicalItemRecord]) -> str | list[object]:
     primary = validate_group(items)
     result: list[object] = []
@@ -252,21 +322,29 @@ def group_content(items: Sequence[CanonicalItemRecord]) -> str | list[object]:
         if item.semantic_kind == "reasoning":
             if item.payload_kind == "extension":
                 if (
-                    item.payload.get("extension_schema") != "boxteam.checkpoint.reasoning-carrier"
+                    item.payload.get("extension_schema")
+                    != "boxteam.checkpoint.reasoning-carrier"
                     or item.payload.get("extension_version") != "1"
                     or not isinstance(item.payload.get("value"), Mapping)
                 ):
-                    raise ValueError("canonical message group reasoning extension 不受支持")
+                    raise ValueError(
+                        "canonical message group reasoning extension 不受支持"
+                    )
                 result.append(dict(item.payload["value"]))
             else:
-                carrier = dict(item.metadata["reasoning_carrier"])
+                if (
+                    item.projection_identity is None
+                    or item.projection_identity.reasoning_carrier is None
+                ):
+                    raise ValueError("reasoning group 缺少 typed carrier")
+                carrier = item.projection_identity.reasoning_carrier.to_dict()
                 key = carrier.pop("text_key")
                 result.append({**carrier, key: item.payload})
         elif item.payload_kind == "text":
             result.append(item.payload)
         else:
             result.extend(item.payload)
-    if primary.metadata["projection_group"]["content_form"] == "str":
+    if primary.projection_group.content_form == "str":
         if not result:
             return ""
         if len(result) != 1 or not isinstance(result[0], str):

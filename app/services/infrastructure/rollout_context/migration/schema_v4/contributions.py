@@ -10,6 +10,7 @@ from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.request_plan import (
     ContextContribution,
+    SourceBinding,
     resolve_contribution_for_ref,
 )
 from app.services.infrastructure.rollout_context.migration.schema_v4.model import (
@@ -22,7 +23,7 @@ def _session_sources(connection: sqlite3.Connection) -> tuple[ContextContributio
     cursor = connection.execute(
         "SELECT contribution_id,source_kind,source_revision,content_hash,content_length,"
         "redacted_stable_digest,request_only,contribution_kind,visibility,protection,"
-        "metadata_json FROM context_contributions ORDER BY contribution_id"
+        "binding_manifest_json FROM context_contributions ORDER BY contribution_id"
     )
     columns = tuple(column[0] for column in cursor.description)
     result = []
@@ -30,13 +31,13 @@ def _session_sources(connection: sqlite3.Connection) -> tuple[ContextContributio
         values = dict(zip(columns, row, strict=True))
         if type(values["request_only"]) is not int or values["request_only"] != 1:
             raise SchemaV4UpgradeError("source-mismatch: schema3 contribution request_only 非法")
-        raw = values.pop("metadata_json")
+        raw = values.pop("binding_manifest_json")
         # 不可信 metadata/parser 异常可能携带凭据；不得附带原值或异常链。
         try:
             metadata = json.loads(raw)
             if not isinstance(metadata, dict) or canonical_json_bytes(metadata).decode() != raw:
                 raise ValueError("metadata 不是规范 JCS object")
-            contribution = ContextContribution(**{**values, "request_only": True, "metadata": metadata})
+            contribution = ContextContribution(**{**values, "request_only": True, "extensions": metadata["extensions"], "source_binding": SourceBinding.from_dict(metadata["source_binding"]) if metadata["source_binding"] is not None else None, "root_placement": metadata["root_placement"]})
         except (ValueError, TypeError):
             invalid = True
         else:

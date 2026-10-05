@@ -5,14 +5,17 @@
 
 from __future__ import annotations
 
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionGroup,
+)
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projection_helpers import (
-    _activity_model_call_id,
     _authoritative_tool_coordinates,
     _final_reasoning_source_refs,
     _finalize_activity_projection,
     _json_object,
     _logical_activity_key,
-    _source_ref_matches,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -25,11 +28,11 @@ def _merge_activity_items(
     result: dict[str, dict[str, object]],
     tool_rows: object,
     activity_rows: object,
-) -> tuple[dict[str, set[int]], dict[str, set[str]]]:
+) -> tuple[dict[str, set[int]], dict[str, set[tuple[str | None, str]]]]:
     """归并 canonical activity item，返回 shadow 索引与 reasoning 源引用表。"""
 
     tool_by_message: dict[tuple[str, str], list[dict[str, object]]] = {}
-    tool_by_call_id: dict[tuple[str, str], dict[str, object]] = {}
+    tool_by_call_id: dict[tuple[str, str | None, str], dict[str, object]] = {}
     tool_by_model_call_index: dict[tuple[str, str, int], dict[str, object]] = {}
     canonical_tools_by_model_call: dict[
         tuple[str, str], list[dict[str, object]]
@@ -43,6 +46,7 @@ def _merge_activity_items(
         result_sequence,
         assistant_sequence,
         call_index,
+        tool_projection_manifest_json,
     ) in tool_rows:
         turn_id = strict_text(turn_id, field="messages.turn_id")
         message_id = strict_text(message_id, field="messages.message_id")
@@ -63,16 +67,19 @@ def _merge_activity_items(
                 call_index, field=f"tool_calls.call_index:{call_id}"
             ),
         }
+        tool_manifest = parse_item_projection_manifest(_json_object(tool_projection_manifest_json, field="item_catalog.projection_manifest_json:tool"))
+        tool_identity = ItemProjectionIdentity.from_dict(tool_manifest["projection_identity"]) if tool_manifest["projection_identity"] is not None else None
+        model_call_id = tool_identity.model_call_id if tool_identity is not None else None
         tool_by_message.setdefault((turn_id, message_id), []).append(tool)
-        tool_by_call_id[(turn_id, call_id)] = tool
+        tool_by_call_id[(turn_id, model_call_id, call_id)] = tool
         tool_by_model_call_index[
-            (turn_id, message_id.removeprefix("lc_run--"), tool["call_index"])
+            (turn_id, model_call_id, tool["call_index"])
         ] = tool
 
     canonical_tool_call_ids_by_model_call: dict[
         tuple[str, str, int], str
     ] = {}
-    canonical_tool_call_ids_by_raw_id: dict[tuple[str, str], str | None] = {}
+    canonical_tool_call_ids_by_raw_id: dict[tuple[str, str | None, str], str | None] = {}
     # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
     # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
     # 映射，后续所有兼容消息都通过这张表归一化。
@@ -85,23 +92,23 @@ def _merge_activity_items(
         _item_status,
         _item_created_at,
         producer_ref_json,
-        metadata_json,
+        projection_manifest_json,
         _content,
         _content_truncated,
+        _tool_call_id,
     ) in activity_rows:
         if semantic_kind != "tool_call":
             continue
-        metadata = _json_object(
-            metadata_json, field="item_catalog.metadata_json:canonical-tool"
-        )
-        block_id = metadata.get("block_id")
+        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field="item_catalog.projection_manifest_json:canonical-tool"))
+        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"]) if manifest["projection_identity"] is not None else None
+        block_id = identity.block_id if identity is not None else None
         if not isinstance(block_id, str) or not block_id:
             continue
         producer_ref = _json_object(
             producer_ref_json, field="item_catalog.producer_ref_json:canonical-tool"
         )
-        model_call_id = _activity_model_call_id(metadata, producer_ref)
-        block_index = metadata.get("block_index")
+        model_call_id = identity.model_call_id
+        block_index = identity.block_index
         if not isinstance(block_index, int) or isinstance(block_index, bool):
             raise TypeError(
                 "canonical tool_call 缺少稳定 block_index: "
@@ -114,7 +121,7 @@ def _merge_activity_items(
     seen_activity: dict[str, set[tuple[object, ...]]] = {
         turn_id: set() for turn_id in result
     }
-    seen_reasoning_source_refs: dict[str, set[str]] = {
+    seen_reasoning_source_refs: dict[str, set[tuple[str | None, str]]] = {
         turn_id: set() for turn_id in result
     }
     canonical_reasoning_keys: dict[
@@ -135,34 +142,34 @@ def _merge_activity_items(
         item_status,
         item_created_at,
         producer_ref_json,
-        metadata_json,
+        projection_manifest_json,
         content,
         content_truncated,
+        indexed_tool_call_id,
     ) in activity_rows:
         turn_id = strict_text(turn_id, field="item_catalog.turn_id")
-        metadata = _json_object(
-            metadata_json, field=f"item_catalog.metadata_json:{item_id}"
-        )
+        manifest = parse_item_projection_manifest(_json_object(projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
+        identity = ItemProjectionIdentity.from_dict(manifest["projection_identity"]) if manifest["projection_identity"] is not None else None
+        projection_group = ProjectionGroup.from_dict(manifest["projection_group"]) if manifest["projection_group"] is not None else None
         producer_ref = _json_object(
             producer_ref_json, field=f"item_catalog.producer_ref_json:{item_id}"
         )
         semantic_kind = strict_text(
             semantic_kind, field=f"item_catalog.semantic_kind:{item_id}"
         )
-        source_part_id = metadata.get("block_id")
-        projection_message_id = metadata.get("projection_message_id")
-        activity_model_call_id = _activity_model_call_id(metadata, producer_ref)
+        source_part_id = identity.block_id if identity is not None else None
+        projection_message_id = identity.projection_message_id if identity is not None else None
+        activity_model_call_id = identity.model_call_id if identity is not None else None
         matching_tools = (
             tool_by_message.get((turn_id, projection_message_id), [])
             if isinstance(projection_message_id, str)
             else []
         )
-        block_ordinal = metadata.get("block_index")
-        projection_group = metadata.get("projection_group")
+        block_ordinal = identity.block_index if identity is not None else None
         if not isinstance(block_ordinal, int) or isinstance(block_ordinal, bool):
             block_ordinal = (
-                projection_group.get("ordinal")
-                if isinstance(projection_group, dict)
+                projection_group.ordinal
+                if projection_group is not None
                 else 0
             )
         block_ordinal = strict_non_negative_int(
@@ -170,22 +177,22 @@ def _merge_activity_items(
         )
         activity_tools: list[dict[str, object] | None] = [None]
         if semantic_kind in {"tool_call", "tool_result"}:
-            metadata_call_id = metadata.get("tool_call_id")
-            block_id = metadata.get("block_id")
+            metadata_call_id = indexed_tool_call_id
+            block_id = identity.block_id if identity is not None else None
             tool_call_id: str | None = None
             if isinstance(metadata_call_id, str) and metadata_call_id:
                 tool_call_id = metadata_call_id
             elif isinstance(block_id, str) and block_id:
                 tool_call_id = block_id
             if tool_call_id is not None:
-                selected_tool = tool_by_call_id.get((turn_id, tool_call_id))
+                selected_tool = tool_by_call_id.get((turn_id, activity_model_call_id, tool_call_id))
                 if selected_tool is None:
                     selected_tool = tool_by_model_call_index.get(
                         (turn_id, activity_model_call_id, block_ordinal)
                     )
                 canonical_tool_call_id: str | None = None
                 raw_id_alias = canonical_tool_call_ids_by_raw_id.get(
-                    (turn_id, tool_call_id)
+                    (turn_id, activity_model_call_id, tool_call_id)
                 )
                 if raw_id_alias is not None:
                     canonical_tool_call_id = raw_id_alias
@@ -219,7 +226,7 @@ def _merge_activity_items(
                                 f"{item_id}"
                             )
                         coordinates = _authoritative_tool_coordinates(
-                            tool_by_call_id, turn_id, block_id
+                            tool_by_call_id, turn_id, identity, indexed_tool_call_id or block_id
                         )
                         selected_tool = {
                             "tool_call_id": canonical_tool_call_id,
@@ -248,7 +255,7 @@ def _merge_activity_items(
                         }
                     selected_tool.setdefault("call_index", block_ordinal)
                     if isinstance(block_id, str) and block_id:
-                        tool_by_call_id[(turn_id, canonical_tool_call_id)] = (
+                        tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = (
                             selected_tool
                         )
                         model_call_key = (
@@ -270,7 +277,7 @@ def _merge_activity_items(
                     # 后续 checkpoint shadow 通过 model-call provenance 和
                     # tool_call_id 在本方法内合并，不能因派生表尚未存在而 500。
                     coordinates = _authoritative_tool_coordinates(
-                        tool_by_call_id, turn_id, block_id
+                        tool_by_call_id, turn_id, identity, indexed_tool_call_id or block_id
                     )
                     selected_tool = {
                         "tool_call_id": tool_call_id,
@@ -292,7 +299,7 @@ def _merge_activity_items(
                             "call_index", block_ordinal
                         ),
                     }
-                    tool_by_call_id[(turn_id, tool_call_id)] = selected_tool
+                    tool_by_call_id[(turn_id, activity_model_call_id, tool_call_id)] = selected_tool
                     model_call_key = (
                         turn_id,
                         activity_model_call_id,
@@ -346,12 +353,12 @@ def _merge_activity_items(
                         **matching_tool,
                         "tool_call_id": canonical_tool_call_id,
                     }
-                    tool_by_call_id[(turn_id, canonical_tool_call_id)] = (
+                    tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = (
                         normalized_tool
                     )
                     raw_tool_call_id = matching_tool.get("tool_call_id")
                     if isinstance(raw_tool_call_id, str) and raw_tool_call_id:
-                        alias_key = (turn_id, raw_tool_call_id)
+                        alias_key = (turn_id, activity_model_call_id, raw_tool_call_id)
                         if alias_key not in canonical_tool_call_ids_by_raw_id:
                             canonical_tool_call_ids_by_raw_id[alias_key] = (
                                 canonical_tool_call_id
@@ -395,7 +402,8 @@ def _merge_activity_items(
             and isinstance(source_part_id, str)
             and source_part_id
         ):
-            seen_reasoning_source_refs[turn_id].add(source_part_id)
+            prefix = f"{activity_model_call_id}:block:"
+            seen_reasoning_source_refs[turn_id].add((activity_model_call_id, source_part_id.removeprefix(prefix)))
         for activity_tool in activity_tools:
             activity_item: dict[str, object] = {
                 "item_id": strict_text(item_id, field="item_catalog.item_id"),
@@ -419,13 +427,14 @@ def _merge_activity_items(
                 )
                 == 1,
                 "producer_ref": producer_ref,
+                "model_call_id": activity_model_call_id,
                 "block_ordinal": block_ordinal,
                 "block_id": (
                     source_part_id
                     if isinstance(source_part_id, str) and source_part_id
                     else None
                 ),
-                "completion_reason": metadata.get("completion_reason"),
+                "completion_reason": identity.completion_reason if identity is not None else None,
                 "message_sequence": 0,
             }
             if activity_tool is not None:
@@ -438,7 +447,7 @@ def _merge_activity_items(
                     activity_tool.get("call_index"),
                     field="tool_calls.call_index",
                 )
-            logical_key = _logical_activity_key(activity_item)
+            logical_key = _logical_activity_key(activity_item, activity_model_call_id)
             reasoning_block_key = (
                 (
                     kind,
@@ -451,7 +460,8 @@ def _merge_activity_items(
             is_checkpoint_reasoning_shadow = (
                 semantic_kind == "reasoning"
                 and activity_item["block_id"] is None
-                and isinstance(projection_group, dict)
+                and projection_group is not None
+                and activity_model_call_id is not None
             )
             if (
                 is_checkpoint_reasoning_shadow
@@ -488,7 +498,7 @@ def _merge_activity_items(
 def _merge_final_reasoning(
     result: dict[str, dict[str, object]],
     final_reasoning_rows: object,
-    seen_reasoning_source_refs: dict[str, set[str]],
+    seen_reasoning_source_refs: dict[str, set[tuple[str | None, str]]],
 ) -> None:
     """归并 final checkpoint reasoning 源引用。"""
     for (
@@ -505,7 +515,7 @@ def _merge_final_reasoning(
         item_id,
         item_sequence,
         item_created_at,
-        final_item_metadata_json,
+        final_item_projection_manifest_json,
     ) in final_reasoning_rows:
         turn_id = strict_text(turn_id, field="turns.turn_id")
         content_block_index = strict_non_negative_int(
@@ -538,23 +548,15 @@ def _merge_final_reasoning(
         )
         if signature_value not in {0, 1}:
             raise RuntimeError(f"reasoning signature 标记非法: {turn_id}")
-        final_item_metadata = _json_object(
-            final_item_metadata_json,
-            field=f"item_catalog.metadata_json:{item_id}",
-        )
+        final_manifest = parse_item_projection_manifest(_json_object(final_item_projection_manifest_json, field=f"item_catalog.projection_manifest_json:{item_id}"))
+        final_identity = ItemProjectionIdentity.from_dict(final_manifest["projection_identity"]) if final_manifest["projection_identity"] is not None else None
         source_refs = _final_reasoning_source_refs(
-            final_item_metadata,
+            final_identity,
             content_block_index=content_block_index,
             item_index=item_index,
             provider_item_id=reasoning_item_id,
         )
-        if any(
-            _source_ref_matches(
-                source_ref,
-                seen_reasoning_source_refs[turn_id],
-            )
-            for source_ref in source_refs
-        ):
+        if source_refs & seen_reasoning_source_refs[turn_id]:
             continue
         seen_reasoning_source_refs[turn_id].update(source_refs)
         items = result[turn_id]["activity_items"]

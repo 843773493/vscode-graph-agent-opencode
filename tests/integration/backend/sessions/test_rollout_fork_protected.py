@@ -19,7 +19,11 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -141,7 +145,7 @@ def protected_source(fork_workspace, session_bundle_factory, protected_key):
                 content_length=len(canonical_json_bytes(body)),
                 redacted_stable_digest=digest,
                 protection="protected",
-                metadata={"source_ref": "source-contribution"},
+                extensions={} , source_binding=SourceBinding(source_ref='source-contribution'),
             ),
             request_content=body,
         )

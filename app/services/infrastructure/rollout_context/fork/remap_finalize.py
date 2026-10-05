@@ -63,6 +63,12 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
     overlay_epoch_map = state.overlay_epoch_map
     target_overlay_epoch = max(overlay_epoch_map.values(), default=0)
     target_thread_id = state.target_thread_id
+    # message 通过权威 locator 引用 anchor；可空的展示 identity 不参与寻址。
+    source_anchor_sequences = {
+        position: sequence for sequence, position in state.old_positions.items()
+    }
+    if len(source_anchor_sequences) != len(state.old_positions):
+        raise RuntimeError("full_rollout_copy source canonical locator 重复")
     _update_one(
         connection,
         "UPDATE database_meta SET session_id = ?, thread_id = ?, rollout_id = ?, "
@@ -72,7 +78,11 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
         (
             target_session_id,
             target_thread_id,
-            self._rollout_id(target_session_id, thread_id=target_thread_id),
+            self._rollout_id(
+                target_session_id,
+                thread_id=target_thread_id,
+                checkpoint_ns=checkpoint_ns,
+            ),
             checkpoint_ns,
             sum(len(line) for line in new_lines),
             target_overlay_epoch,
@@ -92,7 +102,9 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
             raise RuntimeError(f"full copy target checkpoint 缺失: {target_id}")
         checkpoint = dict(json_mapping(row[0], field="checkpoints.checkpoint_json"))
         if checkpoint.get("id") != source_id:
-            raise RuntimeError(f"full copy checkpoint core 与 source 主键不一致: {source_id}")
+            raise RuntimeError(
+                f"full copy checkpoint core 与 source 主键不一致: {source_id}"
+            )
         checkpoint["id"] = target_id
         metadata = json_mapping(row[1], field="checkpoints.metadata_json")
         _update_one(
@@ -102,11 +114,12 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
             context=f"checkpoint:{target_id}",
         )
 
+    connection.execute("DELETE FROM item_relations WHERE canonical_item_id IS NOT NULL")
     for sequence, item in new_items.items():
         offset, length = new_positions[sequence]
         _update_one(
             connection,
-            "UPDATE item_catalog SET jsonl_offset = ?, jsonl_length = ?, producer_ref_json = ?, payload_length = ?, source_revision = ?, content_hash = ?, metadata_json = ? WHERE item_sequence = ?",
+            "UPDATE item_catalog SET jsonl_offset = ?, jsonl_length = ?, producer_ref_json = ?, payload_length = ?, source_revision = ?, content_hash = ?, projection_manifest_json = ?, tool_call_id = ? WHERE item_sequence = ?",
             (
                 offset,
                 length,
@@ -114,17 +127,23 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
                 payload_content_length(item.payload_kind, item.payload),
                 (
                     optional_text(
-                        item.metadata.get("source_revision"),
+                        (
+                            item.source_manifest.source_revision
+                            if item.source_manifest
+                            else None
+                        ),
                         field=f"item_catalog.source_revision:{item.item_id}",
                     )
                     or f"canonical:{item.item_id}:{item.content_hash}"
                 ),
                 item.content_hash,
-                _json(item.metadata),
+                _json(item.projection_manifest()),
+                item.tool_call_id,
                 sequence,
             ),
             context=f"item_catalog:{sequence}",
         )
+        self._insert_canonical_relations(connection, item)
         projection_content = self._codec().projection_content(item)
         _update_one(
             connection,
@@ -157,7 +176,9 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
             raise RuntimeError("full_rollout_copy messages.message_sequence 不能为 0")
         message_id = required_text(message_id, field="messages.message_id")
         optional_text(_turn_id, field=f"messages.turn_id:{message_id}")
-        non_negative_int(_offset, field=f"messages.jsonl_offset:{message_id}")
+        message_offset = non_negative_int(
+            _offset, field=f"messages.jsonl_offset:{message_id}"
+        )
         message_length = non_negative_int(
             _length, field=f"messages.jsonl_length:{message_id}"
         )
@@ -170,26 +191,29 @@ def refresh_full_copy_projections(state: FullCopyRemapState) -> None:
         required_text(_rest[0], field=f"messages.visibility:{message_id}")
         non_negative_int(_rest[1], field=f"messages.commit_id:{message_id}")
         required_text(_rest[2], field=f"messages.created_at:{message_id}")
-        item = next(
-            (
-                value
-                for value in new_items.values()
-                if value.metadata.get("projection_message_id") == message_id
-            ),
-            None,
-        )
-        if item is None:
+        anchor_sequence = source_anchor_sequences.get((message_offset, message_length))
+        if anchor_sequence is None:
             raise RuntimeError(
                 "full_rollout_copy message 没有对应 canonical item: "
                 f"message_id={message_id}"
             )
+        item = new_items[anchor_sequence]
         if item.turn_id != _turn_id:
-            raise RuntimeError(f"full copy message Turn 与 target canonical 不一致: {message_id}")
+            raise RuntimeError(
+                f"full copy message Turn 与 target canonical 不一致: {message_id}"
+            )
         offset, length = new_positions[item.item_sequence]
-        group = tuple(
-            value for value in sorted(new_items.values(), key=lambda value: value.item_sequence)
-            if value.message_group_id == item.message_group_id
-        ) if item.metadata.get("projection_group") is not None else (item,)
+        group = (
+            tuple(
+                value
+                for value in sorted(
+                    new_items.values(), key=lambda value: value.item_sequence
+                )
+                if value.message_group_id == item.message_group_id
+            )
+            if item.projection_group is not None
+            else (item,)
+        )
         message = self._codec().project_message(group)
         content = (
             message.get("data", {}).get("content")
@@ -589,9 +613,7 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
                 lineage["source"].update(
                     {
                         "turn_id": source_admission["turn_id"],
-                        "accepted_ingress_id": source_admission[
-                            "accepted_ingress_id"
-                        ],
+                        "accepted_ingress_id": source_admission["accepted_ingress_id"],
                         "admission_idempotency_key": source_admission[
                             "admission_idempotency_key"
                         ],
@@ -612,20 +634,28 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
                 )
             elif execution_origin == "internal":
                 if execution[6] is not None or execution[7] is not None:
-                    raise RuntimeError("full copy internal execution 不得绑定 Turn/ingress")
+                    raise RuntimeError(
+                        "full copy internal execution 不得绑定 Turn/ingress"
+                    )
                 admission = connection.execute(
                     "SELECT lineage_json FROM fork_identity_mappings WHERE fork_id = ? "
                     "AND entity_type = 'admission_idempotency_key' AND target_local_id = ?",
                     (fork_id, execution[4]),
                 ).fetchone()
                 if admission is None:
-                    raise RuntimeError("full copy internal execution 缺少冻结 admission lineage")
+                    raise RuntimeError(
+                        "full copy internal execution 缺少冻结 admission lineage"
+                    )
                 internal_lineage = json.loads(admission[0])
                 for side in ("source", "target"):
                     lineage[side].update(internal_lineage[side])
-                if (lineage["target"]["execution_id"] != target_id
-                    or lineage["target"]["admission_payload_hash"] != execution[5]):
-                    raise RuntimeError("full copy internal admission lineage 与 execution 不一致")
+                if (
+                    lineage["target"]["execution_id"] != target_id
+                    or lineage["target"]["admission_payload_hash"] != execution[5]
+                ):
+                    raise RuntimeError(
+                        "full copy internal admission lineage 与 execution 不一致"
+                    )
             else:
                 raise RuntimeError(
                     "full_rollout_copy execution origin 非法: "

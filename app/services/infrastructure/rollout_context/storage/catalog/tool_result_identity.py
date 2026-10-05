@@ -9,8 +9,12 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
 
 
 def _strict_db_text(value: object, *, field: str) -> str:
@@ -27,12 +31,11 @@ def _strict_db_optional_text(value: object, *, field: str) -> str | None:
 
 
 def _comparable_tool_result_payload(
-    value: object,
-    *,
-    metadata: Mapping[str, object] | None = None,
+    item: CanonicalItemRecord,
 ) -> object:
     """提取工具结果正文，排除每个 producer 独有的生命周期 ID。"""
 
+    value = item.payload
     if not isinstance(value, Mapping):
         return value
     # on_tool_end 与下一次 model call 的 ToolMessage 可能分别生成 canonical
@@ -57,7 +60,7 @@ def _comparable_tool_result_payload(
     tool_call_id = comparable.get("tool_call_id")
     if isinstance(tool_call_id, str) and tool_call_id:
         comparable["tool_call_id"] = provider_tool_call_id(
-            metadata or {}, tool_call_id
+            item.projection_identity, tool_call_id
         )
     return comparable
 
@@ -70,27 +73,18 @@ def _tool_result_identity(
     payload = item.payload if isinstance(item.payload, Mapping) else {}
     raw_tool_call_id = payload.get("tool_call_id")
     if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
-        raw_tool_call_id = item.metadata.get("tool_call_id")
+        raw_tool_call_id = (item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else None)
     if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
         return None
     return (
         raw_tool_call_id,
-        provider_tool_call_id(item.metadata, raw_tool_call_id),
+        provider_tool_call_id(item.projection_identity, raw_tool_call_id),
     )
 
 
-def _tool_result_scope(metadata: Mapping[str, object]) -> str | None:
-    """读取 tool_result 的可验证 model-call provenance。"""
-    model_call_id = metadata.get("model_call_id")
-    if isinstance(model_call_id, str) and model_call_id:
-        return f"model-call:{model_call_id}"
-    projection_message_id = metadata.get("projection_message_id")
-    if (
-        isinstance(projection_message_id, str)
-        and projection_message_id.startswith("lc_run--")
-    ):
-        return f"model-call:{projection_message_id.removeprefix('lc_run--')}"
-    return None
+def _tool_result_scope(identity: ItemProjectionIdentity | None) -> str | None:
+    """只读取已封存 typed model-call scope。"""
+    return f"model-call:{identity.model_call_id}" if identity is not None and identity.model_call_id is not None else None
 
 
 def _select_existing_tool_result(
@@ -106,48 +100,33 @@ def _select_existing_tool_result(
     """
 
     identity = _tool_result_identity(item)
-    if identity is None or item.turn_id is None:
+    if identity is None or item.projection_identity is None or item.projection_identity.model_call_id is None:
         return None
     raw_tool_call_id, normalized_tool_call_id = identity
     rows = connection.execute(
         "SELECT item_id, content_hash, commit_id, jsonl_offset, jsonl_length, "
-        "metadata_json FROM item_catalog "
-        "WHERE semantic_kind = 'tool_result' AND turn_id = ? "
+        "projection_manifest_json, tool_call_id FROM item_catalog "
+        "WHERE semantic_kind = 'tool_result' AND turn_id IS ? "
         "ORDER BY item_sequence",
         (item.turn_id,),
     ).fetchall()
-    candidates: list[sqlite3.Row] = []
-    exact_candidates: list[sqlite3.Row] = []
-    incoming_scope = _tool_result_scope(item.metadata)
+    incoming_scope = _tool_result_scope(item.projection_identity)
     scoped_candidates: list[sqlite3.Row] = []
     for row in rows:
-        metadata_value = json.loads(row[5])
-        if not isinstance(metadata_value, Mapping):
-            raise TypeError(
-                f"既有 tool_result metadata 不是 object: {row[0]}"
-            )
-        existing_raw_tool_call_id = metadata_value.get("tool_call_id")
+        manifest = parse_item_projection_manifest(json.loads(row[5]))
+        projection = manifest["projection_identity"]
+        identity = ItemProjectionIdentity.from_dict(projection) if projection is not None else None
+        existing_raw_tool_call_id = row[6]
         if not isinstance(existing_raw_tool_call_id, str) or not existing_raw_tool_call_id:
-            continue
+            raise RuntimeError(f"既有 tool_result 缺少 typed call identity: {row[0]}")
         if (
-            provider_tool_call_id(metadata_value, existing_raw_tool_call_id)
+            provider_tool_call_id(identity, existing_raw_tool_call_id)
             != normalized_tool_call_id
         ):
             continue
-        candidates.append(row)
-        if existing_raw_tool_call_id == raw_tool_call_id:
-            exact_candidates.append(row)
-        if incoming_scope is not None and _tool_result_scope(metadata_value) == incoming_scope:
+        if incoming_scope is not None and _tool_result_scope(identity) == incoming_scope:
             scoped_candidates.append(row)
-    if incoming_scope is not None:
-        # 有明确 model-call scope 时，裸 provider ID 相同但属于另一次
-        # model call 的结果绝不能复用；这正是 provider 允许重用短 ID 时
-        # 防止正文冲突和错误覆盖的边界。
-        preferred_candidates = scoped_candidates
-    else:
-        # 没有 provenance 的旧结果只能在整个候选集合唯一时复用；保留
-        # exact 优先仅用于同一旧消息的重复提交。
-        preferred_candidates = exact_candidates or candidates
+    preferred_candidates = scoped_candidates
     for preferred in (preferred_candidates,):
         if len(preferred) == 1:
             return preferred[0]

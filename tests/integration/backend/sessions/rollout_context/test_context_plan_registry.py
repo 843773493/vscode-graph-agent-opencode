@@ -16,7 +16,11 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     create_registration,
     read_registration,
@@ -60,7 +64,7 @@ def registry_db(request, session_bundle_factory):
     connection.execute("PRAGMA foreign_keys = ON")
     assert connection.execute(
         "SELECT schema_version, database_state FROM database_meta"
-    ).fetchone() == (8, "active")
+    ).fetchone() == (10, "active")
     try:
         yield saver, session_id, connection, accepted
     finally:
@@ -78,7 +82,7 @@ def draft(registry_db):
         source_revision="revision-1",
         content_hash=contribution_content_hash("prompt", body),
         body=body,
-        metadata={"source_ref": "source-contribution"},
+        extensions={} , source_binding=SourceBinding(source_ref='source-contribution'),
         source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(

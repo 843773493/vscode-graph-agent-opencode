@@ -17,10 +17,10 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,
@@ -39,7 +39,7 @@ from app.services.mapping.itemized.selection import (
 
 
 def _message_id(item: CanonicalItemRecord) -> str:
-    value = item.metadata.get("projection_message_id")
+    value = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
     return value if isinstance(value, str) and value else item.item_id
 
 
@@ -123,7 +123,7 @@ def project_canonical_items(
         if item.semantic_kind == SemanticKind.USER_INPUT:
             messages.append(
                 HumanMessage(
-                    content=_message_content(item.payload), id=_message_id(item)
+                    content=_message_content(item.payload["content"] if isinstance(item.payload, Mapping) and "attachments" in item.payload else item.payload), id=_message_id(item)
                 )
             )
             continue
@@ -138,7 +138,7 @@ def project_canonical_items(
                 ToolMessage(
                     content=_message_content(payload.get("content", item.payload)),
                     id=_message_id(item),
-                    tool_call_id=str(payload.get("tool_call_id") or "unknown-call"),
+                    tool_call_id=item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else payload["tool_call_id"],
                     name=str(payload.get("name") or "tool"),
                     status=tool_status,
                 )

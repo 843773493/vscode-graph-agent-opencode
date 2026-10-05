@@ -7,14 +7,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from app.services.infrastructure.rollout_context.migration.store import (
-    LegacyMigrationStorage,
-)
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -110,8 +108,8 @@ def _write_v1_source(
     return lines
 
 
-def _storage(sessions_root: Path) -> LegacyMigrationStorage:
-    return LegacyMigrationStorage(
+def _storage(sessions_root: Path) -> RolloutStorage:
+    return RolloutStorage(
         sessions_root,
         serde=JsonPlusSerializer(),
         message_codec=LangChainMessageCodec(),
@@ -153,8 +151,10 @@ def _accepted_records() -> list[dict[str, object]]:
     ]
 
 
-def _table_counts(storage: LegacyMigrationStorage, session_id: str) -> dict[str, int]:
-    with storage._connect(session_id, "", read_only=True) as connection:
+def _table_counts(storage: RolloutStorage, session_id: str) -> dict[str, int]:
+    with storage._connect(
+        storage.main_thread_id(session_id), "", session_id=session_id, read_only=True
+    ) as connection:
         return {
             table: int(
                 connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -169,6 +169,6 @@ def _table_counts(storage: LegacyMigrationStorage, session_id: str) -> dict[str,
         }
 
 
-def migration_audits(storage: LegacyMigrationStorage) -> list[dict[str, object]]:
+def migration_audits(storage: RolloutStorage) -> list[dict[str, object]]:
     root = storage.root(TARGET_SESSION_ID).parent / "legacy-import"
     return [json.loads(path.read_text()) for path in sorted(root.glob("*/report.json"))]

@@ -270,7 +270,7 @@ class TestTypedSourceOrdinal:
             source_revision="rev-1",
             content_hash=contribution_content_hash("prompt", body),
             request_only=True,
-            metadata=metadata or {},
+            extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": metadata or {}}},
             contribution_kind="prompt",
             body=body,
             source_ordinal=source_ordinal,

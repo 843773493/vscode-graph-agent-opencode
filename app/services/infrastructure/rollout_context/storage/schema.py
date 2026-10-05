@@ -9,7 +9,7 @@ from app.services.infrastructure.rollout_context.storage.schema_plans import (
     TOOL_SET_SNAPSHOT_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 9
+ROLLOUT_SCHEMA_VERSION = 10
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -249,7 +249,20 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             operation_anchor_capable INTEGER NOT NULL DEFAULT 0,
             searchable INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
-            metadata_json TEXT NOT NULL
+            tool_call_id TEXT,
+            projection_manifest_json TEXT NOT NULL CHECK(
+                json_valid(projection_manifest_json)
+                AND json_type(projection_manifest_json, '$.extensions') IS 'object'
+                AND json_type(projection_manifest_json, '$.projection_group') IS NOT NULL
+                AND json_type(projection_manifest_json, '$.projection_group') IN ('object','null')
+                AND json_type(projection_manifest_json, '$.projection_identity') IS NOT NULL
+                AND json_type(projection_manifest_json, '$.projection_identity') IN ('object','null')
+                AND json_type(projection_manifest_json, '$.tool_result_evidence') IS NOT NULL
+                AND json_type(projection_manifest_json, '$.tool_result_evidence') IN ('object','null')
+                AND json_type(projection_manifest_json, '$.source_manifest') IS NOT NULL
+                AND json_type(projection_manifest_json, '$.source_manifest') IN ('object','null')
+                AND json_type(projection_manifest_json, '$.provenance_relations') IS 'array'
+            )
         );
         CREATE TABLE IF NOT EXISTS item_projections (
             item_sequence INTEGER PRIMARY KEY,
@@ -276,12 +289,19 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS item_relations (
             relation_id TEXT PRIMARY KEY,
             relation TEXT NOT NULL,
+            canonical_item_id TEXT,
+            canonical_relation_ordinal INTEGER,
             source_ref TEXT NOT NULL,
             target_ref TEXT NOT NULL,
             attempt INTEGER,
             supersedes_relation_id TEXT,
             replay_input INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
+            CHECK ((canonical_item_id IS NULL AND canonical_relation_ordinal IS NULL)
+                OR (typeof(canonical_item_id) = 'text'
+                    AND typeof(canonical_relation_ordinal) = 'integer'
+                    AND canonical_relation_ordinal >= 0)),
+            UNIQUE(canonical_item_id, canonical_relation_ordinal),
             UNIQUE(relation, source_ref, target_ref, attempt)
         );
         CREATE TABLE IF NOT EXISTS item_parts (
@@ -477,7 +497,14 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             contribution_kind TEXT NOT NULL DEFAULT 'prompt',
             visibility TEXT NOT NULL DEFAULT 'internal',
             protection TEXT NOT NULL DEFAULT 'public',
-            metadata_json TEXT NOT NULL,
+            binding_manifest_json TEXT NOT NULL CHECK(
+                json_valid(binding_manifest_json)
+                AND json_type(binding_manifest_json, '$.extensions') IS 'object'
+                AND json_type(binding_manifest_json, '$.source_binding') IS NOT NULL
+                AND json_type(binding_manifest_json, '$.source_binding') IN ('object', 'null')
+                AND json_type(binding_manifest_json, '$.root_placement') IS 'text'
+                AND json_extract(binding_manifest_json, '$.root_placement') IN ('root_eligible', 'tail_only')
+            ),
             CHECK ((content_hash IS NOT NULL) != (redacted_stable_digest IS NOT NULL)),
             PRIMARY KEY(assembly_id, contribution_ordinal),
             UNIQUE(assembly_id, contribution_id)
@@ -522,10 +549,17 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             protection TEXT NOT NULL DEFAULT 'public',
             assembly_id TEXT,
             contribution_ordinal INTEGER,
-            source_ordinal INTEGER,
+            source_ordinal INTEGER NOT NULL CHECK(typeof(source_ordinal) = 'integer' AND source_ordinal >= 0),
             selection_role TEXT NOT NULL DEFAULT 'direct' CHECK(selection_role IN ('direct','backing_only')),
             replacement_policy TEXT NOT NULL DEFAULT 'immutable' CHECK(replacement_policy IN ('immutable','replaceable')),
-            metadata_json TEXT NOT NULL,
+            binding_manifest_json TEXT NOT NULL CHECK(
+                json_valid(binding_manifest_json)
+                AND json_type(binding_manifest_json, '$.extensions') IS 'object'
+                AND json_type(binding_manifest_json, '$.source_binding') IS NOT NULL
+                AND json_type(binding_manifest_json, '$.source_binding') IN ('object', 'null')
+                AND json_type(binding_manifest_json, '$.root_placement') IS 'text'
+                AND json_extract(binding_manifest_json, '$.root_placement') IN ('root_eligible', 'tail_only')
+            ),
             created_at TEXT NOT NULL,
             CHECK ((content_hash IS NOT NULL) != (redacted_stable_digest IS NOT NULL))
         );

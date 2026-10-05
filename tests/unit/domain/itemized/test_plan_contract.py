@@ -23,6 +23,7 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
+    SourceBinding,
     resolve_contribution_for_ref,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -91,7 +92,7 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
 ) -> None:
     contribution = replace(
         prompt_contribution,
-        metadata={"source_ref": "workspace:policy"},
+        extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": {}}}, source_binding=SourceBinding(source_ref='workspace:policy'),
         source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(
@@ -163,11 +164,10 @@ def test_overlay_binding_requires_ref_role_and_epoch(
         prompt_contribution,
         contribution_kind=kind,
         content_hash=contribution_content_hash(kind, prompt_contribution.body),
-        metadata={
-            "overlay_ref": "overlay-1",
-            "overlay_role": role,
-            "source_overlay_epoch": 2,
-        },
+        source_binding=SourceBinding(
+            source_ref="workspace:policy", overlay_ref="overlay-1",
+            overlay_id="overlay-owner", overlay_role=role, source_overlay_epoch=2,
+        ),
         source_ordinal=0,
     )
     ref = ContextRef.request_only_ref(

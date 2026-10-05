@@ -22,7 +22,7 @@ def _contribution(
     *,
     selection_role: str = "direct",
     replacement_policy: str = "immutable",
-    metadata: dict | None = None,
+    annotations: dict[str, object] | None = None,
 ) -> ContextContribution:
     return ContextContribution(
         contribution_id="contribution-role",
@@ -30,7 +30,7 @@ def _contribution(
         source_revision="rev-role",
         content_hash=contribution_content_hash("prompt", BODY),
         request_only=True,
-        metadata=metadata or {},
+        extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": annotations or {}}},
         contribution_kind="prompt",
         body=BODY,
         source_ordinal=0,
@@ -93,7 +93,7 @@ def test_same_name_metadata_keys_never_drive_typed_fields() -> None:
         _contribution(
             selection_role="direct",
             replacement_policy="immutable",
-            metadata={"selection_role": "backing_only", "replacement_policy": "replaceable"},
+            annotations={'selection_role': 'backing_only', 'replacement_policy': 'replaceable'},
         )
     )
     restored = parse_contribution(raw, sealed=False)

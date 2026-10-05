@@ -13,6 +13,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.item_projection import ToolResultEvidence
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     InternalDisplayPart,
@@ -71,7 +72,7 @@ def test_runtime_notice_display_payload_round_trips_with_one_content_hash() -> N
             "producer_id": "message-internal-result",
         },
         payload=payload,
-        metadata={"internal": True},
+        extensions={},
         turn_scope="pending_next_turn",
         wire_role="user",
     )
@@ -133,6 +134,8 @@ def item_arguments(user_item: CanonicalItemRecord) -> dict[str, object]:
     raw = user_item.to_dict()
     for name in ("format_version", "record_type", "content_hash"):
         raw.pop(name)
+    for name in ("projection_identity", "projection_group", "tool_result_evidence", "source_manifest", "provenance_relations"):
+        raw[name] = getattr(user_item, name)
     return raw
 
 
@@ -159,7 +162,7 @@ def test_full_semantic_payload_status_matrix(
         "turn_id": None,
         "turn_scope": "ambient",
         "payload": row["examples"].get(payload_kind, {}),
-        "metadata": row.get("metadata_by_payload", {}).get(payload_kind, {}),
+        "tool_result_evidence": ToolResultEvidence.from_dict(row["tool_result_evidence_by_payload"][payload_kind]) if payload_kind in row.get("tool_result_evidence_by_payload", {}) else None,
     }
     if not allowed:
         with pytest.raises(ItemSchemaError, match="item-schema-incompatible"):
@@ -185,6 +188,7 @@ def test_tool_outcome_marker_matrix(
     confirmed: bool,
 ) -> None:
     payload = {"tool_call_id": "call-1", "result_id": "result-1", "content": "result"}
+    payload["execution_confirmed"] = confirmed
     if outcome is not None:
         payload["tool_outcome"] = outcome
     allowed = outcome == "unknown" or (
@@ -202,7 +206,7 @@ def test_tool_outcome_marker_matrix(
         "status": status,
         "turn_scope": "turn_member",
         "payload": payload,
-        "metadata": {"execution_confirmed": confirmed},
+
     }
     if allowed:
         item = CanonicalItemRecord.create(**arguments)
@@ -226,21 +230,17 @@ def test_text_result_preserves_exact_body_and_explicit_identity(
             "status": status,
             "turn_scope": "turn_member",
             "payload": text,
-            "metadata": {
-                "tool_call_id": "call-explicit",
-                "result_id": "result-explicit",
-                "execution_confirmed": True,
-            },
+            "tool_result_evidence": ToolResultEvidence("call-explicit", "result-explicit", True),
         }
     )
     assert item.payload == text
-    assert item.metadata["tool_call_id"] == "call-explicit"
+    assert item.tool_result_evidence.tool_call_id == "call-explicit"
     assert (
         CanonicalItemRecord.from_dict(json.loads(canonical_json_bytes(item.to_dict())))
         == item
     )
     changed_identity = replace(
-        item, metadata={**item.metadata, "result_id": "another-result"}
+        item, tool_result_evidence=replace(item.tool_result_evidence, result_id="another-result")
     )
     assert changed_identity.content_hash == item.content_hash
 
@@ -251,14 +251,14 @@ def test_text_result_does_not_guess_missing_identity(
 ) -> None:
     metadata = {"tool_call_id": "call-explicit", "result_id": "result-explicit"}
     metadata.pop(field)
-    with pytest.raises(ItemSchemaError, match=f"metadata.{field}"):
+    with pytest.raises((ItemSchemaError, TypeError)):
         CanonicalItemRecord.create(
             **{
                 **item_arguments,
                 "semantic_kind": "tool_result",
                 "payload_kind": "text",
                 "payload": "正文不是 identity",
-                "metadata": metadata,
+                "tool_result_evidence": ToolResultEvidence(**metadata, execution_confirmed=True),
             }
         )
 
@@ -276,33 +276,29 @@ def test_unconfirmed_text_result_requires_typed_unknown_marker(
                 "payload_kind": "text",
                 "status": status,
                 "payload": "result",
-                "metadata": {
-                    "tool_call_id": "call-explicit",
-                    "result_id": "result-explicit",
-                    "execution_confirmed": False,
-                },
+                "tool_result_evidence": ToolResultEvidence("call-explicit", "result-explicit", False),
             }
         )
 
 
 @pytest.mark.parametrize("kind", KINDS)
-def test_tool_marker_cannot_be_moved_into_metadata(
-    item_matrix: dict[str, object],
-    item_arguments: dict[str, object],
-    kind: str,
+def test_tool_marker_extension_has_no_execution_authority(
+    item_matrix: dict[str, object], item_arguments: dict[str, object], kind: str,
 ) -> None:
     row = next(row for row in item_matrix["rows"] if row["semantic_kind"] == kind)
     payload_kind = row["allowed_payloads"][0]
-    with pytest.raises(ItemSchemaError, match="tool_outcome 只能位于"):
-        CanonicalItemRecord.create(
-            **{
-                **item_arguments,
-                "semantic_kind": kind,
-                "payload_kind": payload_kind,
-                "payload": row["examples"][payload_kind],
-                "metadata": {"tool_outcome": "unknown"},
-            }
-        )
+    if kind == "tool_result":
+        payload_kind = "tool_result"
+    item = CanonicalItemRecord.create(**{
+        **item_arguments, "semantic_kind": kind, "payload_kind": payload_kind,
+        "payload": row["examples"][payload_kind], "turn_id": None, "turn_scope": "ambient",
+        "extensions": {"boxteam.test.annotations": {
+            "extension_version": "1", "protection": "public", "value": {"tool_outcome": "success"},
+        }},
+    })
+    assert item.extensions["boxteam.test.annotations"]["value"] == {"tool_outcome": "success"}
+    if kind == "tool_result":
+        assert item.payload["tool_outcome"] == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -427,6 +423,7 @@ def test_tool_marker_rejects_non_string_values(
                     "tool_call_id": "call",
                     "result_id": "result",
                     "tool_outcome": marker,
+                    "execution_confirmed": True,
                 },
             }
         )
@@ -461,7 +458,7 @@ def test_canonical_item_rejects_non_exact_format_version(
         ("payload_kind", None),
         ("status", True),
         ("created_at", ""),
-        ("metadata", []),
+        ("extensions", []),
         ("turn_scope", 1),
     ],
 )
@@ -481,7 +478,7 @@ def test_canonical_item_factory_rejects_coerced_ingress_values(
         },
         "payload": "factory contract",
         "created_at": "2026-09-07T00:00:00+00:00",
-        "metadata": {},
+        "extensions": {},
         "turn_id": "turn-factory-contract",
         "turn_scope": "turn_root",
     }

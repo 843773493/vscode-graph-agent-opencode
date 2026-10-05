@@ -341,9 +341,8 @@ class RolloutMaintenanceOwner(
         *,
         session_id: str,
     ) -> None:
-        del checkpoint_ns
         with self._host._connect(
-            thread_id, session_id=session_id
+            thread_id, checkpoint_ns, session_id=session_id
         ) as connection:
             initialize_rollout_schema(connection)
 
@@ -522,7 +521,7 @@ class RolloutMaintenanceOwner(
                 ).fetchone()
                 if meta is None:
                     rollout_id = self._host._rollout_id(
-                        session_id, thread_id=thread_id
+                        session_id, thread_id=thread_id, checkpoint_ns=checkpoint_ns
                     )
                     timestamp = _now()
                     meta_result = connection.execute(

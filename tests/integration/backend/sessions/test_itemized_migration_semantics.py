@@ -11,9 +11,10 @@ from collections.abc import Callable
 import pytest
 
 from app.domain.itemized.errors import FormatDispatchError
-from app.services.infrastructure.rollout_context.migration.store import (
-    LegacyMigrationStorage,
+from app.services.infrastructure.rollout_context.migration.importer import (
+    LegacyRolloutImporter,
 )
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
     _storage,
@@ -29,7 +30,7 @@ TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
 def migration_setup(request: pytest.FixtureRequest, session_bundle_factory) -> Callable:
     sessions = prepare_migration_workspace(request) / ".boxteam" / "sessions"
 
-    def setup(records: list[dict[str, object]]) -> LegacyMigrationStorage:
+    def setup(records: list[dict[str, object]]) -> RolloutStorage:
         _write_v1_source(
             sessions,
             session_id=SOURCE_SESSION_ID,
@@ -87,10 +88,17 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
         "metadata": {},
     }
     storage = migration_setup([*records, result, final])
-    imported = storage.migrate_legacy_to_v2(
-        SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, require_lossless=True
+    imported = LegacyRolloutImporter(storage).import_v1(
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        target_session_id=TARGET_SESSION_ID,
+        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        checkpoint_ns="",
+        require_lossless=True,
     )
-    items = storage.read_items(TARGET_SESSION_ID)
+    items = storage.read_items(
+        TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+    )
     call = next(item for item in items if item.semantic_kind == "tool_call")
     result_item = next(item for item in items if item.semantic_kind == "tool_result")
     root = next(item for item in items if item.semantic_kind == "user_input")
@@ -109,7 +117,14 @@ def test_tool_calls_and_results_get_target_local_linked_identity(
     assert result_item.payload["result_id"] != "source-result"
     assert result_item.payload["name"] == "echo"
     assert (result_item.status, result_item.payload["tool_outcome"]) == (status, marker)
-    assert call.metadata["legacy_source_ref"]["part_id"] == "tool_call:source-call"
+    assert (
+        next(
+            relation.target_part_id
+            for relation in call.provenance_relations
+            if relation.target_kind == "legacy_message"
+        )
+        == "tool_call:source-call"
+    )
     assert imported["migrated"][0]["status"] == "completed"
     assert len({item.item_id for item in items}) == len(items) == 5
 
@@ -140,7 +155,13 @@ def test_conflicting_candidates_never_create_turns(
         if case == "unsupported_same_id":
             records[1]["role"] = "unknown-role"
     storage = migration_setup(records)
-    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    result = LegacyRolloutImporter(storage).import_v1(
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        target_session_id=TARGET_SESSION_ID,
+        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        checkpoint_ns="",
+    )
     assert not result["migrated"]
     assert {candidate["candidate_status"] for candidate in result["rejected"]} == {
         expected
@@ -148,7 +169,10 @@ def test_conflicting_candidates_never_create_turns(
     assert sum(len(candidate["records"]) for candidate in result["rejected"]) == len(
         records
     )
-    assert storage.read_items(TARGET_SESSION_ID) == []
+    assert (
+        storage.read_items(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID))
+        == []
+    )
 
 
 @pytest.mark.parametrize("trusted", [True, False])
@@ -161,9 +185,17 @@ def test_system_reminder_never_becomes_a_turn_member(
     notice["message"]["data"]["id"] = "notice"
     notice["metadata"] = {"internal": True, "checkpoint": True} if trusted else {}
     storage = migration_setup([*records, notice])
-    result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+    result = LegacyRolloutImporter(storage).import_v1(
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        target_session_id=TARGET_SESSION_ID,
+        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        checkpoint_ns="",
+    )
     if trusted:
-        item = storage.read_items(TARGET_SESSION_ID)[-1]
+        item = storage.read_items(
+            TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+        )[-1]
         assert (item.semantic_kind, item.turn_id, item.turn_scope) == (
             "runtime_notice",
             None,
@@ -171,7 +203,12 @@ def test_system_reminder_never_becomes_a_turn_member(
         )
     else:
         assert result["rejected"][0]["candidate_status"] == "legacy_unsupported_role"
-        assert storage.read_items(TARGET_SESSION_ID) == []
+        assert (
+            storage.read_items(
+                TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+            )
+            == []
+        )
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
@@ -191,10 +228,22 @@ def test_manifest_final_pointer_is_validated(
         )
     if corrupt:
         with pytest.raises(FormatDispatchError, match="final pointer"):
-            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+            LegacyRolloutImporter(storage).import_v1(
+                source_session_id=SOURCE_SESSION_ID,
+                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                target_session_id=TARGET_SESSION_ID,
+                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                checkpoint_ns="",
+            )
         assert not storage.root(TARGET_SESSION_ID).exists()
     else:
-        result = storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+        result = LegacyRolloutImporter(storage).import_v1(
+            source_session_id=SOURCE_SESSION_ID,
+            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            target_session_id=TARGET_SESSION_ID,
+            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            checkpoint_ns="",
+        )
         assert result["migrated"][0]["status"] == "completed"
         assert result["migrated"][0]["final_item_id"] is not None
 
@@ -236,12 +285,22 @@ def test_legacy_manifest_content_identity_is_checked(
         with pytest.raises(
             FormatDispatchError, match="content_hash|content_length|role"
         ):
-            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)
+            LegacyRolloutImporter(storage).import_v1(
+                source_session_id=SOURCE_SESSION_ID,
+                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                target_session_id=TARGET_SESSION_ID,
+                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                checkpoint_ns="",
+            )
         assert not storage.root(TARGET_SESSION_ID).exists()
     else:
         assert (
-            storage.migrate_legacy_to_v2(SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID)[
-                "lossless"
-            ]
+            LegacyRolloutImporter(storage).import_v1(
+                source_session_id=SOURCE_SESSION_ID,
+                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                target_session_id=TARGET_SESSION_ID,
+                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                checkpoint_ns="",
+            )["lossless"]
             is True
         )

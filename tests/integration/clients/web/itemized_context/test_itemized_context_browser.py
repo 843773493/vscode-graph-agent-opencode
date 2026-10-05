@@ -16,11 +16,14 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
+from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     TurnScope,
 )
-from app.domain.itemized.identity.refs import ContextRef
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -272,7 +275,7 @@ async def browser_source(browser_runtime, native_http_server):
                 "producer_id": "browser-contract",
             },
             payload=final_item.payload,
-            metadata={"projection_message_id": "browser-turn-final-message"},
+            projection_identity=ItemProjectionIdentity(projection_message_id="browser-turn-final-message"),
             turn_id=turn_id,
             turn_scope=TurnScope.TURN_MEMBER,
             message_group_id=f"message-{turn_id}-final",

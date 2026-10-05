@@ -82,7 +82,7 @@
         "extension": {
           "encoding": "json",
           "value": {
-            "𐀀": 1e-7,
+            "𐀀": 1e-07,
             "￿": 0
           },
           "wire_type": "example.encrypted",
@@ -129,7 +129,7 @@
     },
     {
       "semantic_kind": "tool_result",
-      "metadata_by_payload": {
+      "tool_result_evidence_by_payload": {
         "text": {
           "tool_call_id": "call-1",
           "result_id": "result-1",
@@ -157,13 +157,15 @@
           "tool_call_id": "call-1",
           "result_id": "result-1",
           "content": "result",
-          "tool_outcome": "unknown"
+          "tool_outcome": "unknown",
+          "execution_confirmed": false
         },
         "tool_result": {
           "tool_call_id": "call-1",
           "result_id": "result-1",
           "content": "result",
-          "tool_outcome": "unknown"
+          "tool_outcome": "unknown",
+          "execution_confirmed": false
         },
         "opaque": {
           "encoding": "base64url",
@@ -176,12 +178,13 @@
           },
           "tool_call_id": "call-1",
           "result_id": "result-1",
-          "tool_outcome": "unknown"
+          "tool_outcome": "unknown",
+          "execution_confirmed": false
         },
         "extension": {
           "encoding": "json",
           "value": {
-            "𐀀": 1e-7,
+            "𐀀": 1e-07,
             "￿": 0
           },
           "wire_type": "example.encrypted",
@@ -194,7 +197,8 @@
           "extension_version": "v1",
           "tool_call_id": "call-1",
           "result_id": "result-1",
-          "tool_outcome": "unknown"
+          "tool_outcome": "unknown",
+          "execution_confirmed": false
         }
       }
     },
@@ -227,7 +231,7 @@
         "extension": {
           "encoding": "json",
           "value": {
-            "𐀀": 1e-7,
+            "𐀀": 1e-07,
             "￿": 0
           },
           "wire_type": "example.encrypted",
@@ -298,7 +302,7 @@
         "extension": {
           "encoding": "json",
           "value": {
-            "𐀀": 1e-7,
+            "𐀀": 1e-07,
             "￿": 0
           },
           "wire_type": "example.encrypted",

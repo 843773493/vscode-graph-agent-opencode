@@ -417,28 +417,7 @@ class ContextAssemblySnapshot:
             "source_overlay_epoch": self.source_overlay_epoch,
             "refs": [ref.to_dict() for ref in self.refs],
             "contributions": [
-                {
-                    "contribution_id": item.contribution_id,
-                    "source_kind": item.source_kind,
-                    "source_revision": item.source_revision,
-                    "content_hash": item.content_hash,
-                    "content_length": item.content_length,
-                    "redacted_stable_digest": item.redacted_stable_digest,
-                    "request_only": item.request_only,
-                    "contribution_kind": item.contribution_kind,
-                    "visibility": item.visibility,
-                    "protection": item.protection,
-                    "root_placement": item.root_placement,
-                    "body": (
-                        item.body
-                        if item.body is not None
-                        and item.protection == DetailProtection.PUBLIC
-                        else None
-                    ),
-                    "assembly_id": item.assembly_id,
-                    "contribution_ordinal": item.contribution_ordinal,
-                    "metadata": dict(item.metadata),
-                }
+                item.to_dict()
                 for item in self.contributions
             ],
             "tool_snapshot": persisted_tool_snapshot,

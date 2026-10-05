@@ -8,6 +8,13 @@ from dataclasses import dataclass, field
 from app.domain.itemized.enums import ControlOutcome, TurnStatus
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ItemSourceManifest,
+    ProjectionGroup,
+    ToolResultEvidence,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import ITEM_STATUSES as _ITEM_STATUSES
 from app.domain.itemized.schema import PROTECTIONS as _PROTECTIONS
@@ -199,7 +206,12 @@ class ItemDraft:
     payload_kind: str
     producer_ref: Mapping[str, object]
     payload: object
-    metadata: dict[str, object] = field(default_factory=dict)
+    extensions: dict[str, object] = field(default_factory=dict)
+    projection_group: ProjectionGroup | None = None
+    projection_identity: ItemProjectionIdentity | None = None
+    tool_result_evidence: ToolResultEvidence | None = None
+    source_manifest: ItemSourceManifest | None = None
+    provenance_relations: tuple[ItemProvenanceRelation, ...] = ()
     status: str | None = None
     turn_id: str | None = None
     turn_scope: str | None = None
@@ -220,7 +232,12 @@ class ItemDraft:
             status=status,
             producer_ref=self.producer_ref,
             payload=self.payload,
-            metadata=self.metadata,
+            extensions=self.extensions,
+            projection_group=self.projection_group,
+            projection_identity=self.projection_identity,
+            tool_result_evidence=self.tool_result_evidence,
+            source_manifest=self.source_manifest,
+            provenance_relations=self.provenance_relations,
             turn_id=self.turn_id,
             turn_scope=self.turn_scope,
             message_group_id=self.message_group_id,

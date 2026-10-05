@@ -22,6 +22,9 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -103,11 +106,7 @@ def _seed_v2_partial_text_turn(workspace_root: Path) -> None:
             "invocation_id": str(accepted["initial_execution_id"]),
         },
         payload=PARTIAL_TEXT_CONTENT,
-        metadata={
-            "projection_message_id": PARTIAL_TEXT_MESSAGE_ID,
-            "completion_reason": "user_interrupt",
-            "phase": "assistant_text",
-        },
+        projection_identity=ItemProjectionIdentity(projection_message_id=PARTIAL_TEXT_MESSAGE_ID, phase="assistant_text", completion_reason="user_interrupt"),
         turn_id=PARTIAL_TEXT_TURN_ID,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id="message-boundary-partial-text-0004",

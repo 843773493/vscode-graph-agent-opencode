@@ -133,11 +133,10 @@ def _prompt_contributions(
             source_revision=sha256_jcs(blocks),
             content_hash=contribution_content_hash("prompt", blocks),
             request_only=True,
-            metadata={
-                "label": "assembled system prompt",
-                "operation": "replace",
-                "runtime_projection": True,
-            },
+            extensions={"boxteam.prompt.label": {
+                "extension_version": "1", "protection": "public",
+                "value": {"label": "assembled system prompt"},
+            }},
             contribution_kind="prompt",
             body=blocks,
             content_length=len(canonical_json_bytes(blocks)),

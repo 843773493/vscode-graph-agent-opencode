@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
 from app.domain.itemized.identity.refs import ContextRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
@@ -52,17 +55,7 @@ def _identity_comparable(contribution: ContextContribution) -> ContextContributi
     是 typed 字段）；重入登记同一 source 时，两侧 ordinal 可能分别为已分配
     值与 None，不属于内容漂移，不得触发 identity 冲突。
     """
-    return replace(
-        replace(
-            contribution,
-            metadata={
-                key: value
-                for key, value in contribution.metadata.items()
-                if key != "source_ordinal"
-            },
-        ),
-        source_ordinal=None,
-    )
+    return replace(contribution, source_ordinal=None)
 
 
 class ContextPlanCompositionMixin:
@@ -116,24 +109,11 @@ class ContextPlanCompositionMixin:
         *,
         checkpoint_ns: str = "",
         request_content: object | None = None,
+        expected_source_revision: str | None = None,
     ) -> None:
         """登记 middleware/source provenance；贡献正文仍由 request-only source 持有。"""
         composer = self._composer_for(session_id, thread_id, checkpoint_ns)
-        # replacement_policy 是 producer 声明的 typed core 字段，决定是否
-        # 允许在同一 owner slot 内原位更新 revision；自由 metadata/extensions
-        # 的同名 key 不再拥有任何解释权（旧路径已物理下线）。
-        replaceable = contribution.replacement_policy == "replaceable"
         with self._lock:
-            existing = composer.ledger.contributions.get(contribution.contribution_id)
-            if (
-                existing is not None
-                and _identity_comparable(existing) != _identity_comparable(contribution)
-                and not replaceable
-            ):
-                raise ValueError(
-                    f"context contribution identity 冲突: {contribution.contribution_id}"
-                )
-
             # SQLite registry 是提交边界；先完成持久化，再更新运行时 ledger/body
             # cache，避免 storage 失败后出现仅内存可见的 source。
             self._storage.register_context_contribution(
@@ -141,6 +121,7 @@ class ContextPlanCompositionMixin:
                 thread_id,
                 contribution,
                 checkpoint_ns=checkpoint_ns,
+                expected_source_revision=expected_source_revision,
             )
             # source_ordinal 是 SQLite registry 分配的稳定顺序。把它复制到
             # 当前 execution 的内存 view，避免重启前后分别按 dict/created_at
@@ -165,7 +146,7 @@ class ContextPlanCompositionMixin:
                 # source_ordinal 只由 itemized registry 列分配；这里把
                 # registry 值映射到 typed 字段，不再写回 metadata。
                 contribution = replace(contribution, source_ordinal=source_ordinal)
-            if replaceable:
+            if contribution.replacement_policy == "replaceable":
                 composer.ledger.replace_contribution(contribution)
             else:
                 composer.ledger.add_contribution(contribution)
@@ -391,17 +372,11 @@ class ContextPlanCompositionMixin:
                 checkpoint_ns=checkpoint_ns,
                 snapshot=snapshot,
             ):
-                metadata_json = raw.get("metadata_json")
-                if not isinstance(metadata_json, str):
-                    raise TypeError(
-                        "plan-order-integrity: context contribution metadata_json 非法: "
-                        f"{raw.get('contribution_id')}"
-                    )
-                metadata = json.loads(metadata_json)
-                if not isinstance(metadata, Mapping):
-                    raise TypeError(
-                        f"context contribution metadata 非法: {raw['contribution_id']}"
-                    )
+                extensions = raw.get("extensions")
+                if not isinstance(extensions, Mapping):
+                    raise TypeError("context contribution extensions 非法")
+                binding_value = raw.get("source_binding")
+                source_binding = SourceBinding.from_dict(binding_value) if binding_value is not None else None
                 contribution_id = _manifest_string(
                     raw.get("contribution_id"), field="contribution_id"
                 )
@@ -410,11 +385,11 @@ class ContextPlanCompositionMixin:
                 # 但不能进入当前 plan，否则 alias lookup 会把一个 ref 解析成
                 # 多条 contribution。active overlay 的 role/epoch 由 overlay
                 # registry 重新绑定，不能相信 stale metadata 自己声明的值。
-                overlay_id = metadata.get("overlay_id")
+                overlay_id = source_binding.overlay_id if source_binding is not None else None
                 if overlay_id is not None:
                     if contribution_id not in active_overlay_contribution_ids:
                         continue
-                    role = contribution_id.rsplit(":", 1)[-1]
+                    role = source_binding.overlay_role
                     if role not in {"base", "delta"}:
                         raise ValueError(
                             "plan-order-integrity: overlay contribution role 非法: "
@@ -438,13 +413,13 @@ class ContextPlanCompositionMixin:
                         overlay_epoch,
                         field=f"overlay epoch:{contribution_id}",
                     )
-                    metadata = {
-                        **dict(metadata),
-                        "source_ref": source_ref,
-                        "overlay_ref": source_ref,
-                        "overlay_role": role,
-                        "source_overlay_epoch": overlay_epoch,
-                    }
+                    active_binding = SourceBinding(
+                        source_ref=source_ref, overlay_ref=source_ref,
+                        overlay_id=overlay_id, overlay_role=role,
+                        source_overlay_epoch=overlay_epoch,
+                    )
+                    if source_binding != active_binding:
+                        raise ValueError("source-mismatch: registry overlay binding 与 active overlay 不一致")
                 # source_ordinal 是 registry 列的稳定持久化顺序，不能在重启后
                 # 退回 created_at 排序；assembly 内的 contribution_ordinal
                 # 仍由 seal 单独分配，二者不能混用。registry 值只映射 typed
@@ -477,7 +452,9 @@ class ContextPlanCompositionMixin:
                         request_only=_manifest_sql_bool(
                             raw.get("request_only"), field="request_only"
                         ),
-                        metadata=dict(metadata),
+                        extensions=extensions,
+                        source_binding=source_binding,
+                        root_placement=raw["root_placement"],
                         contribution_kind=_manifest_string(
                             raw.get("contribution_kind"), field="contribution_kind"
                         ),

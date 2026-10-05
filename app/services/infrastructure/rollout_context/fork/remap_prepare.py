@@ -6,7 +6,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 
-from app.domain.itemized.hashing import content_hash as item_content_hash
+from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -20,6 +20,10 @@ from app.services.infrastructure.rollout_context.fork.detail_mapping import (
 from app.services.infrastructure.rollout_context.fork.full_copy.plans import (
     collect_plan_identities,
 )
+from app.services.infrastructure.rollout_context.fork.identity import (
+    remap_canonical_item,
+    remap_tool_payload,
+)
 from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
@@ -30,6 +34,10 @@ from app.services.infrastructure.rollout_context.fork.validation import (
 )
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    validate_catalog_body,
+    validate_catalog_projection,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line as _v2_json_line,
@@ -118,9 +126,16 @@ def prepare_full_copy_remap(
                 value, field=f"full_rollout_copy.{entity_type}.source_id"
             )
             if source_id not in mapping:
-                message_id = maps.get("message", {}).get(source_id) if entity_type == "tool_result" else None
+                message_id = (
+                    maps.get("message", {}).get(source_id)
+                    if entity_type == "tool_result"
+                    else None
+                )
                 mapping[source_id] = message_id or self._full_copy_identity(
-                    fork_id, target_session_id, entity_type, source_id,
+                    fork_id,
+                    target_session_id,
+                    entity_type,
+                    source_id,
                 )
 
     def rows(column: str, table: str) -> tuple[object, ...]:
@@ -133,7 +148,7 @@ def prepare_full_copy_remap(
 
     item_rows = tuple(
         connection.execute(
-            "SELECT item_sequence, item_id, turn_id, jsonl_offset, jsonl_length, metadata_json FROM item_catalog ORDER BY item_sequence"
+            "SELECT item_sequence, item_id, turn_id, jsonl_offset, jsonl_length, projection_manifest_json FROM item_catalog ORDER BY item_sequence"
         ).fetchall()
     )
     normalized_item_rows: list[tuple[object, ...]] = []
@@ -157,7 +172,7 @@ def prepare_full_copy_remap(
             raise RuntimeError(f"full_rollout_copy item JSONL length 为 0: {item_id}")
         if not isinstance(row[5], str) or not row[5]:
             raise RuntimeError(
-                f"full_rollout_copy item metadata_json 非空字符串: {item_id}"
+                f"full_rollout_copy item projection_manifest_json 非空字符串: {item_id}"
             )
         normalized_item_rows.append(
             (sequence, item_id, turn_id, offset, length, row[5])
@@ -187,16 +202,24 @@ def prepare_full_copy_remap(
     collect("turn", rows("turn_id", "turn_records"))
     collect("turn", rows("turn_id", "turns"))
     collect("execution", rows("execution_id", "executions"))
-    source_execution_by_item = dict(connection.execute(
-        "SELECT item_id, execution_id FROM item_catalog"
-    ).fetchall())
+    source_execution_by_item = dict(
+        connection.execute("SELECT item_id, execution_id FROM item_catalog").fetchall()
+    )
     collect("model_call", rows("model_call_id", "model_calls"))
     collect("assembly", rows("assembly_id", "context_assemblies"))
     collect("view", rows("view_id", "context_views"))
     collect("branch", rows("branch_id", "branches"))
     collect("checkpoint", rows("checkpoint_id", "checkpoints"))
     collect("anchor", rows("anchor_id", "operation_anchors"))
-    collect("relation", rows("relation_id", "item_relations"))
+    collect(
+        "relation",
+        tuple(
+            row[0]
+            for row in connection.execute(
+                "SELECT relation_id FROM item_relations WHERE canonical_item_id IS NULL ORDER BY relation_id"
+            ).fetchall()
+        ),
+    )
     collect("context_contribution", rows("contribution_id", "context_contributions"))
     collect("tool_set", rows("tool_set_snapshot_id", "tool_set_snapshots"))
     collect(
@@ -370,7 +393,14 @@ def prepare_full_copy_remap(
             }
             for key, child in value.items():
                 key_text = str(key)
-                if key_text in {"source", "tools", "tool_snapshot", "tool_policy", "body"}:
+                if key_text in {
+                    "extensions",
+                    "source",
+                    "tools",
+                    "tool_snapshot",
+                    "tool_policy",
+                    "body",
+                }:
                     # 工具 schema/policy 与正文不是 ContextRef；其中恰好同名的
                     # JSON property 不能被当作 operational identity 改写。
                     result[key_text] = child
@@ -400,7 +430,12 @@ def prepare_full_copy_remap(
                         child = mapped("tool_set", child)
                     else:
                         child = mapped("request_ref", child)
-                elif key_text in {"item_id", "root_input_item_id", "final_item_id", "notice_item_id"}:
+                elif key_text in {
+                    "item_id",
+                    "root_input_item_id",
+                    "final_item_id",
+                    "notice_item_id",
+                }:
                     child = mapped("item", child)
                 elif key_text in {"turn_id", "replay_of_turn_id"}:
                     child = mapped("turn", child)
@@ -507,31 +542,11 @@ def prepare_full_copy_remap(
         return value
 
     def remap_payload(value: object) -> object:
-        if isinstance(value, Mapping):
-            result: dict[str, object] = {}
-            for key, child in value.items():
-                key_text = str(key)
-                if key_text in {"tool_call_id", "call_id"}:
-                    child = mapped("tool_call", child)
-                elif key_text in {"tool_invocation_id", "tool_attempt_id"}:
-                    child = mapped(key_text.removesuffix("_id"), child)
-                elif key_text == "result_id":
-                    child = mapped("tool_result", child)
-                elif (
-                    key_text == "id"
-                    and isinstance(child, str)
-                    and child in maps.get("tool_call", {})
-                ):
-                    child = mapped("tool_call", child)
-                result[key_text] = remap_payload(child)
-            return result
-        if isinstance(value, list):
-            return [remap_payload(child) for child in value]
-        if isinstance(value, tuple):
-            return [remap_payload(child) for child in value]
-        return value
+        return remap_tool_payload(value, mapped)
 
-    jsonl_path = self.jsonl_path(target_session_id, checkpoint_ns)
+    jsonl_path = self.jsonl_path(
+        target_session_id, checkpoint_ns, thread_id=target_thread_id
+    )
     if not jsonl_path.is_file() or jsonl_path.is_symlink():
         raise RuntimeError(
             f"full_rollout_copy target JSONL 不是安全普通文件: {jsonl_path}"
@@ -547,7 +562,7 @@ def prepare_full_copy_remap(
         if length == 0:
             raise RuntimeError(f"full_rollout_copy item JSONL length 为 0: {item_id}")
         metadata_text = required_text(
-            row[5], field=f"item_catalog.metadata_json:{item_id}"
+            row[5], field=f"item_catalog.projection_manifest_json:{item_id}"
         )
         end = offset + length
         if end > len(old_jsonl):
@@ -590,22 +605,39 @@ def prepare_full_copy_remap(
             raise RuntimeError(
                 f"full_rollout_copy catalog 与 JSONL Turn identity 不一致: {item_id}"
             )
-        try:
-            catalog_metadata = json.loads(metadata_text)
-        except (TypeError, json.JSONDecodeError) as error:
+        item = CanonicalItemRecord.from_dict(envelope)
+        catalog = connection.execute(
+            "SELECT content_hash, payload_length, source_revision, tool_call_id "
+            "FROM item_catalog WHERE item_id = ?",
+            (item_id,),
+        ).fetchone()
+        if catalog is None:
             raise RuntimeError(
-                f"full_rollout_copy item catalog metadata_json 无法解析: {item_id}"
-            ) from error
-        if not isinstance(catalog_metadata, Mapping):
-            raise TypeError(
-                f"full_rollout_copy item catalog metadata_json 必须是 object: {item_id}"
+                f"full_rollout_copy 缺少 canonical item catalog: {item_id}"
             )
-        if _v2_json_line(catalog_metadata) != (
-            metadata_text.encode("utf-8") + b"\n"
-        ) or catalog_metadata != envelope.get("metadata"):
-            raise RuntimeError(
-                f"full_rollout_copy item catalog metadata 与 JSONL 不一致: {item_id}"
-            )
+        validate_catalog_body(
+            raw,
+            sequence=sequence,
+            item_id=item_id,
+            catalog_hash=required_text(catalog[0], field="item_catalog.content_hash"),
+            payload_length=non_negative_int(
+                catalog[1], field="item_catalog.payload_length"
+            ),
+            source_revision=required_text(
+                catalog[2], field="item_catalog.source_revision"
+            ),
+        )
+        relation_rows = connection.execute(
+            "SELECT canonical_relation_ordinal, relation, source_ref, target_ref "
+            "FROM item_relations WHERE canonical_item_id = ? ORDER BY canonical_relation_ordinal",
+            (item_id,),
+        ).fetchall()
+        validate_catalog_projection(
+            item,
+            projection_manifest_json=metadata_text,
+            tool_call_id=optional_text(catalog[3], field="item_catalog.tool_call_id"),
+            relation_rows=relation_rows,
+        )
         return raw, envelope
 
     # v2 tool call/result identity 通常只存在 item payload，而不一定有
@@ -617,7 +649,7 @@ def prepare_full_copy_remap(
         _old_turn_id,
         old_offset,
         old_length,
-        _metadata_json,
+        _projection_manifest_json,
     ) in item_rows:
         _raw, envelope = load_item_line(
             (
@@ -626,34 +658,46 @@ def prepare_full_copy_remap(
                 _old_turn_id,
                 old_offset,
                 old_length,
-                _metadata_json,
+                _projection_manifest_json,
             )
         )
-        payload = envelope.get("payload")
-        stack: list[object] = [payload]
-        while stack:
-            current = stack.pop()
-            if isinstance(current, Mapping):
-                for key, child in current.items():
-                    key_text = str(key)
-                    if (
-                        key_text in {"tool_call_id", "call_id"}
-                        and isinstance(child, str)
-                        and child
-                    ):
-                        collect("tool_call", (child,))
-                    elif key_text == "result_id" and isinstance(child, str) and child:
-                        collect("tool_result", (child,))
-                    elif (
-                        key_text in {"tool_invocation_id", "tool_attempt_id"}
-                        and isinstance(child, str)
-                        and child
-                    ):
-                        collect(key_text.removesuffix("_id"), (child,))
-                    elif isinstance(child, (Mapping, list, tuple)):
-                        stack.append(child)
-            elif isinstance(current, (list, tuple)):
-                stack.extend(current)
+        source_item = CanonicalItemRecord.from_dict(envelope)
+        if source_item.projection_identity is not None:
+            collect("model_call", (source_item.projection_identity.model_call_id,))
+            collect("message", (source_item.projection_identity.projection_message_id,))
+        if source_item.tool_result_evidence is not None:
+            collect("tool_call", (source_item.tool_result_evidence.tool_call_id,))
+            collect("tool_result", (source_item.tool_result_evidence.result_id,))
+        identity = source_item.projection_identity
+        if identity is not None:
+            collect("content_part", (ref.id for ref in identity.content_part_refs))
+            if identity.block_id is not None:
+                prefix = f"{identity.model_call_id}:block:"
+                if identity.block_id.startswith(prefix):
+                    collect("content_part", (identity.block_id.removeprefix(prefix),))
+        call_ids = (
+            [source_item.tool_call_id] if source_item.tool_call_id is not None else []
+        )
+        if isinstance(source_item.payload, Mapping):
+            call_ids.extend(
+                call["id"] for call in source_item.payload.get("tool_calls", ())
+            )
+        for call_id in call_ids:
+            collect("tool_call", (call_id,))
+            if identity is not None and identity.model_call_id is not None:
+                prefix = f"{identity.model_call_id}:tool-call:"
+                if call_id.startswith(prefix):
+                    raw_call_id = call_id.removeprefix(prefix)
+                    collect("tool_call", (raw_call_id,))
+                    maps["tool_call"][call_id] = (
+                        f"{mapped('model_call', identity.model_call_id)}:tool-call:{mapped('tool_call', raw_call_id)}"
+                    )
+        payload = source_item.payload
+        if isinstance(payload, Mapping):
+            if source_item.semantic_kind == SemanticKind.TOOL_RESULT:
+                collect("tool_result", (payload.get("result_id"),))
+            collect("tool_invocation", (payload.get("tool_invocation_id"),))
+            collect("tool_attempt", (payload.get("tool_attempt_id"),))
     old_positions: dict[int, tuple[int, int]] = {}
     new_positions: dict[int, tuple[int, int]] = {}
     new_items: dict[int, CanonicalItemRecord] = {}
@@ -665,7 +709,7 @@ def prepare_full_copy_remap(
         old_turn_id,
         old_offset,
         old_length,
-        _metadata_json,
+        _projection_manifest_json,
     ) in item_rows:
         sequence_value = non_negative_int(sequence, field="item_catalog.item_sequence")
         old_position = (
@@ -674,40 +718,30 @@ def prepare_full_copy_remap(
         )
         old_positions[sequence_value] = old_position
         _raw, envelope = load_item_line(
-            (sequence, old_item_id, old_turn_id, old_offset, old_length, _metadata_json)
+            (
+                sequence,
+                old_item_id,
+                old_turn_id,
+                old_offset,
+                old_length,
+                _projection_manifest_json,
+            )
         )
         item = CanonicalItemRecord.from_dict(envelope)
-        remapped_metadata = remap_json(dict(item.metadata))
-        if not isinstance(remapped_metadata, Mapping):
-            raise TypeError(
-                f"full_rollout_copy item metadata remap 非 object: {old_item_id}"
-            )
-        metadata = dict(remapped_metadata)
         source_execution_id = required_text(
-            source_execution_by_item[old_item_id], field=f"source.item.execution_id:{old_item_id}",
+            source_execution_by_item[old_item_id],
+            field=f"source.item.execution_id:{old_item_id}",
         )
         if source_execution_id not in maps["execution"]:
             raise RuntimeError("full copy canonical item 引用了缺失的 source execution")
-        metadata["execution_id"] = mapped("execution", source_execution_id)
-        for key, entity_type in (
-            ("projection_message_id", "message"),
-            ("message_group_id", "group"),
-        ):
-            if key in metadata:
-                metadata[key] = mapped(entity_type, metadata[key])
-        block_id = metadata.get("block_id")
-        if isinstance(block_id, str):
-            metadata["block_id"] = part_maps.get(
-                (item.item_id, block_id),
-                mapped("content_part", block_id),
-            )
-        metadata["fork_target_session_id"] = target_session_id
         producer = dict(item.producer_ref)
         producer_kind = required_text(
             producer.get("producer_kind"), field="item.producer_ref.producer_kind"
         )
         if producer.get("producer_id") in maps.get("accepted_ingress", {}):
-            producer["producer_id"] = mapped("accepted_ingress", producer["producer_id"])
+            producer["producer_id"] = mapped(
+                "accepted_ingress", producer["producer_id"]
+            )
         elif producer.get("producer_id") in maps.get("message", {}):
             producer["producer_id"] = mapped("message", producer["producer_id"])
         elif producer_kind == "provider":
@@ -718,34 +752,27 @@ def prepare_full_copy_remap(
             producer["invocation_id"] = mapped("execution", producer["invocation_id"])
         target_item_id = mapped("item", item.item_id) or item.item_id
         remapped_payload = remap_payload(item.payload)
-        # source revision 的默认值包含 item identity。full copy 重写
-        # target-local item id 或 tool identity 后，不能继续让 reader
-        # 根据旧 source id/hash 猜 revision；显式写入新的 target manifest。
-        revision = metadata.get("source_revision")
-        if (
-            revision is None
-            or revision == ""
-            or revision == f"canonical:{item.item_id}:{item.content_hash}"
-        ):
-            metadata["source_revision"] = (
-                f"canonical:{target_item_id}:"
-                f"{item_content_hash(item.payload_kind, remapped_payload)}"
-            )
-        new_item = CanonicalItemRecord.create(
+        new_item = remap_canonical_item(
+            item,
+            mapped=mapped,
+            source_session_id=source_session_id,
+            source_thread_id=source_thread_id,
+            target_session_id=target_session_id,
+            target_thread_id=target_thread_id,
             item_sequence=sequence_value,
             item_id=target_item_id,
-            semantic_kind=item.semantic_kind,
-            payload_kind=item.payload_kind,
-            status=item.status,
+            turn_id=mapped("turn", item.turn_id),
+            message_group_id=mapped("group", item.message_group_id),
             producer_ref=producer,
             payload=remapped_payload,
-            created_at=item.created_at,
-            metadata=metadata,
-            turn_id=mapped("turn", item.turn_id),
-            turn_scope=item.turn_scope,
-            message_group_id=mapped("group", item.message_group_id),
-            wire_role=item.wire_role,
         )
+        if (
+            item.projection_identity is not None
+            and item.projection_identity.block_id is not None
+        ):
+            part_maps[(item.item_id, item.projection_identity.block_id)] = (
+                new_item.projection_identity.block_id
+            )
         new_items[sequence_value] = new_item
         # full_rollout_copy 重建的是新的 canonical item line；LangChain
         # message 仍由 target 的 projection reader 从 item 生成，不能把

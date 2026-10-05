@@ -21,7 +21,12 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
 from app.domain.itemized.hashing import content_hash as item_content_hash
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+)
 from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.schema import validate_extensions
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -64,7 +69,11 @@ class RolloutTurnsMixin:
         turn_ordinal: int | None = None,
         root_item_id: str | None = None,
         initial_execution_id: str | None = None,
-        acceptance_metadata: Mapping[str, object] | None = None,
+        extensions: Mapping[str, object] | None = None,
+        source_session_id: str | None = None,
+        source_accepted_ingress_id: str | None = None,
+        source_acceptance_idempotency_key: str | None = None,
+        provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
         replay_of_turn_id: str | None = None,
         identity_origin: str = "runtime",
     ) -> dict[str, object]:
@@ -82,6 +91,17 @@ class RolloutTurnsMixin:
             field="admission_idempotency_key",
         )
         payload_kind = strict_text(payload_kind, field="payload_kind")
+        extensions_value = dict(extensions) if extensions is not None else {}
+        validate_extensions(extensions_value)
+        source_session_id = strict_optional_text(
+            source_session_id, field="source_session_id"
+        )
+        source_accepted_ingress_id = strict_optional_text(
+            source_accepted_ingress_id, field="source_accepted_ingress_id"
+        )
+        source_acceptance_idempotency_key = strict_optional_text(
+            source_acceptance_idempotency_key, field="source_acceptance_idempotency_key"
+        )
         strict_text(checkpoint_ns, field="checkpoint_ns", allow_empty=True)
         branch_id = strict_optional_text(branch_id, field="branch_id")
         turn_id = strict_optional_text(turn_id, field="turn_id")
@@ -96,9 +116,7 @@ class RolloutTurnsMixin:
         )
         strict_text(identity_origin, field="identity_origin")
         with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(
-                session_id, checkpoint_ns, thread_id=owner_thread_id
-            )
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
@@ -202,13 +220,9 @@ class RolloutTurnsMixin:
                             "existing user_turn execution admission payload hash 不匹配"
                         )
                     if existing_job_id != job_id:
-                        raise ValueError(
-                            "acceptance identity 已绑定不同 job_id"
-                        )
+                        raise ValueError("acceptance identity 已绑定不同 job_id")
                     if existing_admission_key != admission_idempotency_key:
-                        raise ValueError(
-                            "acceptance identity 已绑定不同 admission key"
-                        )
+                        raise ValueError("acceptance identity 已绑定不同 admission key")
                     existing_turn = connection.execute(
                         "SELECT turn_id, root_input_item_id, initial_execution_id, status, final_item_id "
                         "FROM turn_records WHERE session_id = ? AND thread_id = ? AND turn_id = ?",
@@ -237,20 +251,21 @@ class RolloutTurnsMixin:
                         "SELECT execution_id FROM item_catalog WHERE item_id = ?",
                         (stored_root_item_id,),
                     ).fetchone()
-                    if root_execution is None or strict_text(
-                        root_execution[0],
-                        field="item_catalog.execution_id:acceptance_root",
-                    ) != stored_execution_id:
+                    if (
+                        root_execution is None
+                        or strict_text(
+                            root_execution[0],
+                            field="item_catalog.execution_id:acceptance_root",
+                        )
+                        != stored_execution_id
+                    ):
                         raise RuntimeError(
                             "existing acceptance root 未绑定 initial execution: "
                             f"turn_id={stored_turn_id}, execution_id={stored_execution_id}"
                         )
                     if turn_id is not None and stored_turn_id != turn_id:
                         raise ValueError("acceptance identity 冲突：turn_id 不一致")
-                    if (
-                        root_item_id is not None
-                        and stored_root_item_id != root_item_id
-                    ):
+                    if root_item_id is not None and stored_root_item_id != root_item_id:
                         raise ValueError(
                             "acceptance identity 冲突：root_item_id 不一致"
                         )
@@ -263,10 +278,41 @@ class RolloutTurnsMixin:
                         )
                     execution = connection.execute(
                         "SELECT execution_id FROM executions WHERE session_id = ? AND thread_id = ? AND execution_id = ? AND turn_id = ?",
-                        (session_id, owner_thread_id, stored_execution_id, stored_turn_id),
+                        (
+                            session_id,
+                            owner_thread_id,
+                            stored_execution_id,
+                            stored_turn_id,
+                        ),
                     ).fetchone()
                     if execution is None:
                         raise RuntimeError("acceptance 已存在但 initial execution 缺失")
+                    with self.jsonl_path(
+                        session_id, checkpoint_ns, thread_id=owner_thread_id
+                    ).open("rb") as root_stream:
+                        root_locator = connection.execute(
+                            "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id = ?",
+                            (stored_root_item_id,),
+                        ).fetchone()
+                        restored_root = self._read_v2_item_at(
+                            connection,
+                            root_stream,
+                            sequence=strict_non_negative_int(
+                                root_locator[0], field="root.item_sequence"
+                            ),
+                            offset=strict_non_negative_int(
+                                root_locator[1], field="root.jsonl_offset"
+                            ),
+                            length=strict_non_negative_int(
+                                root_locator[2], field="root.jsonl_length"
+                            ),
+                        )
+                    if _json(restored_root.extensions) != _json(extensions_value):
+                        raise ValueError("acceptance identity 冲突：extensions 不一致")
+                    if restored_root.provenance_relations != provenance_relations:
+                        raise ValueError(
+                            "acceptance identity 冲突：typed provenance relations 不一致"
+                        )
                     accepted_commit = load_committed_idempotency_commit(
                         connection,
                         commit_kind=CommitKind.ACCEPTANCE.value,
@@ -346,7 +392,7 @@ class RolloutTurnsMixin:
                             + ":"
                             + accepted_ingress_id
                         ).encode("utf-8")
-                        ).hexdigest()[:24]
+                    ).hexdigest()[:24]
                 )
                 turn_value = strict_text(turn_value, field="turn_id")
                 branch_exists = connection.execute(
@@ -420,7 +466,9 @@ class RolloutTurnsMixin:
                     "SELECT last_item_sequence FROM database_meta WHERE singleton_id = 1"
                 ).fetchone()
                 if item_sequence_row is None:
-                    raise RuntimeError("acceptance 缺少 database_meta.last_item_sequence")
+                    raise RuntimeError(
+                        "acceptance 缺少 database_meta.last_item_sequence"
+                    )
                 item_sequence = (
                     strict_non_negative_int(
                         item_sequence_row[0],
@@ -428,29 +476,6 @@ class RolloutTurnsMixin:
                     )
                     + 1
                 )
-                if acceptance_metadata is not None and not isinstance(
-                    acceptance_metadata, Mapping
-                ):
-                    raise TypeError("acceptance_metadata 必须是 object")
-                acceptance_metadata_value = dict(acceptance_metadata or {})
-                protected_metadata_keys = {
-                    "accepted_ingress_id",
-                    "turn_id",
-                    "execution_id",
-                    "projection_message_id",
-                    "turn_scope",
-                    "semantic_kind",
-                    "payload_kind",
-                    "content_hash",
-                }
-                overridden = sorted(
-                    protected_metadata_keys.intersection(acceptance_metadata_value)
-                )
-                if overridden:
-                    raise ValueError(
-                        "acceptance metadata 不得覆盖 canonical identity 字段: "
-                        + ",".join(overridden)
-                    )
                 root = CanonicalItemRecord.create(
                     item_sequence=item_sequence,
                     item_id=root_item_id or "item-root-" + uuid4().hex,
@@ -463,18 +488,13 @@ class RolloutTurnsMixin:
                         "invocation_id": execution_id,
                     },
                     payload=payload,
-                    metadata={
-                        **acceptance_metadata_value,
-                        "accepted_ingress_id": accepted_ingress_id,
-                        "turn_id": turn_value,
-                        "execution_id": execution_id,
-                        "projection_message_id": (
-                            root_item_id[len("item-") :]
-                            if isinstance(root_item_id, str)
-                            and root_item_id.startswith("item-")
-                            else root_item_id
-                        ),
-                    },
+                    provenance_relations=provenance_relations,
+                    extensions=extensions_value,
+                    projection_identity=ItemProjectionIdentity(
+                        projection_message_id=root_item_id.removeprefix("item-")
+                        if root_item_id
+                        else None,
+                    ),
                     turn_id=turn_value,
                     turn_scope=TurnScope.TURN_ROOT,
                     wire_role="user",
@@ -573,23 +593,6 @@ class RolloutTurnsMixin:
                         branch_id=branch_value,
                     )
                 timestamp = _now()
-                acceptance_metadata_value = dict(acceptance_metadata or {})
-                source_session_id = acceptance_metadata_value.get("source_session_id")
-                source_ingress_id = acceptance_metadata_value.get(
-                    "source_accepted_ingress_id"
-                )
-                source_acceptance_key = acceptance_metadata_value.get(
-                    "source_acceptance_idempotency_key"
-                )
-                if any(
-                    value is not None and (not isinstance(value, str) or not value)
-                    for value in (
-                        source_session_id,
-                        source_ingress_id,
-                        source_acceptance_key,
-                    )
-                ):
-                    raise ValueError("acceptance source lineage 字段必须是非空字符串")
                 connection.execute(
                     "INSERT INTO turn_acceptances(accepted_ingress_id, acceptance_idempotency_key, session_id, thread_id, turn_id, payload_hash, source_session_id, source_accepted_ingress_id, source_acceptance_idempotency_key, identity_origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
@@ -600,8 +603,8 @@ class RolloutTurnsMixin:
                         turn_value,
                         payload_digest,
                         source_session_id,
-                        source_ingress_id,
-                        source_acceptance_key,
+                        source_accepted_ingress_id,
+                        source_acceptance_idempotency_key,
                         identity_origin,
                         timestamp,
                     ),
@@ -659,10 +662,13 @@ class RolloutTurnsMixin:
                             "UPDATE context_views SET head_turn_id = ?, logical_turn_count = MAX(logical_turn_count, ?) WHERE view_id = ?",
                             (turn_value, next_turn_ordinal, view_id),
                         )
-                    elif strict_text(
-                        existing_view_turn[1],
-                        field="context_view_turns.root_input_item_id",
-                    ) != root.item_id:
+                    elif (
+                        strict_text(
+                            existing_view_turn[1],
+                            field="context_view_turns.root_input_item_id",
+                        )
+                        != root.item_id
+                    ):
                         raise RuntimeError(
                             f"active view Turn root identity 冲突: turn_id={turn_value}"
                         )

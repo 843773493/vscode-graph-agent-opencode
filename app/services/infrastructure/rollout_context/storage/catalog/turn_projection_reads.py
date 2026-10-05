@@ -58,7 +58,7 @@ class TurnProjectionReadMixin:
             ids,
         ).fetchall()
         tool_rows = connection.execute(
-            f"SELECT m.turn_id, m.message_id, tc.tool_call_id, tc.tool_name, tc.status, tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence WHERE m.turn_id IN ({placeholders}) ORDER BY tc.assistant_message_sequence, tc.call_index",
+            f"SELECT m.turn_id, m.message_id, tc.tool_call_id, tc.tool_name, tc.status, tc.result_message_sequence, tc.assistant_message_sequence, tc.call_index, ic.projection_manifest_json FROM tool_calls tc JOIN messages m ON m.message_sequence = tc.assistant_message_sequence JOIN item_catalog ic ON ic.jsonl_offset = m.jsonl_offset AND ic.jsonl_length = m.jsonl_length WHERE m.turn_id IN ({placeholders}) ORDER BY tc.assistant_message_sequence, tc.call_index",
             ids,
         ).fetchall()
         final_rows = connection.execute(
@@ -77,7 +77,7 @@ class TurnProjectionReadMixin:
         activity_rows = connection.execute(
             "SELECT ic.turn_id, ic.item_sequence, ic.item_id, ic.semantic_kind, "
             "ic.payload_kind, ic.status, ic.created_at, ic.producer_ref_json, "
-            "ic.metadata_json, ip.content, ip.content_truncated "
+            "ic.projection_manifest_json, ip.content, ip.content_truncated, ic.tool_call_id "
             "FROM item_catalog AS ic JOIN item_projections AS ip "
             "ON ip.item_id = ic.item_id AND ip.item_sequence = ic.item_sequence "
             "LEFT JOIN turn_records AS tr ON tr.turn_id = ic.turn_id "
@@ -93,7 +93,7 @@ class TurnProjectionReadMixin:
             "SELECT t.turn_id, rb.message_sequence, rb.content_block_index, "
             "rb.item_index, rb.carrier_type, rb.reasoning_text, rb.summary_text, "
             "rb.signature_present, rb.encrypted_length, rb.item_id, ic.item_id, "
-            "ic.item_sequence, ic.created_at, ic.metadata_json "
+            "ic.item_sequence, ic.created_at, ic.projection_manifest_json "
             "FROM turns AS t "
             "JOIN turn_records AS tr ON tr.turn_id = t.turn_id "
             "JOIN item_catalog AS ic ON ic.item_id = tr.final_item_id "

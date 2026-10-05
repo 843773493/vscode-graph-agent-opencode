@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.turn_response_parts import (
     response_parts_from_internal_item,
@@ -55,7 +56,7 @@ def _canonical_item(
     semantic_kind: str,
     payload_kind: str,
     payload: object,
-    metadata: dict[str, object] | None = None,
+    projection_identity: ItemProjectionIdentity | None = None,
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=item_sequence,
@@ -66,7 +67,7 @@ def _canonical_item(
         producer_ref={"producer_kind": "provider", "producer_id": "execution_1"},
         payload=payload,
         created_at=NOW,
-        metadata=metadata or {},
+        projection_identity=projection_identity,
     )
 
 
@@ -306,6 +307,7 @@ def test_detail_backfills_scoped_canonical_tool_call_arguments_by_raw_id() -> No
                 "type": "ai",
                 "data": {
                     "content": [],
+                    "response_metadata": {"model_call_id": "model-call"},
                     "tool_calls": [
                         {
                             "id": "call-pwd",
@@ -330,6 +332,7 @@ def test_detail_backfills_scoped_canonical_tool_call_arguments_by_raw_id() -> No
                 "tool_call",
                 tool_call_id="model-call:tool-call:call-pwd",
                 tool_name="exec_command",
+                model_call_id="model-call",
             )
         ),
         mode="detail",
@@ -349,6 +352,7 @@ def test_detail_matches_scoped_tool_call_to_raw_result_id() -> None:
                 "type": "ai",
                 "data": {
                     "content": [],
+                    "response_metadata": {"model_call_id": "model-call"},
                     "tool_calls": [
                         {
                             "id": "call-pwd",
@@ -365,6 +369,7 @@ def test_detail_matches_scoped_tool_call_to_raw_result_id() -> None:
                 "type": "tool",
                 "data": {
                     "tool_call_id": "call-pwd",
+                    "response_metadata": {"model_call_id": "model-call"},
                     "content": '{"output":"/workspace","exit_code":0}',
                 },
             },
@@ -379,6 +384,7 @@ def test_detail_matches_scoped_tool_call_to_raw_result_id() -> None:
                 "tool_call",
                 tool_call_id="model-call:tool-call:call-pwd",
                 tool_name="exec_command",
+                model_call_id="model-call",
                 assistant_message_sequence=10,
                 call_index=0,
             ),
@@ -388,6 +394,7 @@ def test_detail_matches_scoped_tool_call_to_raw_result_id() -> None:
                 "tool_result",
                 tool_call_id="call-pwd",
                 tool_name="exec_command",
+                model_call_id="model-call",
                 assistant_message_sequence=10,
                 call_index=0,
                 result_message_sequence=11,
@@ -410,6 +417,7 @@ def test_detail_does_not_guess_arguments_when_raw_tool_call_id_is_ambiguous() ->
                 "type": "ai",
                 "data": {
                     "content": [],
+                    "response_metadata": {"model_call_id": "model-call"},
                     "tool_calls": [
                         {"id": "call-reused", "name": "first", "args": {"n": 1}}
                     ],
@@ -422,6 +430,7 @@ def test_detail_does_not_guess_arguments_when_raw_tool_call_id_is_ambiguous() ->
                 "type": "ai",
                 "data": {
                     "content": [],
+                    "response_metadata": {"model_call_id": "model-call"},
                     "tool_calls": [
                         {"id": "call-reused", "name": "second", "args": {"n": 2}}
                     ],
@@ -438,6 +447,7 @@ def test_detail_does_not_guess_arguments_when_raw_tool_call_id_is_ambiguous() ->
                 "tool_call",
                 tool_call_id="model-call:tool-call:call-reused",
                 tool_name="second",
+                model_call_id="model-call",
             )
         ),
         mode="detail",

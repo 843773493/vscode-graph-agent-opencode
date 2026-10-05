@@ -25,6 +25,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
+from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.mutation_intents import (
     AppendCanonicalItemIntent,
     MutationIntentOwner,
@@ -166,7 +167,11 @@ def _tool_call_id_for_intent(item: CanonicalItemRecord) -> str:
     else:
         raw_tool_call_id = payload.get("tool_call_id")
         if raw_tool_call_id is None:
-            raw_tool_call_id = item.metadata.get("tool_call_id")
+            raw_tool_call_id = (
+                item.tool_result_evidence.tool_call_id
+                if item.tool_result_evidence is not None
+                else None
+            )
     if not isinstance(raw_tool_call_id, str) or not raw_tool_call_id:
         raise ValueError(
             f"{item.semantic_kind} 缺少配对 tool_call_id: {item.item_id!r}"
@@ -244,9 +249,7 @@ class RolloutCheckpointSaver(
             history_reader = RolloutHistoryReader(self._context_reader)
         self._history_reader = history_reader
         if detail_store is not None and protected_detail_key is not None:
-            raise ValueError(
-                "detail_store 与 protected_detail_key 不能同时传入"
-            )
+            raise ValueError("detail_store 与 protected_detail_key 不能同时传入")
         self._detail_store = detail_store or ContextPlanDetailStore(
             sessions_dir,
             protected_key=protected_detail_key,
@@ -255,7 +258,9 @@ class RolloutCheckpointSaver(
             get_session_path_resolver(Path(sessions_dir).resolve())
         )
         self._node_debug_workspace_config = node_debug_workspace_config
-        self._context_plan_composers: dict[tuple[str, str, str], ContextPlanComposer] = {}
+        self._context_plan_composers: dict[
+            tuple[str, str, str], ContextPlanComposer
+        ] = {}
         # 这是当前进程的 context view 变化记录，不是第二份持久化事实。
         # storage manifest/source_overlays 仍是恢复后的权威状态；每次对外暴露
         # reconciliation 前都会用已提交 manifest 校准内存记录。
@@ -282,13 +287,14 @@ class RolloutCheckpointSaver(
             MutationIntentOwner, SessionThreadMutationIntents
         ] = {}
         # 正在经 intent 端口消费的 append 批；由 append_items 持锁注册/清理。
-        self._append_intent_batches: dict[
-            MutationIntentOwner, _AppendIntentBatch
-        ] = {}
+        self._append_intent_batches: dict[MutationIntentOwner, _AppendIntentBatch] = {}
         self._lock = threading.RLock()
 
     def upgrade_rollout_schema(
-        self, session_id: str, *, checkpoint_ns: str = "",
+        self,
+        session_id: str,
+        *,
+        checkpoint_ns: str = "",
     ) -> None:
         """显式升级当前会话索引；普通启动、读取和请求路径不得自动调用。"""
         # 只有显式升级加载旧 artifact parser；正常 Saver 构造和读取路径不加载它。
@@ -326,11 +332,14 @@ class RolloutCheckpointSaver(
 
         def prepare_plans(connection):
             return prepare_schema_v4_upgrade(
-                connection, session_id=session_id, checkpoint_ns=checkpoint_ns,
+                connection,
+                session_id=session_id,
+                checkpoint_ns=checkpoint_ns,
             )
 
         with self._storage.upgrade_v2_schema(
-            session_id, checkpoint_ns=checkpoint_ns,
+            session_id,
+            checkpoint_ns=checkpoint_ns,
             prepare_artifact_upgrade=prepare_artifacts,
             resume_artifact_upgrade=resume_artifacts,
             prepare_plan_upgrade=prepare_plans,
@@ -354,7 +363,11 @@ class RolloutCheckpointSaver(
         turn_ordinal: int | None = None,
         root_item_id: str | None = None,
         initial_execution_id: str | None = None,
-        acceptance_metadata: Mapping[str, object] | None = None,
+        extensions: Mapping[str, object] | None = None,
+        source_session_id: str | None = None,
+        source_accepted_ingress_id: str | None = None,
+        source_acceptance_idempotency_key: str | None = None,
+        provenance_relations: tuple[ItemProvenanceRelation, ...] = (),
         replay_of_turn_id: str | None = None,
         identity_origin: str = "runtime",
     ) -> dict[str, object]:
@@ -374,7 +387,11 @@ class RolloutCheckpointSaver(
             turn_ordinal=turn_ordinal,
             root_item_id=root_item_id,
             initial_execution_id=initial_execution_id,
-            acceptance_metadata=acceptance_metadata,
+            extensions=extensions,
+            source_session_id=source_session_id,
+            source_accepted_ingress_id=source_accepted_ingress_id,
+            source_acceptance_idempotency_key=source_acceptance_idempotency_key,
+            provenance_relations=provenance_relations,
             replay_of_turn_id=replay_of_turn_id,
             identity_origin=identity_origin,
         )
@@ -404,9 +421,7 @@ class RolloutCheckpointSaver(
                 "canonical append intent 不接受非空 checkpoint_ns: "
                 f"{checkpoint_ns!r} (session_id={session_id!r})"
             )
-        admission = require_current_execution_admission(
-            langgraph_thread_id=thread_id
-        )
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
         if (admission.session_id, admission.thread_id) != (session_id, thread_id):
             raise RuntimeError(
                 "canonical append owner 与 execution admission 不一致: "
@@ -499,7 +514,9 @@ class RolloutCheckpointSaver(
             or notice.turn_id is not None
             or notice.turn_scope != TurnScope.PENDING_NEXT_TURN
         ):
-            raise ValueError("internal execution notice 未生成预期的 pending runtime_notice")
+            raise ValueError(
+                "internal execution notice 未生成预期的 pending runtime_notice"
+            )
         return self._storage.admit_internal_execution(
             session_id,
             thread_id=thread_id,
@@ -680,8 +697,22 @@ class RolloutCheckpointSaver(
             loss_reason=loss_reason,
         )
 
-    def resume_turn(self, session_id: str, *, turn_id: str, thread_id: str, job_id: str, checkpoint_ns: str='') -> dict[str, object]:
-        return self._storage.resume_turn(session_id, turn_id=turn_id, thread_id=thread_id, job_id=job_id, checkpoint_ns=checkpoint_ns)
+    def resume_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        thread_id: str,
+        job_id: str,
+        checkpoint_ns: str = "",
+    ) -> dict[str, object]:
+        return self._storage.resume_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            checkpoint_ns=checkpoint_ns,
+        )
 
     def mark_execution_lost(
         self,
@@ -707,6 +738,7 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
+        thread_id: str,
         item_id: str,
         part: ContentPart,
         locator: Mapping[str, object],
@@ -715,6 +747,7 @@ class RolloutCheckpointSaver(
         """通过 Saver 持久化 canonical item 的 content-part locator。"""
         self._storage.register_content_part(
             session_id,
+            thread_id=thread_id,
             item_id=item_id,
             part=part,
             locator=locator,
@@ -726,12 +759,14 @@ class RolloutCheckpointSaver(
         session_id: str,
         anchor: ContentPartAnchor,
         *,
+        thread_id: str,
         checkpoint_ns: str = "",
     ) -> None:
         """通过 Saver 持久化可恢复的 content-part 操作锚点。"""
         self._storage.register_content_part_anchor(
             session_id,
             anchor,
+            thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
         )
 
@@ -739,12 +774,14 @@ class RolloutCheckpointSaver(
         self,
         session_id: str,
         *,
+        thread_id: str,
         anchor_id: str,
         checkpoint_ns: str = "",
     ) -> ContentPartAnchor:
         """通过 Saver 恢复并校验 durable content-part anchor。"""
         return self._storage.resolve_content_part_anchor(
             session_id,
+            thread_id=thread_id,
             anchor_id=anchor_id,
             checkpoint_ns=checkpoint_ns,
         )
@@ -805,8 +842,10 @@ class RolloutCheckpointSaver(
         status: str,
     ) -> bool:
         return self._writer.mark_job_terminal_status(
-            session_id=session_id, thread_id=thread_id,
-            job_id=job_id, status=status,
+            session_id=session_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            status=status,
         )
 
     def load_history(

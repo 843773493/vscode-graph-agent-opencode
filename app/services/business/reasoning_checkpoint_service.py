@@ -14,7 +14,13 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
 )
+from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
+from app.domain.itemized.records import user_input_payload
 from app.schemas.event import ModelTokenUsagePayload
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    message_annotations,
+    producer_response_metadata,
+)
 
 _STALE_EXECUTION_CHANNEL = "__pregel_tasks"
 
@@ -36,11 +42,7 @@ def _build_assistant_content(
             f"实际类型: {type(canonical_content).__name__}"
         )
 
-    content = [
-        dict(block)
-        for block in canonical_content
-        if isinstance(block, Mapping)
-    ]
+    content = [dict(block) for block in canonical_content if isinstance(block, Mapping)]
     text_block_index = -1
     for index, block in enumerate(content):
         block_type = block.get("type")
@@ -54,7 +56,9 @@ def _build_assistant_content(
             "thinking",
             "redacted_thinking",
         }:
-            raise ValueError(f"最终 assistant content 含未知 block type: {block_type!r}")
+            raise ValueError(
+                f"最终 assistant content 含未知 block type: {block_type!r}"
+            )
         if block_type in {"text", "output_text"}:
             text_block_index = index
 
@@ -118,7 +122,7 @@ def _rewrite_latest_assistant_message(
     if not isinstance(latest, AIMessage):
         raise TypeError("最终 assistant 定位结果不是 AIMessage")
 
-    response_metadata = dict(latest.response_metadata or {})
+    response_metadata = producer_response_metadata(latest.response_metadata or {})
     response_metadata["phase"] = "final_answer"
     response_metadata["message_id"] = message_id
     response_metadata["created_at"] = message_created_at.isoformat()
@@ -131,7 +135,21 @@ def _rewrite_latest_assistant_message(
     ):
         # canonical item 不可覆盖；最终收敛消息显式指向它替代的 LangGraph
         # carrier，供下次 Provider context 按 identity 排除旧副本。
-        response_metadata["supersedes_message_id"] = superseded_message_id
+        # 此处仍在 producer 边界，冻结真实原始消息的 model-call 身份。
+        original_scope = response_metadata.get("model_call_id")
+        if original_scope is None and superseded_message_id.startswith("lc_run--"):
+            original_scope = superseded_message_id.removeprefix("lc_run--")
+        if original_scope:
+            response_metadata["model_call_id"] = original_scope
+        response_metadata["provenance_relations"] = [
+            *response_metadata.get("provenance_relations", []),
+            ItemProvenanceRelation(
+                "replaces",
+                "projection_message",
+                superseded_message_id,
+                target_model_call_id=original_scope,
+            ).to_dict(),
+        ]
     if turn_id is not None:
         raw_message_metadata = response_metadata.get("message_metadata")
         message_metadata = (
@@ -276,9 +294,7 @@ def persist_user_message_checkpoint(
         raise ValueError("用户消息 checkpoint 缺少独立 admission_idempotency_key")
 
     accept_turn = getattr(checkpointer, "accept_turn", None)
-    admit_internal_execution = getattr(
-        checkpointer, "admit_internal_execution", None
-    )
+    admit_internal_execution = getattr(checkpointer, "admit_internal_execution", None)
     execution_for_turn = getattr(checkpointer, "execution_for_turn", None)
     read_admission = getattr(checkpointer, "execution_admission", None)
     if not all(
@@ -321,6 +337,9 @@ def persist_user_message_checkpoint(
         )
         if not isinstance(turn_id, str) or not turn_id:
             raise ValueError("user_turn checkpoint 缺少显式真实 turn_id")
+        accepted_payload = user_input_payload(
+            message.content, response_metadata.get("attachments")
+        )
         accepted = accept_turn(
             session_id,
             thread_id=thread_id,
@@ -328,19 +347,13 @@ def persist_user_message_checkpoint(
             acceptance_idempotency_key=f"message:{message_id}",
             job_id=job_id,
             admission_idempotency_key=admission_idempotency_key,
-            payload=message.content,
+            payload=accepted_payload,
             payload_kind=(
-                "text" if isinstance(message.content, str) else "structured_content"
+                "text" if isinstance(accepted_payload, str) else "structured_content"
             ),
             turn_id=turn_id,
             root_item_id=f"item-{message_id}",
-            acceptance_metadata={
-                "message_created_at": response_metadata.get("created_at"),
-                # acceptance-time canonical root 必须保留消息的业务可见性。
-                # 否则内部 Goal/调度消息会在 LangChain projection 往返后
-                # 丢失 internal 标记，并被历史 API 当作真实用户输入展示。
-                "message_metadata": dict(message_metadata or {}),
-            },
+            extensions=message_annotations(response_metadata),
             checkpoint_ns=checkpoint_ns,
         )
         if not isinstance(accepted, Mapping):

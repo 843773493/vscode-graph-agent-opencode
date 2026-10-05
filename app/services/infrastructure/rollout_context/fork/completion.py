@@ -14,6 +14,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
 from app.domain.itemized.hashing import validate_hash_token
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.fork.cloning import ForkCloneMixin
 from app.services.infrastructure.rollout_context.fork.identity import (
     target_local_acceptance_identity,
@@ -465,14 +466,19 @@ class ForkCompletionMixin(ForkCloneMixin):
         item_map: dict[str, str] = {}
         turn_map: dict[str, str] = {}
         root_map: dict[str, tuple[object, ...]] = {}
-        for item_id, turn_id, sequence, content_hash, scope, metadata_json in connection.execute(
-            "SELECT item_id, turn_id, item_sequence, content_hash, turn_scope, metadata_json "
+        for item_id, turn_id, sequence, content_hash, scope, projection_manifest_json in connection.execute(
+            "SELECT item_id, turn_id, item_sequence, content_hash, turn_scope, projection_manifest_json "
             "FROM item_catalog ORDER BY item_sequence"
         ).fetchall():
-            metadata = json_mapping(metadata_json, field="target.item.metadata_json")
-            source_item_id = required_text(metadata.get("fork_source_item_id"), field="fork_source_item_id")
+            manifest = parse_item_projection_manifest(json_mapping(projection_manifest_json, field="target.item.projection_manifest_json"))
+            origins = [relation for relation in manifest["provenance_relations"]
+                       if relation["relation"] == "derived_from" and relation["target_kind"] == "canonical_item"
+                       and relation["target_session_id"] == source_session_id and relation["target_thread_id"] == source_thread_id]
+            if len(origins) != 1:
+                raise RuntimeError("fork canonical item 缺少唯一 typed source origin")
+            source_item_id = required_text(origins[0]["target_id"], field="fork_source_item_id")
             item_map[source_item_id] = item_id
-            source_turn_id = optional_text(metadata.get("fork_source_turn_id"), field="fork_source_turn_id")
+            source_turn_id = optional_text(origins[0].get("target_turn_id"), field="fork_source_turn_id")
             if source_turn_id is not None:
                 if turn_id is None or turn_map.setdefault(source_turn_id, turn_id) != turn_id:
                     raise RuntimeError("fork source Turn 到 target Turn 的 mapping 不唯一")

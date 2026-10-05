@@ -16,6 +16,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.hashing import _ensure_json_value, sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.validation import _non_empty_string
 from app.services.infrastructure.rollout_context.migration.semantics import (
@@ -25,6 +26,7 @@ from app.services.infrastructure.rollout_context.migration.semantics import (
     record_loss,
     tool_identity_conflict,
 )
+
 
 def validate_envelope(value: Mapping[str, object], expected_format: int = 2) -> None:
     if (
@@ -475,10 +477,15 @@ class LegacyRolloutAdapter:
                 scope = TurnScope.TURN_MEMBER
             else:
                 raise ItemSchemaError(f"legacy record role 不可迁移: {role}")
-            item_metadata: dict[str, object] = {
-                "legacy_source_ref": source_ref,
+            legacy_item_id = f"legacy-item:{seed}:{message_id}"
+            origin = ItemProvenanceRelation(
+                "derived_from", "legacy_message", message_id,
+                target_message_sequence=source_ref.get("message_sequence"),
+                target_part_id=source_ref.get("part_id"),
+                target_legacy_item_id=legacy_item_id,
+            )
+            annotations = {
                 "legacy_turn_id": record.get("turn_id"),
-                "legacy_source_item_id": f"legacy-item:{seed}:{message_id}",
                 "legacy_message_hash": legacy_message_hash,
                 "legacy_seed_hash": seed,
                 "legacy_provenance": "legacy/unknown_source",
@@ -490,10 +497,12 @@ class LegacyRolloutAdapter:
                 },
             }
             if legacy_tool_outcome is not None:
-                item_metadata["legacy_tool_outcome"] = legacy_tool_outcome
-                item_metadata["legacy_outcome_source"] = "legacy_record_or_unknown"
-                if legacy_tool_outcome == "success":
-                    item_metadata["execution_confirmed"] = True
+                annotations["legacy_tool_outcome"] = legacy_tool_outcome
+                annotations["legacy_outcome_source"] = "legacy_record_or_unknown"
+                payload["execution_confirmed"] = legacy_tool_outcome == "success"
+            extensions = {"boxteam.legacy.annotations": {
+                "extension_version": "1", "protection": "public", "value": annotations,
+            }}
             producer_kind = (
                 "user"
                 if index == 0
@@ -521,7 +530,8 @@ class LegacyRolloutAdapter:
                         "source_hash": sha256_jcs(source_ref),
                     },
                     payload=payload,
-                    metadata=item_metadata,
+                    extensions=extensions,
+                    provenance_relations=(origin,),
                     turn_id=item_turn_id,
                     turn_scope=scope,
                     message_group_id=f"legacy-message:{message_id}",
@@ -552,14 +562,13 @@ class LegacyRolloutAdapter:
                                 "name": call["name"],
                                 "args": call["args"],
                             },
-                            metadata={
-                                **item_metadata,
-                                "legacy_source_item_id": f"legacy-item:{seed}:{message_id}:call:{call['id']}",
-                                "legacy_source_ref": {
-                                    **source_ref,
-                                    "part_id": f"tool_call:{call['id']}",
-                                },
-                            },
+                            extensions=extensions,
+                            provenance_relations=(ItemProvenanceRelation(
+                                "derived_from", "legacy_message", message_id,
+                                target_message_sequence=source_ref.get("message_sequence"),
+                                target_part_id=f"tool_call:{call['id']}",
+                                target_legacy_item_id=f"{legacy_item_id}:call:{call['id']}",
+                            ),),
                             turn_id=target_turn_id,
                             turn_scope=TurnScope.TURN_MEMBER,
                             message_group_id=f"legacy-message:{message_id}",

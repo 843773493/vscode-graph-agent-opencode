@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from app.domain.itemized.hashing import canonical_json_bytes
-from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
 )
@@ -148,7 +148,7 @@ def project_native_request(
                         {
                             "type": "function_call",
                             "call_id": provider_tool_call_id(
-                                item.metadata, raw_call_id
+                                item.projection_identity, raw_call_id
                             ),
                             "name": call["name"],
                             "arguments": canonical_json_bytes(
@@ -158,16 +158,17 @@ def project_native_request(
                     )
             elif kind == "tool_result":
                 payload = item.payload
-                if not isinstance(payload, Mapping) or not payload.get("tool_call_id"):
+                if item.tool_result_evidence is None and (not isinstance(payload, Mapping) or not payload.get("tool_call_id")):
                     raise ValueError(
                         f"source-mismatch: native tool_result: {item.item_id}"
                     )
-                output = payload.get("content", payload)
+                raw_call_id = item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else payload["tool_call_id"]
+                output = payload.get("content", payload) if isinstance(payload, Mapping) else payload
                 inputs.append(
                     {
                         "type": "function_call_output",
                         "call_id": provider_tool_call_id(
-                            item.metadata, str(payload["tool_call_id"])
+                            item.projection_identity, raw_call_id
                         ),
                         "output": output
                         if isinstance(output, str)

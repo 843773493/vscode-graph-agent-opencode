@@ -12,8 +12,14 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    message_annotations,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -26,6 +32,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from tests.support.api_helpers import checkpoint_fixture, create_session
+from tests.support.ports import integration_port_block_for_file
+
+
+@pytest.fixture(scope="module")
+def integration_backend_port(request: pytest.FixtureRequest) -> int:
+    return integration_port_block_for_file(Path(request.node.fspath)).port(37)
 
 
 def _turn_messages(
@@ -67,6 +79,7 @@ def _turn_messages(
             }
             for index in range(tool_count)
         ],
+        response_metadata={"model_call_id": f"model-call-{turn_index:04d}"},
     )
     results = []
     for index in range(tool_count):
@@ -82,6 +95,7 @@ def _turn_messages(
                 f"{'-' + str(index) if tool_count > 1 else ''}",
                 content=result_content,
                 name="read_fixture",
+                response_metadata={"model_call_id": f"model-call-{turn_index:04d}"},
                 tool_call_id=f"call-{turn_index:04d}"
                 f"{'-' + str(index) if tool_count > 1 else ''}",
             )
@@ -138,31 +152,57 @@ def _seed_rollout(
 ) -> Path:
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     saver = RolloutCheckpointSaver(sessions_dir)
-    config = build_checkpoint_config(session_id)
+    thread_id = saver._storage.main_thread_id(session_id)
+    config = build_checkpoint_config(thread_id)
     all_messages: list[object] = []
     for turn_index in range(1, count + 1):
-        all_messages.extend(
-            _turn_messages(
-                turn_index,
-                tool_result_size=tool_result_size,
-                tool_count=tool_count,
-            )
+        messages = _turn_messages(
+            turn_index,
+            tool_result_size=tool_result_size,
+            tool_count=tool_count,
         )
-        config = saver.put(
-            config,
-            checkpoint_fixture(
-                f"checkpoint-{turn_index:04d}",
-                all_messages,
-                channel_version=turn_index,
+        user = messages[0]
+        execution_id = f"execution-{turn_index:04d}"
+        turn_id = f"job-{turn_index:04d}"
+        saver.accept_turn(
+            session_id,
+            thread_id=thread_id,
+            accepted_ingress_id=user.id,
+            acceptance_idempotency_key=f"acceptance:{user.id}",
+            job_id=turn_id,
+            admission_idempotency_key=f"admission:{turn_id}",
+            turn_id=turn_id,
+            root_item_id=f"item-{user.id}",
+            payload=user.content,
+            initial_execution_id=execution_id,
+            extensions=message_annotations(user.response_metadata),
+        )
+        all_messages.extend(messages)
+        admission = saver.execution_admission(
+            session_id, thread_id=thread_id, execution_id=execution_id
+        )
+        with (
+            session_thread_owner_scope(
+                MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id
             ),
-            {"source": "deterministic-rollout-stub", "turn": turn_index},
-            {"messages": str(turn_index)},
-        )
-        saver.finalize_turn(
-            session_id=session_id,
-            turn_id=f"job-{turn_index:04d}",
-            final_message_id=f"assistant-final-{turn_index:04d}",
-        )
+            execution_admission_scope(admission, langgraph_thread_id=thread_id),
+        ):
+            config = saver.put(
+                config,
+                checkpoint_fixture(
+                    f"checkpoint-{turn_index:04d}",
+                    all_messages,
+                    channel_version=turn_index,
+                ),
+                {"source": "deterministic-rollout-stub", "turn": turn_index},
+                {"messages": str(turn_index)},
+            )
+            saver.finalize_turn(
+                session_id=session_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                final_message_id=f"assistant-final-{turn_index:04d}",
+            )
     session_dir = get_session_path_resolver(sessions_dir).resolve_session_node(
         session_id
     )

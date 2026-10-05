@@ -16,6 +16,9 @@ from app.domain.itemized.enums import (
     SelectionKind,
     SemanticKind,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemSourceManifest,
+)
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
@@ -96,7 +99,7 @@ def user_item() -> CanonicalItemRecord:
         },
         payload="读取 README",
         created_at="2026-09-07T00:00:00+00:00",
-        metadata={"source_revision": "rev-1"},
+        source_manifest=ItemSourceManifest(source_revision="rev-1", visibility="public", protection='public'),
         turn_id="turn-1",
         turn_scope="turn_root",
         message_group_id="group-1",

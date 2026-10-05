@@ -26,6 +26,7 @@ class RolloutOfflineRestoreMixin:
         self,
         connection: sqlite3.Connection,
         *,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
     ) -> None:
@@ -44,16 +45,16 @@ class RolloutOfflineRestoreMixin:
         self._validate_schema_state(connection)
         self._host._require_v2_runtime(connection)
         owner = connection.execute(
-            "SELECT session_id FROM database_meta WHERE singleton_id = 1"
+            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
         ).fetchone()
-        if owner != (thread_id,):
+        if owner != (session_id, thread_id):
             raise RuntimeError(
                 "SQLite offline restore source session identity 不匹配: "
-                f"expected={thread_id}, actual={owner}"
+                f"expected={(session_id, thread_id)}, actual={owner}"
             )
         self._validate_v2_commit_offsets(
             connection,
-            self._host.jsonl_path(thread_id, checkpoint_ns),
+            self._host.jsonl_path(session_id, checkpoint_ns, thread_id=thread_id),
             validate_jsonl_items=True,
         )
 
@@ -66,13 +67,16 @@ class RolloutOfflineRestoreMixin:
         checkpoint_ns: str,
     ) -> str:
         source_hash = self._file_hash(source_path)
-        with closing(
-            sqlite3.connect(
-                f"{source_path.as_uri()}?mode=ro&cache=private",
-                uri=True,
-                timeout=0,
-            )
-        ) as source, closing(sqlite3.connect(candidate_path)) as candidate:
+        with (
+            closing(
+                sqlite3.connect(
+                    f"{source_path.as_uri()}?mode=ro&cache=private",
+                    uri=True,
+                    timeout=0,
+                )
+            ) as source,
+            closing(sqlite3.connect(candidate_path)) as candidate,
+        ):
             source.execute("BEGIN")
             if source.execute("PRAGMA page_count").fetchone()[0] == 0:
                 raise RuntimeError(
@@ -105,8 +109,7 @@ class RolloutOfflineRestoreMixin:
         for component in source_path.parents:
             if component.is_symlink():
                 raise RuntimeError(
-                    "SQLite offline restore source 父目录不能是符号链接: "
-                    f"{component}"
+                    f"SQLite offline restore source 父目录不能是符号链接: {component}"
                 )
         for suffix in ("-wal", "-shm", "-journal"):
             sidecar = Path(f"{source_path}{suffix}")
@@ -131,9 +134,7 @@ class RolloutOfflineRestoreMixin:
         thread_id = strict_text(thread_id, field="backup.thread_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("backup.checkpoint_ns 必须是字符串")
-        with self._host._lock(
-            thread_id, checkpoint_ns, session_id=session_id
-        ):
+        with self._host._lock(thread_id, checkpoint_ns, session_id=session_id):
             self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._host._connect(
                 thread_id, checkpoint_ns, session_id=session_id
@@ -210,9 +211,7 @@ class RolloutOfflineRestoreMixin:
         self._require_regular_file(source_path, field="SQLite restore source")
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
-        with self._host._lock(
-            thread_id, checkpoint_ns, session_id=session_id
-        ):
+        with self._host._lock(thread_id, checkpoint_ns, session_id=session_id):
             self._restore_index_backup_unlocked(
                 thread_id, checkpoint_ns, source_path, session_id=session_id
             )
@@ -248,10 +247,10 @@ class RolloutOfflineRestoreMixin:
         quarantine_root = target_root / "recovery-quarantine"
         quarantine_path = quarantine_root / operation_id
 
-        with self._host._lock(
-            thread_id, checkpoint_ns, session_id=session_id
-        ):
-            self._require_regular_file(target_path, field="SQLite offline restore target")
+        with self._host._lock(thread_id, checkpoint_ns, session_id=session_id):
+            self._require_regular_file(
+                target_path, field="SQLite offline restore target"
+            )
             if not target_path.is_file():
                 raise FileNotFoundError(target_path)
             for component in target_path.parents:

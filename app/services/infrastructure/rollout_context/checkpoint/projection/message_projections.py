@@ -54,8 +54,8 @@ class RolloutMessageProjectionMixin:
             commit_id, field=f"messages.commit_id: {item.item_id}"
         )
         timestamp = strict_text(timestamp, field="messages.created_at")
-        group = item.metadata.get("projection_group")
-        if isinstance(group, Mapping) and group.get("ordinal") != group.get("size", 0) - 1:
+        group = item.projection_group
+        if group is not None and group.ordinal != group.size - 1:
             return None
         if item.semantic_kind not in {
             SemanticKind.USER_INPUT.value,
@@ -115,7 +115,7 @@ class RolloutMessageProjectionMixin:
         if not isinstance(raw_data, Mapping):
             raise TypeError(f"message projection data 必须是 object: {item.item_id}")
         content_bytes = _json(raw_data.get("content")).encode("utf-8")
-        message_id_value = item.metadata.get("projection_message_id")
+        message_id_value = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
         if isinstance(message_id_value, str) and message_id_value:
             message_id = message_id_value
         elif item.item_id.startswith("item-"):

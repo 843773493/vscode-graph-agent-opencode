@@ -10,6 +10,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
@@ -103,12 +104,12 @@ def _legacy_source_identity_map(
             result["acceptance_idempotency_key"][target_key] = (
                 f"legacy:v1:acceptance-key:{source_key}"
             )
-    for target_item, metadata_json in connection.execute(
-        "SELECT item_id, metadata_json FROM item_catalog ORDER BY item_sequence"
+    for target_item, projection_manifest_json in connection.execute(
+        "SELECT item_id, projection_manifest_json FROM item_catalog ORDER BY item_sequence"
     ).fetchall():
         target_item = required_text(target_item, field="item_catalog.item_id")
         metadata_text = required_text(
-            metadata_json, field=f"item_catalog.metadata_json:{target_item}"
+            projection_manifest_json, field=f"item_catalog.projection_manifest_json:{target_item}"
         )
         try:
             metadata = json.loads(metadata_text)
@@ -120,16 +121,18 @@ def _legacy_source_identity_map(
             raise TypeError(
                 f"legacy migrated item metadata 必须是 object: {target_item}"
             )
-        source_ref = metadata.get("legacy_source_ref")
-        if not isinstance(source_ref, Mapping):
+        manifest = parse_item_projection_manifest(metadata)
+        origins = [relation for relation in manifest["provenance_relations"]
+                   if relation["target_kind"] == "legacy_message"]
+        if len(origins) > 1:
+            raise RuntimeError("legacy item 的 typed origin 不唯一")
+        if not origins:
             continue
-        source_message_id = source_ref.get("message_id")
-        source_message_id = optional_text(
-            source_message_id, field=f"legacy_source_ref.message_id:{target_item}"
-        )
+        source_ref = origins[0]
+        source_message_id = required_text(source_ref["target_id"], field="legacy.origin.target_id")
         if source_message_id is not None:
             part_id = optional_text(
-                source_ref.get("part_id"), field="legacy_source_ref.part_id"
+                source_ref.get("target_part_id"), field="legacy_source_ref.part_id"
             )
             result["item"][target_item] = (
                 "legacy:v1:message-part:"
@@ -190,12 +193,12 @@ def _legacy_source_item_offsets(
                     source_offsets[source_item_id] = raw_offset
 
     target_offsets: dict[str, int] = {}
-    for target_item_id, metadata_json in connection.execute(
-        "SELECT item_id, metadata_json FROM item_catalog ORDER BY item_sequence"
+    for target_item_id, projection_manifest_json in connection.execute(
+        "SELECT item_id, projection_manifest_json FROM item_catalog ORDER BY item_sequence"
     ).fetchall():
         target_item_id = required_text(target_item_id, field="item_catalog.item_id")
         metadata_text = required_text(
-            metadata_json, field=f"item_catalog.metadata_json:{target_item_id}"
+            projection_manifest_json, field=f"item_catalog.projection_manifest_json:{target_item_id}"
         )
         try:
             metadata = json.loads(metadata_text)
@@ -207,7 +210,8 @@ def _legacy_source_item_offsets(
             raise TypeError(
                 f"legacy migrated item metadata 必须是 object: {target_item_id}"
             )
-        source_item_id = metadata.get("legacy_source_item_id")
+        manifest = parse_item_projection_manifest(metadata)
+        source_item_id = next((relation.get("target_legacy_item_id") for relation in manifest["provenance_relations"] if relation["target_kind"] == "legacy_message"), None)
         if not isinstance(source_item_id, str) or not source_item_id:
             continue
         source_offset = source_offsets.get(source_item_id)

@@ -66,15 +66,15 @@ class RolloutPartsMixin:
 
     def resolve_content_part_anchor(
         self,
-        thread_id: str,
+        session_id: str,
         *,
+        thread_id: str,
         anchor_id: str,
         checkpoint_ns: str = "",
     ) -> ContentPartAnchor:
         """重启后恢复 anchor，并校验 view、part 与父 JSONL 行完整性。"""
-        thread_id = strict_text(thread_id, field="thread_id")
-        session_id = thread_id
-        owner_thread_id = self.main_thread_id(session_id)
+        session_id = strict_text(session_id, field="session_id")
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         anchor_id = strict_text(anchor_id, field="operation_anchors.anchor_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -85,6 +85,7 @@ class RolloutPartsMixin:
         self.initialize(
             session_id,
             checkpoint_ns,
+            thread_id=owner_thread_id,
             validate_jsonl_items=False,
         )
         with self._connect(
@@ -215,7 +216,9 @@ class RolloutPartsMixin:
             )
             if catalog_length == 0:
                 raise RuntimeError(f"content part parent JSONL length 为 0: {item_id}")
-            with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+            with self.jsonl_path(
+                session_id, checkpoint_ns, thread_id=owner_thread_id
+            ).open("rb") as stream:
                 stream.seek(catalog_offset)
                 raw_line = stream.read(catalog_length)
             if len(raw_line) != catalog_length or _hash_bytes(raw_line) != line_hash:
@@ -241,17 +244,17 @@ class RolloutPartsMixin:
 
     def register_content_part(
         self,
-        thread_id: str,
+        session_id: str,
         *,
+        thread_id: str,
         item_id: str,
         part: ContentPart,
         locator: Mapping[str, object],
         checkpoint_ns: str = "",
     ) -> None:
         """建立 part locator 派生索引，正文仍只从父 JSONL item 读取。"""
-        thread_id = strict_text(thread_id, field="thread_id")
-        session_id = thread_id
-        owner_thread_id = self.main_thread_id(session_id)
+        session_id = strict_text(session_id, field="session_id")
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         item_id = strict_text(item_id, field="item_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
@@ -288,7 +291,7 @@ class RolloutPartsMixin:
                 "content part json_pointer 必须锚定父 CanonicalItemRecord.payload"
             )
         with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns)
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
@@ -309,7 +312,9 @@ class RolloutPartsMixin:
                     raise RuntimeError(
                         f"content part parent JSONL length 为 0: {item_id}"
                     )
-                with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+                with self.jsonl_path(
+                    session_id, checkpoint_ns, thread_id=owner_thread_id
+                ).open("rb") as stream:
                     stream.seek(parent_offset)
                     raw_line = stream.read(parent_length)
                 if len(raw_line) != parent_length:
@@ -401,19 +406,19 @@ class RolloutPartsMixin:
 
     def register_content_part_anchor(
         self,
-        thread_id: str,
+        session_id: str,
         anchor: ContentPartAnchor,
         *,
+        thread_id: str,
         checkpoint_ns: str = "",
     ) -> None:
-        thread_id = strict_text(thread_id, field="thread_id")
+        session_id = strict_text(session_id, field="session_id")
         checkpoint_ns = strict_text(
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
-        session_id = thread_id
-        owner_thread_id = self.main_thread_id(session_id)
+        owner_thread_id = self._resolve_thread_identity(session_id, thread_id)
         with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(session_id, checkpoint_ns)
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
@@ -572,9 +577,7 @@ class RolloutPartsMixin:
             checkpoint_ns, field="checkpoint_ns", allow_empty=True
         )
         with self._lock(owner_thread_id, checkpoint_ns, session_id=session_id):
-            self.initialize(
-                session_id, checkpoint_ns, thread_id=owner_thread_id
-            )
+            self.initialize(session_id, checkpoint_ns, thread_id=owner_thread_id)
             with self._connect(
                 owner_thread_id, checkpoint_ns, session_id=session_id
             ) as connection:

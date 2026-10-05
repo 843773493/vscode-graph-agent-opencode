@@ -14,6 +14,8 @@ from typing import Any
 
 def direct_content_blocks(content: Any) -> list[dict[str, Any]]:
     """将已接受的消息 content 展开为独立副本，保持原有顺序。"""
+    if isinstance(content, Mapping) and "attachments" in content and "content" in content:
+        content = content["content"]
     if content is None:
         return []
     if isinstance(content, str):

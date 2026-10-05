@@ -255,9 +255,8 @@ class RolloutSchemaIntrospectionMixin:
             )
         if schema_version < storage_version.ROLLOUT_SCHEMA_VERSION and not allow_older_schema:
             raise RuntimeError(
-                "thread_owner_schema_stale: 当前 rollout SQLite 不含 Thread owner 约束，"
-                "不提供自动兼容或迁移。请备份后删除对应 Thread node 下整个 rollout/ "
-                "目录（index.sqlite 与 rollout.jsonl），再按当前 catalog owner 重建；"
+                "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
+                "旧实验 v2 不支持自动兼容或就地转换，原始 JSONL/SQLite 保留；"
                 f"current={schema_version}, target={storage_version.ROLLOUT_SCHEMA_VERSION}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:

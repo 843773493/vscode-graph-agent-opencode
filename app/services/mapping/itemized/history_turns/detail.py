@@ -6,6 +6,8 @@ from collections.abc import Mapping
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
@@ -138,8 +140,12 @@ def build_detail(
                 continue
             tool_name = raw_item.get("tool_name")
             tool_call_id = raw_item.get("tool_call_id")
+            identity = ItemProjectionIdentity.from_dict(
+                {"model_call_id": raw_item.get("model_call_id")}
+            )
             if tool_call_ids is not None and (
-                not isinstance(tool_call_id, str) or tool_call_id not in tool_call_ids
+                not isinstance(tool_call_id, str)
+                or not any(matches_tool_call_id(identity, tool_call_id, selected_id) for selected_id in tool_call_ids)
             ):
                 continue
             if (
@@ -175,8 +181,12 @@ def build_detail(
                     )
                 )
             )
+            identity = ItemProjectionIdentity.from_dict(
+                {"model_call_id": raw_item.get("model_call_id")}
+            )
             if tool_call_ids is not None and (
-                not isinstance(tool_call_id, str) or tool_call_id not in tool_call_ids
+                not isinstance(tool_call_id, str)
+                or not any(matches_tool_call_id(identity, tool_call_id, selected_id) for selected_id in tool_call_ids)
             ):
                 continue
             if raw_item.get("item_kind") == "tool_result":

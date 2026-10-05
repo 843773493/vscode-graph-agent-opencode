@@ -183,18 +183,31 @@ class RolloutCheckpointQueriesMixin:
             message_id: item
             for item in items
             if isinstance(
-                message_id := item.metadata.get("projection_message_id"), str
+                message_id := (
+                    item.projection_identity.projection_message_id
+                    if item.projection_identity is not None
+                    else None
+                ),
+                str,
             )
             and message_id
         }
         superseded_message_ids: set[str] = set()
         for item in items:
-            superseded = item.metadata.get("supersedes_message_id")
+            superseded = next(
+                (
+                    relation.target_id
+                    for relation in item.provenance_relations
+                    if relation.relation == "replaces"
+                    and relation.target_kind == "projection_message"
+                ),
+                None,
+            )
             if superseded is None:
                 continue
             if not isinstance(superseded, str) or not superseded:
                 raise RuntimeError(
-                    f"canonical item supersedes_message_id 非法: {item.item_id}"
+                    f"canonical item typed replaces relation 非法: {item.item_id}"
                 )
             previous = by_message_id.get(superseded)
             if previous is None:
@@ -210,9 +223,7 @@ class RolloutCheckpointQueriesMixin:
                     f"{previous.item_id}->{item.item_id}"
                 )
             if superseded in superseded_message_ids:
-                raise RuntimeError(
-                    f"canonical assistant 被多个消息替代: {superseded}"
-                )
+                raise RuntimeError(f"canonical assistant 被多个消息替代: {superseded}")
             superseded_message_ids.add(superseded)
         session_id = snapshot.session_id
         thread_id = snapshot.thread_id
@@ -223,7 +234,11 @@ class RolloutCheckpointQueriesMixin:
                 thread_id=thread_id,
             )
             for item in items
-            if item.metadata.get("projection_message_id")
+            if (
+                item.projection_identity.projection_message_id
+                if item.projection_identity is not None
+                else None
+            )
             not in superseded_message_ids
         )
 

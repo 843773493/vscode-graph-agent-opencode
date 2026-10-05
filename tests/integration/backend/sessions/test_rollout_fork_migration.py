@@ -7,17 +7,20 @@ import hashlib
 from collections.abc import Callable
 
 import pytest
+
+from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.migration.artifacts import (
+    artifact_manifest,
+)
+from app.services.infrastructure.rollout_context.migration.importer import (
+    LegacyRolloutImporter,
+)
 from tests.integration.backend.sessions.itemized_migration_helpers import (
     _accepted_records,
     _storage,
     _write_v1_source,
     migration_audits,
     prepare_migration_workspace,
-)
-
-from app.domain.itemized.errors import FormatDispatchError
-from app.services.infrastructure.rollout_context.migration.artifacts import (
-    artifact_manifest,
 )
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -45,7 +48,11 @@ def fork_source(request: pytest.FixtureRequest, session_bundle_factory) -> Calla
 
 def _complete_copy(storage, source: str, target: str) -> str:
     view = storage.clone_rollout(
-        source_thread_id=source, target_thread_id=target, source_checkpoint_id=None
+        source_thread_id=storage.main_thread_id(source),
+        target_thread_id=storage.main_thread_id(target),
+        source_checkpoint_id=None,
+        source_session_id=source,
+        target_session_id=target,
     )
     fields = {
         "target_session_id": target,
@@ -72,11 +79,13 @@ def test_full_copy_rejects_v1_without_migration_side_effects(
     records = _accepted_records()
     storage = fork_source(records)
     before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    with pytest.raises(FormatDispatchError, match="v1_migration_required"):
+    with pytest.raises(FormatDispatchError, match="unsupported_legacy_rollout"):
         storage.clone_rollout(
-            source_thread_id=SOURCE_SESSION_ID,
-            target_thread_id=TARGET_SESSION_ID,
+            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
+            source_session_id=SOURCE_SESSION_ID,
+            target_session_id=TARGET_SESSION_ID,
         )
     assert not storage.root(TARGET_SESSION_ID).exists()
     assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == before
@@ -126,19 +135,33 @@ def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     )
     storage = fork_source(records)
     source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    result = storage.migrate_legacy_to_v2(
-        SOURCE_SESSION_ID, target_thread_id=TARGET_SESSION_ID, require_lossless=True
+    result = LegacyRolloutImporter(storage).import_v1(
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+        target_session_id=TARGET_SESSION_ID,
+        target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+        checkpoint_ns="",
+        require_lossless=True,
     )
     assert result["status"] == "completed"
-    items = storage.read_items(TARGET_SESSION_ID)
+    items = storage.read_items(
+        TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID)
+    )
     assert len(items) == 5
     call = next(item for item in items if item.semantic_kind == "tool_call")
     target_before = artifact_manifest(storage.root(TARGET_SESSION_ID))
     fork_id = _complete_copy(storage, TARGET_SESSION_ID, GRANDCHILD_SESSION_ID)
     assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
     assert artifact_manifest(storage.root(TARGET_SESSION_ID)) == target_before
-    child_items = storage.read_items(GRANDCHILD_SESSION_ID)
-    with storage._connect(GRANDCHILD_SESSION_ID, "", read_only=True) as connection:
+    child_items = storage.read_items(
+        GRANDCHILD_SESSION_ID, storage.main_thread_id(GRANDCHILD_SESSION_ID)
+    )
+    with storage._connect(
+        storage.main_thread_id(GRANDCHILD_SESSION_ID),
+        "",
+        read_only=True,
+        session_id=GRANDCHILD_SESSION_ID,
+    ) as connection:
         rows = connection.execute(
             "SELECT source_local_id, target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='item'",
             (fork_id,),
@@ -164,4 +187,9 @@ def test_explicit_v1_import_then_v2_full_copy_keeps_tool_lineage_local(
     source_root = storage.root(TARGET_SESSION_ID)
     source_root.rename(source_root.with_name("rollout-archived"))
     restarted = _storage(storage.sessions_dir)
-    assert restarted.read_items(GRANDCHILD_SESSION_ID) == child_items
+    assert (
+        restarted.read_items(
+            GRANDCHILD_SESSION_ID, restarted.main_thread_id(GRANDCHILD_SESSION_ID)
+        )
+        == child_items
+    )

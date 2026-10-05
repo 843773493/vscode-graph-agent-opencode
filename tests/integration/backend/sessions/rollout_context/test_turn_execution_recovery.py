@@ -25,6 +25,10 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
     sha256_jcs,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemSourceManifest,
+)
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -58,16 +62,15 @@ def _rollout_db(sessions_dir: Path, session_id: str) -> Path:
     resolver = get_session_path_resolver(sessions_dir)
     thread_id = resolver.main_thread_id(session_id)
     return (
-        resolver.resolve_thread_node(session_id, thread_id)
-        / "rollout"
-        / "index.sqlite"
+        resolver.resolve_thread_node(session_id, thread_id) / "rollout" / "index.sqlite"
     )
 
 
 def _assistant_item(
     item_id: str,
     *,
-    metadata: dict[str, object] | None = None,
+    projection_identity: ItemProjectionIdentity | None = None,
+    source_manifest: ItemSourceManifest | None = None,
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
@@ -81,7 +84,8 @@ def _assistant_item(
             "invocation_id": "execution-user-1",
         },
         payload="一个待写入的 assistant item",
-        metadata=metadata or {},
+        projection_identity=projection_identity,
+        source_manifest=source_manifest,
         turn_id="turn-user-1",
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id="message-group-1",
@@ -127,7 +131,7 @@ def test_acceptance_retry_rejects_corrupted_idempotency_ledger(
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    "invalid_manifest",
     [
         {"source_revision": 1},
         {"block_id": "block-1", "block_index": "0"},
@@ -138,7 +142,7 @@ def test_acceptance_retry_rejects_corrupted_idempotency_ledger(
 def test_item_commit_rejects_non_canonical_locator_metadata(
     tmp_path: Path,
     session_bundle_factory,
-    metadata: dict[str, object],
+    invalid_manifest: dict[str, object],
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -150,7 +154,19 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
     with pytest.raises(ItemSchemaError, match="source_revision|block_id|block_index"):
         saver._storage.append_item(
             SESSION_ID,
-            _assistant_item("item-invalid-storage-metadata", metadata=metadata),
+            _assistant_item(
+                "item-invalid-storage-metadata",
+                source_manifest=ItemSourceManifest.from_dict(
+                    {**invalid_manifest, "visibility": "public", "protection": "public"}
+                )
+                if "source_revision" in invalid_manifest
+                else None,
+                projection_identity=ItemProjectionIdentity.from_dict(
+                    {"model_call_id": "model-call-1", **invalid_manifest}
+                )
+                if "source_revision" not in invalid_manifest
+                else None,
+            ),
         )
 
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
@@ -175,7 +191,9 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
 
     item = _assistant_item(
         "item-block-projection",
-        metadata={"block_id": "block-1", "block_index": 0},
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-1", block_id="block-1", block_index=0
+        ),
     )
     commit_id = saver._storage.append_item(SESSION_ID, item)
     db_path = _rollout_db(sessions_dir, SESSION_ID)
@@ -343,10 +361,9 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "name": "get_goal",
             "args": {},
         },
-        metadata={
-            "block_id": "model-call-1:tool-call:call-1",
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(
+            block_id="model-call-1:tool-call:call-1", block_index=0
+        ),
         message_group_id="message-model-call-1",
         **common,
     )
@@ -360,15 +377,10 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "producer_id": "lc_run--model-call-1",
             "invocation_id": "turn-user-1",
         },
-        payload={
-            "tool_calls": [
-                {"id": "call-1", "name": "get_goal", "args": {}}
-            ]
-        },
-        metadata={
-            "projection_message_id": "lc_run--model-call-1",
-            "projection_group": {"content_form": "str", "ordinal": 0, "size": 1},
-        },
+        payload={"tool_calls": [{"id": "call-1", "name": "get_goal", "args": {}}]},
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="lc_run--model-call-1"
+        ),
         message_group_id="message-lc_run--model-call-1",
         **common,
     )
@@ -388,11 +400,9 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "name": "get_goal",
             "content": "{}",
             "tool_outcome": "success",
-        },
-        metadata={
-            "tool_call_id": "model-call-1:tool-call:call-1",
             "execution_confirmed": True,
         },
+        extensions={},
         message_group_id="message-result-1",
         wire_role="tool",
         turn_id="turn-user-1",
@@ -403,18 +413,18 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     saver.append_items(SESSION_ID, (checkpoint_shadow, result))
 
     with saver._storage.open_read_snapshot(SESSION_ID) as snapshot:
-        projection = saver._storage.read_turn_projections(
-            snapshot, ("turn-user-1",)
-        )["turn-user-1"]
+        projection = saver._storage.read_turn_projections(snapshot, ("turn-user-1",))[
+            "turn-user-1"
+        ]
 
     assert projection["activity_stats"]["item_count"] == 2
     assert [item["kind"] for item in projection["activity_items"]] == [
         "tool_call",
         "tool_result",
     ]
-    assert {
-        item["tool_call_id"] for item in projection["activity_items"]
-    } == {"model-call-1:tool-call:call-1"}
+    assert {item["tool_call_id"] for item in projection["activity_items"]} == {
+        "model-call-1:tool-call:call-1"
+    }
 
 
 def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
@@ -491,10 +501,9 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
             "name": "get_goal",
             "args": {"path": "fixture.json"},
         },
-        metadata={
-            "block_id": "model-call-2:tool-call:call-shared",
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(
+            block_id="model-call-2:tool-call:call-shared", block_index=0
+        ),
         message_group_id="message-model-call-2",
         **common,
     )
@@ -897,7 +906,9 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
         capability="content_part",
         content_hash=content_hash,
     )
-    saver.register_content_part_anchor(SESSION_ID, anchor)
+    saver.register_content_part_anchor(
+        SESSION_ID, anchor, thread_id=saver._storage.main_thread_id(SESSION_ID)
+    )
 
     restarted_saver = RolloutCheckpointSaver(sessions_dir)
     restarted_items = restarted_saver._storage.read_items(SESSION_ID)
@@ -908,6 +919,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     assert (
         restarted_saver.resolve_content_part_anchor(
             SESSION_ID,
+            thread_id=restarted_saver._storage.main_thread_id(SESSION_ID),
             anchor_id=anchor.anchor_id,
         )
         == anchor
@@ -1242,9 +1254,7 @@ def test_source_overlay_restore_rejects_corrupted_registry_rows(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="source overlay"):
-        RolloutCheckpointSaver(sessions_dir).list_source_overlays(
-            SESSION_ID, thread_id
-        )
+        RolloutCheckpointSaver(sessions_dir).list_source_overlays(SESSION_ID, thread_id)
 
 
 def test_item_bearing_terminal_convergence_materializes_output_and_restart(
@@ -1462,9 +1472,7 @@ def test_cancelled_turn_rejects_original_dispatch_and_replays_as_new_turn(
             turn_id="turn-user-1",
         )
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay(
-            SESSION_ID, thread_id=thread_id, turn_id="turn-user-1"
-        )
+        saver.dispatch_replay(SESSION_ID, thread_id=thread_id, turn_id="turn-user-1")
 
     replayed = saver.replay_as_new_turn(
         SESSION_ID,
@@ -1556,9 +1564,7 @@ def test_terminal_turn_rejects_resume_and_original_dispatch_without_mutation(
             turn_id="turn-user-1",
         )
     with pytest.raises(ValueError, match="turn_not_resumable"):
-        saver.dispatch_replay(
-            SESSION_ID, thread_id=thread_id, turn_id="turn-user-1"
-        )
+        saver.dispatch_replay(SESSION_ID, thread_id=thread_id, turn_id="turn-user-1")
 
     with sqlite3.connect(db_path) as connection:
         after_turn = connection.execute(
@@ -1636,6 +1642,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     )
     saver.register_content_part(
         SESSION_ID,
+        thread_id=saver._storage.main_thread_id(SESSION_ID),
         item_id=str(accepted["root_input_item_id"]),
         part=part,
         locator={
@@ -1674,11 +1681,14 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         capability="content_part",
         content_hash=sha256_jcs(root),
     )
-    saver.register_content_part_anchor(SESSION_ID, anchor)
+    saver.register_content_part_anchor(
+        SESSION_ID, anchor, thread_id=saver._storage.main_thread_id(SESSION_ID)
+    )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
     resolved = restarted.resolve_content_part_anchor(
         SESSION_ID,
+        thread_id=restarted._storage.main_thread_id(SESSION_ID),
         anchor_id=anchor.anchor_id,
     )
     assert resolved == anchor
@@ -1714,7 +1724,11 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content_hash=part.content_hash,
     )
     with pytest.raises(ValueError, match="不在指定 view"):
-        restarted.register_content_part_anchor(SESSION_ID, unreachable)
+        restarted.register_content_part_anchor(
+            SESSION_ID,
+            unreachable,
+            thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        )
 
     inactive_view_id = "view-inactive-anchor"
     inactive_branch_id = "branch-inactive-anchor"
@@ -1757,7 +1771,11 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         content_hash=part.content_hash,
     )
     with pytest.raises(ValueError, match="active branch lineage"):
-        restarted.register_content_part_anchor(SESSION_ID, inactive_anchor)
+        restarted.register_content_part_anchor(
+            SESSION_ID,
+            inactive_anchor,
+            thread_id=restarted._storage.main_thread_id(SESSION_ID),
+        )
 
     jsonl_path = _rollout_db(sessions_dir, SESSION_ID).parent / "rollout.jsonl"
     original = jsonl_path.read_bytes()
@@ -1765,6 +1783,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     with pytest.raises(ValueError, match="line hash 不匹配"):
         restarted.resolve_content_part_anchor(
             SESSION_ID,
+            thread_id=restarted._storage.main_thread_id(SESSION_ID),
             anchor_id=anchor.anchor_id,
         )
 

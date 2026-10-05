@@ -14,6 +14,10 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind, TurnScope
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemSourceManifest,
+)
 from app.domain.itemized.mutation_intents import (
     AppendCanonicalItemIntent,
     ApplySourceLifecycleDecision,
@@ -69,17 +73,6 @@ class RolloutMutationIntentPortMixin:
                 if intent.item_id.startswith("item-")
                 else intent.item_id
             )
-            metadata = dict(intent.metadata)
-            metadata.setdefault("projection_message_id", message_id)
-            metadata.setdefault("wire_role", "user")
-            metadata.setdefault("execution_confirmed", True)
-            metadata.setdefault("internal", True)
-            metadata.setdefault("context_source_kind", intent.source_kind)
-            metadata.setdefault("context_source_id", intent.source_id)
-            metadata.setdefault("context_source_name", intent.name)
-            metadata.setdefault("context_wire_role", "user")
-            if intent.revision is not None:
-                metadata.setdefault("context_revision", intent.revision)
             item = CanonicalItemRecord.create(
                 item_sequence=1,
                 item_id=intent.item_id,
@@ -92,7 +85,9 @@ class RolloutMutationIntentPortMixin:
                     "invocation_id": intent.idempotency_key,
                 },
                 payload=intent.content,
-                metadata=metadata,
+                projection_identity=ItemProjectionIdentity(projection_message_id=message_id),
+                source_manifest=ItemSourceManifest(intent.revision, "internal", "public") if intent.revision is not None else None,
+                extensions=intent.extensions,
                 turn_scope=TurnScope(intent.turn_scope),
                 message_group_id=f"message-{message_id}",
                 wire_role="user",

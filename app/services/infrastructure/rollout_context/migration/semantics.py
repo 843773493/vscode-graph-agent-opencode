@@ -57,7 +57,7 @@ def terminal_evidence(
         for item in items
         if item.semantic_kind == "assistant_output"
         and item.status == "completed"
-        and item.metadata["legacy_source_ref"]["message_id"] == marker["message_id"]
+        and any(relation.target_kind == "legacy_message" and relation.target_id == marker["message_id"] for relation in item.provenance_relations)
     ]
     metadata = marker["metadata"]
     if (

@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    parse_contribution_binding_manifest,
+)
+from app.domain.itemized.schema import validate_extensions
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     DetailRegistryMixin,
 )
@@ -52,15 +57,18 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         self,
         session_id: str,
         thread_id: str,
-        contribution: object,
+        contribution: ContextContribution,
         *,
         checkpoint_ns: str = "",
+        expected_source_revision: str | None = None,
     ) -> None:
         """保存 request-only source 的 compact provenance，不保存其正文。"""
         session_id = strict_text(session_id, field="context_contribution.session_id")
         thread_id = strict_text(thread_id, field="context_contribution.thread_id")
         if not isinstance(checkpoint_ns, str):
             raise TypeError("context_contribution.checkpoint_ns 必须是字符串")
+        if not isinstance(contribution, ContextContribution):
+            raise TypeError("context registry 必须接收 typed ContextContribution")
         values = {
             name: getattr(contribution, name, None)
             for name in (
@@ -69,7 +77,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 "source_revision",
                 "content_hash",
                 "request_only",
-                "metadata",
+                "extensions",
                 "content_length",
                 "redacted_stable_digest",
                 "contribution_kind",
@@ -89,7 +97,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 )
             )
             or not isinstance(values["request_only"], bool)
-            or not isinstance(values["metadata"], Mapping)
+            or not isinstance(values["extensions"], Mapping)
             or values["selection_role"] not in {"direct", "backing_only"}
             or values["replacement_policy"] not in {"immutable", "replaceable"}
         ):
@@ -179,15 +187,17 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             values["replacement_policy"],
             field="context_contribution.replacement_policy",
         )
-        metadata_json = _json(dict(values["metadata"]))
+        validate_extensions(values["extensions"], field="ContextContribution.extensions")
+        binding_manifest_json = _json(contribution.binding_manifest())
         with self._lock(thread_id, checkpoint_ns, session_id=session_id):
             self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
             with self._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
                 self._require_v2_runtime(connection)
+                connection.execute("BEGIN IMMEDIATE")
                 existing = connection.execute(
-                    "SELECT source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, metadata_json FROM context_contributions WHERE contribution_id = ?",
+                    "SELECT source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json FROM context_contributions WHERE contribution_id = ?",
                     (contribution_id,),
                 ).fetchone()
                 expected = (
@@ -202,7 +212,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     protection,
                     selection_role,
                     replacement_policy,
-                    metadata_json,
+                    binding_manifest_json,
                 )
                 if existing is not None:
                     if len(existing) != 12:
@@ -247,27 +257,36 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                             field="context_contributions.replacement_policy",
                         ),
                         _canonical_json_object(
-                            existing[11], field="context_contributions.metadata_json"
+                            existing[11], field="context_contributions.binding_manifest_json"
                         ),
                     )
+                    if expected_source_revision is not None and expected_source_revision != stored[1]:
+                        raise ValueError("context contribution revision CAS 冲突")
                     if stored == expected:
-                        return
-                    # replacement_policy 是 producer 显式声明的 typed core
-                    # 字段，决定同一 owner slot 是否允许原位更新 revision；
-                    # 不再读取 metadata/extensions 的同名 key（旧路径已物理
-                    # 下线，不做双读或兼容分支）。
-                    if replacement_policy == "replaceable":
-                        cursor = connection.execute(
-                            "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, redacted_stable_digest = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, metadata_json = ? WHERE contribution_id = ?",
-                            (*expected, contribution_id),
-                        )
-                        if cursor.rowcount != 1:
-                            raise RuntimeError(
-                                f"context contribution 更新影响行数异常: {contribution_id}"
-                            )
                         connection.commit()
                         return
-                    raise ValueError("context contribution identity/hash 冲突")
+                    if stored[10] != "replaceable" or replacement_policy != "replaceable":
+                        raise ValueError("context contribution immutable identity/hash 冲突")
+                    if expected_source_revision is None or expected_source_revision != stored[1]:
+                        raise ValueError("context contribution replacement 缺少匹配的 expected source revision CAS")
+                    if source_revision == stored[1]:
+                        raise ValueError("context contribution 同 revision 正文/核心字段冲突")
+                    sealed = connection.execute(
+                        "SELECT 1 FROM context_assembly_contributions WHERE contribution_id = ? AND source_revision = ? LIMIT 1",
+                        (contribution_id, stored[1]),
+                    ).fetchone()
+                    if sealed is not None:
+                        raise ValueError("context contribution 已封存，禁止更新原 registry slot")
+                    cursor = connection.execute(
+                        "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, redacted_stable_digest = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, binding_manifest_json = ? WHERE contribution_id = ? AND source_revision = ? AND replacement_policy = 'replaceable' AND assembly_id IS NULL",
+                        (*expected, contribution_id, expected_source_revision),
+                    )
+                    if cursor.rowcount != 1:
+                        raise ValueError("context contribution revision CAS 冲突或 registry 已封存")
+                    connection.commit()
+                    return
+                if expected_source_revision is not None:
+                    raise ValueError("context contribution revision CAS 冲突：slot 不存在")
                 source_ordinal_row = connection.execute(
                     "SELECT COALESCE(MAX(source_ordinal), -1) + 1 FROM context_contributions"
                 ).fetchone()
@@ -278,7 +297,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     field="context_contributions.source_ordinal",
                 )
                 cursor = connection.execute(
-                    "INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
+                    "INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
                     (
                         contribution_id,
                         *expected[:-1],
@@ -326,7 +345,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         try:
             self._require_v2_runtime(connection)
             rows = connection.execute(
-                "SELECT contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, metadata_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id"
+                "SELECT contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id"
             ).fetchall()
         finally:
             if owned_connection is not None:
@@ -382,9 +401,9 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     "replacement_policy": strict_text(
                         row[11], field="context_contributions.replacement_policy"
                     ),
-                    "metadata_json": _canonical_json_object(
-                        row[15], field="context_contributions.metadata_json"
-                    ),
+                    **parse_contribution_binding_manifest(json.loads(_canonical_json_object(
+                        row[15], field="context_contributions.binding_manifest_json"
+                    ))),
                     "created_at": strict_text(
                         row[16], field="context_contributions.created_at"
                     ),

@@ -6,6 +6,11 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn import TurnResponsePartDTO, TurnResponseSourceDTO
 
@@ -98,17 +103,6 @@ def _int_or_none(raw: Mapping[str, object], key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _raw_tool_call_id(tool_call_id: str | None) -> str | None:
-    """从 stream scoped tool-call ID 取出 checkpoint 中的原始 call ID。"""
-    if not isinstance(tool_call_id, str) or not tool_call_id:
-        return None
-    marker = ":tool-call:"
-    if marker not in tool_call_id:
-        return tool_call_id
-    raw_id = tool_call_id.rsplit(marker, 1)[-1]
-    return raw_id or None
-
-
 def _response_status(value: object) -> str:
     if value in {"completed", "success", "succeeded", "ok"}:
         return "completed"
@@ -143,6 +137,7 @@ def _activity_parts_from_projection(
     *,
     mode: Projection,
     include: frozenset[str],
+    tool_call_ids: frozenset[str] | None,
 ) -> list[TurnResponsePartDTO]:
     """按后端 canonical identity/order 投影中间 item，不在 mapper 去重或排序。"""
     raw_items = projection.get("activity_items")
@@ -195,6 +190,21 @@ def _activity_parts_from_projection(
             else text
         )
         tool_call_id = raw.get("tool_call_id")
+        identity = ItemProjectionIdentity.from_dict(
+            {"model_call_id": raw.get("model_call_id")}
+        )
+        if (
+            tool_call_ids is not None
+            and kind in {"tool_call", "tool_result"}
+            and (
+                not isinstance(tool_call_id, str)
+                or not any(
+                    matches_tool_call_id(identity, tool_call_id, selected_id)
+                    for selected_id in tool_call_ids
+                )
+            )
+        ):
+            continue
         tool_name = raw.get("tool_name")
         parts.append(
             TurnResponsePartDTO(
@@ -246,24 +256,25 @@ def _activity_parts_from_projection(
 def _tool_payloads(
     records: Sequence[Mapping[str, object]],
 ) -> tuple[
-    dict[tuple[str, int, int], tuple[str, bool]],
-    dict[str, tuple[str, bool] | None],
-    dict[tuple[str, int], tuple[str, bool]],
-    dict[tuple[int, int], tuple[str, bool]],
-    dict[int, tuple[str, bool]],
+    dict[tuple[str | None, str, int, int], tuple[str, bool]],
+    dict[tuple[str | None, str], tuple[str, bool] | None],
+    dict[tuple[str | None, str, int], tuple[str, bool]],
 ]:
-    """读取详情正文，但不据此决定 Item identity、数量或顺序。"""
-    calls: dict[tuple[str, int, int], tuple[str, bool]] = {}
-    calls_by_id: dict[str, tuple[str, bool] | None] = {}
-    results: dict[tuple[str, int], tuple[str, bool]] = {}
-    calls_by_position: dict[tuple[int, int], tuple[str, bool]] = {}
-    results_by_sequence: dict[int, tuple[str, bool]] = {}
+    """读取同一 typed 模型调用内的详情正文，不据此决定 Item identity 或顺序。"""
+    calls: dict[tuple[str | None, str, int, int], tuple[str, bool]] = {}
+    calls_by_identity: dict[tuple[str | None, str], tuple[str, bool] | None] = {}
+    results: dict[tuple[str | None, str, int], tuple[str, bool]] = {}
     for record in records:
         sequence = record.get("_indexed_sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             raise TypeError("rollout message 缺少有效 message_sequence")
         message = _serialized_message(record)
         data = _message_data(message)
+        metadata = data.get("response_metadata")
+        identity = ItemProjectionIdentity.from_dict(
+            {"model_call_id": metadata.get("model_call_id") if isinstance(metadata, Mapping) else None}
+        )
+        scope = identity.model_call_id
         if message.get("type") == "ai":
             raw_calls = data.get("tool_calls")
             if not isinstance(raw_calls, list):
@@ -274,24 +285,21 @@ def _tool_payloads(
                 call_id = call.get("id")
                 if not isinstance(call_id, str) or not call_id:
                     continue
+                call_id = provider_tool_call_id(identity, call_id)
                 payload = _bounded(
                     json.dumps(call.get("args", {}), ensure_ascii=False, default=str)
                 )
-                calls[(call_id, sequence, call_index)] = payload
-                if call_id in calls_by_id:
-                    # 原始 provider call ID 可能跨消息复用；存在歧义时禁止
-                    # 用没有坐标的 scoped ID 猜测参数归属。
-                    calls_by_id[call_id] = None
-                else:
-                    calls_by_id[call_id] = payload
-                calls_by_position[(sequence, call_index)] = payload
+                calls[(scope, call_id, sequence, call_index)] = payload
+                key = (scope, call_id)
+                # 同一 scope 内复用 raw ID 时，没有坐标的部件不能猜测归属。
+                calls_by_identity[key] = None if key in calls_by_identity else payload
         elif message.get("type") == "tool":
             call_id = data.get("tool_call_id")
             if isinstance(call_id, str) and call_id:
-                payload = _bounded(data.get("content"))
-                results[(call_id, sequence)] = payload
-                results_by_sequence[sequence] = payload
-    return calls, calls_by_id, results, calls_by_position, results_by_sequence
+                results[(scope, provider_tool_call_id(identity, call_id), sequence)] = _bounded(
+                    data.get("content")
+                )
+    return calls, calls_by_identity, results
 
 
 def _enrich_activity_parts(
@@ -300,16 +308,19 @@ def _enrich_activity_parts(
     *,
     projection: Mapping[str, object],
 ) -> list[TurnResponsePartDTO]:
-    """用定点加载的 JSONL payload 丰富 canonical part，保持后端原顺序。"""
-    (
-        calls,
-        calls_by_id,
-        results,
-        calls_by_position,
-        results_by_sequence,
-    ) = _tool_payloads(records)
+    """用同 snapshot 的 typed scope 和显式坐标补充 canonical payload。"""
+    calls, calls_by_identity, results = _tool_payloads(records)
+    identities = {
+        raw["item_id"]: ItemProjectionIdentity.from_dict(
+            {"model_call_id": raw.get("model_call_id")}
+        )
+        for raw in projection["activity_items"]
+    }
     result_call_ids = {
-        _raw_tool_call_id(part.tool_call_id)
+        (
+            identities[part.source.item_id].model_call_id,
+            provider_tool_call_id(identities[part.source.item_id], part.tool_call_id),
+        )
         for part in parts
         if part.kind == "tool_result" and part.tool_call_id is not None
     }
@@ -317,30 +328,20 @@ def _enrich_activity_parts(
     enriched: list[TurnResponsePartDTO] = []
     for part in parts:
         source = part.source
-        if part.kind == "tool_call" and part.tool_call_id is not None:
+        if part.kind not in {"tool_call", "tool_result"} or part.tool_call_id is None:
+            enriched.append(part)
+            continue
+        identity = identities[source.item_id]
+        key = (identity.model_call_id, provider_tool_call_id(identity, part.tool_call_id))
+        if part.kind == "tool_call":
             assistant_sequence = source.assistant_message_sequence
             call_index = source.call_index
             payload = (
-                calls.get((part.tool_call_id, assistant_sequence, call_index))
+                calls.get((*key, assistant_sequence, call_index))
                 if assistant_sequence is not None and call_index is not None
-                else None
+                else calls_by_identity.get(key)
             )
-            if payload is None and assistant_sequence is not None and call_index is not None:
-                # TODO: 历史 stream scoped ID 完成迁移后，可删除位置索引回退。
-                # canonical stream 使用 model-call scoped ID，而 checkpoint JSONL
-                # 保存 provider 原始 ID；assistant sequence + call index 是同一
-                # 条消息内的显式位置，可安全完成这次 ID 载体转换。
-                payload = calls_by_position.get((assistant_sequence, call_index))
-            if payload is None:
-                # 实时 canonical tool-call 使用 model-call scoped ID，且有些
-                # 历史 projection 不携带 assistant sequence/call index。此时
-                # 只能在原始 call ID 全局唯一时回填，复用 ID 则保持为空并
-                # 继续透明暴露数据不完整，不能猜测参数归属。
-                payload = calls_by_id.get(_raw_tool_call_id(part.tool_call_id))
-            outcome_unknown = (
-                terminal_turn
-                and _raw_tool_call_id(part.tool_call_id) not in result_call_ids
-            )
+            outcome_unknown = terminal_turn and key not in result_call_ids
             enriched.append(
                 part.model_copy(
                     update={
@@ -353,30 +354,18 @@ def _enrich_activity_parts(
                 )
             )
             continue
-        if part.kind == "tool_result" and part.tool_call_id is not None:
-            result_sequence = source.result_message_sequence
-            payload = (
-                results.get((part.tool_call_id, result_sequence))
-                if result_sequence is not None
-                else None
+        result_sequence = source.result_message_sequence
+        payload = results.get((*key, result_sequence)) if result_sequence is not None else None
+        enriched.append(
+            part.model_copy(
+                update={
+                    "result": payload[0] if payload is not None else None,
+                    "text": payload[0] if payload is not None else part.text,
+                    "truncated": part.truncated
+                    or (payload[1] if payload is not None else False),
+                }
             )
-            if payload is None and result_sequence is not None:
-                # TODO: 历史 stream scoped ID 完成迁移后，可删除结果序号回退。
-                # result message sequence 是工具结果的权威位置；不能要求
-                # checkpoint 的 raw provider ID 与 stream scoped ID 相同。
-                payload = results_by_sequence.get(result_sequence)
-            enriched.append(
-                part.model_copy(
-                    update={
-                        "result": payload[0] if payload is not None else None,
-                        "text": payload[0] if payload is not None else part.text,
-                        "truncated": part.truncated
-                        or (payload[1] if payload is not None else False),
-                    }
-                )
-            )
-            continue
-        enriched.append(part)
+        )
     return enriched
 
 
@@ -453,24 +442,8 @@ def response_parts_from_records(
         projection,
         mode=mode,
         include=include,
+        tool_call_ids=tool_call_ids,
     )
-    if tool_call_ids is not None:
-        # 定点详情可能传 model-call scoped ID，而 canonical part 的
-        # tool_call_id 可能是 provider 原始 ID（或反之）。两侧统一归一到原始
-        # call ID 后再比对，避免因 ID 载体不一致把命中的工具部件全部过滤掉。
-        selected_raw_ids = {
-            _raw_tool_call_id(tool_call_id) for tool_call_id in tool_call_ids
-        }
-        selected_raw_ids.discard(None)
-        parts = [
-            part
-            for part in parts
-            if part.kind not in {"tool_call", "tool_result"}
-            or (
-                part.tool_call_id is not None
-                and _raw_tool_call_id(part.tool_call_id) in selected_raw_ids
-            )
-        ]
     if mode == "detail":
         parts = _enrich_activity_parts(parts, records, projection=projection)
     final_part = _final_response_part(
@@ -491,7 +464,7 @@ def response_parts_from_internal_item(
     logical_item_ordinal: int,
 ) -> list[TurnResponsePartDTO]:
     """把单个 standalone execution canonical item 映射为受 include 控制的响应部件。"""
-    metadata = item.metadata
+    identity = item.projection_identity
     semantic_kind = item.semantic_kind
     payload = item.payload
     kind: str | None = None
@@ -520,15 +493,13 @@ def response_parts_from_internal_item(
     if kind is None or not include & allowed_include:
         return []
 
-    part_ordinal = _int_or_none(metadata, "block_index") or 0
-    message_sequence = _int_or_none(metadata, "message_sequence") or 0
+    part_ordinal = identity.block_index if identity is not None and identity.block_index is not None else 0
+    message_sequence = 0
     common_source = {
         "message_sequence": message_sequence,
-        "assistant_message_sequence": _int_or_none(
-            metadata, "assistant_message_sequence"
-        ),
-        "content_block_index": _int_or_none(metadata, "content_block_index"),
-        "item_index": _int_or_none(metadata, "item_index"),
+        "assistant_message_sequence": None,
+        "content_block_index": identity.block_index if identity else None,
+        "item_index": None,
         "item_id": item.item_id,
         "item_sequence": item.item_sequence,
         "logical_item_ordinal": logical_item_ordinal,
@@ -574,8 +545,6 @@ def response_parts_from_internal_item(
                 raw_id if isinstance(raw_id, str) and raw_id else None
             )
             tool_name = raw_call.get("name")
-            if not isinstance(tool_name, str) or not tool_name:
-                tool_name = metadata.get("tool_name")
             tool_name = tool_name if isinstance(tool_name, str) else None
             raw_arguments = raw_call.get("args", raw_call.get("arguments"))
             arguments = (
@@ -606,7 +575,7 @@ def response_parts_from_internal_item(
         return parts
 
     if kind == "tool_result":
-        tool_call_id = payload.get("tool_call_id") if isinstance(payload, Mapping) else None
+        tool_call_id = item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else payload["tool_call_id"]
         tool_name = payload.get("name") if isinstance(payload, Mapping) else None
         raw_result = payload.get("content") if isinstance(payload, Mapping) else payload
         result, truncated = _bounded(raw_result)
@@ -648,11 +617,7 @@ def response_parts_from_internal_item(
             ),
             text=text,
             truncated=truncated,
-            completion_reason=(
-                metadata.get("completion_reason")
-                if isinstance(metadata.get("completion_reason"), str)
-                else None
-            ),
+            completion_reason=identity.completion_reason if identity else None,
             partial=item.status in {"partial", "incomplete"},
         )
     ]

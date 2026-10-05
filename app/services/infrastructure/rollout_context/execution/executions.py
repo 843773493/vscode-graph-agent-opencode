@@ -7,7 +7,7 @@ ports；它们不承担 LangChain/provider projection，也不读取 v1 数据�
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 
 from app.core.sqlite_state import utc_now_text as _now
@@ -21,7 +21,10 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
 from app.domain.itemized.validation import validate_turn_transition
 from app.services.infrastructure.rollout_context.execution.admissions import (
     RolloutExecutionAdmissionMixin,
@@ -931,36 +934,15 @@ class RolloutExecutionsMixin(
                     # 的 final pointer 一并收敛；否则紧随其后的 checkpoint
                     # append 会把旧索引留在 running/NULL，history reader 只能
                     # 看到用户消息而无法证明最终 assistant item。
-                    metadata_row = connection.execute(
-                        "SELECT metadata_json FROM item_catalog WHERE item_id = ?",
+                    manifest_row = connection.execute(
+                        "SELECT projection_manifest_json FROM item_catalog WHERE item_id = ?",
                         (final_item_id,),
                     ).fetchone()
-                    final_message_id: str | None = None
-                    if metadata_row is not None:
-                        metadata_value = strict_text(
-                            metadata_row[0],
-                            field="item_catalog.metadata_json",
-                        )
-                        try:
-                            metadata = json.loads(metadata_value)
-                        except json.JSONDecodeError as error:
-                            raise RuntimeError(
-                                "final item metadata_json 不是合法 JSON: "
-                                f"{final_item_id}"
-                            ) from error
-                        if not isinstance(metadata, Mapping):
-                            raise RuntimeError(
-                                "final item metadata_json 必须是 object: "
-                                f"{final_item_id}"
-                            )
-                        projection_message_id = metadata.get("projection_message_id")
-                        if projection_message_id is not None:
-                            final_message_id = strict_text(
-                                projection_message_id,
-                                field="projection_message_id",
-                            )
-                    if final_message_id is None and final_item_id.startswith("item-"):
-                        final_message_id = final_item_id[len("item-") :]
+                    if manifest_row is None:
+                        raise RuntimeError(f"final item 缺少 catalog: {final_item_id}")
+                    manifest = parse_item_projection_manifest(json.loads(strict_text(manifest_row[0], field="item_catalog.projection_manifest_json")))
+                    identity = manifest["projection_identity"]
+                    final_message_id = identity["projection_message_id"] if identity is not None and "projection_message_id" in identity else None
                     final_message_row = (
                         connection.execute(
                             "SELECT message_sequence, message_id FROM messages "

@@ -116,7 +116,7 @@ class ContextAssemblyManifestMixin:
         )
 
         contribution_rows = connection.execute(
-            "SELECT contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, metadata_json FROM context_assembly_contributions WHERE assembly_id = ? ORDER BY contribution_ordinal",
+            "SELECT contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, binding_manifest_json FROM context_assembly_contributions WHERE assembly_id = ? ORDER BY contribution_ordinal",
             (snapshot.assembly_id,),
         ).fetchall()
         expected_contributions = []
@@ -144,7 +144,7 @@ class ContextAssemblyManifestMixin:
                     contribution.contribution_kind,
                     contribution.visibility,
                     contribution.protection,
-                    _json(dict(contribution.metadata)),
+                    _json(contribution.binding_manifest()),
                 )
             )
         exact_row(

@@ -4,7 +4,6 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.enums import (
     PayloadKind,
     SelectionKind,
@@ -13,13 +12,14 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
 )
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import (
     ContextRef,
     ToolSetRef,
     ref_identity,
     unique_ref_identities,
 )
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.selection import ContextSelectionEntry
 
@@ -287,11 +287,9 @@ def test_canonical_ref_does_not_coerce_metadata_identity(
     value: object,
 ) -> None:
     item = user_item
-    metadata = dict(item.metadata)
-    metadata[field_name] = value
-    with pytest.raises(ItemSchemaError, match="CanonicalItemRecord.metadata"):
+    with pytest.raises(ItemSchemaError):
         ContextRef.canonical_item(
-            replace(item, metadata=metadata), session_id="session-1", thread_id="thread-1"
+            replace(item, source_manifest=replace(item.source_manifest, **{field_name: value})), session_id="session-1", thread_id="thread-1"
         )
 
 

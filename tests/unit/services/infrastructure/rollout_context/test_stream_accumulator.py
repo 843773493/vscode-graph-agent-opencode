@@ -66,7 +66,8 @@ def test_internal_provider_item_keeps_execution_attribution_without_turn_scope()
 
     assert item.turn_id is None
     assert item.turn_scope is None
-    assert item.metadata["execution_id"] == "execution-internal-stream"
+    assert item.projection_identity.model_call_id == "model-call-internal-stream"
+    assert item.producer_ref["invocation_id"] == "model-call-internal-stream"
 
 
 def test_message_group_is_scoped_to_model_call_within_one_execution() -> None:
@@ -135,8 +136,8 @@ def test_reused_provider_block_id_is_unique_per_model_call() -> None:
     second_item = second.finalize(first_item_sequence=2)[0]
 
     assert first_item.item_id != second_item.item_id
-    assert first_item.metadata["model_call_id"] == "model-call-1"
-    assert second_item.metadata["model_call_id"] == "model-call-2"
+    assert first_item.projection_identity.model_call_id == "model-call-1"
+    assert second_item.projection_identity.model_call_id == "model-call-2"
 
 
 def test_repeated_block_identity_cannot_change_coordinate_or_carrier() -> None:

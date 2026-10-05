@@ -20,6 +20,9 @@ from app.domain.itemized.enums import (
     TurnScope,
 )
 from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -92,7 +95,7 @@ def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> Canonical
             "invocation_id": case.execution_id,
         },
         payload=payload,
-        metadata={"projection_message_id": item_id.removeprefix("item-")},
+        projection_identity=ItemProjectionIdentity(projection_message_id=item_id.removeprefix("item-")),
         turn_id=case.turn_id,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id=f"group-{case.execution_id}",
@@ -192,7 +195,7 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
             "invocation_id": internal_execution_id,
         },
         payload="独立 execution 的终态输出",
-        metadata={"projection_message_id": f"{internal_execution_id}-output"},
+        projection_identity=ItemProjectionIdentity(projection_message_id=f"{internal_execution_id}-output"),
         wire_role="assistant",
     )
 
@@ -225,7 +228,7 @@ def test_acceptance_root_binding_and_turnless_internal_terminal_are_atomic(
         ).fetchone()
         internal_message = connection.execute(
             "SELECT turn_id, execution_id, role FROM messages WHERE message_id = ?",
-            (output.metadata["projection_message_id"],),
+            (output.projection_identity.projection_message_id,),
         ).fetchone()
         internal_execution = connection.execute(
             "SELECT turn_id, execution_origin, outcome FROM executions "

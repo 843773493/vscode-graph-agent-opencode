@@ -22,6 +22,13 @@ from app.domain.itemized.hashing import (
     contribution_content_hash,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ItemSourceManifest,
+    ProjectionGroup,
+    ProjectionPartRef,
+)
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -53,14 +60,12 @@ def _assistant_tool_item(
     tool_call_id: str,
     checkpoint: bool,
     reasoning: str,
+    model_call_id: str = "model-call-1",
 ) -> tuple[CanonicalItemRecord, CanonicalItemRecord]:
-    metadata: dict[str, object] = {}
-    if checkpoint:
-        metadata = {
-            "execution_confirmed": True,
-            "projection_message_id": group_id,
-            "projection_group": {"ordinal": 0, "size": 2, "content_form": "list"},
-        }
+    identity = ItemProjectionIdentity(
+        model_call_id=model_call_id,
+        projection_message_id=group_id if checkpoint else None,
+    )
     reasoning_item = CanonicalItemRecord.create(
         item_sequence=item_sequence,
         item_id=f"{item_id}-reasoning",
@@ -73,21 +78,13 @@ def _assistant_tool_item(
             "invocation_id": "turn-tool",
         },
         payload=reasoning,
-        metadata=metadata,
+        projection_identity=identity,
+        projection_group=ProjectionGroup(0, 2, "list") if checkpoint else None,
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id=group_id,
         wire_role="assistant",
     )
-    tool_metadata = dict(metadata)
-    if checkpoint:
-        tool_metadata["projection_group"] = {
-            "ordinal": 1,
-            "size": 2,
-            "content_form": "list",
-        }
-    else:
-        tool_metadata.update(block_id=tool_call_id, block_index=1)
     tool_item = CanonicalItemRecord.create(
         item_sequence=item_sequence + 1,
         item_id=f"{item_id}-tool",
@@ -96,7 +93,8 @@ def _assistant_tool_item(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref=reasoning_item.producer_ref,
         payload={"tool_call_id": tool_call_id, "name": "ls", "args": {}},
-        metadata=tool_metadata,
+        projection_identity=identity,
+        projection_group=ProjectionGroup(1, 2, "list") if checkpoint else None,
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id=group_id,
@@ -137,11 +135,14 @@ def test_provider_projection_prefers_complete_checkpoint_tool_carrier() -> None:
     assert [call["id"] for call in messages[0].tool_calls] == ["call-shared"]
 
 
-def test_provider_projection_does_not_deduplicate_same_text_without_tool_identity() -> None:
+def test_provider_projection_does_not_deduplicate_same_text_without_tool_identity() -> (
+    None
+):
     live = _assistant_tool_item(
         item_sequence=1,
         item_id="live-distinct",
         group_id="message-live-distinct",
+        model_call_id="model-call-live",
         tool_call_id="call-live",
         checkpoint=False,
         reasoning="正文相同也不能作为身份",
@@ -150,6 +151,7 @@ def test_provider_projection_does_not_deduplicate_same_text_without_tool_identit
         item_sequence=3,
         item_id="checkpoint-distinct",
         group_id="message-checkpoint-distinct",
+        model_call_id="model-call-checkpoint",
         tool_call_id="call-checkpoint",
         checkpoint=True,
         reasoning="正文相同也不能作为身份",
@@ -165,11 +167,11 @@ def test_provider_projection_does_not_deduplicate_same_text_without_tool_identit
     ]
 
 
-def test_provider_projection_splits_legacy_execution_stream_group_by_model_call() -> None:
+def test_provider_projection_splits_explicit_model_call_scopes() -> None:
     stream_first = tuple(
         replace(
             item,
-            metadata={**item.metadata, "model_call_id": "model-call-1"},
+            projection_identity=ItemProjectionIdentity(model_call_id="model-call-1"),
         )
         for item in _assistant_tool_item(
             item_sequence=1,
@@ -183,7 +185,7 @@ def test_provider_projection_splits_legacy_execution_stream_group_by_model_call(
     stream_second = tuple(
         replace(
             item,
-            metadata={**item.metadata, "model_call_id": "model-call-2"},
+            projection_identity=ItemProjectionIdentity(model_call_id="model-call-2"),
         )
         for item in _assistant_tool_item(
             item_sequence=3,
@@ -204,6 +206,7 @@ def test_provider_projection_splits_legacy_execution_stream_group_by_model_call(
     )
     checkpoint_second = _assistant_tool_item(
         item_sequence=7,
+        model_call_id="model-call-2",
         item_id="checkpoint-second",
         group_id="message-checkpoint-second",
         tool_call_id="call-second",
@@ -217,9 +220,10 @@ def test_provider_projection_splits_legacy_execution_stream_group_by_model_call(
 
     assert len(messages) == 2
     assert all(isinstance(message, AIMessage) for message in messages)
-    assert [
-        call["id"] for message in messages for call in message.tool_calls
-    ] == ["call-first", "call-second"]
+    assert [call["id"] for message in messages for call in message.tool_calls] == [
+        "call-first",
+        "call-second",
+    ]
 
 
 def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -> None:
@@ -248,8 +252,9 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
             "result_id": "result-final-carrier",
             "tool_call_id": "call-final-carrier",
             "tool_outcome": "success",
+            "execution_confirmed": True,
         },
-        metadata={"execution_confirmed": True},
+        extensions={},
         turn_id="turn-tool",
         turn_scope="turn_member",
         wire_role="tool",
@@ -266,11 +271,11 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
             "invocation_id": "turn-tool",
         },
         payload="工具返回后的 reasoning",
-        metadata={
-            "block_id": "model-call-after-tool:block:part-after-tool-reasoning",
-            "block_index": 0,
-            "model_call_id": "model-call-after-tool",
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-after-tool",
+            block_id="model-call-after-tool:block:part-after-tool-reasoning",
+            block_index=0,
+        ),
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-stream-after-tool",
@@ -284,11 +289,11 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
         status=CanonicalItemStatus.COMPLETED,
         producer_ref=stream_reasoning.producer_ref,
         payload="最终文本",
-        metadata={
-            "block_id": "model-call-after-tool:block:part-after-tool-text",
-            "block_index": 1,
-            "model_call_id": "model-call-after-tool",
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-after-tool",
+            block_id="model-call-after-tool:block:part-after-tool-text",
+            block_index=1,
+        ),
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-stream-after-tool",
@@ -306,14 +311,16 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
             "invocation_id": "turn-tool",
         },
         payload=[
-            {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
+            {
+                "reasoning_content": "工具返回后的 reasoning",
+                "type": "reasoning_content",
+            },
             {"text": "最终文本", "type": "text"},
         ],
-        metadata={
-            "execution_confirmed": True,
-            "projection_message_id": "lc-run-after-tool",
-            "model_call_id": "model-call-after-tool",
-        },
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="lc-run-after-tool",
+            model_call_id="model-call-after-tool",
+        ),
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-checkpoint-shadow-after-tool",
@@ -331,14 +338,24 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
             "invocation_id": "turn-tool",
         },
         payload=checkpoint_shadow.payload,
-        metadata={
-            "content_part_refs": [
-                {"id": "part-after-tool-reasoning", "index": 0},
-                {"id": "part-after-tool-text", "index": 1},
-            ],
-            "supersedes_message_id": "lc-run-after-tool",
-            "execution_confirmed": True,
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-after-tool",
+            content_part_refs=tuple(
+                ProjectionPartRef.from_dict(ref)
+                for ref in [
+                    {"id": "part-after-tool-reasoning", "index": 0},
+                    {"id": "part-after-tool-text", "index": 1},
+                ]
+            ),
+        ),
+        provenance_relations=(
+            ItemProvenanceRelation(
+                "replaces",
+                "projection_message",
+                "lc-run-after-tool",
+                target_model_call_id="model-call-after-tool",
+            ),
+        ),
         turn_id="turn-tool",
         turn_scope="turn_member",
         message_group_id="message-final-carrier-after-tool",
@@ -346,7 +363,14 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
     )
 
     messages = project_canonical_items(
-        (*checkpoint, tool_result, stream_reasoning, stream_text, checkpoint_shadow, final_carrier)
+        (
+            *checkpoint,
+            tool_result,
+            stream_reasoning,
+            stream_text,
+            checkpoint_shadow,
+            final_carrier,
+        )
     )
 
     assert [message.type for message in messages] == ["ai", "tool", "ai"]
@@ -357,7 +381,9 @@ def test_provider_projection_deduplicates_stream_parts_against_final_carrier() -
     ]
 
 
-def test_provider_projection_does_not_remove_reused_part_id_from_another_model_call() -> None:
+def test_provider_projection_does_not_remove_reused_part_id_from_another_model_call() -> (
+    None
+):
     def stream_item(
         *, item_sequence: int, item_id: str, model_call_id: str, text: str
     ) -> CanonicalItemRecord:
@@ -373,11 +399,11 @@ def test_provider_projection_does_not_remove_reused_part_id_from_another_model_c
                 "invocation_id": "turn-reused-part-id",
             },
             payload=text,
-            metadata={
-                "block_id": f"{model_call_id}:block:part-reused",
-                "block_index": 0,
-                "model_call_id": model_call_id,
-            },
+            projection_identity=ItemProjectionIdentity(
+                model_call_id=model_call_id,
+                block_id=f"{model_call_id}:block:part-reused",
+                block_index=0,
+            ),
             turn_id="turn-reused-part-id",
             turn_scope="turn_member",
             message_group_id=f"message-{model_call_id}",
@@ -408,26 +434,25 @@ def test_provider_projection_does_not_remove_reused_part_id_from_another_model_c
             "invocation_id": "turn-reused-part-id",
         },
         payload=[{"text": "最终内容", "type": "text"}],
-        metadata={
-            "content_part_refs": [{"id": "part-reused", "index": 0}],
-            "execution_confirmed": True,
-        },
+        projection_identity=ItemProjectionIdentity(
+            content_part_refs=tuple(
+                ProjectionPartRef.from_dict(ref)
+                for ref in [{"id": "part-reused", "index": 0}]
+            )
+        ),
         turn_id="turn-reused-part-id",
         turn_scope="turn_member",
         message_group_id="message-final-reused-part-carrier",
         wire_role="assistant",
     )
 
-    messages = project_canonical_items((first_call, second_call, final_carrier))
-
-    assert [message.content for message in messages] == [
-        "第一调用的 shadow",
-        "第二调用的独立内容",
-        [{"text": "最终内容", "type": "text"}],
-    ]
+    with pytest.raises(ValueError, match="scope|model-call"):
+        project_canonical_items((first_call, second_call, final_carrier))
 
 
-def test_provider_projection_uses_superseded_checkpoint_identity_without_loading_shadow() -> None:
+def test_provider_projection_uses_superseded_checkpoint_identity_without_loading_shadow() -> (
+    None
+):
     """最终 carrier 自带 lc_run producer identity 时，不依赖未选中的 checkpoint item。"""
     model_call_id = "model-call-selected-only"
     stream = CanonicalItemRecord.create(
@@ -442,11 +467,11 @@ def test_provider_projection_uses_superseded_checkpoint_identity_without_loading
             "invocation_id": "turn-selected-only",
         },
         payload="stream shadow",
-        metadata={
-            "model_call_id": model_call_id,
-            "block_id": f"{model_call_id}:block:part-selected",
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id,
+            block_id=f"{model_call_id}:block:part-selected",
+            block_index=0,
+        ),
         turn_id="turn-selected-only",
         turn_scope="turn_member",
         message_group_id="message-selected-only-stream",
@@ -464,11 +489,21 @@ def test_provider_projection_uses_superseded_checkpoint_identity_without_loading
             "invocation_id": "turn-selected-only",
         },
         payload=[{"text": "final", "type": "text"}],
-        metadata={
-            "content_part_refs": [{"id": "part-selected", "index": 0}],
-            "supersedes_message_id": f"lc_run--{model_call_id}",
-            "execution_confirmed": True,
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id,
+            content_part_refs=tuple(
+                ProjectionPartRef.from_dict(ref)
+                for ref in [{"id": "part-selected", "index": 0}]
+            ),
+        ),
+        provenance_relations=(
+            ItemProvenanceRelation(
+                "replaces",
+                "projection_message",
+                f"lc_run--{model_call_id}",
+                target_model_call_id=model_call_id,
+            ),
+        ),
         turn_id="turn-selected-only",
         turn_scope="turn_member",
         message_group_id="message-selected-only-final",
@@ -500,11 +535,9 @@ def test_provider_projection_deduplicates_scoped_stream_call_and_result_against_
             "name": "ls",
             "args": {"path": "."},
         },
-        metadata={
-            "model_call_id": "model-call-1",
-            "block_id": stream_call_id,
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-1", block_id=stream_call_id, block_index=0
+        ),
         turn_id="turn-scoped-tool",
         turn_scope="turn_member",
         message_group_id="message-model-call-1",
@@ -527,8 +560,9 @@ def test_provider_projection_deduplicates_scoped_stream_call_and_result_against_
             "result_id": "stream-result-id",
             "tool_call_id": stream_call_id,
             "tool_outcome": "success",
+            "execution_confirmed": True,
         },
-        metadata={"model_call_id": "model-call-1", "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(model_call_id="model-call-1"),
         turn_id="turn-scoped-tool",
         turn_scope="turn_member",
         wire_role="tool",
@@ -545,15 +579,11 @@ def test_provider_projection_deduplicates_scoped_stream_call_and_result_against_
             "invocation_id": "turn-scoped-tool",
         },
         payload={
-            "tool_calls": [
-                {"id": "call-shared", "name": "ls", "args": {"path": "."}}
-            ]
+            "tool_calls": [{"id": "call-shared", "name": "ls", "args": {"path": "."}}]
         },
-        metadata={
-            "execution_confirmed": True,
-            "projection_message_id": "lc_run--model-call-1",
-            "projection_group": {"ordinal": 0, "size": 1, "content_form": "list"},
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-1", projection_message_id="lc_run--model-call-1"
+        ),
         turn_id="turn-scoped-tool",
         turn_scope="turn_member",
         message_group_id="message-lc_run--model-call-1",
@@ -576,11 +606,11 @@ def test_provider_projection_deduplicates_scoped_stream_call_and_result_against_
             "result_id": "checkpoint-result-id",
             "tool_call_id": "call-shared",
             "tool_outcome": "success",
-        },
-        metadata={
             "execution_confirmed": True,
-            "projection_message_id": "checkpoint-tool-result",
         },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-1", projection_message_id="checkpoint-tool-result"
+        ),
         turn_id="turn-scoped-tool",
         turn_scope="turn_member",
         wire_role="tool",
@@ -609,7 +639,9 @@ def _native_tool_plan(
         ContextSelectionEntry(
             assembly_id=assembly_id,
             plan_ordinal=index,
-            ref=ContextRef.canonical_item(item, session_id=session_id, thread_id="thread-1"),
+            ref=ContextRef.canonical_item(
+                item, session_id=session_id, thread_id="thread-1"
+            ),
             selection_kind=SelectionKind.CANONICAL_HISTORY,
             source_revision=ContextRef.canonical_item(
                 item, session_id=session_id, thread_id="thread-1"
@@ -672,11 +704,9 @@ def _scoped_stream_and_checkpoint_items(
             "invocation_id": "turn-native-tool",
         },
         payload={"tool_call_id": scoped_id, "name": "ls", "args": {"path": "."}},
-        metadata={
-            "model_call_id": model_call_id,
-            "block_id": scoped_id,
-            "block_index": 0,
-        },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id, block_id=scoped_id, block_index=0
+        ),
         turn_id="turn-native-tool",
         turn_scope="turn_member",
         message_group_id=f"message-{model_call_id}",
@@ -699,8 +729,9 @@ def _scoped_stream_and_checkpoint_items(
             "result_id": f"stream-result-{tool_call_id}",
             "tool_call_id": scoped_id,
             "tool_outcome": "success",
+            "execution_confirmed": True,
         },
-        metadata={"model_call_id": model_call_id, "execution_confirmed": True},
+        projection_identity=ItemProjectionIdentity(model_call_id=model_call_id),
         turn_id="turn-native-tool",
         turn_scope="turn_member",
         wire_role="tool",
@@ -716,12 +747,13 @@ def _scoped_stream_and_checkpoint_items(
             "producer_id": f"lc_run--{model_call_id}",
             "invocation_id": "turn-native-tool",
         },
-        payload={"tool_calls": [{"id": tool_call_id, "name": "ls", "args": {"path": "."}}]},
-        metadata={
-            "execution_confirmed": True,
-            "projection_message_id": f"lc_run--{model_call_id}",
-            "projection_group": {"ordinal": 0, "size": 1, "content_form": "list"},
+        payload={
+            "tool_calls": [{"id": tool_call_id, "name": "ls", "args": {"path": "."}}]
         },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id,
+            projection_message_id=f"lc_run--{model_call_id}",
+        ),
         turn_id="turn-native-tool",
         turn_scope="turn_member",
         message_group_id=f"message-lc_run--{model_call_id}",
@@ -744,11 +776,12 @@ def _scoped_stream_and_checkpoint_items(
             "result_id": f"checkpoint-result-{tool_call_id}",
             "tool_call_id": tool_call_id,
             "tool_outcome": "success",
-        },
-        metadata={
             "execution_confirmed": True,
-            "projection_message_id": f"checkpoint-tool-result-{tool_call_id}",
         },
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=model_call_id,
+            projection_message_id=f"checkpoint-tool-result-{tool_call_id}",
+        ),
         turn_id="turn-native-tool",
         turn_scope="turn_member",
         wire_role="tool",
@@ -779,9 +812,7 @@ def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None
     )
 
     inputs = projection["request"]["input"]
-    call_ids = [
-        item["call_id"] for item in inputs if item["type"] == "function_call"
-    ]
+    call_ids = [item["call_id"] for item in inputs if item["type"] == "function_call"]
     output_ids = [
         item["call_id"] for item in inputs if item["type"] == "function_call_output"
     ]
@@ -790,17 +821,25 @@ def test_native_projection_restores_scoped_ids_and_drops_stream_shadow() -> None
     assert output_ids == [tool_call_id]
     assert all(len(call_id) <= 64 for call_id in (*call_ids, *output_ids))
     # stream shadow 的 result 不能和 checkpoint carrier 一起发送。
-    outputs = [item["output"] for item in inputs if item["type"] == "function_call_output"]
+    outputs = [
+        item["output"] for item in inputs if item["type"] == "function_call_output"
+    ]
     assert outputs == ["checkpoint result"]
 
 
-def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_message() -> None:
+def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_message() -> (
+    None
+):
     """四个并行 invocation 拆成 item 后，native/chat 两条投影仍保持同一组。"""
 
     codec = LangChainMessageCodec()
     model_call_id = "parallel-native-model"
     calls = [
-        {"id": f"parallel-call-{index}", "name": "read_file", "args": {"path": f"{index}.ts"}}
+        {
+            "id": f"parallel-call-{index}",
+            "name": "read_file",
+            "args": {"path": f"{index}.ts"},
+        }
         for index in range(4)
     ]
     checkpoint_group = codec.items_for_message(
@@ -840,10 +879,7 @@ def test_parallel_checkpoint_tool_items_keep_unique_refs_and_one_provider_messag
     assert len({item.item_id for item in call_items}) == 4
     # 非 anchor 伴随 item 失去消息级投影身份后，必须各自携带显式 provider
     # call id，否则历史投影无法把每个并行调用还原为独立逻辑工具。
-    assert [item.metadata.get("tool_call_id") for item in call_items[:-1]] == [
-        call["id"] for call in calls[:-1]
-    ]
-    assert "tool_call_id" not in call_items[-1].metadata
+    assert [item.tool_call_id for item in call_items] == [call["id"] for call in calls]
     projected = codec.project_message(checkpoint_group)
     assert [call["id"] for call in projected["data"]["tool_calls"]] == [
         call["id"] for call in calls
@@ -993,7 +1029,9 @@ def user_item() -> CanonicalItemRecord:
         },
         payload="读取 README",
         created_at="2026-09-07T00:00:00+00:00",
-        metadata={"source_revision": "rev-1"},
+        source_manifest=ItemSourceManifest(
+            source_revision="rev-1", visibility="internal", protection="public"
+        ),
         turn_id="turn-1",
         turn_scope="turn_root",
         message_group_id="group-1",
@@ -1022,13 +1060,17 @@ def test_content_plan_request_and_idempotency_golden_vectors(
         },
         payload="golden input",
         created_at="2026-09-07T00:00:00+00:00",
-        metadata={"source_revision": "rev-golden"},
+        source_manifest=ItemSourceManifest(
+            source_revision="rev-golden", visibility="internal", protection="public"
+        ),
         turn_id="turn-golden",
         turn_scope="turn_root",
         message_group_id="group-golden",
         wire_role="user",
     )
-    ref = ContextRef.canonical_item(item, session_id="session-golden", thread_id="thread-1")
+    ref = ContextRef.canonical_item(
+        item, session_id="session-golden", thread_id="thread-1"
+    )
     selection = ContextSelectionEntry(
         assembly_id="assembly-golden",
         plan_ordinal=0,
@@ -1042,7 +1084,10 @@ def test_content_plan_request_and_idempotency_golden_vectors(
         availability=ref.availability,
     )
     plan = ContextRequestPlan(
-        session_id="session-golden", thread_id="thread-1", plan_id="plan-golden", refs=(ref,)
+        session_id="session-golden",
+        thread_id="thread-1",
+        plan_id="plan-golden",
+        refs=(ref,),
     ).seal_for_assembly("assembly-golden", selection=(selection,))
     assert plan.plan_hash() == vectors["core-plan"]["hash"]
     assert (
@@ -1109,27 +1154,26 @@ def test_tool_result_codec_preserves_tool_outcome_status(
     assert projected["data"]["status"] == tool_status
 
 
-def test_message_codec_restores_internal_visibility_from_acceptance_metadata() -> None:
+def test_message_codec_restores_internal_visibility_from_runtime_notice() -> None:
     codec = LangChainMessageCodec()
     item = CanonicalItemRecord.create(
         item_sequence=1,
         item_id="item-internal-goal",
-        semantic_kind=SemanticKind.USER_INPUT,
+        semantic_kind=SemanticKind.RUNTIME_NOTICE,
         payload_kind=PayloadKind.TEXT,
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={
-            "producer_kind": "user",
+            "producer_kind": "runtime",
             "producer_id": "msg-internal-goal",
             "invocation_id": "execution-internal-goal",
         },
         payload="<system_reminder>继续 Goal</system_reminder>",
         created_at="2026-09-09T00:00:00+00:00",
-        metadata={
-            "projection_message_id": "msg-internal-goal",
-            "message_metadata": {"internal": True},
-        },
-        turn_id="job-internal-goal",
-        turn_scope="turn_root",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="msg-internal-goal"
+        ),
+        turn_id=None,
+        turn_scope="pending_next_turn",
         wire_role="user",
     )
 
@@ -1140,7 +1184,9 @@ def test_message_codec_restores_internal_visibility_from_acceptance_metadata() -
     assert restored.response_metadata["internal"] is True
 
 
-def test_internal_execution_input_remains_turn_root_during_checkpoint_roundtrip() -> None:
+def test_internal_execution_input_has_no_user_turn_during_checkpoint_roundtrip() -> (
+    None
+):
     codec = LangChainMessageCodec()
     message = HumanMessage(
         content="<system_reminder>继续 Goal</system_reminder>",
@@ -1158,14 +1204,15 @@ def test_internal_execution_input_remains_turn_root_during_checkpoint_roundtrip(
         message,
         item_sequence=1,
         message_id=str(message.id),
-        turn_id="job-internal-goal",
+        turn_id=None,
+        execution_id="execution-internal-goal",
         timestamp="2026-09-09T00:00:00+00:00",
     )
 
-    assert item.semantic_kind == SemanticKind.USER_INPUT
-    assert item.turn_id == "job-internal-goal"
-    assert item.turn_scope == "turn_root"
-    assert item.metadata["internal"] is True
+    assert item.semantic_kind == SemanticKind.RUNTIME_NOTICE
+    assert item.turn_id is None
+    assert item.turn_scope == "pending_next_turn"
+    assert item.semantic_kind == SemanticKind.RUNTIME_NOTICE
 
 
 def test_context_source_provenance_survives_canonical_roundtrip() -> None:
@@ -1191,7 +1238,10 @@ def test_context_source_provenance_survives_canonical_roundtrip() -> None:
     )
     restored = codec.from_dict(codec.project_message((item,)))
 
-    assert item.metadata["context_source_id"] == "skill:debugging"
+    assert (
+        item.extensions["boxteam.checkpoint.annotations"]["value"]["context_source_id"]
+        == "skill:debugging"
+    )
     assert restored.response_metadata["context_source_kind"] == "skill"
     assert restored.response_metadata["context_source_name"] == "debugging"
     assert restored.response_metadata["context_wire_role"] == "user"
@@ -1202,7 +1252,9 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
     user_item: CanonicalItemRecord,
 ) -> None:
     item = user_item
-    item_ref = ContextRef.canonical_item(item, session_id="session-shared-selection", thread_id="thread-1")
+    item_ref = ContextRef.canonical_item(
+        item, session_id="session-shared-selection", thread_id="thread-1"
+    )
     body = {"text": "必须先读取配置"}
     contribution = ContextContribution(
         contribution_id="contribution-shared-selection",
@@ -1217,7 +1269,8 @@ def test_history_and_provider_consume_the_same_sealed_selection_order(
     )
     request_ref = ContextRef.request_only_ref(
         contribution.contribution_id,
-        session_id="session-shared-selection", thread_id="thread-1",
+        session_id="session-shared-selection",
+        thread_id="thread-1",
         plan_id="plan-shared-selection",
         source_revision=contribution.source_revision,
         payload_kind=PayloadKind.STRUCTURED_CONTENT,

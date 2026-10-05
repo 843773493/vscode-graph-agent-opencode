@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from app.domain.itemized.enums import (
     BaseDeltaRole,
@@ -16,7 +16,6 @@ from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.hashing import (
-    _ensure_json_value,
     canonical_json_bytes,
     contribution_content_hash,
     validate_hash_token,
@@ -27,9 +26,55 @@ from app.domain.itemized.identity.refs import (
     selection_ref_identity,
     unique_ref_identities,
 )
+from app.domain.itemized.schema import validate_extensions
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serialization import ordered_selection
 from app.domain.itemized.validation import _non_empty_string
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBinding:
+    """producer 声明的来源身份；selection 与顺序仍归封存 plan。"""
+
+    # 普通来源 alias 可空；禁止 reader 从正文或 extension 推导。
+    source_ref: str | None = None
+    # overlay alias、身份、role 和 epoch 必须同时出现，只绑定一个 epoch。
+    overlay_ref: str | None = None
+    overlay_id: str | None = None
+    overlay_role: str = BaseDeltaRole.NONE
+    source_overlay_epoch: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("source_ref", "overlay_ref", "overlay_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _non_empty_string(value, f"SourceBinding.{name}")
+        if not isinstance(self.overlay_role, str) or self.overlay_role not in {item.value for item in BaseDeltaRole}:
+            raise ItemSchemaError("SourceBinding.overlay_role 必须是 none|base|delta")
+        if self.overlay_role == BaseDeltaRole.NONE:
+            if any(value is not None for value in (
+                self.overlay_ref, self.overlay_id, self.source_overlay_epoch
+            )):
+                raise ItemSchemaError("非 overlay SourceBinding 不得携带 overlay 字段")
+        elif (
+            self.source_ref is None or self.overlay_ref is None or self.overlay_id is None
+            or type(self.source_overlay_epoch) is not int or self.source_overlay_epoch < 0
+        ):
+            raise ItemSchemaError("overlay SourceBinding 缺少显式 alias/id/epoch")
+
+    @classmethod
+    def from_dict(cls, value: object) -> SourceBinding:
+        if not isinstance(value, Mapping):
+            raise ItemSchemaError("SourceBinding 必须是 object")
+        fields = {"source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"}
+        if set(value) - fields or "overlay_role" not in value:
+            raise ItemSchemaError("SourceBinding 缺少 overlay_role 或含未知字段")
+        return cls(**dict(value))
+
+    def to_dict(self) -> dict[str, object]:
+        return {name: value for name in (
+            "source_ref", "overlay_ref", "overlay_id", "overlay_role", "source_overlay_epoch"
+        ) if (value := getattr(self, name)) is not None}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +84,10 @@ class ContextContribution:
     source_revision: str
     content_hash: str | None = None
     request_only: bool = True
-    metadata: Mapping[str, object] = field(default_factory=dict)
+    # 非决策扩展仅用于审计/展示，不参与选择、替换、归组或恢复。
+    extensions: Mapping[str, object] = field(default_factory=dict)
+    # 可空代表无 alias；overlay 必须由 producer 完整声明。
+    source_binding: SourceBinding | None = None
     contribution_kind: str = "prompt"
     body: object | None = None
     content_length: int | None = None
@@ -117,8 +165,15 @@ class ContextContribution:
                 f"未知 ContextContribution.replacement_policy: {self.replacement_policy!r}；"
                 "closed set 只有 immutable|replaceable"
             )
-        if not isinstance(self.metadata, Mapping):
-            raise ItemSchemaError("ContextContribution.metadata 必须是 object")
+        validate_extensions(self.extensions, field="ContextContribution.extensions")
+        if self.source_binding is not None and not isinstance(self.source_binding, SourceBinding):
+            raise ItemSchemaError("ContextContribution.source_binding 必须是 typed SourceBinding")
+        role = self.source_binding.overlay_role if self.source_binding is not None else BaseDeltaRole.NONE
+        if self.contribution_kind.startswith("overlay_"):
+            if role != self.contribution_kind.removeprefix("overlay_"):
+                raise ItemSchemaError("ContextContribution overlay kind 与 source binding role 不一致")
+        elif role != BaseDeltaRole.NONE:
+            raise ItemSchemaError("非 overlay contribution 不得绑定 overlay SourceBinding")
         if self.body is not None:
             expected_hash = contribution_content_hash(self.contribution_kind, self.body)
             if self.content_hash != expected_hash:
@@ -172,7 +227,37 @@ class ContextContribution:
             raise ItemSchemaError(
                 "ContextContribution.source_ordinal 只能是 registry 分配的非负整数"
             )
-        _ensure_json_value(self.metadata, "ContextContribution.metadata")
+
+
+    def to_dict(self) -> dict[str, object]:
+        """草稿与封存共享唯一字段投影；保护正文与 registry ordinal 不补写。"""
+        result = {entry.name: getattr(self, entry.name) for entry in fields(self)}
+        result["extensions"] = dict(self.extensions)
+        result["source_binding"] = self.source_binding.to_dict() if self.source_binding is not None else None
+        if self.protection != DetailProtection.PUBLIC:
+            result["body"] = None
+        if self.source_ordinal is None:
+            result.pop("source_ordinal")
+        return result
+
+    def binding_manifest(self) -> dict[str, object]:
+        """SQLite 镜像与封存来源共用的 typed binding 清单，永不携带 registry 序号。"""
+        return {
+            "root_placement": self.root_placement,
+            "source_binding": self.source_binding.to_dict() if self.source_binding is not None else None,
+            "extensions": dict(self.extensions),
+        }
+
+
+def parse_contribution_binding_manifest(value: object) -> dict[str, object]:
+    """恢复唯一 typed binding 镜像；扩展不能覆盖其它 registry 核心列。"""
+    if not isinstance(value, Mapping) or set(value) != {"root_placement", "source_binding", "extensions"}:
+        raise ItemSchemaError("contribution binding manifest 字段非法")
+    if not isinstance(value["root_placement"], str) or value["root_placement"] not in {"root_eligible", "tail_only"}:
+        raise ItemSchemaError("contribution binding manifest 缺少有效 root_placement")
+    binding = SourceBinding.from_dict(value["source_binding"]) if value["source_binding"] is not None else None
+    validate_extensions(value["extensions"], field="contribution.extensions")
+    return {"root_placement": value["root_placement"], "source_binding": binding.to_dict() if binding is not None else None, "extensions": dict(value["extensions"])}
 
 
 def resolve_contribution_for_ref(
@@ -196,9 +281,11 @@ def resolve_contribution_for_ref(
             contribution
             for contribution in contributions
             if contribution.contribution_kind == f"overlay_{role}"
-            and contribution.metadata.get("overlay_ref") == ref.ref_id
-            and contribution.metadata.get("overlay_role") == role
-            and contribution.metadata.get("source_overlay_epoch")
+            and contribution.source_binding is not None
+            and contribution.source_binding.overlay_ref == ref.ref_id
+            and contribution.source_binding.source_ref == ref.source_ref
+            and contribution.source_binding.overlay_role == role
+            and contribution.source_binding.source_overlay_epoch
             == ref.source_overlay_epoch
         )
         if len(matches) > 1:
@@ -221,7 +308,8 @@ def resolve_contribution_for_ref(
         if contribution.contribution_id == ref.ref_id
         or (
             ref.source_ref is not None
-            and contribution.metadata.get("source_ref") == ref.source_ref
+            and contribution.source_binding is not None
+            and contribution.source_binding.source_ref == ref.source_ref
         )
     }
     if len(candidates_by_id) > 1:
@@ -255,7 +343,7 @@ def validate_included_overlay_chain(
         if contribution is None:
             raise ItemSchemaError("plan-order-integrity: included overlay 缺少 contribution")
         overlay_id = _non_empty_string(
-            contribution.metadata.get("overlay_id"), "overlay chain metadata.overlay_id"
+            contribution.source_binding.overlay_id, "overlay chain SourceBinding.overlay_id"
         )
         key = (overlay_id, entry.source_overlay_epoch)
         if entry.base_delta_role == "base":
@@ -615,11 +703,8 @@ class ContextRequestPlan:
                 # source_ordinal 是 registry 表的独立排序列，不属于 sealed
                 # contribution provenance metadata；assembly 的顺序由下面
                 # 新分配的 contribution_ordinal 固化。
-                metadata={
-                    key: value
-                    for key, value in contribution.metadata.items()
-                    if key != "source_ordinal"
-                },
+                extensions=contribution.extensions,
+                source_binding=contribution.source_binding,
                 contribution_kind=contribution.contribution_kind,
                 body=contribution.body,
                 content_length=contribution.content_length,
@@ -681,31 +766,7 @@ class ContextRequestPlan:
             "refs": [ref.to_dict() for ref in self.refs],
             "tool_set_refs": [ref.to_dict() for ref in self.tool_set_refs],
             "contributions": [
-                {
-                    "contribution_id": item.contribution_id,
-                    "source_kind": item.source_kind,
-                    "source_revision": item.source_revision,
-                    "content_hash": item.content_hash,
-                    "content_length": item.content_length,
-                    "redacted_stable_digest": item.redacted_stable_digest,
-                    "request_only": item.request_only,
-                    "contribution_kind": item.contribution_kind,
-                    "visibility": item.visibility,
-                    "protection": item.protection,
-                    "root_placement": item.root_placement,
-                    "selection_role": item.selection_role,
-                    "replacement_policy": item.replacement_policy,
-                    "body": (
-                        item.body
-                        if item.body is not None
-                        and item.protection == DetailProtection.PUBLIC
-                        else None
-                    ),
-                    "assembly_id": item.assembly_id,
-                    "contribution_ordinal": item.contribution_ordinal,
-                    "source_ordinal": item.source_ordinal,
-                    "metadata": dict(item.metadata),
-                }
+                item.to_dict()
                 for item in self.contributions
             ],
             "selection": [entry.to_dict() for entry in self.selection],

@@ -120,7 +120,7 @@ def test_item_recovery_keeps_the_same_content_preimage(
         item_sequence=2,
         status="completed",
         created_at="2027-01-01T00:00:00Z",
-        metadata={"other": "metadata"},
+        extensions={"boxteam.test.annotations": {"extension_version": "1", "protection": "public", "value": {'other': "metadata"}}},
         producer_ref={"producer_kind": "user", "producer_id": "other-ingress"},
     )
     assert changed_envelope.content_hash == item.content_hash

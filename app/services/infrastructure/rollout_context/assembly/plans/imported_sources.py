@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
@@ -12,10 +12,8 @@ from app.domain.itemized.request_plan import (
     ContextContribution,
     resolve_contribution_for_ref,
 )
+from app.domain.itemized.schema import validate_extensions
 from app.domain.itemized.serde.registry import parse_context_ref, parse_contribution
-from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
-    _validate_metadata,
-)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )
@@ -34,11 +32,11 @@ class ParsedSourceManifest:
 
 
 def _contribution_value(item: ContextContribution) -> dict[str, object]:
-    # ContextContribution 没有独立 to_dict；复用其 dataclass 字段和严格 domain parser。
+    # 使用唯一 contribution 序列化边界与严格 domain parser。
     # 必须在提取字段前拒绝正文，不能经 plan.to_dict 静默删掉 protected body。
     if not isinstance(item, ContextContribution) or item.body is not None:
         raise ValueError("source-mismatch: source manifest 必须是无正文 contribution")
-    return {field.name: getattr(item, field.name) for field in fields(ContextContribution)}
+    return item.to_dict()
 
 
 def _parse(
@@ -78,7 +76,7 @@ def _parse(
         item = parse_contribution(raw, sealed=False)
         if item.assembly_id is not None or item.contribution_ordinal is not None:
             raise ValueError("source manifest 不得包含最终 assembly/ordinal binding")
-        _validate_metadata(item.metadata, field="contribution.metadata")
+        validate_extensions(item.extensions, field="contribution.extensions")
         contributions.append(item)
     if len({item.contribution_id for item in contributions}) != len(contributions):
         raise ValueError("source manifest 重复 contribution")
@@ -181,14 +179,12 @@ def validate_source_bindings(
             raise ValueError("plan-order-integrity: included source 缺少 sealed contribution")
         # domain seal 只移除独立 source_ordinal，并新分配 assembly/贡献 ordinal。
         expected = _contribution_value(item)
+        expected.pop("source_ordinal", None)
         expected.update(
             assembly_id=snapshot.assembly_id,
             contribution_ordinal=entry.contribution_ordinal,
-            # domain seal 只保留 registry slot 于来源清单；sealed contribution
-            # 的 assembly 顺序由 contribution_ordinal 固化，typed source_ordinal
-            # 与 metadata 中的同名历史键一样不进入 sealed 形态。
-            source_ordinal=None,
-            metadata={key: value for key, value in item.metadata.items() if key != "source_ordinal"},
+            extensions=item.extensions,
+            source_binding=item.source_binding.to_dict() if item.source_binding is not None else None,
         )
         if json_text(expected) != json_text(_contribution_value(actual)):
             raise ValueError("source-mismatch: sealed contribution 与来源清单不一致")

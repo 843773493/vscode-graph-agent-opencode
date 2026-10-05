@@ -16,6 +16,9 @@ from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.enums import CanonicalItemStatus, PayloadKind, SemanticKind
 from app.domain.itemized.errors import FormatDispatchError
 from app.domain.itemized.hashing import payload_content_length
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     InternalDisplayPart,
@@ -203,7 +206,7 @@ def _seed_rollout(
                         provenance=InternalDisplayProvenance(),
                     ),
                 ).to_dict(),
-                metadata={"internal": True},
+                extensions={},
                 turn_scope="ambient",
                 wire_role="user",
                 created_at=_CREATED_AT,
@@ -217,7 +220,7 @@ def _seed_rollout(
                     status=CanonicalItemStatus.COMPLETED,
                     producer_ref={"producer_kind": "provider", "producer_id": execution_id},
                     payload=f"内部执行回复 {sequence}",
-                    metadata={"internal": True, "block_id": f"block-internal-{sequence}", "block_index": sequence - 1},
+                    projection_identity=ItemProjectionIdentity(block_id=f"block-internal-{sequence}", block_index=sequence - 1),
                     wire_role="assistant",
                     created_at=_CREATED_AT,
                 )
@@ -267,7 +270,7 @@ def _seed_rollout(
                 "(item_sequence, item_id, semantic_kind, payload_kind, status, turn_id, "
                 "execution_id, turn_scope, message_group_id, wire_role, producer_ref_json, "
                 "payload_length, source_revision, content_hash, jsonl_offset, jsonl_length, "
-                "commit_id, operation_anchor_capable, searchable, created_at, metadata_json) "
+                "commit_id, operation_anchor_capable, searchable, created_at, projection_manifest_json) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)",
                 (
                     item.item_sequence,
@@ -290,7 +293,7 @@ def _seed_rollout(
                         in {SemanticKind.USER_INPUT, SemanticKind.ASSISTANT_OUTPUT}
                     ),
                     item.created_at,
-                    canonical_json_text(item.metadata),
+                    canonical_json_text(item.projection_manifest()),
                 ),
             )
             item_offset += len(line)

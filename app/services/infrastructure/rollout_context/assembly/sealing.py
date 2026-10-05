@@ -257,7 +257,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     _assert_one_row(cursor, context="assembly item ref 写入")
                 for ordinal, contribution in enumerate(snapshot.contributions):
                     cursor = connection.execute(
-                        "INSERT INTO context_assembly_contributions(assembly_id, contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO context_assembly_contributions(assembly_id, contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, binding_manifest_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             snapshot.assembly_id,
                             contribution.contribution_ordinal
@@ -273,7 +273,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             contribution.contribution_kind,
                             contribution.visibility,
                             contribution.protection,
-                            _json(dict(contribution.metadata)),
+                            _json(contribution.binding_manifest()),
                         ),
                     )
                     _assert_one_row(cursor, context="assembly contribution 写入")

@@ -15,6 +15,11 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionGroup,
+    ProjectionPartRef,
+)
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import PromptSection, internal_message_factory
@@ -76,6 +81,7 @@ def _accept_user_turn(
 @pytest.fixture
 def accept_previous_message():
     """先建立真实已提交 root；空库不能伪造一个有 commit 的 checkpoint。"""
+
     def accept(saver: RolloutCheckpointSaver, session_id: str) -> HumanMessage:
         thread_id = saver._storage.main_thread_id(session_id)
         message = HumanMessage(
@@ -253,7 +259,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
     database_path = saver._storage.index_path(session_id, thread_id=thread_id)
     with sqlite3.connect(database_path) as connection:
         row = connection.execute(
-            "SELECT turn_id, turn_scope, metadata_json FROM item_catalog "
+            "SELECT turn_id, turn_scope, semantic_kind FROM item_catalog "
             "WHERE item_id = ?",
             ("item-msg_internal_goal",),
         ).fetchone()
@@ -261,7 +267,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
     assert admission.execution_origin == "internal"
     assert admission.turn_id is None
     assert row[:2] == (None, "pending_next_turn")
-    assert json.loads(row[2])["internal"] is True
+    assert row[2] == "runtime_notice"
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM turns").fetchone() == (0,)
     page = RolloutHistoryReader(
@@ -392,15 +398,16 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
                         "message_metadata": {"turn_id": turn_id},
                     },
                 ),
-                    AIMessage(
-                        content=final_text,
-                        name="default",
-                        response_metadata={
-                            "message_id": "msg_intermediate",
-                            "created_at": MESSAGE_TIME.isoformat(),
-                            "updated_at": MESSAGE_TIME.isoformat(),
-                        },
-                    ),
+                AIMessage(
+                    content=final_text,
+                    name="default",
+                    response_metadata={
+                        "message_id": "msg_intermediate",
+                        "model_call_id": "model-call-final",
+                        "created_at": MESSAGE_TIME.isoformat(),
+                        "updated_at": MESSAGE_TIME.isoformat(),
+                    },
+                ),
             ],
         },
         "channel_versions": {"messages": "1"},
@@ -482,11 +489,17 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
     assert assistant.response_metadata["phase"] == "final_answer"
     assert assistant.id == "msg_assistant"
     assert assistant.response_metadata["message_id"] == "msg_assistant"
-    assert assistant.response_metadata["supersedes_message_id"] == "msg_intermediate"
+    assert assistant.response_metadata["provenance_relations"][-1] == {
+        "relation": "replaces",
+        "target_kind": "projection_message",
+        "target_id": "msg_intermediate",
+        "target_model_call_id": "model-call-final",
+    }
     assert isinstance(assistant.response_metadata["created_at"], str)
-    assert assistant.response_metadata["updated_at"] == assistant.response_metadata[
-        "created_at"
-    ]
+    assert (
+        assistant.response_metadata["updated_at"]
+        == assistant.response_metadata["created_at"]
+    )
     assert assistant.tool_calls == []
     assert assistant.content == [
         {
@@ -496,7 +509,9 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         {"type": "text", "text": final_text},
     ]
 
-    messages_page = await build_message_service(tmp_path, checkpointer=saver).list(session_id, limit=10)
+    messages_page = await build_message_service(tmp_path, checkpointer=saver).list(
+        session_id, limit=10
+    )
     assert messages_page.items[-1].content == final_text
     assert messages_page.items[-1].metadata["token_usage"] == {
         "input_tokens": 100,
@@ -555,7 +570,9 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
                         HumanMessage(
                             content="问题",
                             id="msg-encrypted-user",
-                            response_metadata={"message_metadata": {"turn_id": turn_id}},
+                            response_metadata={
+                                "message_metadata": {"turn_id": turn_id}
+                            },
                         ),
                         AIMessage(content="回答"),
                     ]
@@ -735,9 +752,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
     checkpoint["channel_values"] = channel_values
     checkpoint["id"] = "ckpt-reminder-final"
     channel_versions = dict(checkpoint["channel_versions"])
-    messages_version = saver.get_next_version(
-        channel_versions.get("messages"), None
-    )
+    messages_version = saver.get_next_version(channel_versions.get("messages"), None)
     channel_versions["messages"] = messages_version
     checkpoint["channel_versions"] = channel_versions
     with (
@@ -786,9 +801,9 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         )
 
     assert changed is True
-    state_snapshot = await build_message_service(tmp_path, checkpointer=saver).get_agent_state_messages(
-        session_id
-    )
+    state_snapshot = await build_message_service(
+        tmp_path, checkpointer=saver
+    ).get_agent_state_messages(session_id)
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
     assert len(records) == 6
     assert records[3]["role"] == "user"
@@ -804,12 +819,15 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         session_id,
         limit=10,
     )
-    assert all("<system_reminder>" not in item.content for item in visible_messages.items)
+    assert all(
+        "<system_reminder>" not in item.content for item in visible_messages.items
+    )
 
 
 @pytest.fixture
 def reasoning_items():
     """输入顺序来自已提交 selection；物理 sequence 故意与它不同。"""
+
     def make(*indices: int) -> list[CanonicalItemRecord]:
         items = [
             CanonicalItemRecord.create(
@@ -825,28 +843,38 @@ def reasoning_items():
                 },
                 payload=f"思考 {index}",
                 created_at=MESSAGE_TIME.isoformat(),
-                metadata={"block_id": f"reasoning-{index}", "block_index": index},
+                message_group_id="message-model-call-1",
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-1",
+                    block_id=f"model-call-1:block:reasoning-{index}",
+                    block_index=index,
+                ),
                 turn_id="turn-1",
                 turn_scope="turn_member",
             )
             for position, index in enumerate(indices)
         ]
-        items.append(CanonicalItemRecord.create(
-            item_sequence=11,
-            item_id="tool-call-item",
-            semantic_kind="tool_call",
-            payload_kind="tool_call",
-            status="completed",
-            producer_ref={
-                "producer_kind": "provider",
-                "producer_id": "test-model",
-                "invocation_id": "model-call-1",
-            },
-            payload={"tool_calls": [{"id": "call-1", "name": "read", "args": {}}]},
-            created_at=MESSAGE_TIME.isoformat(),
-            turn_id="turn-1",
-            turn_scope="turn_member",
-        ))
+        items.append(
+            CanonicalItemRecord.create(
+                item_sequence=11,
+                item_id="tool-call-item",
+                semantic_kind="tool_call",
+                payload_kind="tool_call",
+                status="completed",
+                producer_ref={
+                    "producer_kind": "provider",
+                    "producer_id": "test-model",
+                    "invocation_id": "model-call-1",
+                },
+                payload={"tool_calls": [{"id": "call-1", "name": "read", "args": {}}]},
+                created_at=MESSAGE_TIME.isoformat(),
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-1"
+                ),
+                turn_id="turn-1",
+                turn_scope="turn_member",
+            )
+        )
         return items
 
     return make
@@ -855,42 +883,60 @@ def reasoning_items():
 def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items):
     items = reasoning_items(0, 2)
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content="",
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
     result = merge_canonical_reasoning([message], items)
     assert [block["id"] for block in result[0].content] == [
-        "reasoning-0", "reasoning-2",
+        "model-call-1:block:reasoning-0",
+        "model-call-1:block:reasoning-2",
     ]
     assert message.content == ""
     assert [item.item_sequence for item in items] == [10, 9, 11]
     assert result[0].tool_calls == message.tool_calls
 
 
-def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(reasoning_items):
+def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(
+    reasoning_items,
+):
     protected = {
-        "type": "reasoning", "id": "reasoning-0", "index": 0,
-        "reasoning": "思考 0", "signature": "protected-signature",
+        "type": "reasoning",
+        "id": "reasoning-0",
+        "index": 0,
+        "reasoning": "思考 0",
+        "signature": "protected-signature",
         "extras": {"opaque": "不得丢失"},
     }
     text = {"type": "text", "text": "调用前说明", "index": 1, "id": "text-1"}
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content=[protected, text],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
     items = reasoning_items(0, 2)
     original_items = [item.to_dict() for item in items]
     result = merge_canonical_reasoning([message], items)
-    assert result[0].content == [protected, text, {
-        "type": "reasoning", "reasoning": "思考 2", "id": "reasoning-2", "index": 2,
-    }]
+    assert result[0].content == [
+        protected,
+        text,
+        {
+            "type": "reasoning",
+            "reasoning": "思考 2",
+            "id": "model-call-1:block:reasoning-2",
+            "index": 2,
+        },
+    ]
     assert message.content == [protected, text]
     assert [item.to_dict() for item in items] == original_items
     assert merge_canonical_reasoning(result, items)[0].content == result[0].content
 
 
-def test_agent_state_reasoning_merge_reuses_matching_provider_carrier(reasoning_items):
+def test_agent_state_reasoning_merge_reports_unidentified_provider_carrier(
+    reasoning_items,
+):
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content=[
             {
                 "type": "reasoning_content",
@@ -902,6 +948,10 @@ def test_agent_state_reasoning_merge_reuses_matching_provider_carrier(reasoning_
     result = merge_canonical_reasoning([message], reasoning_items(0))
     assert result[0].content == message.content
     assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
+    assert (
+        result[0].response_metadata["reasoning_merge_reason"]
+        == "content_part_index_missing"
+    )
 
 
 def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
@@ -913,13 +963,13 @@ def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
         replace(
             items[0],
             item_id="reasoning-0-checkpoint",
-            metadata={
-                "execution_confirmed": True,
-                "projection_group": {"content_form": "list", "ordinal": 0, "size": 2},
-            },
+            projection_group=ProjectionGroup.from_dict(
+                {"content_form": "list", "ordinal": 0, "size": 2}
+            ),
         ),
     )
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content=[
             {
                 "type": "reasoning_content",
@@ -942,7 +992,11 @@ def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_mess
         item_sequence=8,
         payload="工具返回后的 reasoning",
         content_hash=content_hash("text", "工具返回后的 reasoning"),
-        metadata={"block_id": "part-after-tool", "block_index": 0},
+        projection_identity=ItemProjectionIdentity(
+            model_call_id="model-call-2",
+            block_id="model-call-2:block:part-after-tool",
+            block_index=0,
+        ),
     )
     items.insert(1, post_tool)
     items.append(
@@ -958,22 +1012,30 @@ def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_mess
                 "invocation_id": "turn-1",
             },
             payload=[
-                {"reasoning_content": "工具返回后的 reasoning", "type": "reasoning_content"},
+                {
+                    "reasoning_content": "工具返回后的 reasoning",
+                    "type": "reasoning_content",
+                },
                 {"text": "最终答复", "type": "text"},
             ],
-            metadata={
-                "phase": "final_answer",
-                "content_part_refs": [
-                    {"id": "part-after-tool", "index": 0},
-                    {"id": "part-final-text", "index": 1},
-                ],
-            },
+            projection_identity=ItemProjectionIdentity(
+                model_call_id="model-call-2",
+                phase="final_answer",
+                content_part_refs=tuple(
+                    ProjectionPartRef.from_dict(ref)
+                    for ref in [
+                        {"id": "part-after-tool", "index": 0},
+                        {"id": "part-final-text", "index": 1},
+                    ]
+                ),
+            ),
             turn_id="turn-1",
             turn_scope="turn_member",
             wire_role="assistant",
         )
     )
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content=[
             {
                 "type": "reasoning_content",
@@ -995,6 +1057,7 @@ def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
     indices,
 ):
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content="缺少 content-part 顺序的正文",
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )
@@ -1013,6 +1076,7 @@ def test_agent_state_reasoning_merge_keeps_conflicting_part_order_explicit(
     reasoning_items,
 ):
     message = AIMessage(
+        response_metadata={"model_call_id": "model-call-1"},
         content=[{"type": "text", "text": "调用前说明", "index": 1}],
         tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
     )

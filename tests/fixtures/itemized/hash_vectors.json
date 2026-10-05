@@ -324,8 +324,11 @@
         ]
       },
       "created_at": "2026-09-08T00:00:00Z",
-      "metadata": {
-        "source_revision": "revision-golden"
+      "extensions": {},
+      "source_manifest": {
+        "source_revision": "revision-golden",
+        "visibility": "public",
+        "protection": "public"
       },
       "turn_id": "turn-golden",
       "turn_scope": "turn_root",

@@ -5,14 +5,31 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
+from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    CANONICAL_GROUP_FIELD,
+    message_annotations,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.reader import (
+    RolloutContextReader,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -20,6 +37,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
 )
+from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 
 
 @pytest.fixture
@@ -48,15 +66,25 @@ def group_case(tmp_path, session_bundle_factory):
             content=content,
             tool_calls=[{"id": "call-1", "name": "read", "args": {"path": "a.txt"}}],
             response_metadata={
+                "model_call_id": "model-call-1",
                 "phase": "commentary",
                 "token_usage": {"input_tokens": 12, "output_tokens": 5},
             },
         ),
         ToolMessage(
-            id="result-1", content="文件正文", tool_call_id="call-1", name="read"
+            id="result-1",
+            content="文件正文",
+            tool_call_id="call-1",
+            name="read",
+            response_metadata={"model_call_id": "model-call-1"},
         ),
         AIMessage(
-            id="final-1", content="完成", response_metadata={"phase": "final_answer"}
+            id="final-1",
+            content="完成",
+            response_metadata={
+                "phase": "final_answer",
+                "model_call_id": "model-call-final",
+            },
         ),
     ]
     checkpoint = {
@@ -65,13 +93,44 @@ def group_case(tmp_path, session_bundle_factory):
         "channel_versions": {"messages": "1"},
         "updated_channels": ["messages"],
     }
-    return session_id, session_dir, messages, checkpoint
+    saver = RolloutCheckpointSaver(tmp_path)
+    thread_id = saver._storage.main_thread_id(session_id)
+    saver.accept_turn(
+        session_id,
+        thread_id=thread_id,
+        accepted_ingress_id="user-1",
+        acceptance_idempotency_key="acceptance:user-1",
+        job_id="job-group",
+        admission_idempotency_key="admission:job-group",
+        turn_id="turn-tool-result",
+        root_item_id="item-user-1",
+        payload=messages[0].content,
+        initial_execution_id="execution-group",
+        extensions=message_annotations(messages[0].response_metadata),
+    )
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id="execution-group",
+    )
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        yield session_id, session_dir, messages, checkpoint
 
 
 def _save(tmp_path, group_case):
     session_id, _, _, checkpoint = group_case
     saver = RolloutCheckpointSaver(tmp_path)
-    config = {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}}
+    config = {
+        "configurable": {
+            "thread_id": saver._storage.main_thread_id(session_id),
+            "checkpoint_ns": "",
+        }
+    }
     saver.put(
         config,
         checkpoint,
@@ -79,6 +138,271 @@ def _save(tmp_path, group_case):
         {"messages": "1"},
     )
     return saver, config
+
+
+@pytest.fixture
+def opaque_group_case(group_case):
+    _, _, messages, _ = group_case
+    codec = LangChainMessageCodec()
+    group = codec.items_for_message(
+        messages[1],
+        item_sequence=2,
+        message_id="call-message-1",
+        turn_id="turn-tool-result",
+        execution_id="execution-group",
+        model_call_id="model-call-1",
+        timestamp="2026-10-05T00:00:00+00:00",
+    )
+    members = tuple(
+        replace(
+            item,
+            extensions={
+                **item.extensions,
+                "vendor.opaque": {
+                    "extension_version": "future-99",
+                    "encoding": "opaque-v42",
+                    "protection": "public",
+                    "value": [index, {"owner": "只保存，不参与归属"}],
+                },
+            },
+            provenance_relations=(
+                ItemProvenanceRelation(
+                    "derived_from",
+                    "canonical_item",
+                    f"source-item-{index}",
+                    target_session_id="source-session",
+                    target_thread_id="source-thread",
+                    target_turn_id="source-turn",
+                    target_model_call_id=f"source-model-{index}",
+                ),
+            ),
+        )
+        for index, item in enumerate(group)
+    )
+    messages[1] = codec.from_dict(codec.project_message(members))
+    return group_case, members
+
+
+def test_checkpoint_preserves_each_member_opaque_extensions_and_provenance_on_reopen(
+    tmp_path,
+    opaque_group_case,
+):
+    group_case, expected = opaque_group_case
+    session_id, session_dir, _, _ = group_case
+    _, config = _save(tmp_path, group_case)
+    path = session_dir / "rollout" / "rollout.jsonl"
+    before = path.read_bytes()
+    script = """
+import json, sys
+from pathlib import Path
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from tests.support.session_catalog_owner import fixture_catalog_scope
+with fixture_catalog_scope():
+    saver = RolloutCheckpointSaver(Path(sys.argv[1]))
+    thread_id = saver._storage.main_thread_id(sys.argv[2])
+    with session_thread_owner_scope(MutationIntentOwner(sys.argv[2], thread_id), langgraph_thread_id=thread_id):
+        restored = saver.get_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+    print(json.dumps(restored.checkpoint["channel_values"]["messages"][1].response_metadata["canonical_item_manifests"], ensure_ascii=False))
+"""
+    fresh = subprocess.run(
+        [
+            "timeout",
+            "30",
+            "bash",
+            "-c",
+            'ulimit -d 4194304; exec "$@"',
+            "bash",
+            "uv",
+            "run",
+            "python",
+            "-c",
+            script,
+            str(tmp_path),
+            session_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert fresh.returncode == 0, fresh.stderr
+    assert json.loads(fresh.stdout) == [
+        {"item_id": item.item_id, **item.projection_manifest()} for item in expected
+    ]
+    with RolloutCheckpointSaver(tmp_path) as reopened:
+        restored = reopened.get_tuple(config)
+        assert restored is not None
+        messages = restored.checkpoint["channel_values"]["messages"]
+        manifests = messages[1].response_metadata[CANONICAL_GROUP_FIELD]
+        assert manifests == [
+            {"item_id": item.item_id, **item.projection_manifest()} for item in expected
+        ]
+        items = reopened._storage.read_items(
+            session_id, config["configurable"]["thread_id"]
+        )
+        actual = [
+            item
+            for item in items
+            if item.message_group_id == expected[-1].message_group_id
+        ]
+        assert [item.projection_manifest() for item in actual] == [
+            item.projection_manifest() for item in expected
+        ]
+        reopened.put(
+            config,
+            {**restored.checkpoint, "id": "checkpoint-opaque-retry"},
+            {"source": "test", "step": 2, "writes": {}},
+            {"messages": "2"},
+        )
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mutation", ["extensions", "provenance_relations"])
+def test_same_body_checkpoint_rejects_changed_opaque_or_member_provenance(
+    tmp_path,
+    opaque_group_case,
+    mutation,
+):
+    group_case, _ = opaque_group_case
+    _, session_dir, _, checkpoint = group_case
+    saver, config = _save(tmp_path, group_case)
+    messages = list(saver.get_tuple(config).checkpoint["channel_values"]["messages"])
+    metadata = deepcopy(messages[1].response_metadata)
+    if mutation == "extensions":
+        metadata[CANONICAL_GROUP_FIELD][0]["extensions"]["vendor.opaque"]["value"] = (
+            "changed"
+        )
+    else:
+        metadata[CANONICAL_GROUP_FIELD][0]["provenance_relations"][0]["target_id"] = (
+            "other-source-item"
+        )
+    messages[1] = messages[1].model_copy(update={"response_metadata": metadata})
+    path = session_dir / "rollout" / "rollout.jsonl"
+    before = path.read_bytes()
+    with sqlite3.connect(session_dir / "rollout" / "index.sqlite") as database:
+        catalog_before = database.execute(
+            "SELECT * FROM item_catalog ORDER BY item_sequence"
+        ).fetchall()
+        commits_before = database.execute(
+            "SELECT * FROM storage_commits ORDER BY commit_id"
+        ).fetchall()
+    with pytest.raises(ValueError, match="typed provenance/extensions"):
+        saver.put(
+            config,
+            {
+                **checkpoint,
+                "id": "checkpoint-opaque-conflict",
+                "channel_values": {"messages": messages},
+            },
+            {"source": "test", "step": 2, "writes": {}},
+            {"messages": "2"},
+        )
+    assert path.read_bytes() == before
+    with sqlite3.connect(session_dir / "rollout" / "index.sqlite") as database:
+        assert (
+            database.execute(
+                "SELECT * FROM item_catalog ORDER BY item_sequence"
+            ).fetchall()
+            == catalog_before
+        )
+        assert (
+            database.execute(
+                "SELECT * FROM storage_commits ORDER BY commit_id"
+            ).fetchall()
+            == commits_before
+        )
+
+
+@pytest.mark.parametrize("model_call", ["model-call-1", "model-call-2"])
+@pytest.mark.parametrize("carrier", ["provider_raw", "canonical_scoped"])
+def test_indexed_reader_keeps_reused_provider_tool_call_within_requested_model_scope(
+    tmp_path,
+    group_case,
+    model_call,
+    carrier,
+):
+    session_id, _, messages, _ = group_case
+    first_id = (
+        "model-call-1:tool-call:call-1" if carrier == "canonical_scoped" else "call-1"
+    )
+    messages[1] = messages[1].model_copy(
+        update={
+            "tool_calls": [{**messages[1].tool_calls[0], "id": first_id}],
+        }
+    )
+    messages[2] = messages[2].model_copy(update={"tool_call_id": first_id})
+    second_id = (
+        "model-call-2:tool-call:call-1" if carrier == "canonical_scoped" else "call-1"
+    )
+    messages[3:3] = [
+        AIMessage(
+            id="call-message-2",
+            content="",
+            response_metadata={"model_call_id": "model-call-2"},
+            tool_calls=[{"id": second_id, "name": "read", "args": {"path": "b.txt"}}],
+        ),
+        ToolMessage(
+            id="result-2",
+            content="另一调用的结果",
+            tool_call_id=second_id,
+            name="read",
+            response_metadata={"model_call_id": "model-call-2"},
+        ),
+    ]
+    saver, config = _save(tmp_path, group_case)
+    with saver._storage.open_read_snapshot(
+        session_id, config["configurable"]["thread_id"]
+    ) as snapshot:
+        records = saver._storage.read_indexed_records_batch(
+            snapshot,
+            turn_ids=("turn-tool-result",),
+            message_roles=(),
+            tool_kinds=("tool_result",),
+            tool_call_ids=(f"{model_call}:tool-call:call-1",),
+        )["turn-tool-result"]
+    suffix = "1" if model_call == "model-call-1" else "2"
+    assert {record["message_id"] for record in records} == {
+        f"call-message-{suffix}",
+        f"result-{suffix}",
+    }
+    assert all(
+        record["message"]["data"]["response_metadata"]["model_call_id"] == model_call
+        for record in records
+    )
+
+    page = RolloutHistoryReader(RolloutContextReader(saver._storage)).load(
+        session_id,
+        config["configurable"]["thread_id"],
+        TurnHistoryLoadRequest(
+            turn_ids=["turn-tool-result"],
+            tool_call_ids=[f"{model_call}:tool-call:call-1"],
+            include=["tool_call", "tool_result", "tool_summary"],
+        ),
+    )
+    detail = page.items[0]
+    assert [part.kind for part in detail.response_parts] == ["tool_call", "tool_result"]
+    expected_id = f"{model_call}:tool-call:call-1" if carrier == "canonical_scoped" else "call-1"
+    assert {part.tool_call_id for part in detail.response_parts} == {expected_id}
+    assert json.loads(detail.response_parts[0].arguments)["path"] == (
+        "a.txt" if suffix == "1" else "b.txt"
+    )
+    assert detail.response_parts[1].result == (
+        "文件正文" if suffix == "1" else "另一调用的结果"
+    )
+    assert len(detail.items) == 2
+    assert {item.part_id for item in detail.items} == {expected_id}
+    assert len(detail.tool_summary) == 2
+    with saver._storage.open_read_snapshot(
+        session_id, config["configurable"]["thread_id"]
+    ) as snapshot:
+        assert saver._storage.read_indexed_records_batch(
+            snapshot,
+            turn_ids=("turn-tool-result",),
+            message_roles=(),
+            tool_kinds=("tool_call", "tool_result"),
+            tool_call_ids=("unknown-model:tool-call:call-1",),
+        )["turn-tool-result"] == []
 
 
 def test_canonical_group_jsonl_locator_commit_and_fresh_process(tmp_path, group_case):
@@ -101,15 +425,26 @@ def test_canonical_group_jsonl_locator_commit_and_fresh_process(tmp_path, group_
     assert [item.item_sequence for item in items] == list(range(1, 8))
     assert items[0].turn_scope == "turn_root"
     assert all(item.turn_id == items[0].turn_id for item in items)
-    assert all(
-        line == canonical_json_line(item.to_dict())
-        for line, item in zip(lines, items, strict=True)
-    )
+    for line, item in zip(lines, items, strict=True):
+        restored = item.to_dict()
+        original = json.loads(line)
+        assert line == canonical_json_line(restored), {
+            key: (original.get(key), restored.get(key))
+            for key in original.keys() | restored.keys()
+            if original.get(key) != restored.get(key)
+            or (key in original) != (key in restored)
+        }
     group = items[1:5]
-    assert all("token_usage" not in item.metadata for item in group[:-1])
+    assert all(
+        "token_usage"
+        not in item.extensions.get("boxteam.checkpoint.annotations", {}).get(
+            "value", {}
+        )
+        for item in group[:-1]
+    )
     assert len({item.message_group_id for item in group}) == 1
     assert len({json.dumps(item.producer_ref, sort_keys=True) for item in group}) == 1
-    assert [item.metadata["projection_group"]["ordinal"] for item in group] == [
+    assert [item.projection_group.ordinal for item in group] == [
         0,
         1,
         2,
@@ -117,24 +452,40 @@ def test_canonical_group_jsonl_locator_commit_and_fresh_process(tmp_path, group_
     ]
     assert group[1].payload == "核对参数"
     assert set(group[-1].payload) == {"tool_calls"}
-    assert "核对参数" not in json.dumps(group[-1].metadata, ensure_ascii=False)
-    assert items[0].metadata["source"] == "session_subagent_delegation"
-    assert items[0].metadata["parent_session_id"] == "parent-1"
-    assert "message_role" not in items[0].metadata
-    assert group[-1].metadata["phase"] == "commentary"
-    assert group[-1].metadata["token_usage"] == {"input_tokens": 12, "output_tokens": 5}
+    assert "核对参数" not in json.dumps(
+        group[-1].projection_manifest(), ensure_ascii=False
+    )
+    assert (
+        items[0].extensions["boxteam.checkpoint.annotations"]["value"]["source"]
+        == "session_subagent_delegation"
+    )
+    assert (
+        items[0].extensions["boxteam.checkpoint.annotations"]["value"][
+            "parent_session_id"
+        ]
+        == "parent-1"
+    )
+    assert (
+        "message_role"
+        not in items[0].extensions["boxteam.checkpoint.annotations"]["value"]
+    )
+    assert group[-1].projection_identity.phase == "commentary"
+    assert group[-1].extensions["boxteam.checkpoint.annotations"]["value"][
+        "token_usage"
+    ] == {"input_tokens": 12, "output_tokens": 5}
     with sqlite3.connect(
         f"file:{session_dir}/rollout/index.sqlite?mode=ro", uri=True
     ) as db:
         catalogs = db.execute(
             "SELECT item_sequence, jsonl_offset, jsonl_length, commit_id FROM item_catalog ORDER BY item_sequence"
         ).fetchall()
-        assert len({row[3] for row in catalogs}) == 1
+        assert len({row[3] for row in catalogs[1:]}) == 1
+        assert catalogs[0][3] != catalogs[1][3]
         for sequence, offset, length, _ in catalogs:
             assert raw[offset : offset + length] == lines[sequence - 1]
         assert db.execute(
-            "SELECT jsonl_record_count FROM storage_commits WHERE status = 'committed'"
-        ).fetchall() == [(7,)]
+            "SELECT jsonl_record_count FROM storage_commits WHERE status = 'committed' ORDER BY commit_id"
+        ).fetchall() == [(1,), (6,)]
         anchors = db.execute(
             "SELECT message_sequence, jsonl_offset, jsonl_length FROM messages ORDER BY message_sequence"
         ).fetchall()
@@ -145,19 +496,42 @@ def test_canonical_group_jsonl_locator_commit_and_fresh_process(tmp_path, group_
         assert [row[0] for row in anchors] == [1, 2, 3, 4]
         assert (
             db.execute(
-                "SELECT COUNT(*) FROM context_view_items WHERE visible = 1"
+                "SELECT COUNT(*) FROM context_view_items AS i "
+                "JOIN branches AS b ON b.head_view_id = i.view_id "
+                "JOIN checkpoint_namespace_state AS ns ON ns.active_branch_id = b.branch_id "
+                "WHERE ns.checkpoint_ns = '' AND i.visible = 1"
             ).fetchone()[0]
             == 7
         )
     script = """
 import json, sys
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
-saver = RolloutCheckpointSaver(sys.argv[1])
-value = saver.get_tuple({'configurable': {'thread_id': sys.argv[2], 'checkpoint_ns': ''}})
-print(json.dumps([{'id': message.id, 'content': message.content, 'metadata': message.response_metadata, 'calls': getattr(message, 'tool_calls', [])} for message in value.checkpoint['channel_values']['messages']], ensure_ascii=False))
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from tests.support.session_catalog_owner import fixture_catalog_scope
+with fixture_catalog_scope():
+    saver = RolloutCheckpointSaver(sys.argv[1])
+    thread_id = saver._storage.main_thread_id(sys.argv[2])
+    with session_thread_owner_scope(MutationIntentOwner(sys.argv[2], thread_id), langgraph_thread_id=thread_id):
+        value = saver.get_tuple({'configurable': {'thread_id': thread_id, 'checkpoint_ns': ''}})
+    print(json.dumps([{'id': message.id, 'content': message.content, 'metadata': message.response_metadata, 'calls': getattr(message, 'tool_calls', [])} for message in value.checkpoint['channel_values']['messages']], ensure_ascii=False))
 """
     result = subprocess.run(
-        ["uv", "run", "python", "-c", script, str(tmp_path), session_id],
+        [
+            "timeout",
+            "30",
+            "bash",
+            "-c",
+            'ulimit -d 4194304; exec "$@"',
+            "bash",
+            "uv",
+            "run",
+            "python",
+            "-c",
+            script,
+            str(tmp_path),
+            session_id,
+        ],
         cwd=Path.cwd(),
         capture_output=True,
         text=True,
@@ -316,7 +690,12 @@ def test_group_catalog_corruption_does_not_rewrite_jsonl(tmp_path, group_case):
 def test_group_sql_failure_rolls_back_jsonl_catalog_and_locators(tmp_path, group_case):
     session_id, session_dir, messages, checkpoint = group_case
     saver = RolloutCheckpointSaver(tmp_path)
-    config = {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}}
+    config = {
+        "configurable": {
+            "thread_id": saver._storage.main_thread_id(session_id),
+            "checkpoint_ns": "",
+        }
+    }
     metadata = {"source": "test", "step": 1, "writes": {}}
     saver.put(
         config,
@@ -361,17 +740,30 @@ def test_request_tool_group_rejects_existing_group_semantic_changes(
     path = session_dir / "rollout" / "rollout.jsonl"
     before = path.read_bytes()
     turn_id = json.loads(before.splitlines()[0])["turn_id"]
-    assert saver._storage.ensure_request_items(
-        session_id, turn_id=turn_id, messages=messages
-    ) == ()
+    assert (
+        saver._storage.ensure_request_items(
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            execution_id="execution-group",
+            turn_id=turn_id,
+            messages=messages,
+        )
+        == ()
+    )
     changed = messages[1].model_copy(
         update={"content": messages[1].content[:1]}
         if mutation == "missing_companions"
-        else {"response_metadata": {**messages[1].response_metadata, "phase": "changed"}}
+        else {
+            "response_metadata": {**messages[1].response_metadata, "phase": "changed"}
+        }
     )
     with pytest.raises(RuntimeError, match="canonical.*group"):
         saver._storage.ensure_request_items(
-            session_id, turn_id=turn_id, messages=[changed]
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            execution_id="execution-group",
+            turn_id=turn_id,
+            messages=[changed],
         )
     assert path.read_bytes() == before
 
@@ -381,7 +773,12 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
 ):
     session_id, session_dir, messages, checkpoint = group_case
     saver = RolloutCheckpointSaver(tmp_path)
-    config = {"configurable": {"thread_id": session_id, "checkpoint_ns": ""}}
+    config = {
+        "configurable": {
+            "thread_id": saver._storage.main_thread_id(session_id),
+            "checkpoint_ns": "",
+        }
+    }
     metadata = {"source": "test", "step": 1, "writes": {}}
     saver.put(
         config,
@@ -392,7 +789,11 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     path = session_dir / "rollout" / "rollout.jsonl"
     turn_id = json.loads(path.read_bytes().splitlines()[0])["turn_id"]
     committed = saver._storage.ensure_request_items(
-        session_id, turn_id=turn_id, messages=messages[1:3]
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        execution_id="execution-group",
+        turn_id=turn_id,
+        messages=messages[1:3],
     )
     assert committed == (
         "item-call-message-1-content-0",
@@ -403,9 +804,16 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
     )
     before = path.read_bytes()
     assert len(before.splitlines()) == 6
-    assert saver._storage.ensure_request_items(
-        session_id, turn_id=turn_id, messages=messages[1:3]
-    ) == ()
+    assert (
+        saver._storage.ensure_request_items(
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            execution_id="execution-group",
+            turn_id=turn_id,
+            messages=messages[1:3],
+        )
+        == ()
+    )
     assert path.read_bytes() == before
     saver.put(config, checkpoint, metadata, {"messages": "1"})
     after = path.read_bytes()
@@ -417,7 +825,10 @@ def test_request_tool_groups_are_committed_once_and_reused_by_checkpoint(
             "SELECT COUNT(DISTINCT commit_id) FROM item_catalog WHERE item_sequence BETWEEN 2 AND 6"
         ).fetchone() == (1,)
     restored = RolloutCheckpointSaver(tmp_path).get_tuple(config)
-    assert restored.checkpoint["channel_values"]["messages"][1].content == messages[1].content
+    assert (
+        restored.checkpoint["channel_values"]["messages"][1].content
+        == messages[1].content
+    )
     assert path.read_bytes() == after
 
 
@@ -433,6 +844,8 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
     )
     shadow_ids = saver._storage.ensure_request_items(
         session_id,
+        saver._storage.main_thread_id(session_id),
+        execution_id="execution-group",
         turn_id="turn-tool-result",
         messages=[tool_result_message],
     )
@@ -456,22 +869,18 @@ def test_tool_result_shadow_reuses_completed_result_with_different_lifecycle_ids
             "name": "read",
             "content": "文件正文",
             "tool_outcome": "success",
-        },
-        metadata={
-            "execution_id": "tool-execution-1",
-            "model_call_id": "model-call-1",
-            "tool_call_id": "model-call-1:tool-call:call-1",
-            "tool_invocation_id": "tool-invocation-1",
-            "tool_attempt_id": "tool-execution-1",
             "execution_confirmed": True,
         },
+        projection_identity=ItemProjectionIdentity(model_call_id="model-call-1"),
         turn_id="turn-tool-result",
         turn_scope="turn_member",
         message_group_id="message-tool-execution-1",
         wire_role="tool",
     )
     before = (session_dir / "rollout" / "rollout.jsonl").read_bytes()
-    saver._storage.append_items(session_id, (result,))
+    saver.append_items(
+        session_id, (result,), thread_id=saver._storage.main_thread_id(session_id)
+    )
     assert (session_dir / "rollout" / "rollout.jsonl").read_bytes() == before
 
 

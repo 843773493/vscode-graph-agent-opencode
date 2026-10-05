@@ -26,11 +26,18 @@ from app.domain.itemized.enums import (
     TurnScope,
 )
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ItemProvenanceRelation,
+    ItemSourceManifest,
+    ProjectionPartRef,
+)
 from app.domain.itemized.records import (
     CanonicalItemRecord,
     InternalDisplayPart,
     InternalDisplayProvenance,
     RuntimeNoticePayload,
+    user_input_payload,
 )
 from app.prompting.factory import INTERNAL_PROMPT_SCHEMA_VERSION
 from app.prompting.registry import (
@@ -41,11 +48,13 @@ from app.prompting.validation import internal_prompt_metadata, validate_internal
 from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
     expand_tool_message,
     group_content,
+    restore_group_manifests,
     validate_group,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
-    restore_metadata,
-    semantic_metadata,
+    CANONICAL_GROUP_FIELD,
+    message_annotations,
+    project_annotations,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
 from app.services.mapping.itemized.provider_history import (
@@ -261,9 +270,7 @@ class LangChainMessageCodec:
         if execution_id is not None and (
             not isinstance(execution_id, str) or not execution_id
         ):
-            raise ValueError(
-                "items_for_message.execution_id 必须是非空字符串或 None"
-            )
+            raise ValueError("items_for_message.execution_id 必须是非空字符串或 None")
         if turn_id is None and execution_id is None:
             raise ValueError(
                 "Turn-less canonical message 必须带 admission 的 execution_id"
@@ -283,42 +290,38 @@ class LangChainMessageCodec:
             )
             else None
         )
-        item_metadata: dict[str, object] = {
-            "projection_message_id": message_id,
-            "wire_role": role,
-            "execution_confirmed": True,
-        }
-        if isinstance(model_call_id, str) and model_call_id:
-            item_metadata["model_call_id"] = model_call_id
-        item_metadata.update(semantic_metadata(response_metadata))
-        for key in (
-            "context_fork_source_session_id",
-            "fork_source_session_id",
-            "fork_source_item_id",
-            "fork_source_turn_id",
-        ):
-            value = response_metadata.get(key)
-            if isinstance(value, str) and value:
-                item_metadata[key] = value
-        raw_attachments = response_metadata.get("attachments")
-        if isinstance(raw_attachments, list):
-            attachments: list[dict[str, object]] = []
-            for attachment in raw_attachments:
-                if not isinstance(attachment, Mapping):
-                    continue
-                file_id = attachment.get("file_id")
-                if not isinstance(file_id, str) or not file_id:
-                    continue
-                safe_attachment: dict[str, object] = {"file_id": file_id}
-                for key in ("name", "content_type", "path", "preview_status"):
-                    value = attachment.get(key)
-                    if isinstance(value, str) and value:
-                        safe_attachment[key] = value
-                attachments.append(safe_attachment)
-            if attachments:
-                item_metadata["attachments"] = attachments
-        internal_notice = internal and isinstance(message, HumanMessage) and (
-            turn_id is None or display_payload is not None
+        nested_metadata = response_metadata.get("message_metadata")
+        nested_metadata = (
+            nested_metadata if isinstance(nested_metadata, Mapping) else {}
+        )
+        phase = response_metadata.get("phase", nested_metadata.get("phase"))
+        refs = response_metadata.get(
+            "content_part_refs", nested_metadata.get("content_part_refs", [])
+        )
+        if not isinstance(refs, list):
+            raise TypeError("checkpoint content_part_refs 必须是有序 array")
+        identity = ItemProjectionIdentity(
+            projection_message_id=message_id,
+            model_call_id=model_call_id,
+            phase=phase,
+            completion_reason=response_metadata.get(
+                "completion_reason", nested_metadata.get("completion_reason")
+            ),
+            content_part_refs=tuple(ProjectionPartRef.from_dict(ref) for ref in refs),
+        )
+        raw_relations = response_metadata.get("provenance_relations", [])
+        if not isinstance(raw_relations, list):
+            raise TypeError("checkpoint provenance_relations 必须是有序 typed array")
+        relations = tuple(
+            ItemProvenanceRelation.from_dict(entry) for entry in raw_relations
+        )
+        extensions = message_annotations(response_metadata)
+        if role == "user" and not internal:
+            content = user_input_payload(content, response_metadata.get("attachments"))
+        internal_notice = (
+            internal
+            and isinstance(message, HumanMessage)
+            and (turn_id is None or display_payload is not None)
         )
         if internal_notice:
             semantic_kind = SemanticKind.RUNTIME_NOTICE
@@ -349,7 +352,9 @@ class LangChainMessageCodec:
         elif isinstance(message, ToolMessage):
             semantic_kind = SemanticKind.TOOL_RESULT
             payload_kind = PayloadKind.TOOL_RESULT
-            tool_call_id = str(data_mapping.get("tool_call_id") or "unknown-call")
+            tool_call_id = data_mapping.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                raise ValueError("ToolMessage 缺少真实 tool_call_id")
             tool_status = data_mapping.get("status")
             tool_outcome = {
                 "success": "success",
@@ -361,8 +366,8 @@ class LangChainMessageCodec:
                 "name": str(data_mapping.get("name") or "tool"),
                 "content": data_mapping.get("content"),
                 "tool_outcome": tool_outcome,
+                "execution_confirmed": tool_outcome != "unknown",
             }
-            item_metadata["tool_call_id"] = tool_call_id
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
         elif self.tool_calls(message_value):
@@ -423,24 +428,45 @@ class LangChainMessageCodec:
             },
             payload=payload,
             created_at=timestamp,
-            metadata=item_metadata,
+            extensions=extensions,
+            projection_identity=identity,
+            source_manifest=ItemSourceManifest(
+                response_metadata["context_revision"], "public", "public"
+            )
+            if response_metadata.get("context_revision") is not None
+            else None,
+            provenance_relations=relations,
             turn_id=item_turn_id,
             turn_scope=turn_scope,
             message_group_id=f"message-{message_id}",
             wire_role=role,
         )
-        return expand_tool_message(primary, data_mapping.get("content", ""))
+        return restore_group_manifests(
+            expand_tool_message(primary, data_mapping.get("content", "")),
+            response_metadata,
+        )
 
     def project_message(
-        self, items: Sequence[CanonicalItemRecord],
+        self,
+        items: Sequence[CanonicalItemRecord],
     ) -> dict[str, object]:
         item = validate_group(items)
-        message_id = item.metadata.get("projection_message_id")
+        message_id = (
+            item.projection_identity.projection_message_id
+            if item.projection_identity is not None
+            else None
+        )
         if not isinstance(message_id, str) or not message_id:
             message_id = item.item_id
         if item.semantic_kind == SemanticKind.USER_INPUT:
             message: BaseMessage = HumanMessage(
-                content=_message_content_value(item.payload), id=message_id
+                content=_message_content_value(
+                    item.payload.get("content", item.payload)
+                    if isinstance(item.payload, Mapping)
+                    and "attachments" in item.payload
+                    else item.payload
+                ),
+                id=message_id,
             )
         elif item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             # runtime notice 仍沿用 checkpoint 的 HumanMessage wire projection，
@@ -483,7 +509,9 @@ class LangChainMessageCodec:
             message = ToolMessage(
                 content=_message_content_value(payload.get("content", item.payload)),
                 id=message_id,
-                tool_call_id=str(payload.get("tool_call_id") or "unknown-call"),
+                tool_call_id=item.tool_result_evidence.tool_call_id
+                if item.tool_result_evidence is not None
+                else payload["tool_call_id"],
                 name=str(payload.get("name") or "tool"),
                 status=tool_status,
             )
@@ -517,7 +545,8 @@ class LangChainMessageCodec:
                 )
             message = AIMessage(
                 content=group_content(items) if len(items) > 1 else "",
-                id=message_id, tool_calls=tool_calls,
+                id=message_id,
+                tool_calls=tool_calls,
             )
         else:
             if (
@@ -540,37 +569,48 @@ class LangChainMessageCodec:
                     content=_message_content_value(item.payload), id=message_id
                 )
         projected = self.to_dict(message)
-        if item.metadata:
-            data = projected.get("data")
-            if not isinstance(data, Mapping):
-                raise TypeError(f"message projection data 必须是 object: {item.item_id}")
-            response_metadata = data.get("response_metadata")
-            merged_metadata = (
-                dict(response_metadata)
-                if isinstance(response_metadata, Mapping)
-                else {}
-            )
-            merged_metadata.update(restore_metadata(item.metadata))
-            for key in (
-                "context_fork_source_session_id",
-                "fork_source_session_id",
-                "fork_source_item_id",
-                "fork_source_turn_id",
-            ):
-                value = item.metadata.get(key)
-                if isinstance(value, str) and value:
-                    merged_metadata[key] = value
-            attachments = item.metadata.get("attachments")
-            if isinstance(attachments, list):
-                merged_metadata["attachments"] = [
-                    dict(attachment)
-                    for attachment in attachments
-                    if isinstance(attachment, Mapping)
+        data = projected.get("data")
+        if not isinstance(data, Mapping):
+            raise TypeError(f"message projection data 必须是 object: {item.item_id}")
+        response = data.get("response_metadata")
+        merged = dict(response) if isinstance(response, Mapping) else {}
+        merged.update(project_annotations(item))
+        if item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
+            merged["internal"] = True
+            merged["message_metadata"] = {
+                **merged.get("message_metadata", {}),
+                "internal": True,
+            }
+        if item.source_manifest is not None:
+            merged["context_revision"] = item.source_manifest.source_revision
+            merged["context_wire_role"] = item.wire_role
+        if item.projection_identity is not None:
+            identity = item.projection_identity
+            if identity.completion_reason is not None:
+                merged["completion_reason"] = identity.completion_reason
+            if identity.phase is not None:
+                merged["phase"] = identity.phase
+            if identity.model_call_id is not None:
+                merged["model_call_id"] = identity.model_call_id
+            if identity.content_part_refs:
+                merged["content_part_refs"] = [
+                    ref.to_dict() for ref in identity.content_part_refs
                 ]
-            if merged_metadata:
-                projected_data = dict(data)
-                projected_data["response_metadata"] = merged_metadata
-                projected["data"] = projected_data
+        merged["provenance_relations"] = [
+            relation.to_dict() for relation in item.provenance_relations
+        ]
+        merged[CANONICAL_GROUP_FIELD] = [
+            {"item_id": member.item_id, **member.projection_manifest()}
+            for member in items
+        ]
+        if isinstance(item.payload, Mapping) and isinstance(
+            item.payload.get("attachments"), list
+        ):
+            merged["attachments"] = [
+                dict(attachment) for attachment in item.payload["attachments"]
+            ]
+        if merged:
+            projected["data"] = {**data, "response_metadata": merged}
         return projected
 
     def visible_text(self, message: Mapping[str, object]) -> str:

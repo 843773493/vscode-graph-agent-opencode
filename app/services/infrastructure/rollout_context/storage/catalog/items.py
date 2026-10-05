@@ -21,7 +21,13 @@ from app.domain.itemized.hashing import (
     payload_content_length,
     sha256_jcs,
 )
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.integrity import (
+    validate_catalog_projection,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -41,7 +47,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_text,
-    validate_item_storage_metadata,
+    validate_item_storage_projection,
 )
 
 if TYPE_CHECKING:
@@ -65,7 +71,7 @@ class RolloutItemsMixin:
     ) -> None:
         """写入唯一 canonical catalog，并生成对应 item projection。"""
         item.validate()
-        source_revision, part_ordinal = validate_item_storage_metadata(item)
+        source_revision, part_ordinal = validate_item_storage_projection(item)
         if (
             not isinstance(commit_id, int)
             or isinstance(commit_id, bool)
@@ -89,8 +95,8 @@ class RolloutItemsMixin:
             "payload_kind, status, turn_id, turn_scope, message_group_id, "
             "wire_role, producer_ref_json, payload_length, source_revision, "
             "content_hash, jsonl_offset, jsonl_length, commit_id, "
-            "operation_anchor_capable, searchable, created_at, metadata_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "operation_anchor_capable, searchable, created_at, projection_manifest_json, tool_call_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 item.item_sequence,
                 item.item_id,
@@ -121,11 +127,17 @@ class RolloutItemsMixin:
                     in {SemanticKind.USER_INPUT, SemanticKind.ASSISTANT_OUTPUT}
                 ),
                 item.created_at,
-                _json(item.metadata),
+                _json(item.projection_manifest()),
+                item.tool_call_id,
             ),
         )
         self._insert_item_projection(connection, item, created_at)
-        block_id = item.metadata.get("block_id")
+        self._insert_canonical_relations(connection, item)
+        block_id = (
+            item.projection_identity.block_id
+            if item.projection_identity is not None
+            else None
+        )
         if block_id is not None:
             locator = {
                 "json_pointer": "/payload",
@@ -146,6 +158,28 @@ class RolloutItemsMixin:
                     item.content_hash,
                     _json(locator),
                     _hash_bytes(_v2_json_line(item.to_dict())),
+                    item.created_at,
+                ),
+            )
+
+    def _insert_canonical_relations(
+        self,
+        connection: sqlite3.Connection,
+        item: CanonicalItemRecord,
+    ) -> None:
+        """关系表只是 canonical tuple 的有序派生索引，不能独立发布关系。"""
+        for ordinal, relation in enumerate(item.provenance_relations):
+            connection.execute(
+                "INSERT INTO item_relations(relation_id, relation, canonical_item_id, "
+                "canonical_relation_ordinal, source_ref, target_ref, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"canonical-relation:{item.item_id}:{ordinal}",
+                    relation.relation,
+                    item.item_id,
+                    ordinal,
+                    item.item_id,
+                    _json(relation.to_dict()),
                     item.created_at,
                 ),
             )
@@ -236,7 +270,7 @@ class RolloutItemsMixin:
                     existing = connection.execute(
                         "SELECT semantic_kind, payload_kind, status, turn_id, turn_scope, "
                         "message_group_id, wire_role, producer_ref_json, content_hash, "
-                        "created_at, metadata_json, commit_id, execution_id FROM item_catalog "
+                        "created_at, projection_manifest_json, commit_id, execution_id, item_sequence, jsonl_offset, jsonl_length FROM item_catalog "
                         "WHERE item_id = ?",
                         (item.item_id,),
                     ).fetchone()
@@ -268,8 +302,9 @@ class RolloutItemsMixin:
                                         f"{result_item_id}"
                                     )
                                 result_path = self.jsonl_path(
-                                    thread_id,
+                                    session_id,
                                     checkpoint_ns,
+                                    thread_id=thread_id,
                                 )
                                 raw_result = result_path.read_bytes()[
                                     result_offset : result_offset + result_length
@@ -291,21 +326,34 @@ class RolloutItemsMixin:
                                         "既有 tool_result canonical envelope 非 object: "
                                         f"{result_item_id}"
                                     )
-                                existing_payload = existing_envelope.get("payload")
-                                existing_metadata = json.loads(existing_result[5])
-                                if not isinstance(existing_metadata, Mapping):
+                                existing_item = CanonicalItemRecord.from_dict(
+                                    existing_envelope
+                                )
+                                existing_manifest = parse_item_projection_manifest(
+                                    json.loads(existing_result[5])
+                                )
+                                if (
+                                    existing_item.item_id != result_item_id
+                                    or existing_manifest
+                                    != existing_item.projection_manifest()
+                                    or existing_item.content_hash != existing_result[1]
+                                ):
                                     raise RuntimeError(
-                                        "既有 tool_result metadata 不是 object: "
-                                        f"{result_item_id}"
+                                        f"既有 tool_result catalog 与 JSONL 不一致: {result_item_id}"
+                                    )
+                                existing_call = (
+                                    existing_item.tool_result_evidence.tool_call_id
+                                    if existing_item.tool_result_evidence
+                                    else existing_item.payload["tool_call_id"]
+                                )
+                                if existing_call != existing_result[6]:
+                                    raise RuntimeError(
+                                        f"既有 tool_result 派生 call identity 与 JSONL 不一致: {result_item_id}"
                                     )
                                 comparable_existing = _comparable_tool_result_payload(
-                                    existing_payload,
-                                    metadata=existing_metadata,
+                                    existing_item
                                 )
-                                comparable_new = _comparable_tool_result_payload(
-                                    item.payload,
-                                    metadata=item.metadata,
-                                )
+                                comparable_new = _comparable_tool_result_payload(item)
                                 if comparable_existing != comparable_new:
                                     identity = _tool_result_identity(item)
                                     raise ItemSchemaError(
@@ -325,10 +373,19 @@ class RolloutItemsMixin:
                                 # 持久化新 carrier；投影层靠 projection_message_id
                                 # 保留它并过滤 live shadow。
                                 incoming_is_request_carrier = isinstance(
-                                    item.metadata.get("projection_message_id"), str
+                                    (
+                                        item.projection_identity.projection_message_id
+                                        if item.projection_identity is not None
+                                        else None
+                                    ),
+                                    str,
                                 )
                                 existing_is_request_carrier = isinstance(
-                                    existing_metadata.get("projection_message_id"),
+                                    (
+                                        existing_item.projection_identity.projection_message_id
+                                        if existing_item.projection_identity is not None
+                                        else None
+                                    ),
                                     str,
                                 )
                                 if (
@@ -342,6 +399,22 @@ class RolloutItemsMixin:
                                 continue
                         pending.append(item)
                         continue
+                    with self.jsonl_path(
+                        session_id, checkpoint_ns, thread_id=thread_id
+                    ).open("rb") as source_stream:
+                        self._read_v2_item_at(
+                            connection,
+                            source_stream,
+                            sequence=strict_non_negative_int(
+                                existing[13], field="item_catalog.item_sequence"
+                            ),
+                            offset=strict_non_negative_int(
+                                existing[14], field="item_catalog.jsonl_offset"
+                            ),
+                            length=strict_non_negative_int(
+                                existing[15], field="item_catalog.jsonl_length"
+                            ),
+                        )
                     stored_identity = (
                         _strict_db_text(
                             existing[0], field="item_catalog.semantic_kind"
@@ -366,7 +439,7 @@ class RolloutItemsMixin:
                         _strict_db_text(existing[8], field="item_catalog.content_hash"),
                         _strict_db_text(existing[9], field="item_catalog.created_at"),
                         _strict_db_text(
-                            existing[10], field="item_catalog.metadata_json"
+                            existing[10], field="item_catalog.projection_manifest_json"
                         ),
                     )
                     incoming_identity = (
@@ -380,7 +453,7 @@ class RolloutItemsMixin:
                         _json(dict(item.producer_ref)),
                         item.content_hash,
                         item.created_at,
-                        _json(dict(item.metadata)),
+                        _json(item.projection_manifest()),
                     )
                     if stored_identity != incoming_identity:
                         raise ItemSchemaError(
@@ -572,7 +645,10 @@ class RolloutItemsMixin:
                         if catalog_message is not None
                         else execution_id
                     )
-                    if not isinstance(message_execution_id, str) or not message_execution_id:
+                    if (
+                        not isinstance(message_execution_id, str)
+                        or not message_execution_id
+                    ):
                         raise RuntimeError(
                             f"request message 缺少 canonical execution attribution: {message_id}"
                         )
@@ -580,7 +656,7 @@ class RolloutItemsMixin:
                         codec.tool_message_model_call_id(message, messages[:index])
                         if is_tool_result
                         else codec.model_call_id(message)
-                        if is_tool_call
+                        if codec.message_role(message) == "assistant"
                         else None
                     )
                     group = codec.items_for_message(
@@ -598,9 +674,14 @@ class RolloutItemsMixin:
                         (group[-1].item_id,),
                     ).fetchone()
                     if anchor is not None:
-                        with self.jsonl_path(thread_id, checkpoint_ns).open("rb") as stream:
+                        with self.jsonl_path(
+                            session_id, checkpoint_ns, thread_id=thread_id
+                        ).open("rb") as stream:
                             stored = read_message_group(
-                                connection, stream, offset=anchor[0], length=anchor[1],
+                                connection,
+                                stream,
+                                offset=anchor[0],
+                                length=anchor[1],
                                 read_item=self._read_v2_item_at,
                             )
                         # 必须比较完整 carrier 与语义 metadata；逐 item hash 无法
@@ -765,12 +846,12 @@ class RolloutItemsMixin:
             if values:
                 placeholders = ",".join("?" for _ in values)
                 rows = connection.execute(
-                    f"SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
+                    f"SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence",
                     values,
                 ).fetchall()
             else:
                 rows = connection.execute(
-                    "SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length FROM item_catalog ORDER BY item_sequence"
+                    "SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog ORDER BY item_sequence"
                 ).fetchall()
             if values:
                 found_ids = {
@@ -785,6 +866,16 @@ class RolloutItemsMixin:
                         "canonical item catalog 缺少请求的 item: "
                         + ",".join(missing_ids)
                     )
+            relation_rows = connection.execute(
+                "SELECT canonical_item_id, canonical_relation_ordinal, relation, source_ref, target_ref "
+                "FROM item_relations WHERE canonical_item_id IS NOT NULL "
+                "ORDER BY canonical_item_id, canonical_relation_ordinal"
+            ).fetchall()
+            relations_by_item: dict[str, list[tuple[object, ...]]] = {}
+            for owner, ordinal, relation, source, target in relation_rows:
+                relations_by_item.setdefault(owner, []).append(
+                    (ordinal, relation, source, target)
+                )
             committed_row = connection.execute(
                 "SELECT committed_jsonl_offset FROM database_meta WHERE singleton_id = 1"
             ).fetchone()
@@ -810,6 +901,8 @@ class RolloutItemsMixin:
                 expected_source_revision,
                 offset_value,
                 length_value,
+                expected_projection_manifest,
+                expected_tool_call_id,
             ) in rows:
                 sequence = strict_non_negative_int(
                     sequence_value,
@@ -868,7 +961,11 @@ class RolloutItemsMixin:
                     raise RuntimeError(
                         f"item catalog 与 JSONL payload_length 不一致: {item_id}"
                     )
-                source_revision = item.metadata.get("source_revision")
+                source_revision = (
+                    item.source_manifest.source_revision
+                    if item.source_manifest is not None
+                    else None
+                )
                 if source_revision is None:
                     source_revision = f"canonical:{item.item_id}:{item.content_hash}"
                 elif not isinstance(source_revision, str) or not source_revision:
@@ -879,6 +976,12 @@ class RolloutItemsMixin:
                     raise RuntimeError(
                         f"item catalog 与 JSONL source_revision 不一致: {item_id}"
                     )
+                validate_catalog_projection(
+                    item,
+                    projection_manifest_json=expected_projection_manifest,
+                    tool_call_id=expected_tool_call_id,
+                    relation_rows=relations_by_item.get(item.item_id, ()),
+                )
                 result.append(item)
         return result
 

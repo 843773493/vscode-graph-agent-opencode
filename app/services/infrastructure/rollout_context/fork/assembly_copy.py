@@ -70,7 +70,7 @@ def refresh_copied_assemblies(state: FullCopyRemapState) -> None:
                 "content_length=CASE WHEN content_length IS NULL THEN NULL ELSE ? END "
                 "WHERE ref_type='canonical_item' AND ref_id=?",
                 (
-                    item.metadata.get("source_revision")
+                    (item.source_manifest.source_revision if item.source_manifest else None)
                     or f"canonical:{item.item_id}:{item.content_hash}",
                     item.content_hash,
                     payload_content_length(item.payload_kind, item.payload),

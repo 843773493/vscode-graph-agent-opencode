@@ -47,7 +47,7 @@ def resolve_selected_item(
             f"source-mismatch: context plan canonical ref 缺失: {ref.ref_id}"
         )
     expected_source = (
-        item.metadata.get("source_revision")
+        (item.source_manifest.source_revision if item.source_manifest is not None else None)
         or f"canonical:{item.item_id}:{item.content_hash}"
     )
     if (

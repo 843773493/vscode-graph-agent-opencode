@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
 
 from app.domain.itemized.assembly_snapshot import (
     ContextAssemblySnapshot,
@@ -221,14 +220,7 @@ class ContextPlanComposer:
             if contribution is not None
         }
         assembly_contributions = tuple(
-            replace(
-                contribution,
-                metadata={
-                    key: value
-                    for key, value in contribution.metadata.items()
-                    if key != "source_ordinal"
-                },
-            )
+            contribution
             for contribution in plan.contributions
             if contribution.contribution_id in selected_contribution_ids
         )
@@ -239,7 +231,8 @@ class ContextPlanComposer:
                 source_revision=contribution.source_revision,
                 content_hash=contribution.content_hash,
                 request_only=contribution.request_only,
-                metadata=contribution.metadata,
+                extensions=contribution.extensions,
+                source_binding=contribution.source_binding,
                 contribution_kind=contribution.contribution_kind,
                 body=contribution.body,
                 content_length=contribution.content_length,

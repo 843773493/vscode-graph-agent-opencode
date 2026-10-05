@@ -84,6 +84,9 @@ def refresh_detail_manifests(state: FullCopyRemapState) -> None:
             return value
         result = {}
         for key, child in value.items():
+            if key == "extensions":
+                result[key] = child
+                continue
             # 只改正式摘要字段；用户文本和 source lineage 中的字符串不作替换。
             if key in {"source", "lineage", "legacy_source_ref"}:
                 result[key] = child
@@ -99,7 +102,7 @@ def refresh_detail_manifests(state: FullCopyRemapState) -> None:
 
     for table, key_column, json_column in (
         ("context_assemblies", "assembly_id", "snapshot_json"),
-        ("context_contributions", "contribution_id", "metadata_json"),
+        ("context_contributions", "contribution_id", "binding_manifest_json"),
     ):
         for key, raw in connection.execute(
             f"SELECT {key_column}, {json_column} FROM {table}"
@@ -110,10 +113,10 @@ def refresh_detail_manifests(state: FullCopyRemapState) -> None:
                 (encoded, key),
             )
     for assembly, ordinal, raw in connection.execute(
-        "SELECT assembly_id, contribution_ordinal, metadata_json FROM context_assembly_contributions"
+        "SELECT assembly_id, contribution_ordinal, binding_manifest_json FROM context_assembly_contributions"
     ).fetchall():
         connection.execute(
-            "UPDATE context_assembly_contributions SET metadata_json=? WHERE assembly_id=? AND contribution_ordinal=?",
+            "UPDATE context_assembly_contributions SET binding_manifest_json=? WHERE assembly_id=? AND contribution_ordinal=?",
             (
                 canonical_json_bytes(refresh(json.loads(raw))).decode("utf-8"),
                 assembly,

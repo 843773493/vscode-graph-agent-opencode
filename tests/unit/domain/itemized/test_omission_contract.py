@@ -162,12 +162,12 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
             content_hash=contribution_content_hash(kind, body),
             body=body,
             contribution_kind=kind,
-            metadata={
+            extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": {
                 "overlay_id": "overlay-policy",
                 "overlay_ref": f"ref-{role}",
                 "overlay_role": role,
                 "source_overlay_epoch": 1,
-            },
+            }}},
             source_ordinal=ordinal,
         )
         ref = ContextRef.request_only_ref(

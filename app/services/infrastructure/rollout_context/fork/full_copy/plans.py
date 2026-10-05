@@ -95,10 +95,10 @@ def collect_plan_identities(
                     collect("request_ref", (ref.source_ref,))
             for contribution in contributions:
                 collect("context_contribution", (contribution.contribution_id,))
-                alias = contribution.metadata.get("source_ref")
+                alias = contribution.source_binding.source_ref if contribution.source_binding is not None else None
                 if isinstance(alias, str):
                     collect("request_ref", (alias,))
-                overlay_ref = contribution.metadata.get("overlay_ref")
+                overlay_ref = contribution.source_binding.overlay_ref if contribution.source_binding is not None else None
                 if isinstance(overlay_ref, str):
                     collect("request_ref", (overlay_ref,))
     for (ref_id,) in connection.execute(

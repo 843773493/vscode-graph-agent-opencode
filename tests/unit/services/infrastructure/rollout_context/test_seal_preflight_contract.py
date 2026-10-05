@@ -21,9 +21,12 @@ from app.domain.itemized.hashing import (
     sha256_jcs,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.services.infrastructure.rollout_context.assembly.seal_preflight import (
     ContextAssemblySealPreflightError,
@@ -96,7 +99,7 @@ def _request_ref(
 def _contribution(
     contribution_id: str,
     kind: str = "prompt",
-    metadata: dict[str, object] | None = None,
+    source_binding: SourceBinding | None = None,
 ) -> ContextContribution:
     body = {"text": contribution_id}
     return ContextContribution(
@@ -106,7 +109,7 @@ def _contribution(
         contribution_kind=kind,
         body=body,
         content_hash=contribution_content_hash(kind, body),
-        metadata=metadata or {},
+        source_binding=source_binding,
     )
 
 
@@ -384,22 +387,18 @@ def _overlay_pair_snapshot() -> ContextAssemblySnapshot:
             _contribution(
                 "skill-base",
                 kind="overlay_base",
-                metadata={
-                    "overlay_id": "skill-a-overlay",
-                    "overlay_ref": "skill-base",
-                    "overlay_role": "base",
-                    "source_overlay_epoch": 1,
-                },
+                source_binding=SourceBinding(
+                    source_ref="skill-source:skill-base", overlay_id="skill-a-overlay",
+                    overlay_ref="skill-base", overlay_role="base", source_overlay_epoch=1,
+                ),
             ),
             _contribution(
                 "skill-delta",
                 kind="overlay_delta",
-                metadata={
-                    "overlay_id": "skill-a-overlay",
-                    "overlay_ref": "skill-delta",
-                    "overlay_role": "delta",
-                    "source_overlay_epoch": 1,
-                },
+                source_binding=SourceBinding(
+                    source_ref="skill-source:skill-delta", overlay_id="skill-a-overlay",
+                    overlay_ref="skill-delta", overlay_role="delta", source_overlay_epoch=1,
+                ),
             ),
         ),
     )
@@ -466,8 +465,9 @@ def _canonical_record(
     semantic_kind: str,
     payload_kind: str,
     payload: object,
-    metadata: dict[str, object] | None = None,
+    projection_identity: ItemProjectionIdentity | None = None,
     turn_id: str = "turn-pairing",
+    message_group_id: str | None = None,
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=1,
@@ -477,10 +477,10 @@ def _canonical_record(
         status=CanonicalItemStatus.COMPLETED.value,
         producer_ref={"producer_kind": "provider", "producer_id": item_id},
         payload=payload,
-        metadata=metadata,
+        projection_identity=projection_identity,
         turn_id=turn_id,
         turn_scope="turn_member",
-        message_group_id=f"message-{item_id}",
+        message_group_id=message_group_id or f"message-{item_id}",
         wire_role="assistant",
     )
 
@@ -496,7 +496,12 @@ def test_canonical_tool_pairings_derive_from_explicit_ids() -> None:
         "result-item-1",
         semantic_kind=SemanticKind.TOOL_RESULT.value,
         payload_kind=PayloadKind.TOOL_RESULT.value,
-        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+        payload={
+            "tool_call_id": "tc-1",
+            "result_id": "res-1",
+            "content": "ok",
+            "execution_confirmed": True,
+        },
     )
 
     assert canonical_tool_pairings((call, result)) == (
@@ -522,7 +527,12 @@ def test_canonical_tool_pairings_fail_closed_without_explicit_link() -> None:
         "result-item-1",
         semantic_kind=SemanticKind.TOOL_RESULT.value,
         payload_kind=PayloadKind.TOOL_RESULT.value,
-        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+        payload={
+            "tool_call_id": "tc-1",
+            "result_id": "res-1",
+            "content": "ok",
+            "execution_confirmed": True,
+        },
     )
     object.__setattr__(result, "payload", {"content": "缺少 tool_call_id"})
 
@@ -562,12 +572,20 @@ def test_canonical_tool_pairings_restore_scoped_stream_call_id() -> None:
             "tool_call_id": "mc-1:tool-call:tc-1",
         },
     )
-    object.__setattr__(stream_call, "metadata", {"model_call_id": "mc-1"})
+    object.__setattr__(
+        stream_call, "projection_identity", ItemProjectionIdentity(model_call_id="mc-1")
+    )
     result = _canonical_record(
         "result-item-1",
+        projection_identity=ItemProjectionIdentity(model_call_id="mc-1"),
         semantic_kind=SemanticKind.TOOL_RESULT.value,
         payload_kind=PayloadKind.TOOL_RESULT.value,
-        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+        payload={
+            "tool_call_id": "tc-1",
+            "result_id": "res-1",
+            "content": "ok",
+            "execution_confirmed": True,
+        },
     )
 
     assert canonical_tool_pairings((stream_call, result)) == (
@@ -587,7 +605,9 @@ def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
             "tool_call_id": "mc-1:tool-call:tc-1",
         },
     )
-    object.__setattr__(stream_call, "metadata", {"model_call_id": "mc-1"})
+    object.__setattr__(
+        stream_call, "projection_identity", ItemProjectionIdentity(model_call_id="mc-1")
+    )
     checkpoint_call = _canonical_record(
         "item-checkpoint-call-1",
         semantic_kind=SemanticKind.TOOL_CALL.value,
@@ -596,19 +616,22 @@ def test_canonical_tool_pairings_cover_dual_carriers_with_one_result() -> None:
     )
     object.__setattr__(
         checkpoint_call,
-        "metadata",
-        {
-            "execution_confirmed": True,
-            "model_call_id": "mc-1",
-            "projection_group": {"ordinal": 1, "size": 2},
-            "projection_message_id": "lc_run--mc-1",
-        },
+        "projection_identity",
+        ItemProjectionIdentity(
+            model_call_id="mc-1", projection_message_id="lc_run--mc-1"
+        ),
     )
     result = _canonical_record(
         "result-item-1",
+        projection_identity=ItemProjectionIdentity(model_call_id="mc-1", projection_message_id="result-item-1"),
         semantic_kind=SemanticKind.TOOL_RESULT.value,
         payload_kind=PayloadKind.TOOL_RESULT.value,
-        payload={"tool_call_id": "tc-1", "result_id": "res-1", "content": "ok"},
+        payload={
+            "tool_call_id": "tc-1",
+            "result_id": "res-1",
+            "content": "ok",
+            "execution_confirmed": True,
+        },
     )
 
     assert canonical_tool_pairings((stream_call, checkpoint_call, result)) == (
@@ -646,11 +669,13 @@ def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
         model_call_id=model_call_id,
     )
     checkpoint_calls = tuple(
-        item for item in checkpoint_group if item.semantic_kind == SemanticKind.TOOL_CALL.value
+        item
+        for item in checkpoint_group
+        if item.semantic_kind == SemanticKind.TOOL_CALL.value
     )
     assert len(checkpoint_calls) == 4
     assert len({item.item_id for item in checkpoint_calls}) == 4
-    assert checkpoint_calls[-1].metadata["projection_message_id"] == (
+    assert checkpoint_calls[-1].projection_identity.projection_message_id == (
         f"lc_run--{model_call_id}"
     )
 
@@ -670,17 +695,18 @@ def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
                     "args": call["args"],
                 },
                 turn_id=turn_id,
+                message_group_id=f"message-stream-{model_call_id}",
             )
         )
         stream_call = stream_calls[-1]
         object.__setattr__(
             stream_call,
-            "metadata",
-            {
-                "model_call_id": model_call_id,
-                "block_id": f"{model_call_id}:block:{call_id}",
-                "execution_confirmed": True,
-            },
+            "projection_identity",
+            ItemProjectionIdentity(
+                model_call_id=model_call_id,
+                block_id=f"{model_call_id}:block:{call_id}",
+                block_index=index,
+            ),
         )
         stream_result = _canonical_record(
             f"stream-result-{index}",
@@ -692,18 +718,17 @@ def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
                 "name": call["name"],
                 "content": f"stream-{index}",
                 "tool_outcome": "success",
-                },
-                metadata={"execution_confirmed": True},
-                turn_id=turn_id,
-            )
+                "execution_confirmed": True,
+            },
+            projection_identity=ItemProjectionIdentity(model_call_id=model_call_id),
+            turn_id=turn_id,
+        )
         object.__setattr__(
             stream_result,
-            "metadata",
-            {
-                "model_call_id": model_call_id,
-                "execution_confirmed": True,
-                "completion_reason": "tool_completed",
-            },
+            "projection_identity",
+            ItemProjectionIdentity(
+                model_call_id=model_call_id, completion_reason="tool_completed"
+            ),
         )
         stream_calls[-1] = stream_call
         stream_results.append(stream_result)
@@ -724,15 +749,18 @@ def test_parallel_tool_group_canonicalizes_dual_completion_carriers() -> None:
         checkpoint_results.append(
             replace(
                 checkpoint_result,
-                metadata={
-                    **checkpoint_result.metadata,
-                    "completion_reason": "reconciled_tool_message",
-                },
+                projection_identity=replace(
+                    checkpoint_result.projection_identity,
+                    completion_reason="reconciled_tool_message",
+                ),
             )
         )
 
-    items = tuple(stream_calls) + checkpoint_group + tuple(stream_results) + tuple(
-        checkpoint_results
+    items = (
+        tuple(stream_calls)
+        + checkpoint_group
+        + tuple(stream_results)
+        + tuple(checkpoint_results)
     )
     pairings = canonical_tool_pairings(items)
     assert len(pairings) == 8

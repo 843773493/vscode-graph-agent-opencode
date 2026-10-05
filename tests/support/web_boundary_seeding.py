@@ -17,6 +17,9 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -32,7 +35,7 @@ def boundary_item(
     payload: object,
     turn_id: str,
     wire_role: str = "assistant",
-    metadata: dict[str, object] | None = None,
+    projection_identity: ItemProjectionIdentity | None = None,
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
         item_sequence=999,
@@ -46,10 +49,11 @@ def boundary_item(
             "invocation_id": f"execution-{turn_id}",
         },
         payload=payload,
-        metadata={
-            "projection_message_id": item_id.removeprefix("item-"),
-            **(metadata or {}),
-        },
+        projection_identity=projection_identity
+        or ItemProjectionIdentity(
+            projection_message_id=item_id.removeprefix("item-"),
+            model_call_id=f"model-call-{turn_id}",
+        ),
         turn_id=turn_id,
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id=f"message-{turn_id}",
@@ -84,6 +88,7 @@ def tool_result_payload(
         "name": name,
         "content": content,
         "tool_outcome": "success",
+        "execution_confirmed": True,
     }
 
 
@@ -120,16 +125,15 @@ def seed_boundary_turn(
             HumanMessage(
                 content=user_content,
                 id=f"boundary-user-{turn_id}",
-                response_metadata={
-                    "message_metadata": {"turn_id": turn_id}
-                },
+                response_metadata={"message_metadata": {"turn_id": turn_id}},
             )
         ]
     }
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
     admission = saver.execution_admission(
-        session_id, thread_id=owner.thread_id,
+        session_id,
+        thread_id=owner.thread_id,
         execution_id=str(accepted["initial_execution_id"]),
     )
     with (
@@ -186,11 +190,14 @@ def _seed_case_0001(sessions_dir: Path) -> None:
                     "call-boundary-text-tool", "read_file", {"path": "README.md"}
                 ),
                 turn_id="boundary-turn-0001",
-                metadata={
-                    "block_id": "call-boundary-text-tool",
-                    "tool_call_id": "call-boundary-text-tool",
-                    "block_index": 0,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0001",
+                    block_id="model-call-"
+                    + "boundary-turn-0001"
+                    + ":tool-call:"
+                    + "call-boundary-text-tool",
+                    block_index=0,
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-result-0001",
@@ -204,11 +211,9 @@ def _seed_case_0001(sessions_dir: Path) -> None:
                 ),
                 turn_id="boundary-turn-0001",
                 wire_role="tool",
-                metadata={
-                    "block_id": "call-boundary-text-tool",
-                    "tool_call_id": "call-boundary-text-tool",
-                    "execution_confirmed": True,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0001"
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-final-0001",
@@ -239,10 +244,11 @@ def _seed_case_0002(sessions_dir: Path) -> None:
                 status=CanonicalItemStatus.PARTIAL,
                 payload="我准备读取配置文件。",
                 turn_id="boundary-turn-0002",
-                metadata={
-                    "completion_reason": "user_interrupt",
-                    "phase": "assistant_text",
-                },
+                projection_identity=ItemProjectionIdentity(
+                    phase="assistant_text",
+                    completion_reason="user_interrupt",
+                    model_call_id="model-call-" + "boundary-turn-0002",
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-call-0002",
@@ -253,11 +259,14 @@ def _seed_case_0002(sessions_dir: Path) -> None:
                     "call-boundary-partial-tool", "read_file", {"path": "config/"}
                 ),
                 turn_id="boundary-turn-0002",
-                metadata={
-                    "block_id": "call-boundary-partial-tool",
-                    "tool_call_id": "call-boundary-partial-tool",
-                    "block_index": 0,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0002",
+                    block_id="model-call-"
+                    + "boundary-turn-0002"
+                    + ":tool-call:"
+                    + "call-boundary-partial-tool",
+                    block_index=0,
+                ),
             ),
         ),
         outcome="cancelled",
@@ -291,11 +300,14 @@ def _seed_case_0003(sessions_dir: Path) -> None:
                     {"lines": 768, "marker": "unknown-result"},
                 ),
                 turn_id="boundary-turn-0003",
-                metadata={
-                    "block_id": "call-boundary-unknown-tool",
-                    "tool_call_id": "call-boundary-unknown-tool",
-                    "block_index": 0,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0003",
+                    block_id="model-call-"
+                    + "boundary-turn-0003"
+                    + ":tool-call:"
+                    + "call-boundary-unknown-tool",
+                    block_index=0,
+                ),
             ),
         ),
         outcome="failed",
@@ -317,10 +329,11 @@ def _seed_case_0004(sessions_dir: Path) -> None:
                 status=CanonicalItemStatus.PARTIAL,
                 payload="我已经开始分析这个问题，但回答在这里被用户中断……",
                 turn_id="boundary-turn-0004",
-                metadata={
-                    "completion_reason": "user_interrupt",
-                    "phase": "assistant_text",
-                },
+                projection_identity=ItemProjectionIdentity(
+                    phase="assistant_text",
+                    completion_reason="user_interrupt",
+                    model_call_id="model-call-" + "boundary-turn-0004",
+                ),
             ),
         ),
         outcome="cancelled",
@@ -377,11 +390,14 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                     "call-boundary-parallel-read", "read_file", {"path": "README.md"}
                 ),
                 turn_id="boundary-turn-0006",
-                metadata={
-                    "block_id": "call-boundary-parallel-read",
-                    "tool_call_id": "call-boundary-parallel-read",
-                    "block_index": 0,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0006",
+                    block_id="model-call-"
+                    + "boundary-turn-0006"
+                    + ":tool-call:"
+                    + "call-boundary-parallel-read",
+                    block_index=0,
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-call-0006-search",
@@ -394,11 +410,14 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                     {"query": "MessageBlock"},
                 ),
                 turn_id="boundary-turn-0006",
-                metadata={
-                    "block_id": "call-boundary-parallel-search",
-                    "tool_call_id": "call-boundary-parallel-search",
-                    "block_index": 1,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0006",
+                    block_id="model-call-"
+                    + "boundary-turn-0006"
+                    + ":tool-call:"
+                    + "call-boundary-parallel-search",
+                    block_index=1,
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-result-0006-read",
@@ -412,11 +431,9 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                 ),
                 turn_id="boundary-turn-0006",
                 wire_role="tool",
-                metadata={
-                    "block_id": "call-boundary-parallel-read",
-                    "tool_call_id": "call-boundary-parallel-read",
-                    "execution_confirmed": True,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0006"
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-result-0006-search",
@@ -430,11 +447,9 @@ def _seed_case_0006(sessions_dir: Path) -> None:
                 ),
                 turn_id="boundary-turn-0006",
                 wire_role="tool",
-                metadata={
-                    "block_id": "call-boundary-parallel-search",
-                    "tool_call_id": "call-boundary-parallel-search",
-                    "execution_confirmed": True,
-                },
+                projection_identity=ItemProjectionIdentity(
+                    model_call_id="model-call-" + "boundary-turn-0006"
+                ),
             ),
             boundary_item(
                 item_id="item-boundary-final-0006",

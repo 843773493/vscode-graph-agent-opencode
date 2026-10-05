@@ -6,6 +6,11 @@ from datetime import datetime
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
+)
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
     TurnToolSummaryDTO,
@@ -27,31 +32,41 @@ def tool_items(
     tool_call_ids: frozenset[str] | None = None,
 ) -> list[TraceEventDTO]:
     items: list[TraceEventDTO] = []
-    tool_names: dict[str, str] = {}
+    tool_names: dict[tuple[str | None, str], str] = {}
     tool_ids_by_name: dict[str, list[str]] = {}
     tool_ids: list[str] = []
     for message in messages:
         if not isinstance(message, AIMessage):
             continue
+        identity = ItemProjectionIdentity.from_dict(
+            {"model_call_id": message.response_metadata.get("model_call_id")}
+        )
         for call in message.tool_calls or []:
             call_id = call.get("id")
             if tool_call_ids is not None and (
-                not isinstance(call_id, str) or call_id not in tool_call_ids
+                not isinstance(call_id, str)
+                or not any(matches_tool_call_id(identity, call_id, selected_id) for selected_id in tool_call_ids)
             ):
                 continue
             name = call.get("name")
             if isinstance(call_id, str) and isinstance(name, str) and name:
-                tool_names[call_id] = name
+                tool_names[(identity.model_call_id, provider_tool_call_id(identity, call_id))] = name
                 tool_ids_by_name.setdefault(name, []).append(call_id)
                 tool_ids.append(call_id)
     for message_index, message in enumerate(messages):
         timestamp = message_time(message, fallback=fallback_timestamp)
+        identity = ItemProjectionIdentity.from_dict(
+            {"model_call_id": message.response_metadata.get("model_call_id")}
+        )
         if isinstance(message, AIMessage):
             for call_index, call in enumerate(message.tool_calls or []):
                 name = str(call.get("name") or "unknown_tool")
                 args = call.get("args", {})
                 call_id = str(call.get("id") or f"{turn_id}:call:{call_index}")
-                if tool_call_ids is not None and call_id not in tool_call_ids:
+                if tool_call_ids is not None and not any(
+                    matches_tool_call_id(identity, call_id, selected_id)
+                    for selected_id in tool_call_ids
+                ):
                     continue
                 items.append(
                     tool_event(
@@ -73,10 +88,13 @@ def tool_items(
                     )
                 )
         elif isinstance(message, ToolMessage):
-            name = message.name or tool_names.get(message.tool_call_id) or "tool"
+            name = message.name or tool_names.get(
+                (identity.model_call_id, provider_tool_call_id(identity, message.tool_call_id))
+            ) or "tool"
             tool_call_id = message.tool_call_id
             if tool_call_ids is not None and (
-                not isinstance(tool_call_id, str) or tool_call_id not in tool_call_ids
+                not isinstance(tool_call_id, str)
+                or not any(matches_tool_call_id(identity, tool_call_id, selected_id) for selected_id in tool_call_ids)
             ):
                 continue
             if not tool_call_id and tool_ids_by_name.get(name):

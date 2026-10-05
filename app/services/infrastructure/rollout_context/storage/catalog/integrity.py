@@ -4,14 +4,39 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import payload_content_length
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line,
+    canonical_json_text,
 )
+
+
+def validate_catalog_projection(
+    item: CanonicalItemRecord,
+    *,
+    projection_manifest_json: str,
+    tool_call_id: str | None,
+    relation_rows: Sequence[tuple[object, ...]],
+) -> None:
+    """所有正文读取入口共用 typed 镜像与有序关系索引校验。"""
+    manifest = parse_item_projection_manifest(json.loads(projection_manifest_json))
+    if canonical_json_text(manifest) != projection_manifest_json or manifest != item.projection_manifest():
+        raise RuntimeError(f"item catalog 与 JSONL typed projection manifest 不一致: {item.item_id}")
+    if tool_call_id != item.tool_call_id:
+        raise RuntimeError(f"item catalog 与 JSONL tool_call_id 不一致: {item.item_id}")
+    expected = [
+        (ordinal, relation.relation, item.item_id, canonical_json_text(relation.to_dict()))
+        for ordinal, relation in enumerate(item.provenance_relations)
+    ]
+    if list(relation_rows) != expected:
+        raise RuntimeError(f"item relation index 与 canonical typed relations 不一致: {item.item_id}")
 
 
 def validate_catalog_body(
@@ -46,7 +71,7 @@ def validate_catalog_body(
         raise RuntimeError(f"v2 item JSONL schema/content 非法: item_id={item_id}") from error
     if payload_length != payload_content_length(item.payload_kind, item.payload):
         raise RuntimeError(f"item catalog 与 JSONL payload_length 不一致: {item_id}")
-    expected_revision = item.metadata.get("source_revision")
+    expected_revision = (item.source_manifest.source_revision if item.source_manifest is not None else None)
     if expected_revision is None:
         expected_revision = f"canonical:{item.item_id}:{item.content_hash}"
     if source_revision != expected_revision:

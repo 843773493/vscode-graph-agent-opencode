@@ -15,7 +15,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.request_plan import ContextContribution, SourceBinding
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
@@ -105,7 +105,7 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
                 source_revision="source-revision",
                 body=body,
                 content_hash=contribution_content_hash("prompt", body),
-                metadata={"source_ref": "source-contribution"},
+                extensions={} , source_binding=SourceBinding(source_ref='source-contribution'),
             ),
             request_content=body,
         )

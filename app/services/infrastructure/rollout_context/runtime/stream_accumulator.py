@@ -14,6 +14,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
 
 
@@ -187,6 +188,7 @@ class CanonicalBlockAccumulator:
                     "name": name,
                     "content": draft["text"],
                     "tool_outcome": "success" if status == "completed" else "unknown",
+                    "execution_confirmed": status == "completed",
                 }
             elif payload_kind == PayloadKind.SUMMARY:
                 payload = {
@@ -206,16 +208,6 @@ class CanonicalBlockAccumulator:
                 }
             else:
                 payload = draft["text"]
-            identity_metadata = {
-                key: payload[key]
-                for key in (
-                    "tool_invocation_id",
-                    "tool_attempt_id",
-                )
-                if isinstance(payload, Mapping)
-                and isinstance(payload.get(key), str)
-                and payload[key]
-            }
             result.append(
                 CanonicalItemRecord.create(
                     item_sequence=first_item_sequence + index,
@@ -229,13 +221,11 @@ class CanonicalBlockAccumulator:
                         "invocation_id": self.model_call_id,
                     },
                     payload=payload,
-                    metadata={
-                        "block_id": block_id,
-                        "block_index": draft["block_index"],
-                        "execution_id": self.execution_id,
-                        "model_call_id": self.model_call_id,
-                        **identity_metadata,
-                    },
+                    projection_identity=ItemProjectionIdentity(
+                        block_id=block_id,
+                        block_index=draft["block_index"],
+                        model_call_id=self.model_call_id,
+                    ),
                     turn_id=self.turn_id,
                     turn_scope=(
                         TurnScope.TURN_MEMBER if self.turn_id is not None else None

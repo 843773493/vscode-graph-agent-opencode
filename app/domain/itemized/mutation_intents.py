@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+from app.domain.itemized.schema import validate_extensions
+
 IntentFailureOutcome = Literal[
     "reject_atomic",
     "keep_pending",
@@ -200,7 +202,7 @@ class ApplySourceLifecycleDecision:
     content: str | None = None
     item_id: str | None = None
     turn_scope: SourceItemTurnScope = "pending_next_turn"
-    metadata: Mapping[str, object] = field(default_factory=dict)
+    extensions: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.source_id, "ApplySourceLifecycleDecision.source_id")
@@ -275,8 +277,7 @@ class ApplySourceLifecycleDecision:
                 "ApplySourceLifecycleDecision.turn_scope 只能是 ambient/"
                 f"pending_next_turn: {self.turn_scope!r}"
             )
-        if not isinstance(self.metadata, Mapping):
-            raise TypeError("ApplySourceLifecycleDecision.metadata 必须是 object")
+        validate_extensions(self.extensions, field="ApplySourceLifecycleDecision.extensions")
         if self.decision_kind in {"base", "delta", "rebuild", "observe_pending"}:
             if self.content is None:
                 raise ValueError(

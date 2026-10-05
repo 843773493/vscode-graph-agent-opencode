@@ -5,38 +5,43 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 
-from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.migration.semantics import (
     candidate_audit,
     terminal_evidence,
 )
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_text as _json,
-)
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
 )
 
 
 class LegacyImportBuilder:
+    def __init__(self, storage: RolloutStorage) -> None:
+        self.storage = storage
+
     def build_import(
         self,
-        source_thread_id: str,
+        source_session_id: str,
         *,
+        source_thread_id: str,
+        target_session_id: str,
         target_thread_id: str,
         report: dict[str, object],
         migration_id: str,
-        checkpoint_ns: str = "",
+        checkpoint_ns: str,
     ) -> dict[str, object]:
         """将 v1 source 安装到全新的 v2 target，保留 source 只读原件。"""
         from app.services.infrastructure.rollout_context.migration.legacy_adapter import (
             LegacyRolloutAdapter,
         )
 
-        self.initialize(target_thread_id, checkpoint_ns)
-        adapter = LegacyRolloutAdapter(source_thread_id)
+        self.storage.initialize(
+            target_session_id, checkpoint_ns, thread_id=target_thread_id
+        )
+        adapter = LegacyRolloutAdapter(source_session_id)
         migrated: list[dict[str, object]] = []
         rejected: list[dict[str, object]] = []
         candidates = report["candidates"]
@@ -70,7 +75,8 @@ class LegacyImportBuilder:
             seen_seeds.add(source_seed)
             target_identity_seed = sha256_jcs(
                 {
-                    "target_session_id": target_thread_id,
+                    "target_session_id": target_session_id,
+                    "target_thread_id": target_thread_id,
                     "candidate_key": candidate["candidate_key"],
                     "legacy_seed_hash": source_seed,
                 }
@@ -80,37 +86,46 @@ class LegacyImportBuilder:
             # adapter identity 只描述 source legacy 坐标，不能直接占用 target
             # session 的 acceptance namespace。target-local identity 必须同时
             # 对 ingress、幂等 key 和 initial execution 做确定性重映射；source
-            # 值仅通过 metadata/legacy report 保留审计 lineage。
+            # 值仅通过 typed extensions/legacy report 保留审计 lineage。
             target_accepted_ingress_id = f"legacy-ingress:{target_identity_seed}"
             target_acceptance_key = f"legacy-migration:{target_identity_seed}"
             target_initial_execution_id = f"legacy-execution:{target_identity_seed}"
-            accepted = self.accept_turn(
-                target_thread_id,
+            accepted = self.storage.accept_turn(
+                target_session_id,
+                thread_id=target_thread_id,
                 accepted_ingress_id=target_accepted_ingress_id,
                 acceptance_idempotency_key=target_acceptance_key,
                 job_id=f"legacy-job:{target_identity_seed}",
                 admission_idempotency_key=f"legacy-admission:{target_identity_seed}",
                 payload=root.payload,
+                provenance_relations=root.provenance_relations,
                 payload_kind=root.payload_kind,
                 turn_id=target_turn,
                 root_item_id=target_root_item_id,
                 initial_execution_id=target_initial_execution_id,
-                acceptance_metadata={
-                    **dict(root.metadata),
-                    "legacy_artifact_ref": report["raw_artifact_ref"],
-                    "legacy_source_session_id": source_thread_id,
-                    "legacy_source_turn_id": candidate.get("turn_id"),
-                    "legacy_seed_hash": identity["legacy_seed_hash"],
-                    "legacy_source_item_id": root.item_id,
-                    "legacy_source_accepted_ingress_id": identity[
-                        "accepted_ingress_id"
-                    ],
-                    "legacy_source_acceptance_idempotency_key": identity[
-                        "acceptance_idempotency_key"
-                    ],
-                    "legacy_source_initial_execution_id": identity[
-                        "initial_execution_id"
-                    ],
+                extensions={
+                    "boxteam.acceptance.annotations": {
+                        "extension_version": "1",
+                        "protection": "public",
+                        "value": {
+                            "legacy_annotations": root.extensions,
+                            "legacy_artifact_ref": report["raw_artifact_ref"],
+                            "legacy_source_session_id": source_session_id,
+                            "legacy_source_thread_id": source_thread_id,
+                            "legacy_source_turn_id": candidate.get("turn_id"),
+                            "legacy_seed_hash": identity["legacy_seed_hash"],
+                            "legacy_source_item_id": root.item_id,
+                            "legacy_source_accepted_ingress_id": identity[
+                                "accepted_ingress_id"
+                            ],
+                            "legacy_source_acceptance_idempotency_key": identity[
+                                "acceptance_idempotency_key"
+                            ],
+                            "legacy_source_initial_execution_id": identity[
+                                "initial_execution_id"
+                            ],
+                        },
+                    }
                 },
                 identity_origin="legacy_synthetic",
                 checkpoint_ns=checkpoint_ns,
@@ -118,8 +133,11 @@ class LegacyImportBuilder:
             target_items = [accepted]
             target_item_by_source_id = {root.item_id: target_root_item_id}
             target_members: list[CanonicalItemRecord] = []
-            with self._connect(
-                target_thread_id, checkpoint_ns, read_only=True
+            with self.storage._connect(
+                target_thread_id,
+                checkpoint_ns,
+                session_id=target_session_id,
+                read_only=True,
             ) as connection:
                 next_sequence = strict_non_negative_int(
                     connection.execute(
@@ -146,8 +164,10 @@ class LegacyImportBuilder:
                                 "legacy-tool:"
                                 + sha256_jcs(
                                     {
-                                        "target_session_id": target_thread_id,
-                                        "source_session_id": source_thread_id,
+                                        "target_session_id": target_session_id,
+                                        "target_thread_id": target_thread_id,
+                                        "source_session_id": source_session_id,
+                                        "source_thread_id": source_thread_id,
                                         "field": field,
                                         "source_id": payload[field],
                                     }
@@ -172,13 +192,23 @@ class LegacyImportBuilder:
                     },
                     payload=payload,
                     created_at=item.created_at,
-                    metadata={
-                        **dict(item.metadata),
-                        "legacy_artifact_ref": report["raw_artifact_ref"],
-                        "legacy_source_item_id": item.item_id,
-                        "target_session_id": target_thread_id,
-                        "projection_message_id": f"legacy:{target_identity_seed}:{hashlib.sha256(item.item_id.encode()).hexdigest()}",
+                    extensions={
+                        **item.extensions,
+                        "boxteam.legacy.import": {
+                            "extension_version": "1",
+                            "protection": "public",
+                            "value": {
+                                "legacy_artifact_ref": report["raw_artifact_ref"]
+                            },
+                        },
                     },
+                    projection_identity=ItemProjectionIdentity(
+                        projection_message_id=f"legacy:{target_identity_seed}:{hashlib.sha256(item.item_id.encode()).hexdigest()}",
+                    ),
+                    projection_group=item.projection_group,
+                    tool_result_evidence=item.tool_result_evidence,
+                    source_manifest=item.source_manifest,
+                    provenance_relations=item.provenance_relations,
                     turn_id=target_turn if item.turn_id is not None else None,
                     turn_scope=item.turn_scope,
                     message_group_id=(
@@ -207,8 +237,9 @@ class LegacyImportBuilder:
             runtime_notices = tuple(
                 member for member in target_members if member not in terminal_members
             )
-            self.converge_execution(
-                target_thread_id,
+            self.storage.converge_execution(
+                target_session_id,
+                thread_id=target_thread_id,
                 turn_id=target_turn,
                 execution_id=accepted["initial_execution_id"],
                 outcome=migrated_status,
@@ -218,7 +249,26 @@ class LegacyImportBuilder:
                 checkpoint_ns=checkpoint_ns,
             )
             for notice in runtime_notices:
-                self.append_item(target_thread_id, notice, checkpoint_ns=checkpoint_ns)
+                notice_seed = hashlib.sha256(notice.item_id.encode()).hexdigest()
+                notice_execution_id = f"legacy-notice-execution:{notice_seed}"
+                self.storage.admit_internal_execution(
+                    target_session_id,
+                    thread_id=target_thread_id,
+                    execution_id=notice_execution_id,
+                    job_id=f"legacy-notice-job:{notice_seed}",
+                    admission_idempotency_key=f"legacy-notice-admission:{notice_seed}",
+                    notice_item=notice,
+                    checkpoint_ns=checkpoint_ns,
+                )
+                self.storage.converge_execution(
+                    target_session_id,
+                    thread_id=target_thread_id,
+                    turn_id=None,
+                    execution_id=notice_execution_id,
+                    outcome="unknown",
+                    turn_status=None,
+                    checkpoint_ns=checkpoint_ns,
+                )
             target_items.extend((*terminal_members, *runtime_notices))
             migrated.append(
                 {
@@ -237,8 +287,13 @@ class LegacyImportBuilder:
                                 for record in candidate_records
                                 if isinstance(record, Mapping)
                                 and record.get("message_id")
-                                == item.metadata.get("legacy_source_ref", {}).get(
-                                    "message_id"
+                                == next(
+                                    (
+                                        relation.target_id
+                                        for relation in item.provenance_relations
+                                        if relation.target_kind == "legacy_message"
+                                    ),
+                                    None,
                                 )
                             ),
                             None,
@@ -270,7 +325,9 @@ class LegacyImportBuilder:
                 candidate_audit(candidate, report["raw_artifact_ref"])
                 for candidate in candidates
             ],
-            "target_session_id": target_thread_id,
+            "source_thread_id": source_thread_id,
+            "target_session_id": target_session_id,
+            "target_thread_id": target_thread_id,
             "migration_id": migration_id,
             "status": "completed" if not rejected else "completed_with_rejections",
             "loss": loss,
@@ -282,22 +339,4 @@ class LegacyImportBuilder:
             ],
             "migration_quality": "partial" if loss or rejected else "lossless",
         }
-        with (
-            self._lock(target_thread_id, checkpoint_ns),
-            self._connect(target_thread_id, checkpoint_ns) as connection,
-        ):
-            now = _now()
-            connection.execute(
-                "INSERT INTO legacy_migration_reports(migration_id, source_session_id, target_session_id, source_format_version, target_format_version, status, report_json, created_at, completed_at) VALUES (?, ?, ?, 1, 2, ?, ?, ?, ?)",
-                (
-                    migration_id,
-                    source_thread_id,
-                    target_thread_id,
-                    result["status"],
-                    _json(result),
-                    now,
-                    now,
-                ),
-            )
-            connection.commit()
         return result

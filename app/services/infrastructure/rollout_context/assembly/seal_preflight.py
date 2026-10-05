@@ -72,6 +72,8 @@ def canonical_tool_pairings(
         if not isinstance(item, CanonicalItemRecord):
             raise TypeError("canonical tool pairing 只接受 CanonicalItemRecord")
     try:
+        for item in item_tuple:
+            item.validate()
         superseded_ids = superseded_stream_item_ids(item_tuple)
     except ValueError as error:
         raise ContextAssemblySealPreflightError(
@@ -91,7 +93,7 @@ def canonical_tool_pairings(
                         "seal-dispatch-tool-pairing-conflict",
                         f"tool call item {item.item_id!r} 正文不是显式 call mapping",
                     )
-                explicit = call.get("id") or call.get("tool_call_id") or item.item_id
+                explicit = call.get("id") or call.get("tool_call_id")
                 if not isinstance(explicit, str) or not explicit:
                     raise ContextAssemblySealPreflightError(
                         "seal-dispatch-tool-pairing-conflict",
@@ -99,7 +101,7 @@ def canonical_tool_pairings(
                     )
                 key = (
                     _model_call_scope(item),
-                    provider_tool_call_id(item.metadata, explicit),
+                    provider_tool_call_id(item.projection_identity, explicit),
                 )
                 carriers = call_carriers.setdefault(key, [])
                 if item.item_id not in carriers:
@@ -110,7 +112,7 @@ def canonical_tool_pairings(
                 continue
             explicit = payload.get("tool_call_id")
             if not isinstance(explicit, str) or not explicit:
-                explicit = item.metadata.get("tool_call_id")
+                explicit = (item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else None)
             if not isinstance(explicit, str) or not explicit:
                 raise ContextAssemblySealPreflightError(
                     "seal-dispatch-tool-pairing-conflict",
@@ -119,7 +121,7 @@ def canonical_tool_pairings(
                 )
             key = (
                 _model_call_scope(item),
-                provider_tool_call_id(item.metadata, explicit),
+                provider_tool_call_id(item.projection_identity, explicit),
             )
             prior = result_ids.get(key)
             if prior is not None and prior != item.item_id:
@@ -130,37 +132,16 @@ def canonical_tool_pairings(
                 )
             result_ids[key] = item.item_id
     pairings: list[tuple[str, str]] = []
-    scopeless_results: dict[str, str] = {}
-    for (scope, provider_id), result in result_ids.items():
-        if scope is None:
-            scopeless_results[provider_id] = result
     for key, carriers in call_carriers.items():
-        scope, provider_id = key
         result = result_ids.get(key)
-        if result is None and scope is not None:
-            # 无 provenance 的旧 result 只在该 provider 的 call scope 唯一
-            # 时可复用；provider 重用原始 ID 的多个 scope 必须显式消歧。
-            result = scopeless_results.get(provider_id)
-            if result is not None:
-                scoped_call_scopes = {
-                    call_scope
-                    for call_scope, call_provider in call_carriers
-                    if call_provider == provider_id and call_scope is not None
-                }
-                if len(scoped_call_scopes) > 1:
-                    raise ContextAssemblySealPreflightError(
-                        "seal-dispatch-tool-pairing-conflict",
-                        f"tool_call_id {provider_id!r} 被多个 model call 复用，"
-                        "旧 result 缺少 provenance 无法消歧",
-                    )
-        if result is None:
-            continue
         survivors = [item_id for item_id in carriers if item_id not in superseded_ids]
         if len(survivors) > 1:
             raise ContextAssemblySealPreflightError(
                 "seal-dispatch-tool-pairing-conflict",
                 f"显式 call id {key[1]!r} 被多个 call item 声明: {survivors!r}",
             )
+        if result is None:
+            continue
         # 影子 stream carrier 与 checkpoint carrier 是同一次调用，全部
         # 与同一 result 配对，保证 preflight 覆盖所有 included tool entry。
         pairings.extend((item_id, result) for item_id in carriers)
@@ -170,7 +151,7 @@ def canonical_tool_pairings(
 def _model_call_scope(item: CanonicalItemRecord) -> str | None:
     """读取 tool 条目的可验证 model-call provenance。"""
 
-    model_call_id = item.metadata.get("model_call_id")
+    model_call_id = (item.projection_identity.model_call_id if item.projection_identity is not None else None)
     if isinstance(model_call_id, str) and model_call_id:
         return f"model-call:{model_call_id}"
     return None
@@ -231,8 +212,8 @@ def _validate_source_identity_uniqueness(snapshot: ContextAssemblySnapshot) -> N
 
 def _validate_overlay_order(snapshot: ContextAssemblySnapshot) -> None:
     overlay_ids = {
-        contribution.contribution_id: contribution.metadata.get("overlay_id")
-        or contribution.contribution_id
+        contribution.contribution_id: contribution.source_binding.overlay_id
+        if contribution.source_binding is not None and contribution.source_binding.overlay_id is not None else contribution.contribution_id
         for contribution in snapshot.contributions
     }
     chain_tail: dict[tuple[str, int | None], str] = {}

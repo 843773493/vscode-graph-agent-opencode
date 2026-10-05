@@ -2025,13 +2025,15 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
             (internal[0],),
         ).fetchone()[0]
         assert internal[5] == notice_hash
+    with sqlite3.connect(_main_thread_node(context, child.session_id) / "rollout" / "index.sqlite") as connection:
+        connection_execution_by_item = dict(connection.execute("SELECT item_id, execution_id FROM item_catalog"))
     calls = [item for item in target_items if item.semantic_kind == SemanticKind.TOOL_CALL]
     results = [item for item in target_items if item.semantic_kind == SemanticKind.TOOL_RESULT]
     assert len(calls) == len(results) == 1
     call_id = calls[0].payload["tool_calls"][0]["id"]
-    assert call_id == results[0].metadata["tool_call_id"] == results[0].payload["tool_call_id"]
+    assert call_id == results[0].tool_call_id == results[0].payload["tool_call_id"]
     assert call_id != "retry-tool-call"
-    assert calls[0].metadata["execution_id"] == results[0].metadata["execution_id"] == retry[0]
+    assert connection_execution_by_item[calls[0].item_id] == connection_execution_by_item[results[0].item_id] == retry[0]
     assert results[0].producer_ref["invocation_id"] == retry[0]
     restored = await _get_tuple(context, child.session_id)
     assert restored is not None

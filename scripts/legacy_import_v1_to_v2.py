@@ -24,9 +24,26 @@ if __package__ in {None, ""}:
         )
     sys.path.insert(0, str(_workspace_root))
 
-from app.services.infrastructure.rollout_context.migration.store import (
-    LegacyMigrationStorage,
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+from app.core.path_utils import (
+    build_session_catalog_components,
+    catalog_provider_scope,
 )
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.migration.artifacts import (
+    require_safe_path,
+)
+from app.services.infrastructure.rollout_context.migration.importer import (
+    LegacyRolloutImporter,
+)
+from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,18 +71,48 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if not args.report_only and not args.target_session_id:
         raise SystemExit("导入模式必须指定 --target-session-id")
-    storage = LegacyMigrationStorage(args.sessions_dir)
-    if args.report_only:
-        result = storage.legacy_migration_report(
-            args.source_session_id,
-            checkpoint_ns=args.checkpoint_ns,
-        )
-    else:
-        result = storage.migrate_legacy_to_v2(
-            args.source_session_id,
-            target_thread_id=args.target_session_id,
-            checkpoint_ns=args.checkpoint_ns,
-        )
+    sessions_root = args.sessions_dir.expanduser().absolute()
+    require_safe_path(sessions_root)
+    if sessions_root.name != "sessions" or sessions_root.parent.name != ".boxteam":
+        raise ValueError("--sessions-dir 必须指向显式工作区的 .boxteam/sessions")
+    workspace_root = sessions_root.parent.parent
+    for path in (
+        workspace_identity_path(workspace_root),
+        sessions_root.parent / "navigation" / "session-catalog.sqlite",
+    ):
+        require_safe_path(path)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"import 必须使用已有 workspace/catalog 身份: {path}"
+            )
+    components = build_session_catalog_components(
+        sessions_root, load_or_create_workspace_id(workspace_root)
+    )
+    try:
+        with catalog_provider_scope(components):
+            storage = RolloutStorage(
+                sessions_root,
+                serde=JsonPlusSerializer(),
+                message_codec=LangChainMessageCodec(),
+            )
+            importer = LegacyRolloutImporter(storage)
+            source_thread_id = storage.main_thread_id(args.source_session_id)
+            if args.report_only:
+                result = importer.read_report(
+                    source_session_id=args.source_session_id,
+                    source_thread_id=source_thread_id,
+                    checkpoint_ns=args.checkpoint_ns,
+                )
+            else:
+                result = importer.import_v1(
+                    source_session_id=args.source_session_id,
+                    source_thread_id=source_thread_id,
+                    target_session_id=args.target_session_id,
+                    target_thread_id=storage.main_thread_id(args.target_session_id),
+                    checkpoint_ns=args.checkpoint_ns,
+                )
+    finally:
+        components.close()
     sys.stdout.write(
         json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     )

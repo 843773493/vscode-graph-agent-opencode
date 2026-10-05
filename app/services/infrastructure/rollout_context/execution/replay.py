@@ -92,8 +92,7 @@ class RolloutReplayMixin:
                         active_branch_row[0],
                         field="checkpoint_namespace_state.active_branch_id",
                     )
-                    if branch_id is None
-                    and active_branch_row is not None
+                    if branch_id is None and active_branch_row is not None
                     else branch_id
                 )
                 existing = connection.execute(
@@ -153,7 +152,10 @@ class RolloutReplayMixin:
                     raise ValueError(
                         "replay acceptance_idempotency_key 冲突：source payload 不一致"
                     )
-                if expected_branch is not None and existing_source_branch != expected_branch:
+                if (
+                    expected_branch is not None
+                    and existing_source_branch != expected_branch
+                ):
                     raise ValueError(
                         "replay acceptance_idempotency_key 冲突：source branch 不一致"
                     )
@@ -197,9 +199,15 @@ class RolloutReplayMixin:
             branch_id=branch_id,
             turn_id=new_turn_id,
             root_item_id=f"item-replay-{replay_id}",
-            acceptance_metadata={
-                "replay_of_turn_id": source_turn_id,
-                "source_root_item_id": root_item_id,
+            extensions={
+                "boxteam.replay.annotations": {
+                    "extension_version": "1",
+                    "protection": "public",
+                    "value": {
+                        "replay_of_turn_id": source_turn_id,
+                        "source_root_item_id": root_item_id,
+                    },
+                }
             },
             replay_of_turn_id=source_turn_id,
             identity_origin="replay_as_new_turn",

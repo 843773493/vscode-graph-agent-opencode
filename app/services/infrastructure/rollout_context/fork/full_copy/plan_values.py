@@ -16,6 +16,7 @@ def localize_plan_value(state, value: object) -> object:
     for key, child in value.items():
         if key in {
             "source",
+            "extensions",
             "lineage",
             "legacy_source_ref",
             "fork_source_ref",
@@ -49,7 +50,7 @@ def localize_plan_value(state, value: object) -> object:
                 return result
             raise ValueError("source-mismatch: fork canonical ref target item 缺失")
         replacements = {
-            "source_revision": item.metadata.get("source_revision")
+            "source_revision": (item.source_manifest.source_revision if item.source_manifest else None)
             or f"canonical:{item.item_id}:{item.content_hash}",
             "content_hash": item.content_hash,
             "content_length": payload_content_length(item.payload_kind, item.payload),

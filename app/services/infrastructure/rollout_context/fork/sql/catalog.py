@@ -55,13 +55,14 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
             raise RuntimeError(f"full_rollout_copy item catalog 丢失: {old_id}")
         old_turn_id = optional_text(old_row[0], field="item_catalog.turn_id")
         result = connection.execute(
-            "UPDATE item_catalog SET item_id = ?, turn_id = ?, producer_ref_json = ?, content_hash = ?, metadata_json = ? WHERE item_id = ?",
+            "UPDATE item_catalog SET item_id = ?, turn_id = ?, producer_ref_json = ?, content_hash = ?, projection_manifest_json = ?, tool_call_id = ? WHERE item_id = ?",
             (
                 new_id,
                 mapped("turn", old_turn_id),
                 _json(item.producer_ref),
                 item.content_hash,
-                _json(item.metadata),
+                _json(item.projection_manifest()),
+                item.tool_call_id,
                 old_id,
             ),
         )
@@ -360,29 +361,29 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
         (table, *row)
         for table in ("context_contributions", "context_assembly_contributions")
         for row in connection.execute(
-            f"SELECT assembly_id, contribution_id, metadata_json FROM {table}"
+            f"SELECT assembly_id, contribution_id, binding_manifest_json FROM {table}"
         ).fetchall()
     ]
-    for table, assembly_id, contribution_id, metadata_json in contribution_rows:
+    for table, assembly_id, contribution_id, binding_manifest_json in contribution_rows:
         contribution_id = required_text(
             contribution_id, field="context_contributions.contribution_id"
         )
-        metadata_text = required_text(
-            metadata_json, field="context_contributions.metadata_json"
+        binding_manifest_text = required_text(
+            binding_manifest_json, field="context_contributions.binding_manifest_json"
         )
-        value = json.loads(metadata_text)
+        value = json.loads(binding_manifest_text)
         if not isinstance(value, Mapping):
             raise TypeError(
                 "full_rollout_copy context contribution metadata 必须是 object: "
                 f"{contribution_id}"
             )
-        remapped = remap_json(value)
+        remapped = {**value, "source_binding": remap_json(value["source_binding"])}
         if not isinstance(remapped, dict):
             raise TypeError(
                 "full_rollout_copy context contribution metadata remap 非 object"
             )
         result = connection.execute(
-            f"UPDATE {table} SET metadata_json = ? WHERE contribution_id = ? AND assembly_id IS ?",
+            f"UPDATE {table} SET binding_manifest_json = ? WHERE contribution_id = ? AND assembly_id IS ?",
             (_json(remapped), contribution_id, assembly_id),
         )
         if result.rowcount != 1:

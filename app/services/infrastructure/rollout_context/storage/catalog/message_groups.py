@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import BinaryIO
 
 from app.domain.itemized.records import CanonicalItemRecord
@@ -29,17 +29,17 @@ def read_message_group(
         sequence=strict_non_negative_int(anchors[0][0], field="item_catalog.item_sequence"),
         offset=offset, length=length,
     )
-    manifest = anchor.metadata.get("projection_group")
+    manifest = anchor.projection_group
     if manifest is None:
         return (anchor,)
-    if not isinstance(manifest, Mapping) or not anchor.message_group_id:
+    if not anchor.message_group_id:
         raise RuntimeError("canonical projection group manifest 非法")
     rows = connection.execute(
         "SELECT item_sequence, jsonl_offset, jsonl_length FROM item_catalog "
         "WHERE message_group_id = ? ORDER BY item_sequence",
         (anchor.message_group_id,),
     ).fetchall()
-    if type(manifest.get("size")) is not int or len(rows) != manifest["size"]:
+    if len(rows) != manifest.size:
         raise RuntimeError("canonical projection group 缺少或多出成员")
     items = tuple(
         anchor if row[0] == anchor.item_sequence else read_item(

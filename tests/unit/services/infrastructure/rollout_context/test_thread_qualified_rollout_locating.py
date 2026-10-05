@@ -45,7 +45,9 @@ CHILD_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 CHILD_THREAD_ID = thread_id_at(CHILD_CREATED_AT)
 
 
-def test_full_copy_staging_owner_accepts_thread_qualified_root_signature(tmp_path: Path) -> None:
+def test_full_copy_staging_owner_accepts_thread_qualified_root_signature(
+    tmp_path: Path,
+) -> None:
     """私有 fork staging 支持真实 main owner 并拒绝 non-main。"""
     from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
         FullCopyStagingStorage,
@@ -59,7 +61,9 @@ def test_full_copy_staging_owner_accepts_thread_qualified_root_signature(tmp_pat
     probe_root = tmp_path / "staging-root-signature-probe"
     main_thread_id = f"thr_{create_uuid_hex()}"
     instance = object.__new__(FullCopyStagingStorage)
-    instance._path_resolver = SimpleNamespace(main_thread_id=lambda _session_id: main_thread_id)
+    instance._path_resolver = SimpleNamespace(
+        main_thread_id=lambda _session_id: main_thread_id
+    )
     instance._source = f"ses_{create_uuid_hex()}"
     instance._target = target
     instance._stage_root = probe_root
@@ -82,7 +86,14 @@ def _publish_child_thread(
             idempotency_key=key,
             initial_state="idle",
             preimage_hash="a" * 64,
-            graph_binding=json.dumps({"graph_id": "rollout-locating"}),
+            graph_binding=json.dumps(
+                {
+                    "graph_id": "rollout-locating",
+                    "graph_revision": 1,
+                    "graph_schema_hash": "sha256:" + "a" * 64,
+                    "capability_profile_hash": "sha256:" + "b" * 64,
+                }
+            ),
             capability_profile=json.dumps({}),
             created_at=uuid7_datetime_from_hex(thread_id[4:]),
             thread_id=thread_id,
@@ -91,9 +102,7 @@ def _publish_child_thread(
         control.freeze_thread_creation_artifact_manifest(
             key,
             artifact_manifest=manifest,
-            artifact_manifest_hash=hashlib.sha256(
-                manifest.encode("utf-8")
-            ).hexdigest(),
+            artifact_manifest_hash=hashlib.sha256(manifest.encode("utf-8")).hexdigest(),
         )
         published = control.publish_thread_creation_record(key)
         locator = published.final_relative_locator
@@ -121,9 +130,7 @@ def test_main_thread_resolves_to_session_node_rollout(
 ) -> None:
     main_thread_id = storage._path_resolver.main_thread_id(SESSION_ID)
     session_node = storage._path_resolver.resolve_session_node(SESSION_ID)
-    thread_node = storage._path_resolver.resolve_thread_node(
-        SESSION_ID, main_thread_id
-    )
+    thread_node = storage._path_resolver.resolve_thread_node(SESSION_ID, main_thread_id)
     assert storage.root(SESSION_ID) == thread_node / "rollout"
     assert storage.root(SESSION_ID, thread_id=main_thread_id) == thread_node / "rollout"
     assert storage.index_path(SESSION_ID) == thread_node / "rollout" / "index.sqlite"
@@ -131,14 +138,17 @@ def test_main_thread_resolves_to_session_node_rollout(
     assert thread_node == session_node
 
 
-def test_session_and_main_thread_resolve_to_one_rollout_lock(
+def test_main_thread_owner_resolves_to_one_rollout_lock_and_rejects_session_alias(
     storage: RolloutStorage,
 ) -> None:
-    assert storage._lock(SESSION_ID, "", session_id=SESSION_ID) is storage._lock(
-        SESSION_ID,
+    thread_id = storage.main_thread_id(SESSION_ID)
+    assert storage._lock(thread_id, "", session_id=SESSION_ID) is storage._lock(
+        thread_id,
         "",
         session_id=SESSION_ID,
     )
+    with pytest.raises(RuntimeError, match="拒绝 thread alias"):
+        storage._lock(SESSION_ID, "", session_id=SESSION_ID)
 
 
 def test_child_thread_resolves_to_own_thread_node_rollout(
@@ -386,11 +396,17 @@ def test_main_and_child_checkpoints_restore_through_exact_owner(
 
     assert restored_main is not None
     assert restored_child is not None
-    assert [message.content for message in restored_main.checkpoint["channel_values"]["messages"]] == [
+    assert [
+        message.content
+        for message in restored_main.checkpoint["channel_values"]["messages"]
+    ] == [
         "main-owner question",
         "main-owner answer",
     ]
-    assert [message.content for message in restored_child.checkpoint["channel_values"]["messages"]] == [
+    assert [
+        message.content
+        for message in restored_child.checkpoint["channel_values"]["messages"]
+    ] == [
         "child-owner question",
         "child-owner answer",
     ]

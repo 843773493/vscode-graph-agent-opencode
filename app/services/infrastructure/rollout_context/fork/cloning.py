@@ -284,6 +284,7 @@ class ForkCloneMixin:
                     target_rollout_id = self._rollout_id(
                         target_session_id,
                         thread_id=target_thread_id,
+                        checkpoint_ns=checkpoint_ns,
                     )
                     connection.execute(
                         "UPDATE database_meta SET rollout_id = ?, session_id = ?, thread_id = ?, updated_at = ? WHERE singleton_id = 1",

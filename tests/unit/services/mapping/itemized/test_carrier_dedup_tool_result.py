@@ -20,6 +20,11 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.identity.item_projection import (
+    ItemProjectionIdentity,
+    ProjectionGroup,
+    ReasoningCarrier,
+)
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.itemized.carrier_dedup import (
     superseded_stream_item_ids,
@@ -42,9 +47,10 @@ def _item(
     semantic_kind: SemanticKind,
     payload_kind: PayloadKind,
     payload: object,
-    metadata: dict[str, object],
     *,
     wire_role: str,
+    projection_identity: ItemProjectionIdentity,
+    projection_group: ProjectionGroup | None = None,
     message_group_id: str | None = None,
 ) -> CanonicalItemRecord:
     return CanonicalItemRecord.create(
@@ -62,7 +68,8 @@ def _item(
             "producer_id": MODEL_CALL,
             "invocation_id": TURN,
         },
-        metadata=metadata,
+        projection_identity=projection_identity,
+        projection_group=projection_group,
         payload=payload,
     )
 
@@ -74,14 +81,13 @@ def _stream_reasoning(sequence: int = 1) -> CanonicalItemRecord:
         SemanticKind.REASONING,
         PayloadKind.TEXT,
         "用户要求委派子代理。",
-        {
-            "block_id": f"{MODEL_CALL}:block:part_reasoning",
-            "block_index": 0,
-            "execution_id": EXECUTION,
-            "model_call_id": MODEL_CALL,
-        },
         wire_role="assistant",
         message_group_id=f"message-{MODEL_CALL}",
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=MODEL_CALL,
+            block_id=f"{MODEL_CALL}:block:part_reasoning",
+            block_index=0,
+        ),
     )
 
 
@@ -97,15 +103,11 @@ def _stream_tool_call(sequence: int = 2) -> CanonicalItemRecord:
             "tool_call_id": SCOPED_TOOL_CALL_ID,
             "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{TOOL_CALL_ID}",
         },
-        {
-            "block_id": SCOPED_TOOL_CALL_ID,
-            "block_index": 0,
-            "execution_id": EXECUTION,
-            "model_call_id": MODEL_CALL,
-            "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{TOOL_CALL_ID}",
-        },
         wire_role="assistant",
         message_group_id=f"message-{MODEL_CALL}",
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=MODEL_CALL, block_id=SCOPED_TOOL_CALL_ID, block_index=0
+        ),
     )
 
 
@@ -122,16 +124,11 @@ def _live_tool_result(sequence: int = 3) -> CanonicalItemRecord:
             "tool_call_id": SCOPED_TOOL_CALL_ID,
             "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{TOOL_CALL_ID}",
             "tool_outcome": "success",
-        },
-        {
             "execution_confirmed": True,
-            "execution_id": LIVE_EXECUTION_ID,
-            "model_call_id": MODEL_CALL,
-            "tool_call_id": SCOPED_TOOL_CALL_ID,
-            "tool_invocation_id": f"tool-invocation:{MODEL_CALL}:{TOOL_CALL_ID}",
         },
         wire_role="tool",
         message_group_id=f"message-{LIVE_EXECUTION_ID}",
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL),
     )
 
 
@@ -142,18 +139,20 @@ def _confirmed_reasoning(sequence: int = 4) -> CanonicalItemRecord:
         SemanticKind.REASONING,
         PayloadKind.TEXT,
         "用户要求委派子代理。",
-        {
-            "execution_confirmed": True,
-            "model_call_id": MODEL_CALL,
-            "projection_group": {"content_form": "list", "ordinal": 0, "size": 2},
-            "reasoning_carrier": {
-                "text_key": "reasoning_content",
-                "type": "reasoning_content",
-            },
-            "wire_role": "assistant",
-        },
         wire_role="assistant",
         message_group_id=f"message-lc_run--{MODEL_CALL}",
+        projection_identity=ItemProjectionIdentity(
+            model_call_id=MODEL_CALL,
+            reasoning_carrier=ReasoningCarrier.from_dict(
+                {
+                    "text_key": "reasoning_content",
+                    "type": "reasoning_content",
+                }
+            ),
+        ),
+        projection_group=ProjectionGroup.from_dict(
+            {"content_form": "list", "ordinal": 0, "size": 2}
+        ),
     )
 
 
@@ -173,15 +172,14 @@ def _confirmed_tool_call(sequence: int = 5) -> CanonicalItemRecord:
                 }
             ]
         },
-        {
-            "execution_confirmed": True,
-            "model_call_id": MODEL_CALL,
-            "projection_group": {"content_form": "list", "ordinal": 1, "size": 2},
-            "projection_message_id": f"lc_run--{MODEL_CALL}",
-            "wire_role": "assistant",
-        },
         wire_role="assistant",
         message_group_id=f"message-lc_run--{MODEL_CALL}",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id=f"lc_run--{MODEL_CALL}", model_call_id=MODEL_CALL
+        ),
+        projection_group=ProjectionGroup.from_dict(
+            {"content_form": "list", "ordinal": 1, "size": 2}
+        ),
     )
 
 
@@ -197,16 +195,14 @@ def _request_tool_result(sequence: int = 6) -> CanonicalItemRecord:
             "result_id": "1b56a352-af40-4db3-adc2-0a77994e039e",
             "tool_call_id": TOOL_CALL_ID,
             "tool_outcome": "success",
-        },
-        {
             "execution_confirmed": True,
-            "model_call_id": MODEL_CALL,
-            "projection_message_id": "1b56a352-af40-4db3-adc2-0a77994e039e",
-            "tool_call_id": TOOL_CALL_ID,
-            "wire_role": "tool",
         },
         wire_role="tool",
         message_group_id="message-1b56a352-af40-4db3-adc2-0a77994e039e",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="1b56a352-af40-4db3-adc2-0a77994e039e",
+            model_call_id=MODEL_CALL,
+        ),
     )
 
 

@@ -472,7 +472,7 @@ class ContextSourceControlStorageMixin:
                 existing_item = connection.execute(
                     "SELECT content_hash, semantic_kind, payload_kind, status, "
                     "turn_id, turn_scope, message_group_id, wire_role, "
-                    "producer_ref_json, metadata_json, commit_id "
+                    "producer_ref_json, projection_manifest_json, commit_id "
                     "FROM item_catalog WHERE item_id = ?",
                     (item.item_id,),
                 ).fetchone()
@@ -501,7 +501,7 @@ class ContextSourceControlStorageMixin:
                         item.message_group_id,
                         item.wire_role,
                         canonical_json_bytes(dict(item.producer_ref)).decode("utf-8"),
-                        canonical_json_bytes(dict(item.metadata)).decode("utf-8"),
+                        canonical_json_bytes(item.projection_manifest()).decode("utf-8"),
                     )
                     if stored_identity != incoming_identity:
                         raise RuntimeError(

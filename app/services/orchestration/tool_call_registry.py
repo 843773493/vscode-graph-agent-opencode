@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from langchain_core.messages import BaseMessage, ToolMessage
 
 from app.domain.itemized.enums import CanonicalItemStatus
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
 
 
@@ -367,16 +368,9 @@ class StreamToolRegistryMixin:
                         "name": tool_name,
                         "content": result,
                         "tool_outcome": result_outcome,
-                    },
-                    metadata={
-                        "execution_id": tool_execution_id,
-                        "model_call_id": model_call_id,
-                        "tool_execution_id": tool_execution_id,
-                        "tool_call_id": tool_call_id,
-                        "tool_invocation_id": payload["tool_invocation_id"],
-                        "tool_attempt_id": tool_execution_id,
                         "execution_confirmed": result_outcome != "unknown",
                     },
+                    projection_identity=ItemProjectionIdentity(model_call_id=model_call_id),
                     turn_id=self._canonical_turn_id,
                     turn_scope=(
                         "turn_member"

@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from app.domain.itemized.enums import CanonicalItemStatus, TurnScope
+from app.domain.itemized.identity.item_projection import (
+    ToolResultEvidence,
+)
 from app.domain.itemized.mutation_intents import (
     AppendCanonicalItemIntent,
     MutationIntentOwner,
@@ -61,9 +64,9 @@ def _tool_result_item(item_id: str) -> CanonicalItemRecord:
             "result_id": "result-1",
             "name": "get_goal",
             "content": "{}",
-            "tool_outcome": "success",
-        },
-        metadata={"execution_confirmed": True},
+            "tool_outcome": "success"
+        , "execution_confirmed": True},
+        extensions={},
         turn_id="turn-1",
         turn_scope=TurnScope.TURN_MEMBER,
     )
@@ -224,10 +227,7 @@ def test_append_items_supports_text_tool_result_identity_from_metadata(
         status=CanonicalItemStatus.COMPLETED,
         producer_ref={"producer_kind": "tool", "producer_id": "tool-exec-1"},
         payload="{}",
-        metadata={
-            "tool_call_id": "model-call-1:tool-call:call-1",
-            "result_id": "result-1",
-        },
+        tool_result_evidence=ToolResultEvidence(tool_call_id="model-call-1:tool-call:call-1", result_id="result-1", execution_confirmed=True),
         turn_id="turn-1",
         turn_scope=TurnScope.TURN_MEMBER,
     )

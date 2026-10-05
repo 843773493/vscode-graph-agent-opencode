@@ -125,7 +125,10 @@ def submit_checkpoint_reminder(
         # 同一事件重试时复用同一个 immutable item；若正文真的变化，owner 会
         # 以 identity/content 冲突显式拒绝，而不是悄悄追加第二条提醒。
         item_id=f"item-{source_id}",
-        metadata=prepared.metadata,
+        extensions={"boxteam.checkpoint.annotations": {
+            "extension_version": "1", "protection": "public",
+            "value": dict(prepared.metadata),
+        }},
     )
     consume = getattr(checkpointer, "consume_mutation_intent", None)
     if not callable(consume):

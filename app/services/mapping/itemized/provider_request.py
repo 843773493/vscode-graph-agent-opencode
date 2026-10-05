@@ -69,6 +69,8 @@ def project_user_message_content(
             f"不支持: {target_format!r}"
         )
 
+    if isinstance(content, Mapping) and "attachments" in content and "content" in content:
+        content = content["content"]
     source_blocks = direct_content_blocks(content)
     projected: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
