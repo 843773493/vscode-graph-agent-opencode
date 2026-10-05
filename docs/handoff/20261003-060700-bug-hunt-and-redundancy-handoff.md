@@ -82,12 +82,12 @@
 
 **变异验证口径（重要）**：有界性用例**刻意不 import 分片常量**，让还原无界实现后的变异直接命中被测行为（`assert N <= 64`）而不是 `AttributeError`。
 
-### 已登记、未修的同形状残留
+### 原登记项的当前 owner 状态
 
 | 位置 | 现状 | 判定 |
 |---|---|---|
 | `app/core/background_message_bus.py:18 _messages` | B01/B02 已集成 `28359675` | 删除排空后回收目标 Session 全部 backlog，活跃 collector 明确拒绝关闭；删除失败后 catalog `deleting` 拒绝消息准备、Job 创建和迟到 continuation。74 项相关单测及 1 项真实集成通过，两个入口单点变异分别命中拒绝断言，R19 独审通过。其它非 Job Session 写入准入缺口由 A20 单独继续收敛，不把 backlog 改成 LRU |
-| `app/services/orchestration/thread_residency.py ThreadResidencyTracker._states` | 随 (session,thread) 无界 | 唯一淘汰路径 `sweep()` 全仓无生产调用点；朴素 LRU 会因 generation fence 复用误纳迟到 callback，需 owner 配合 |
+| `app/services/orchestration/thread_residency.py ThreadResidencyTracker._states` | 原缺口已由 owner 收敛 | 当前冷读不登记 slot；成功释放后 `_drop_cold_state` 回收，失败保 owner 重试，generation 不复用。固定 `9e7013e` 增量独审通过；通用强杀关闭风险仍另验，不重做 LRU。证据见 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/residency-stable-pre-review/final-report.md` |
 | `app/services/infrastructure/trace_event_store.py _event_ids` 的自动 `evt_*` 条目 | 旧报告候选 | A13 已核验当前 Store/writer 使用调用方 Event ID，源码已无该侧车；不重开修复，证据见实时台账引用的 residency/Trace owner 审查 |
 
 ---
@@ -127,11 +127,11 @@
 1. **`delegate` 的 `before_start` 失败后 child 已 publish，无回收路径**（OpenSpec 8.5 已知缺口）。
    探针实测：child row 与 intent 都留下，`abort_thread_creation_record` 只覆盖 `preparing`，对已 `published` 直接抛错；全库无任何回收已发布 child 的路径。
    当前选择：发布前准备复用 Session `session-control.sqlite` 的唯一 collaboration/creation ledger，与 child publication 同事务收敛；不增加 Team JSON intent/readiness 权威，published child 不回滚。实施及依赖验证仍待完成。
-2. **`Resource activation/provenance` 层尚不存在**（OpenSpec 第 9 节未实施）。
-3. **`replaceable_source` 仍暂存在 `ContextItem.metadata`**（`itemized_context_middleware.py` 有 TODO），应迁移为 typed 领域字段。
-4. **SessionThread 未成为统一 owner**（`ContextRef.session_id` 无 `thread_id`，OpenSpec 第 8 节要求 `(session_id, thread_id)` 定位）。
+2. **Resource activation/provenance 组件已存在，真实执行接线与验收仍待**：领域 snapshot/provenance 与 `services/orchestration/resource_activation/coordinator.py` 已有实现，不重新派“从零新增”；继续接真实 user/internal execution、唯一 Saver 与封存重试，按原第 9 节逐项验收。
+3. **自由 metadata 决策字段的 typed 迁移已集成，完整来源消费仍待验收**：`ContextContribution` 已有 typed selection_role/replacement_policy/source_binding，当前 middleware 无旧 replaceable_source 分支。继续审 producer、封存、恢复与 Provider，不恢复 metadata 双读；整 R 与 activation 未验收项保留。
+4. **SessionThread typed owner 已进入模型和存储，继承入口与端到端验收仍待**：`ContextRef`、assembly、detail、canonical/checkpoint/fork 已显式携带 thread，不按旧“缺字段”描述重做。当前历史加载测试仍混用 Session/Thread 或漏 admission，交唯一实现者整文件迁移；通信、activation、同 Session child/team 沿原第 8 节继续。
 5. **前端会话目录 outbox 已接线，完整连续操作验收未闭合**（2026-10-06 fixed3f复核，OpenSpec 8.1-G/H、10.8）：App/hooks与folder CRUD/move、session rename/parent/delete已消费同一outbox；backend已有跨进程flock＋durable generation worker，旧同步端点/非递归第二writer已下线，不按历史“零caller”重做。真实剩余是pending父Folder建child被UI拒绝、两个后端测试文件仍调用已删同步方法，以及即时pending/失败/重开对账的最终验收。主fixed核验与只读报告见本run `coordinator/artifacts/sol-efficiency-trial/session-catalog-outbox-current-owner-review/attempt-1/`，未运行当前完整组、未勾任务。
-6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `vrn/schema_vrn` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；其它持久化 VRN 接线仍须完成。
+6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `uri/schema_uri` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；字段已随统一资源寻址术语迁移正名；其它资源 URI 持久化接线仍须完成。
 7. **uuidv7 change** 的前缀数已实核为 33 个、33 个唯一值；自然创建、真实时钟回拨及路径预算已集成验收，49/49 任务完成。关联 SessionThread 与端到端迁移验收仍按 `add-itemized` 第 8 节单独推进，不能由 UUID 验收代替；证据见 `coordinator/artifacts/u07-main-validation.json` 与实时台账。
 
 ---
