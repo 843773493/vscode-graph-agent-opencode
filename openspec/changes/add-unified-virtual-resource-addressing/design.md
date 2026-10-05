@@ -1,5 +1,7 @@
 ## Context
 
+2026-10-05 用户确认术语收口，由主线程按 `tasks.md` 1.1/6.6 统一实施；现有 VRN 命名只作为待迁移的基线引用，不继续定义新的同义术语。此次调整不改变寻址语法、稳定身份或授权行为，实际命名修改与唯一实现者的在途写入错开。
+
 现状（全部取自仓库内受版本控制的事实源；关键取值已内联在下方要点中，不引用任何 `out/tests/temp/**` 临时产物）：
 
 - `app/services/infrastructure/resource_platform/virtual_resources/` 定义了严格 VRN grammar 与 typed resolver，但**解析/授权侧零生产调用**：`parse_vrn`、`VirtualResourceResolver`、`ResolvedResourceHandle`、`ResolutionContext` 只被测试引用。 **（修订注，`298ef599`+`f3bd8213`：本 change 3.2/3.3 已装配生产链路，「解析/授权侧零生产调用」已不成立，见下条）**

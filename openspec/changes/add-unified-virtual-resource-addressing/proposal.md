@@ -10,6 +10,7 @@
 
 ## What Changes
 
+- **术语收口计划（2026-10-05 用户决定）**：主线程按 `tasks.md` 1.1/6.6 统一机制名称、具体地址名称及全量引用。现有文档和代码中的 VRN 是待清理的历史命名，不构成第二套寻址合同；源码正名在相关业务候选固定后实施，不与唯一实现者并行改接口。
 - **BREAKING 统一 VRN 语法（定稿）**：`boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}`。`{gateway_authority?}` 为可选单段、承载稳定 gateway_id；`{scope_id}` 对**所有** scope 必填；`resources` 为固定保留段。现有 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` 是该语法的特例（authority 缺省）。
 - **BREAKING scope 闭集（定稿）**：`workspace` | `user` | `gateway` | `inline`。（实测现状闭集已为 `workspace`/`user`/`gateway`/`inline`：`builtin` 正名 `inline` 与 `user` 新增均已落地，`memory` 已移出闭集）。
   - `builtin` MUST 更名为 `inline`，向 config 域既有词汇（`app/schemas/internal_v2/config.py:20` 的 `inline`/`user`/`user_local`/`workspace`/`sqlite`）收敛。

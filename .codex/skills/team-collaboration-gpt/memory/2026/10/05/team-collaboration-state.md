@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 17:44（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 19:08（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
 本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
@@ -33,7 +33,7 @@
 | Terminal | 61812→9fbb恢复增量通过；真实PTY/UI/promote/stop/detach/delete及正式Session清理已验收 | terminal-owner-production/complete-delivery/、browser-owner-production/terminal-shared-recovery-delivery/、root-product-verification/terminal-product-acceptance.json |
 | Browser | f9ac→b2完整包，b2→f838释放增量3路径独审通过；主strict/blob与原87+4收据分别核过。真实Chromium首轮19.53s/exit0：UI创建、grant/WS、导航/read、promote、正式Session删除、保留发现、无Session重连、原生stop/delete；page_errors/failed_requests均0，创建Session与资源已清理 | browser-owner-production/final-delivery/、browser-owner-production/release-confirmation-forward/、root-product-verification/browser-product-acceptance.json |
 
-Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品验证只背书该临时场景；唯一正式 Web E2E、LLM documented-tool discovery、remote Docker Gateway Browser/Terminal 尚未执行。已绿未变部分复用，原失败 raw/exit 保留，各组不相加。官方生成后 tsc/build 已过；继承 Ruff 诊断的精确边界见各 evidence-binding。
+Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品验证只背书该临时场景；唯一正式 Web E2E 尚未验收，LLM documented-tool discovery 与 remote Docker Gateway Browser/Terminal 的正式尝试见下文，不能算整体通过。已绿未变部分复用，原失败 raw/exit 保留，各组不相加。官方生成后 tsc/build 已过；继承 Ruff 诊断的精确边界见各 evidence-binding。
 
 ## 当前 typed 切片
 
@@ -58,6 +58,7 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 2. delegate：Session SQLite publication ledger与child publication同事务，recovery/factory/startcaller全接；published不倒删。
 3. federated VRN/target-main：复用channel/grant/policy/credential和本地cursor，唯一authority语法；真实B⇄A⇄C、同本机authority等价、一次transit/两hop/deadline、最新权限/零副作用/不泄漏locator。**已有 GET /api/v1/sessions/{session_id}/main-thread，只接 WorkspaceSessionMainPort 消费者，不新增路由。** A/remaining-addressing-contract-review/attempt-1/report.md仅静态。
 4. 按七change原task ID逐项证据，官方生成公共协议并独立tsc、strict OpenSpec、既有唯一 tests/e2e/clients/web/test_basic_chat_tool_loop.py 扩展完整场景、真实产品与清理。Browser里程碑不结束goal，不以组件绿灯或测试总数勾整项。
+5. 用户 2026-10-05 新增术语收口：唯一术语表归寻址 change 的 requirement「术语必须区分机制、地址、身份与真实路径」；主线程按该 change 的 1.1/6.6 全量改术语和引用，与 Sol 在途接口错开。当前只登记计划，未开始源码正名，不保留 VRN/URI 别名；URI 字节、身份和授权合同保持既有语义。主线程的机械正名单独计量，不归业务补写或模型提速。
 
 ## 效率与协作效果
 
@@ -78,3 +79,9 @@ Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品
 2026-10-05 remote正式attempt3 actual exit1/64.355秒（pytest62.70秒）：Gateway/后端/native服务与隧道已真实就绪，remote DTO仍offline。主核ROOT registry/dtos.py严格比较health.workspace_id与target.backend_workspace_id（首次在0b355的Sol WVL集成出现），remote_gateway.py两条WorkspaceTarget构造和routes/federation.py导出却漏传UUID，默认NULL；这是Sol消费者闭包遗漏，不能归旧fixture或等待。修复仍由同Sol贯穿联邦DTO/导出/投影/持久恢复/健康及真实路由，保留严格身份校验。A/root-product-verification/remote-browser-terminal-attempt-3/保留原回执和双端日志。主首次target shell读取多行Python未做shell quoting失败，第二次正确引用后成功；原失败保留，单列主协调，不归作者。
 
 同Sol在typed真实history/fork/storage收集到v1显式importer的基线悬空：f838及live都无migration/store.py或LegacyMigrationStorage/migrate_legacy_to_v2定义，但CLI与集成仍调用。按保留的显式importer合同连接唯一现行writer，不恢复runtimev1或第二存储owner；该基线投入与typed返工分开，尚未验收。
+
+远端UUID固定80889/18path严格导出、主机械/12Python AST/官方field7核验、只读独审无确定finding已通过，主串行集成145759f7；18path pre/postblob、guard、双祖先、共享index f2afa293不变。独审最初提出旧NULL投影恢复问题，按用户无旧开发数据兼容授权重判撤回；保非NULL现行JSON/SQLite恢复和明确缺UUID拒绝。主第一次apply --index因read-tree-only索引stat cache拒绝，未改源码；第二次分别check/cached-check后apply＋精确add完成，原commands保留，属于主机械协调。
+
+正式remote attempt4在145759 actual exit1/69.279秒（pytest67.56秒）：联邦ready、资源create/list、attach页面和Browser grant均通过；Browser WS返回合法二进制screencast却被旧JSON-only接收helper解码，未到TerminalWS与Gateway重启。Node framing与已有integration helper分流已主核；同Sol在typed可停点窄修正式helper，主固定差异独审/集成后attempt5，不重跑无关组。原证据A/root-product-verification/remote-browser-terminal-attempt-4/。这是f838已有测试消费者遗漏，不归新增UUID实现。
+
+作者typed阶段报告（尚未固定/验收）：全仓items/offline restore/content-part locator显式session/thread；checkpoint typed provenance/extensions与真实fullcopy fork；group semantic retry严格核extensions/source/token_usage。逐字段JSONL→canonical→JCS原样一致，原行号误判实际是companion重复统计，未改hash算法；token_usage仅group anchor。通用acceptance_metadata迁为显式extensions、lineage参数与attachment payload，全量8caller闭合，不让opaque legacy audit扩展推导身份。保留原98pass及有限失败回执，不作为完整交付。
