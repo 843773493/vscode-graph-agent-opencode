@@ -101,3 +101,11 @@ attempt5初次端口预检尚未启动测试，发现attempt4孤儿SSH2323641占
 正式remote attempt7：guest consumer固定b25b→treee05c/唯一+1行，主strict/blob/preimage/AST/Ruff/固定差异独审/guard/双祖先/sharedindex不变后集成1de54734cab6047369a0d9ea1513dd9e432345ab。ROOT1de547正式实际0/74.575秒（pytest1pass/72.89秒），真实联邦ready、Browser附加/分离、Terminal命令输出、Gateway关闭/重启和fresh SQLite恢复后资源访问全部通过。target前后status0；精确测试监听无残留、ROOT无.boxteam，10份原日志保留。A/root-product-verification/remote-browser-terminal-attempt-7/acceptance.json；不再重跑这些未变绿项，也不据此勾typed/R/activation/delegate/federated资源URI或通用强杀harness安全。修订技能的事务/完整重开/重启认证规则已获得此次正式效果证据。
 
 typed阶段报告：唯一Sol修复structured tool_result.result_id在唯一收集阶段映射，remap_finalize从已校验message locator取anchor sequence，移除可空projection_message_id推导。有限fork8pass（pytest30.23秒，actual0/34.476秒），覆盖fullcopy→删source→二次fork及omitted四形态重开/损坏反证；未改hash/compare。其余81pass/5fail组消费者复验、opaque成员extensions/derived_from的checkpoint重开/retry拒绝、indexed raw tool-call跨modelscope和v1显式importer闭合仍待；无完整typed固定包，不作验收。
+
+持久资源原task只读对表中，审查者先报Terminal孤儿未调度；主独立固定dcad读main203→TerminalSteeringService._run/scan_once63→container757注入terminal_resource_owner，确认真实生产调度已存在，撤回缺口、不新增第二调度/不派作者返工。主此前进度断言过早，已向用户更正；审查误报与主协调成本单列，不归Sol。反证A/persistent-task-evidence-review/attempt-1/primary-indirect-call-correction.json；任务对表继续。
+
+typed早审固定f838→7dc4832714c5a16bd4e29a8e88124ca9061d0a0d/125path，标准包SHA25681940c53cb61cb92ca15d83816a61a7202d2621d97ec4e66c52eccfcf43376f2；主strict重建/全部postimage SHA/123AST/保护0/sharedindex不变，ROOTdcad preimage无冲突。未集成，v1 importer仍待。原91pass/35.49s实际0/37.726s及fork8pass原回执已主读取，full fork组82pass/153.50s实际0/157.810s原raw/exit已主读取确认；各组不相加。CAS增量持久事务与真实sealed拒绝源码已主静态读，尚待生产producer覆盖说明与独审。
+
+持久资源固定dcad对表已交：按已集成生产链路及原绑定/产品证据勾1.1–1.3、2.1–2.5、3.1–3.3、4.1–4.2；1.4/5.3仍欠外置owner unknown窗口重启，5.1仍欠明确竞争/lease场景，5.2仍欠唯一正式WebE2E。4.3确认Session control失败只显错不重读owner（主核hook→content loader→App→ResourcePanel）；成功整体对象已有，限定失败分支交同Sol后续。对表不新增生产调度、不重跑未变绿项，原报告A/persistent-task-evidence-review/attempt-1/report.md。
+
+v1 importer阶段：唯一Sol已接现行RolloutStorage的composition与显式身份private staging，旧migration.store/LegacyMigrationStorage/旧方法app/tests/scripts引用零。首定向typed-v1-importer-initial-attempt-1实际0/7.484秒、9pass/pytest5.61秒，主已读原raw/exit；异常/recovery/fork/CLI新进程仍待，无最终固定交付，不算完成。125path早审由同只读reviewer并行进行。
