@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **9fb108f05df288139b76d61e2f96aba3a9a12694**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248＋ff1固定47路径组合已物化但未提交，组合tree=`87e3ee3cc2ff29598e9be078a5399f9ef3f999e3`；另有主provider/AGENTS文档校准与本记忆更新，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
+本文更新前ROOT HEAD **356685321ab2322e931e443da52e4b4ac012247e**；最新已提交业务 **0e42364606f3c0ef5533de5e35970df82a2ece67**，其tree=`f7a07cc602fb9c5aeed5bac76eec9bd21f6e2e07`。已集成public0e2a→8ac、transaction e4d→39509、semantic58e1→0e423；ROOT现有d29＋6248＋ff1＋414＋5a89＋1ff0固定53路径组合已物化但未提交，组合tree=`b0e1a334178c05484beae898a343be764f3fa154`；主provider/AGENTS校准已在356文档提交，活跃记忆另更新，不能称工作树clean或生产已完成。下次恢复重新核HEAD/候选/preimage，不把本文值当live；三保护未变。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。本轮systemctl核验 **active/running**，实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -45,7 +45,7 @@
 ## 当前执行与后续顺序
 
 1. **Sol正在实现 R 正向生产切片**，产物 `r-producers-and-toolset-production/`。WT按三方同步163路径后，app/src/tests/scripts/configs/proto/openspec与ROOT1c20零差异；3生成冲突按合并proto等于ROOT后复用官方输出。证据 `root-dependency-sync-attempt-2/preparation.json`；build0/17.483s与真实composition import0/2.990s。不整树覆盖 .codex/docs，不启动 WT/ROOT全服务。
-   公共合同8f922→6dd→0e2a完整22path已经ROOT8ac集成；早审两个P2及protected空policy修复均由同Sol闭合，主95项绿。随后e4d事务10path与58e1语义revision7path分别集成39509、0e423，主61/75相关项绿，独审按未变差异复用。当前WT冻结基点ff1；d29的19path、6248的22path与ff1的12path（重叠共47）已主strict重建并组合物化ROOT。6248的201项消费组绿使用模型/业务依赖替身，不是完整Provider/E2E；消费者独审无blocker。ff1独审已闭合seal投影、runtime wire映射、mapping双向import三项，主57/7受影响组绿。Sol继续真实Saver fixture/删除API测试caller迁移；生产commit_model_call_pending零引用、测试53引用未全迁，不因这些定向绿灯认整R验收。
+   公共合同8f922→6dd→0e2a完整22path已经ROOT8ac集成；早审两个P2及protected空policy修复均由同Sol闭合，主95项绿。随后e4d事务10path与58e1语义revision7path分别集成39509、0e423，主61/75相关项绿，独审按未变差异复用。当前WT冻结基点1ff0；d29/6248/ff1/414/5a89/1ff0（重叠共53path）已主strict重建并组合物化ROOT。6248的201项消费组绿使用模型/业务依赖替身，不是完整Provider/E2E；消费者独审无blocker。ff1三项结构问题独审闭合，主57/7绿；414主189项hash/default/owner断言绿；5a89主114项protected/prepared-detail绿；1ff0主64项schema/offline恢复绿。Sol继续真实Saver/删除API测试caller迁移；生产commit_model_call_pending零引用、测试53引用未全迁，不因定向绿灯认整R验收。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 2. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
 3. **delegate publication**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。 原task对表发现粗队列漏了E01–E07 runtime source/wakeup、同Session team/fanout、通信accepted→binding→cold recovery/持久观察以及8.15背景任务/mailbox；已分成依赖清楚的待办，仍由同Sol后续实现。`create_and_run_internal`已有InternalExecutionIntent，不造真实user Turn；Terminal已有精确source_thread/claim。缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
@@ -102,8 +102,12 @@ Saver d29窄独审已完成，无actionable finding；ack重试窗口无正常�
 
 结构三项finding来自固定d29审查，6248继承，主对目录AGENTS/import独核成立。ff1固定12path已修复：纯投影回provider/mapping owner，seal保唯一事务、runtime保source/epoch，五个canonical投影函数抽唯一叶且AST逐项相同，全caller迁移，无旧重导出/新框架/作者AGENTS修改。canonical graph thread fixture亦迁。主strict/hash/preimage/保护/default index核验0，AST12/Ruff0，受影响57pass actual0/34.075秒、canonical leaf7pass actual0/3.711秒；报告 `r-structure-owner-architecture-review/attempt-1/report.md` 确认实际owner闭合。provider/AGENTS原文字窄于既有native_request职责，主仅校准纯sealed request/preimage描述，保禁止storage/current registry/实时补源及不持有canonical事实，树外文档不归作者ff1。证据 `r-structure-owner-primary-review/root-composed-attempt-1/`。
 
-新增必要hash/default guard检查为72pass+2fail actual1/13.182秒：冻结preimage的canonical selection visibility=internal，typed scenario却public，6248按ref传递后plan/request hash不符。Git对比确认public字段在1c20 typed输入补齐时出现，preimages/hash未改；不将失败归ff1算法或声称旧baseline已跑。交同Sol按冻结合同修测试manifest，不改hash/default/guard；原失败raw保留。
+新增必要hash/default guard首次72pass+2fail actual1/13.182秒：冻结preimage的canonical selection visibility=internal，typed scenario却public，6248按ref传递后plan/request hash不符。Git对比确认public字段在1c20 typed输入补齐时出现，preimages/hash未改；不将失败归ff1算法或声称旧baseline已跑。同Sol固定414仅把scenario manifest该字段改internal，主逐项核preimages/全部其它JSON相同、strict/hash/preimage/default index通过；ROOT189pass actual0/32.924秒，原失败raw保留。证据 `r-hash-fixture-primary-review/root-composed-attempt-1/`；保护/default/golden断言未减。
 
-旧protected向量故障亦已独证：HEAD ciphertext与7a50字节相同，但机械身份迁移改了AAD.session_id；独立AESGCM固定测试key对原AAD认证成功，对HEAD InvalidTag。原配对认证断言保留，新canonical身份fixture允许显式重新冻结独立向量、独立验真，不增UUIDv4兼容或改认证guard。证据 `protected-fixture-aad-review/attempt-1/receipt.json`；必要fixture由同Sol续迁，不盲跑原失败。
+旧protected向量故障亦已独证：原HEAD ciphertext与7a50字节相同，但机械身份迁移改了AAD.session_id；独立AESGCM固定测试key对原AAD认证成功，对原HEAD InvalidTag。同Sol固定5a89单文件修复原AAD/blob配对并独立冻结canonical身份向量，主再核原7a50字节完全保留、新AAD/明文仅session身份变化、两个配对成功及跨配对拒绝；不增UUIDv4兼容或改生产认证。模块级fixture参数改为case selector，运行时用真实thread owner构造foreign ref，保原source-owner拒绝断言。ROOT114pass actual0/24.064秒、AST1/Ruff0，证据 `r-protected-fixture-primary-review/root-composed-attempt-1/`；原诊断 `protected-fixture-aad-review/attempt-1/receipt.json` 保留。
 
 当前审查成本单列：reviewer从截取/混合输出漏看显式example.tools参数，主读完整6248固定blob反证，疑点撤回且无源码/测试返工。作者ff1度量手算误报净减47，实际Git numstat353增300删、净增53；patch/tree不变，作者改为机械计算，不凭行数宣布熵减或模型更快。
+
+schema恢复固定1ff0（base5a89）4path已闭合：原三文件53pass+4fail actual1/34.542秒，其中offline helper漏session_id形参与内部forward（主独核service.py585和offline_restore.py61/102/271），其它是_connect重复thread_id与子进程catalog fixture未初始化。生产仅补两行完整owner传递，保meta/JSONL校验，无旧API适配；fixture按真实schema/DDL/typed manifest与thread owner迁，子进程沿正式catalog lifecycle。主strict/hash/preimage/default index通过，AST4/Ruff0，三文件单次64pass actual0/42.458秒，含真实退出66/SQLite锁、成功offline恢复及foreign session/thread发布前拒绝。主独审窄增量并复用未变报告，证据 `r-schema-recovery-primary-review/root-composed-attempt-1/`；作者61+5（2重叠）不另相加。下一是13测试文件删除API闭包、动态ToolSet/Core第二权威、真实transition与paired-tool屏障，整体仍待。
+
+本轮文件规划验收复用已核：HEAD与live全214个OpenSpec blobs逐字等于9e已验版本，strict41/0无需重跑；证据 `file-tools-openspec-plan/current-plan-reuse-check/receipt.json`。主先用旧6248审查index做单ref working diff，误列该tree没有的6个文件工具规划路径；随后双ref/object和live hash核对纠正，从未据此改规范/源码，计主诊断成本，不归Sol。
