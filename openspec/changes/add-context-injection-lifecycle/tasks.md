@@ -226,3 +226,8 @@
 **待裁定状态解除**：此前登记的「MCP target 级子 binding 形态在代码里不存在，属需 owner 新定稿的数据形态」**已由本文字定稿**（同批更正 `add-itemized-rollout-context/tasks.md` 的 §9 台账）。
 
 **验收门槛的可勾选条目**：本文字第九节三条验收门槛的可勾选 tasks 条目见 `add-itemized-rollout-context/tasks.md` 的 9.8–9.10（本条只作具名引用，不复述其内容）。
+
+## 8. 技能目录读取与激活边界（2026-10-05 修订，未实施）
+
+- [ ] 8.1 将旧管理型Skill通用读取禁令替换为统一寻址owner的目录/单文件读取能力，移除现有工具入口相关拒绝分支；不恢复.boxteam Skill挂载、路径白名单或通用read激活行为。文件工具接入由add-unified-resource-file-tools实现，本项核context边界。
+- [ ] 8.2 从真实read_file入口读取SKILL.md及多层references/scripts，验证catalog/source控制/activation/tracking记录无变化；读取后源文件变化，显式skill_load仍只消费调用冻结snapshot，并维持同名覆盖/rebind与revision合同。不得用普通工具正文替代SourceReconciler已接受快照。

@@ -663,10 +663,15 @@ published Skill descriptor MUST绑定catalog revision、entry/resource/source id
 - **WHEN** 共享file provider经SourceReconciler与ResourceDerivationGraph发布AGENTS语义revision B，而SessionThread已应用revision A
 - **THEN** 系统在该resource配置的turn或model_call activation boundary登记A→B delta并以user role追加；原root/base不被原地替换，model request路径不读盘也不运行`rg`
 
-#### Scenario: 通用 read 不得访问管理型 Skill 资源
+#### Scenario: 技能包文件读取与激活分离
 
-- **WHEN** 模型通过通用文件读取能力提交Skill虚拟URI或旧`.boxteam/.../SKILL.md`路径
-- **THEN** 系统明确拒绝该管理型资源读取；只有name-only `skill_load`能按冻结catalog snapshot注册activation，旧虚拟挂载和路径白名单不得保留
+- **WHEN** 模型通过统一寻址的技能包文件 URI 读取 SKILL.md、references 或 scripts
+- **THEN** 文件 owner 按导航/读取能力返回有界内容，不隐式注册 source、activation 或 tracked state，也不写入来源控制事实；只有 name-only skill_load 按冻结 catalog/source snapshot 建立激活和追踪
+
+#### Scenario: 文件读取后显式激活仍以冻结来源为准
+
+- **WHEN** 模型读取 SKILL.md 后文件发生变化，再调用 skill_load
+- **THEN** skill_load 仍使用发起该调用的冻结 catalog/source binding，不把普通读取结果当作激活 snapshot，不在工具路径临时重新读盘；旧 .boxteam Skill 挂载与路径白名单不恢复
 
 #### Scenario: 团队任务状态更新
 

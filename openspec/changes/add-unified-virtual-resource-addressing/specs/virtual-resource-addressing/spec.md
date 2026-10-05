@@ -238,53 +238,92 @@ URI 的 scope MUST 取自**定稿闭集** `workspace` | `user` | `gateway` | `in
 boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical path segments}
 ```
 
-其中 `{gateway_authority?}` 为**可选单段**，承载**稳定 gateway_id**，缺省即本机 gateway；`resources` 是**固定保留段**（MUST NOT 省略、MUST NOT 被简化掉）；`{kind}` 取自**定稿闭集**（见下一条 requirement）。系统 MUST 使用闭合 charset（动段 `[A-Za-z0-9_-]`，`grammar.py:23`）；MUST 拒绝百分号编码与 `#fragment`（均在分段之前整体拒绝，`grammar.py:153`/`:160`，故不存在二次解码歧义）；大小写**不折叠**（变体一律结构化拒绝），分隔符唯一为 `/`（`\` 整体拒绝），相对段 `.`/`..` 显式拒绝；规范化 MUST 只有单一实现。现有 skill 形态 `boxteam://workspace/{workspace_id}/resources/skills/{name}/SKILL.md` MUST 是本语法的特例（authority 缺省），MUST NOT 存在第二套并列语法。 **owner 待实施项（关联本 change task 3.4）**：模板中的 `{gateway_authority?}` 段当前在 `grammar.py` 的 `parse_resource_uri` 中**无解析分支**（实测 `boxteam://gw-remote/workspace/ws-1/resources/skills/x/SKILL.md` 的首段被当作 scope 并以 `unknown_scope` 拒绝），故 authority 段仅为契约声明、尚未实现；authority 解析落地前跨 gateway URI 不可解析。
+可选 authority 承载稳定 gateway_id；scope_id 对所有 scope 必填，`resources` 是固定保留段，kind 取自本规范闭集。系统 MUST 由唯一寻址 owner 根据 kind 的根模板区分结构/身份段和文件路径段，不得将整条 URI 套用同一个动态段字符表。结构关键字必须精确匹配大小写；身份段继续使用其闭合 ASCII profile（通用动态身份段为 `[A-Za-z0-9_-]`，业务 ID 同时遵守自身 profile），不得百分号解码、折叠大小写或用文件名规则放宽身份校验。
 
-#### Scenario: resources 固定段不可省略
+文件路径段 MUST 支持点号、中文、空格及字面百分号等正常文件名。构造器接收未编码文件名，规范 URI 将每段 UTF-8 字节按 RFC 3986 编码：仅 unreserved 字符直接输出，其余使用大写 `%HH`，空格为 `%20` 而非 `+`。解析 MUST 先按字面 `/` 分段，再对已确定的文件段严格解码一次、验证后按相同规则重编码；合法小写 escape 或 encoded unreserved 可归一到唯一形式。MUST NOT 二次解码、Unicode 归一化或大小写折叠文件名，避免改变目标文件。编码后的 `/` 或反斜杠、解码后的空段、`.`/`..`、NUL/控制字符、无效 UTF-8 和残缺 escape 必须在访问前拒绝。解码后字面 `%2e` 只是文件名字符，不再解释成点号。URI 本体禁止原始非 ASCII、空格、反斜杠、userinfo、query、fragment及冗余/尾随 `/`；文件名中的 `?` 和 `#` 必须编码。
 
-- **WHEN** 解析一个 URI
-- **THEN** `resources` 段按固定位置参与解析；缺少该段的字符串（如 `boxteam://workspace/ws-1/agent-spec/root/AGENTS.md`）被判定为格式非法并结构化拒绝，而不是回退到更宽松的旧形态
+文件路径 profile 只用于根模板公布的 child path；Session ID、assembly 引用、配置逻辑名和其它领域尾段不得因此变成文件路径。既有 `.../resources/skills/{name}/SKILL.md` 仍由同一规则解析；技能根及多层 child 形态见下一 requirement。authority 解析仍需任务3.4的生产实施，本修订不声称已接通。
 
-#### Scenario: 既有 skill 形态是特例
+#### Scenario: 固定段和身份规则不被文件名规则放宽
 
-- **WHEN** 系统处理一个不带 gateway authority 的 skill URI
-- **THEN** 它由同一条语法规则解析，authority 取本机缺省，而非走独立的历史分支
+- **WHEN** URI 缺少 resources、缺少 scope_id，或身份段包含百分号编码、Unicode、非法业务 ID
+- **THEN** 系统在资源访问之前按中央 grammar 拒绝，不补当前工作区，不将身份段当文件名解码
 
-#### Scenario: 拒绝百分号编码与 fragment
+#### Scenario: 技能多层文件与普通文件名往返
 
-- **WHEN** URI 字符串包含 `%` 或 `#`
-- **THEN** 系统在分段与访问任何资源之前显式拒绝，分别返回百分号编码拒绝与 fragment 拒绝的结构化拒绝码
+- **WHEN** 构造 `references/中文 文档.v2.md`、`scripts/run.py`、`100%.txt` 等文件的 URI
+- **THEN** 构造、解析和结果引用使用同一 UTF-8 分段编码；解码后逐字匹配文件名，规范 URI 可以再次访问同一目标
 
-#### Scenario: 规范化只有单一实现
+#### Scenario: 非法 escape 和路径穿越在访问前失败
 
-- **WHEN** 同一逻辑地址以不同大小写或冗余分隔符表达
-- **THEN** 所有调用方得到由同一实现产出的同一规范化结果（大小写变体被显式拒绝而非静默归一）；MUST NOT 存在第二处独立的大小写或分隔符处理
+- **WHEN** 文件段含残缺 escape、无效 UTF-8、编码分隔符，或解码后为 .、..、控制字符
+- **THEN** 系统按中央 grammar 显式拒绝，未打开文件、未注册来源或产生写入
 
-#### Scenario: 未登记 kind 被拒绝
+#### Scenario: 字面百分号不被第二次解码
 
-- **WHEN** URI 的 kind 段不在已登记闭集内
-- **THEN** 系统返回 kind 未登记的结构化拒绝码，不回退到通用资源读写
+- **WHEN** 文件名为 `%2e%2e.txt`，其规范 URI 使用 `%252e%252e.txt`
+- **THEN** owner 只定位该字面文件名，不继续解码，不解释为相对段
+
+#### Scenario: query 和 fragment 与文件名区分
+
+- **WHEN** URI 有原始 query/fragment，或合法文件名含已编码的问号/井号
+- **THEN** 前者明确拒绝，后者仅在文件段按一次解码规则访问，不产生 view/revision selector
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-URI 的 kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session`（依据权威表：既有真实闭集为 `agent-spec`/`skills`，`config` 与 `session` 为本次新增）。`config` 承载配置来源文件本身；`session` 承载会话上下文资源（会话定位，由并行 change `migrate-session-context-resource-uri` 消费其 URI 表达）。两者均在**本 requirement 登记，无需再由其它 change 新登记**。
+URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files`。新增 `files` 只用于 `workspace` scope 的可导航工作区文件树，根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`；其余取值保留原语义。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
 
-系统 MUST 区分**两个独立的 kind 闭集**，MUST NOT 混用：`parse_resource_uri` 的 kind 闭集（`grammar.py:18` 的 `_RESOURCE_KINDS`）与描述符 kind 闭集（`values.py:28` 的 `_DESCRIPTOR_KINDS`）。**语法闭集 `_RESOURCE_KINDS` 为四值 `agent-spec`/`skills`/`config`/`session`（`grammar.py:22`），描述符闭集 `_DESCRIPTOR_KINDS` 为两值 `agent-spec`/`skills`（`values.py:28`）；描述符闭集原有成员 `memory` 已随提交 32bc6256 物理移除**，语法侧对 `boxteam://memory/{scope}/{name}` 两点式以 `unknown_scope` 类拒绝码 fail-closed 拒绝（已落地），故不再存在「`memory` 只出现在描述符闭集、语法 kind 为 `None`」的错配分支。
+语法 kind 与语义来源描述符 kind MUST 分开：描述符仍只有 `agent-spec`/`skills`，普通 files 导航不会创建来源描述符。后续扩展必须先在本 owner 更新模板和能力，不存在通用未知 kind fallback；旧 memory 两点式仍拒绝。
 
-#### Scenario: config kind 承载配置来源
+#### Scenario: 工作区文件树有正式根
 
-- **WHEN** 系统表达一条配置来源资源的地址
-- **THEN** 其 kind 使用闭集内的 `config`，与既有 kind 共享同一套语法与拒绝码
+- **WHEN** 用 files/root 定位某个已明确指定工作区的源码树
+- **THEN** owner 返回其目录根和操作能力，可按公布的 child path 规则导航，不依据当前激活工作区替换 scope_id
 
-#### Scenario: session kind 承载会话上下文资源
+#### Scenario: 未登记 kind 或 scope 组合被拒绝
 
-- **WHEN** 系统表达一个会话上下文资源（会话定位）的地址
-- **THEN** 其 kind 使用闭集内的 `session`，与既有 kind 共享同一套语法与拒绝码；该取值已在本登记处定稿，并行 change 直接引用、无需新登记
+- **WHEN** 使用未登记 kind 或在 user/gateway/inline scope 使用 workspace files 根
+- **THEN** owner 显式拒绝，不回退为本地普通路径
 
-#### Scenario: 两个 kind 闭集不可混用
+#### Scenario: 描述符闭集不因目录导航扩张
 
-- **WHEN** 实现或测试使用 kind 取值
-- **THEN** 语法解析期只接受 `_RESOURCE_KINDS`，描述符构造期只接受 `_DESCRIPTOR_KINDS`，MUST NOT 用其中一个闭集去校验另一个的输入
+- **WHEN** 普通 files 目录列举或搜索返回许多文件
+- **THEN** 系统不将 files 加入语义来源描述符闭集，也不逐文件建立来源或长期身份
+
+### Requirement: 导航形态与操作能力必须由资源 owner 公布
+
+资源根 MUST 公布 `resource_shape=directory|file|domain_object` 和允许的 operations。仅 directory 根或其真实目录子节点、且公布 child path 规则时可追加相对文件段；file 节点不可追加子路径，domain_object 按 owner 给出的引用、结构化 view 和领域操作访问。导航能力不等于写权限；固定修订文件和受 owner 管理的产物不可由通用写工具覆盖。根定位和读取必须校验实际 containment，越界 symlink 不得成为访问另一根的后门。
+
+技能包根为 `.../resources/skills/{name}`，name 仍是 catalog 的身份段；其后是文件路径段，可定位 SKILL.md、references、scripts 和其它真实多层文件。工作区文件树使用本 owner 登记的 files/root 根。agent-spec 和 config 的现有逻辑地址是单文件引用；session/assembly 是领域对象，附件与工具结果由各自 owner 在 `session/{session_id}/attachments/{attachment_id}` 和 `session/{session_id}/tool-results/{result_id}` 模板下公布单文件引用（各段均是原业务身份，非文件路径；完整前缀仍遵循统一 scope/authority 语法），不公开底层私有存储树。根名与 URI 模板由本 owner 固定登记，不运行动态插件注册。
+
+#### Scenario: 目录结果可继续访问
+
+- **WHEN** 列举技能包根或工作区源码树的多层目录
+- **THEN** 每个返回节点带实际 shape 和可继续使用的规范 URI；无需先为该文件登记独立长期身份
+
+#### Scenario: 领域对象不是可遍历目录
+
+- **WHEN** 对 Session、assembly 或单文件节点追加猜测路径并尝试列目录/写入
+- **THEN** owner 按导航/操作能力明确拒绝，不推导 SQLite、checkpoint 或私有目录位置
+
+#### Scenario: 读取技能入口不激活
+
+- **WHEN** 通用 read 通过技能包文件 URI 读取 SKILL.md
+- **THEN** 返回有界文件内容，不建立 activation 或 tracking；显式 skill_load 仍消费冻结 catalog/source 合同
+
+### Requirement: 普通文件访问必须保持轻量且与来源生命周期分离
+
+列目录、搜索和普通读取 MUST NOT 隐式逐文件持久注册 ResourceIdentity、来源 revision、snapshot 或 context tracking。结果可只携带规范 URI、节点类型和所请求的内容；文件 hash 按内容读取或冲突检查需要计算，不为列目录全量预计算。显式进入上下文追踪/历史恢复时才由原 owner 建立稳定 ResourceIdentity、revision 和快照，根的注册不得被解释为所有子文件都已注册。
+
+#### Scenario: 搜索不放大来源注册
+
+- **WHEN** 搜索大量未追踪源码文件并返回有界结果
+- **THEN** 来源注册/快照/activation 表的条目数保持不变，结果 URI 仍可访问；搜索不隐式激活 Skill
+
+#### Scenario: 显式追踪使用原来源 owner
+
+- **WHEN** 用户或业务显式请求追踪一个可访问文件
+- **THEN** 既有来源 owner 负责身份和生命周期，普通文件工具不另建快照或第二状态机
 
 ### Requirement: gateway authority 承载稳定 gateway_id 且缺省等价本机
 
@@ -357,13 +396,13 @@ URI 解析 MUST 按唯一顺序执行：本地 parse（fail-closed）→ 无 aut
 
 ### Requirement: 拒绝码必须分三套集中登记且命名不得自造
 
-系统 MUST 复用既有拒绝码命名空间与风格，并 MUST 在**唯一一处集中登记处**登记全部拒绝码，且 MUST **分三套独立列出（语法期 / 解析授权期 / 联邦解析期）、标明各自适用范围与「不可混用」**：
+系统 MUST 复用既有拒绝码命名空间与风格，并 MUST 在**唯一一处集中登记处**登记全部寻址阶段拒绝码，且 MUST **分三套独立列出（语法期 / 解析授权期 / 联邦解析期）、标明各自适用范围与「不可混用」**：
 
-- **grammar 拒绝码（17 个）**：`ResourceUriGrammarError.reason_code`，闭集定义于 `grammar.py:25-44`（`empty_uri`、`unknown_scheme`、`scheme_case_error`、`userinfo_rejected`、`query_rejected`、`fragment_rejected`、`backslash_rejected`、`control_char_rejected`、`percent_encoding_rejected`、`non_ascii_rejected`、`empty_segment`、`dot_segment`、`invalid_character`、`case_error`、`unknown_scope`、`unknown_resource_kind`、`malformed_path`）。构造函数对未登记 code 直接 `raise ValueError`（`grammar.py:51-53`），故该闭集**不可扩展**，适用于字符串→`ParsedResourceUri` 的语法解析期。
+- **grammar 拒绝码（修订闭集18个）**：`ResourceUriGrammarError.reason_code`，现行17码快照位于 `grammar.py:25-44`，本次修订须在唯一 grammar owner 同步替换并新增编码校验码（`empty_uri`、`unknown_scheme`、`scheme_case_error`、`userinfo_rejected`、`query_rejected`、`fragment_rejected`、`backslash_rejected`、`control_char_rejected`、`invalid_percent_encoding`、`invalid_path_encoding`、`non_ascii_rejected`、`empty_segment`、`dot_segment`、`invalid_character`、`case_error`、`unknown_scope`、`unknown_resource_kind`、`malformed_path`）。构造函数对未登记 code 直接 `raise ValueError`（`grammar.py:51-53`），未登记码构造必须失败；适用于字符串→`ParsedResourceUri` 的语法解析期。`invalid_percent_encoding` 拒绝身份段 escape 或非法文件 escape，`invalid_path_encoding` 拒绝文件段无效 UTF-8；`non_ascii_rejected` 仍用于未编码 URI 本体，不拒绝合法编码文件名。
 - **resolve 拒绝码（规范闭集 7 个）**：`ResourceUriResolveError.reason_code` 适用于已解析出 URI 之后的解析/授权期，闭集为 `scope_mismatch`、`unknown_resource`、`unknown_operation`、`capability_denied`、`snapshot_unavailable`、`historical_snapshot_missing` 与 `unsupported_view`。后者专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍仅实现原有 6 个码，任务 1.3 尚须把 `unsupported_view` 登记到实现闭集中。
-- **联邦解析期拒绝码（第三套，独立闭集）**：`app/gateway/federation/errors.py` 的 `FederationError.code`，**归属 `app/gateway/federation/`**，与上述 grammar 17 + resolve 7 两套不混用。真实码名（实测，含两种命名风格）：`federation-unknown-peer`（未知 / 未登记对端 gateway）、`federation-channel-closed`（channel / 对端连接不可用，即不可达）、`target_not_resolvable`（目标在当前有界拓扑内不可解析，覆盖「未共享 / 未找到」，对「未授权存在」与「不存在」返回同一码）、`target_ambiguous`（裸 session id 命中多个已授权候选）、`federation-deadline-exceeded`（总 deadline 耗尽）、`federation-transit-limit-exceeded`（中继次数 / 跳数超 policy 上界）。注意：`federation-` 前缀**不是本套一致约定**——`target_not_resolvable` 与 `target_ambiguous` 逐字不带前缀。
+- **联邦解析期拒绝码（第三套，独立闭集）**：`app/gateway/federation/errors.py` 的 `FederationError.code`，**归属 `app/gateway/federation/`**，与上述 grammar 修订闭集 + resolve 7 两套不混用。真实码名（实测，含两种命名风格）：`federation-unknown-peer`（未知 / 未登记对端 gateway）、`federation-channel-closed`（channel / 对端连接不可用，即不可达）、`target_not_resolvable`（目标在当前有界拓扑内不可解析，覆盖「未共享 / 未找到」，对「未授权存在」与「不存在」返回同一码）、`target_ambiguous`（裸 session id 命中多个已授权候选）、`federation-deadline-exceeded`（总 deadline 耗尽）、`federation-transit-limit-exceeded`（中继次数 / 跳数超 policy 上界）。注意：`federation-` 前缀**不是本套一致约定**——`target_not_resolvable` 与 `target_ambiguous` 逐字不带前缀。
 
-上述三套闭集 MUST NOT 混用：语法期 MUST NOT 抛 resolve 码或联邦解析期码，解析/授权期 MUST NOT 抛 grammar 码或联邦解析期码，联邦解析期 MUST NOT 抛 grammar 码或 resolve 码。新增码 MUST 只出现在集中登记处一次，其它模块与其它 change MUST 只引用、MUST NOT 自造同义码。
+文件内容冲突、补丁失败及执行未知结果属于文件操作 owner 的执行合同，不冒充寻址阶段错误；该合同见 `add-unified-resource-file-tools`。上述三套寻址闭集 MUST NOT 混用：语法期 MUST NOT 抛 resolve 码或联邦解析期码，解析/授权期 MUST NOT 抛 grammar 码或联邦解析期码，联邦解析期 MUST NOT 抛 grammar 码或 resolve 码。新增码 MUST 只出现在集中登记处一次，其它模块与其它 change MUST 只引用、MUST NOT 自造同义码。
 
 #### Scenario: 三套拒绝码分别登记且不混用
 

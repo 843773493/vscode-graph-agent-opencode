@@ -1,0 +1,113 @@
+## Purpose
+
+为目录导航、普通文本文件访问和目标端文件执行提供统一消费合同。工具通过资源 URI 固定目标、返回可继续访问的引用，并诚实报告冲突、部分写入与执行未知结果，保持普通文件操作与上下文激活及业务资源生命周期分离。
+
+## ADDED Requirements
+
+### Requirement: 文件工具必须共用唯一寻址与文件 owner
+
+系统 MUST 使 `ls/read_file/glob/grep/write_file/edit_file/apply_patch` 消费 `add-unified-virtual-resource-addressing` 的 URI 语法、导航形态、操作能力和错误登记。目标 URI 与 glob/grep 查询条件 MUST 为独立字段，查询文本不得参与 authority、工作区或根解析。每个调用在执行前固定目标 Gateway、工作区、资源根及规范子路径；既有工具的相对路径入口须在明确工作区边界统一归一到该合同，不保留独立旧解析器。
+
+#### Scenario: 搜索条件不改变目标
+
+- **WHEN** 在某资源根搜索含斜杠、中文或 URI 字样的 pattern
+- **THEN** 查询仍只在已固定根内执行，pattern 不成为目标路径或联邦路由参数
+
+#### Scenario: 激活工作区切换
+
+- **WHEN** 文件调用已固定目标后，用户切换当前激活工作区
+- **THEN** 本调用及其分页/写入仍指向原 Gateway、工作区和根，不重新用当前激活态解释
+
+### Requirement: 导航与搜索结果必须有界且可继续访问
+
+目录和搜索结果 MUST 带规范资源 URI 和节点类型；搜索匹配同时带文件引用、位置和有界片段。操作 MUST 设置 entry/match、单文件读取、总响应字节及总 deadline 上限，明确返回截断原因和 continuation 能力；分页 cursor MUST 绑定目标根、操作及查询参数，不含真实路径或凭据。普通可变目录分页不得伪称历史快照；检测到影响分页的变化时明确披露或拒绝旧 cursor。不得为了分页为所有文件建立持久快照。
+
+#### Scenario: 技能包多层访问
+
+- **WHEN** 列出技能包根后访问 references 下中文带空格文件或 scripts 下文件
+- **THEN** 使用返回 URI 可访问同一目标，分段编码由统一 owner 处理，读取不产生 activation/tracking 记录
+
+#### Scenario: 大量搜索仍保持轻量
+
+- **WHEN** 对大量未登记文件执行 glob/grep
+- **THEN** 返回受限匹配及明确截断/分页信息，来源身份、历史快照与 activation 数量保持不变
+
+#### Scenario: cursor 与另一个根或查询混用
+
+- **WHEN** 将搜索 cursor 用于不同根、操作或查询
+- **THEN** 显式拒绝，不跳到新目标继续读取
+
+### Requirement: 普通文本读写必须遵守能力与修订边界
+
+首批文件操作 MUST 使用严格 UTF-8 文本和原始字节内容 hash，不隐式改写换行、BOM 或 Unicode。读取可有明确范围/截断标志，不完整内容不得标作完整；普通文件 hash 按需计算。文件写入 MUST 校验 owner 公布的写能力，绑定预期当前内容 hash 或 owner 的等价 revision；创建 MUST 使用明确的预期不存在条件。只读根、固定历史 revision、领域对象以及由附件/工具结果 owner 管理的产物不得被通用文件工具覆盖。文件工具不得写入上下文来源控制或伪造来源 revision。
+
+#### Scenario: 并发修改返回冲突
+
+- **WHEN** 文件读取后在写入前内容已改变，或预期不存在的文件已出现
+- **THEN** owner 返回明确冲突并保留实际新内容，不自动覆盖或以旧内容重试
+
+#### Scenario: 只读根和历史引用拒绝写入
+
+- **WHEN** 对 inline 技能、只读资源或固定历史 revision 提交 edit/write/patch
+- **THEN** 按 owner 能力明确拒绝，不转为操作当前可写文件
+
+#### Scenario: 非 UTF-8 文件被文本工具读取
+
+- **WHEN** 读取字节不符合严格 UTF-8
+- **THEN** 返回明确编码失败，不用替换字符伪造文本；附件既有二进制读取仍归附件 owner
+
+### Requirement: 补丁必须固定一个根并披露实际发布结果
+
+一次 apply_patch MUST 固定一个目标根；补丁内文件名只按该根的未编码相对文件路径解释，经同一 owner 校验，不允许嵌入另一 authority、绝对路径或越界段。首批支持文本新增和修改，删除/移动等目录 mutation 留后续切片。owner MUST 在首次发布前检查全部文件能力、预期版本与补丁有效性；单文件 MUST 原子发布完整内容。多文件修改不承诺跨文件事务：发布过程中失败时 MUST 停止后续写入，返回已发布、确定未发布/未尝试及结果未知的逐文件列表和可核实的新 hash，不伪报整批回滚；不得通过盲目恢复旧内容覆盖外部并发更新。
+
+#### Scenario: 补丁 preflight 失败
+
+- **WHEN** 多文件补丁有一个文件版本冲突或属于另一根
+- **THEN** 全部文件在发布前保持未修改，失败指出相关逻辑引用
+
+#### Scenario: 中途发布失败
+
+- **WHEN** 首个文件已原子发布而后续文件发布失败
+- **THEN** 响应明确为部分失败，列出实际已发布、未发布及未知文件，不宣称整体未执行或已回滚
+
+### Requirement: 跨端文件操作必须在固定目标端执行
+
+系统 MUST 复用既有联邦身份、授权、星型路由和总 deadline，把操作交给目标资源 owner 所属进程执行。Gateway 只负责路由/代理，不能读取工作区业务数据或返回真实路径让 source 端代执行。各实际操作点校验最新权限，send/read/wait 的通信 grant 不自动授权文件读写；文件操作复用既有授权机制登记独立操作。不可达、不支持或撤权必须显式失败，不改投本地同名目标。
+
+#### Scenario: 相同路径在两个 Gateway 中
+
+- **WHEN** 两端有同名文件，对远端 URI 执行 grep 或 patch
+- **THEN** 结果和修改发生在远端，source 同名文件不变；跨界结果不携带真实路径或凭据
+
+#### Scenario: 对端故障或不支持文件操作
+
+- **WHEN** 目标不可达、撤权或缺少该操作能力
+- **THEN** 返回该阶段明确失败，不切换本地执行，不伪报空结果
+
+### Requirement: 超时取消和响应丢失必须反映执行知识边界
+
+文件执行错误 MUST 与 grammar/resolve/联邦寻址错误分开，由文件 owner 区分 `revision_conflict`、`invalid_patch`、`invalid_encoding`、`output_limit_exceeded` 和 `execution_failed`，不得用它们替代寻址阶段登记。响应 MUST 披露目标实际效果为确定未执行、确定完成、部分完成或未知。发出取消请求不等于目标已停止；deadline 或响应丢失不证明未写入。写入结果未知时 MUST 返回可核实的目标引用和已知前置版本，阻止自动重放直到核实；不新增通用 operation_id/去重账本，实际业务需要恢复时复用既有稳定调用身份并由对应 owner 定义回执。
+
+#### Scenario: 发布后响应丢失
+
+- **WHEN** 目标可能已发布文件，而 source 端收到连接断开或超时
+- **THEN** source 将效果报告为未知并核实原目标，不声称未执行、已回滚或自动重新选路重放
+
+#### Scenario: 请求取消仍在执行
+
+- **WHEN** source 发出取消而尚未收到目标停止确认
+- **THEN** 返回取消已请求及当前已知效果，不宣称目标实际停止
+
+### Requirement: 会话产物引用必须迁入统一寻址并保留原 owner
+
+附件和工具输出 MUST 使用统一寻址 owner 登记的 Session 单文件引用，保留原 attachment/result 业务 ID、访问授权、保留/删除和历史语义。生成、读取、工具结果、Provider 输入及 Web/历史投影 MUST 同步替换 `boxteam-session://`；该 scheme 与解析分支在全部直接/间接消费者迁移后物理下线，不保留别名或双读。产物可显式读取但不可当作 Session 私有目录遍历或通过通用写工具修改；未授权与不存在遵守原 owner 的披露合同。
+
+#### Scenario: 新附件与工具输出可重开读取
+
+- **WHEN** 新产物经消息/工具结果及历史投影发布后重启 owner
+- **THEN** 同一规范 URI 经原 owner 可访问相同内容，授权及删除结果仍与原业务行为一致
+
+#### Scenario: 旧 scheme 被拒绝
+
+- **WHEN** 入口收到 boxteam-session scheme 或猜测会话私有目录
+- **THEN** 明确拒绝，不走旧 parser，不扫描旧开发数据或生成兼容地址

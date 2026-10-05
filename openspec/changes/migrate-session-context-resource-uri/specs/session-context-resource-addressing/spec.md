@@ -44,9 +44,9 @@
 
 **owner 待实施项（关联 `add-unified-virtual-resource-addressing` task 3.4）**：`{gateway_authority?}` 段当前在 owner 的 `grammar.py` 的 `parse_resource_uri` 中无解析分支（authority 首段会被当作 scope 并以 `unknown_scope` 拒绝），本 capability 对 authority 的使用依赖 owner 的 authority 实现。
 
-#### Scenario: 拒绝百分号编码与 fragment
-- **WHEN** 调用方提交含 `%` 编码或 `#fragment` 的 URI
-- **THEN** 解析以既有 grammar 的对应拒绝码显式失败，且不产生二次解码歧义
+#### Scenario: 会话身份编码和 fragment 不成为后门
+- **WHEN** 调用方提交身份/领域段百分号编码或原始 fragment
+- **THEN** 按统一寻址 owner 的分段合同显式拒绝；已公布的文件child段合法编码由owner处理，不在本change另设整体百分号拒绝规则
 
 #### Scenario: 规范化只走单一实现
 - **WHEN** 同一逻辑资源经不同调用入口被寻址
@@ -130,7 +130,7 @@
 
 ### Requirement: 旧式上下文 URI 只能被入口拒绝，且已确证无历史落盘实例
 
-系统 MUST 停止接受旧式上下文 URI 形态（含 `%` 编码、`#fragment`、未登记 scope 的自有正则语法），入口 MUST 显式拒绝并指向结构化字段表示。
+系统 MUST 停止接受旧式上下文 URI 形态（含身份/领域段 `%` 编码、`#fragment`、未登记 scope 的自有正则语法；合法文件段规则引用统一寻址 owner），入口 MUST 显式拒绝并指向结构化字段表示。
 
 **已确证的存量事实（本轮实测取证）**：旧式会话上下文 URI **没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。取证：
 

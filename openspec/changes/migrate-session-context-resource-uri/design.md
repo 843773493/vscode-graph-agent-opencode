@@ -13,7 +13,7 @@
 与此并存的资源平台 URI（`resource_platform/virtual_resources/`）实测形态：
 
 - `parse_resource_uri` 只接受 `boxteam://{scope}/...`，scope 闭集（实测现状）`{workspace, user, gateway, inline}`（`memory` 已由提交 `32bc6256` 物理移除；`builtin` 正名 `inline` 与 `user` 新增均已由 `298ef599`+`f6fc990f` 落地），`kind` 闭集（实测现状）`{agent-spec, skills, config, session}`；
-- 整体拒绝 `%`（`percent_encoding_rejected`）与 `#`（`fragment_rejected`）；
+- 现行旧grammar整体拒绝 `%` 与 `#`；本次新合同改为引用统一owner的分段编码，身份/领域段仍拒escape、fragment仍拒绝；
 - 双向交叉解析**实测 100% 互斥**：URI 拒绝全部 6 条上下文 URI；上下文 parser 拒绝全部 3 条 URI 地址。
 
 因此冲突的**技术根因是两种信息被塞进同一个字符串**：上下文侧把「资源位置」与「修订/视图绑定」编在一起，而 URI 明确只承担前者。
@@ -25,7 +25,7 @@
 - scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 URI scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配（原 `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键配置块与 schema `$defs.agentMemory` 已随 `remove-agent-memory` 物理删除，现配置已无该块））。
 - `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（取值来源与注入 owner 按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只具名引用、不复述取值规则）、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
-- 拒绝码**本 change 只引用其中两套**——grammar 规范闭集 17 个、resolve 规范闭集 7 个——均由「统一资源寻址」change 集中登记；当前生产 resolver 仍只有原有 6 个 resolve 码，缺少 `unsupported_view`，由 owner 的实现任务 1.3 补齐。该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」；本 change 不引用该套、也不实现跨 gateway 解析。本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。URI 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
+- 拒绝码**本 change 只引用其中两套**——grammar 分段编码修订闭集（唯一owner登记）、resolve 规范闭集 7 个——均由「统一资源寻址」change 集中登记；当前生产 resolver 仍只有原有 6 个 resolve 码，缺少 `unsupported_view`，由 owner 的实现任务 1.3 补齐。该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」；本 change 不引用该套、也不实现跨 gateway 解析。本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。URI 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
 - `memory` 不是 URI scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 URI 示意**（它无 `resources` 段、无 kind、恰好两段，曾走独立特例分支；**该特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝**）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
 
@@ -114,7 +114,7 @@ SessionContextResourceRef {
 
 **决定**：会话上下文解析 MUST 走统一星型顺序：
 
-1. 本地 parse（fail-closed，拒绝 `%`/`#`/非法 scope/非法 kind/malformed path）；
+1. 本地 parse（fail-closed，按owner分段规则拒绝身份escape、原始fragment、非法scope/kind/malformed path）；
 2. 本进程解析（本机资源）；
 3. 本地 gateway **是自身联邦的 hub** 时，可直接解析其**直接 spoke** 的资源；
 4. 本地 gateway **是 spoke** 时，通过其**唯一 hub** 做**一次有界 transit 解析**，携带 `visited set`、`max_transit_gateways=1`、`max_gateway_hops=2` 与总 deadline；
@@ -161,9 +161,13 @@ SessionContextResourceRef {
 
 **理由**：一个语法只能有一个定义源；在途 change 尚未归档，可安全改指向。
 
+### D8：会话三入口共用目标，而非文件化领域对象
+
+send/read/wait复用同一target-main owner，把裸Session ID和完整会话引用冻结为同一稳定目标；Job/Turn/通信ID仍是业务selector。资源URI定位与文件导航分开，Session/assembly不因此成为目录。分段编码、产物单文件模板及拒绝规则引用统一寻址owner；durable acceptance/observation引用itemized8.10，本change不建第二resolver/ledger。
+
 ## Risks / Trade-offs
 
-- **[入口破坏性拒绝会打断调用方]** → 入口对旧式 fragment/`%` 形态显式拒绝并在错误信息中指向结构化字段；因已确证无历史落盘实例，不存在需要保持可读的旧记录。
+- **[入口破坏性拒绝会打断调用方]** → 入口对旧式 fragment/身份段escape形态显式拒绝并在错误信息中指向结构化字段；因已确证无历史落盘实例，不存在需要保持可读的旧记录。
 - **[scope 闭集/段序与资源平台现有 grammar 不一致]** → 本 change 不自行扩张 URI 闭集或改段序，只声明会话上下文侧遵循权威形态并要求「统一资源寻址」change 集中登记；在 grammar 与权威表对齐前，接口 MUST fail-closed，禁止临时映射悄悄上线。
 - **[配置来源真实路径迁移影响既有 API 响应体字段]** → `ConfigSourceDTO.path` 是既有对外字段，改为 URI 属**破坏性**变更；按允许破坏性迁移处理，落地时同步改 schema 与前端消费点，并在迁移计划中保留回滚边界。注意这是单用户本地程序，实际安全影响低，主要属契约卫生，故按常规迁移任务处理，不单独开紧急修复。
 - **[结构化字段被写成持久化事实的第三份拷贝]** → requirement 明确三层的唯一 owner（D1），持久化字段一律 identity + URI + 独立 revision，禁止存 real path。
@@ -172,7 +176,7 @@ SessionContextResourceRef {
 
 ## Migration Plan
 
-1. **冻结入口**：会话上下文入口按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（`%`/`#`/未登记 scope，含 `memory` 两点式）。
+1. **冻结入口**：会话上下文入口按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（身份/领域段escape、fragment、未登记scope，含memory两点式）。
 2. **确认无存量**：按 D5 的取证确认不存在内嵌旧式上下文 URI 的持久化记录，**不构造**扫描/规范化/失效的存量迁移脚本。
 3. **新写字段切换**：让既有持久化挂点（`display_uri` 列、`context_source_control_states` 的来源事实）按 identity + URI 的新格式写入，并在读路径切换到新格式，旧写入形态物理下线。
 4. **配置来源真实路径迁移（已确证义务，见 D6）**：按 `add-unified-virtual-resource-addressing` 的配置来源 URI 与 config layer 两项 owner requirement，实施 `ConfigSource` 平级字段模式与 real path 清除；layer 表、runtime override carrier、snapshot 边界与 nullable URI 按 owner 定义执行，不在本 change 重复定义。

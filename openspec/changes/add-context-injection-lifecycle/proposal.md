@@ -43,6 +43,8 @@
 - **BREAKING** 收敛旧`TurnExecutionScope`内的通用cleanup、各runtime手写stop/close与资源平台task树为一个进程内释放合同；取消信号只传递取消意图，`LifetimeScope`只关闭其持有的运行期句柄。旧`ResourceManager`不再猜测工具参数、保存`cleanup_policy`或凭内存stopper宣称外部资源已停止；跨Turn外部资源由实际provider/domain owner执行并核实操作，持久操作lease只负责占用与恢复。会话资源列表/控制不得形成第二事实源。
 - Node调试进程的跨Turn占用由debug owner在spawn前按唯一process-instance建立持久claim，不能由短期tool/Web operation lease替代；重启时以可验证进程代际证据核实，PID/端口复用或证据缺失不得被误认作成功停止。
 
+- **技能目录读取与激活分离（2026-10-05 修订）**：允许通用文件工具按统一寻址的技能包目录/单文件能力读取内容，读取不产生来源登记、activation或tracking。skill_load继续是冻结来源激活/追踪的唯一入口；文件访问消费合同归独立add-unified-resource-file-tools。
+
 ## Capabilities
 
 ### New Capabilities

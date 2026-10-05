@@ -15,6 +15,8 @@
 - 登记一条**已确证**的迁移义务：配置来源曾将真实路径写入持久化并由 API 响应（`ConfigSourceLayerRecord.source_path`/`backup_path`、`ConfigSourceDTO.path`）；该违约已由 owner change 实施，但规范仍保留其不变量。本 change 只引用 `add-unified-virtual-resource-addressing` 唯一登记的配置来源 URI 与 config layer requirements，包括平级字段、逻辑来源与 precedence、SQLite 内部 carrier、runtime override 可无 URI，以及 active/pending snapshot 与来源清单分离；本 change 不复述 layer 闭集或另造 kind / URI 地址。
 - 收口在途 change `add-itemized-rollout-context`：其 `specs/itemized-rollout-context/spec.md` 的会话上下文 URI requirement 指向本 change，消除两套定义并存。
 
+- **入口收口补充**：send/read/wait消费同一target-main解析结果，裸Session ID与完整会话引用固定同一目标；保留Job/Turn/通信ID selector，领域对象不转成文件目录。分段编码只引用统一寻址owner；会话产物文件迁移归独立文件工具change。
+
 ## Capabilities
 
 ### New Capabilities

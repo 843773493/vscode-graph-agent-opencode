@@ -11,7 +11,7 @@
 - [x] 2.1 定义结构化会话上下文引用模型：`resource_identity`（不透明、稳定、revision-free、不依赖激活工作区）、`uri`（位置、禁止编码 revision/hash）、`scope`（取自权威闭集，与 uri 内 scope 一致可校验）、`revision`、`view`、`cursor` 作为彼此并列的字段。 **（规范层已定稿：模型字段与约束见 design D1；位置/URI 政策引用 owner「默认寻址政策必须以 URI 为默认形式」，本 change 不复述。）**
 - [x] 2.2 逐条落地三层分离 / three-layer separation 不变量校验：identity 不含 revision 且不随激活工作区变化；URI 字符串不含 revision/hash/snapshot ref；real path 不出现在 API 响应体、持久化记录与模型可见载荷中。 **（规范层已定稿：三层分离正文引用 owner「三层职责必须严格分离」；会话上下文侧验收见 spec 的同名 requirement 两个 scenario。）**
 - [x] 2.3 落地 scope 闭集与**必填 scope_id** 校验：拒绝未登记 scope（含 `memory`）；拒绝**任意 scope** 缺 scope_id；拒绝回退到隐含上下文补全；断言 `resources` 固定段存在且段序不被简化。 **（规范层已定稿：spec「scope 必须取自闭合集」与「URI 语法形态统一」的 scenario 覆盖拒绝未登记 scope、任意 scope 缺 scope_id、`resources` 固定段不可简化。）**
-- [x] 2.4 落地 URI 规范化只走单一实现（引用「统一资源寻址」owner），并拒绝 `%` 编码与 `#fragment`。 **（规范层已定稿：spec「URI 语法形态统一」的两个 scenario「拒绝百分号编码与 fragment」「规范化只走单一实现」。）**
+- [x] 2.4 落地 URI 规范化只走单一实现（引用「统一资源寻址」owner），按owner分段规则拒绝身份/领域段 `%` 编码与原始 `#fragment`，不整体拒绝已公布文件child段的合法编码。 **（规范层已定稿：spec「URI 语法形态统一」的两个 scenario「会话身份编码和 fragment 不成为后门」「规范化只走单一实现」。）**
 
 ## 3. 视图与修订的结构化迁移
 
@@ -30,7 +30,7 @@
 
 ## 5. 入口破坏与「新写字段」（不是存量数据迁移）
 
-- [x] 5.1 让入口停止接受旧式上下文 URI：对含 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
+- [x] 5.1 让入口停止接受旧式上下文 URI：对含身份/领域段 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
 - [ ] 5.2 记录并复核**零存量**取证基线（见 design D5 与 spec「旧式上下文 URI 只能被入口拒绝」）：旧式上下文 URI 无任何持久化实例，故 MUST NOT 构造扫描/规范化/失效的历史数据迁移脚本。
 - [ ] 5.3 新写字段切换：让既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）与 `context_source_control_states`（来源追踪事实），不得保留旧写入形态或兼容读写双轨。
 - [ ] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。
@@ -68,3 +68,8 @@
 - [x] 8.1 **视图兼容性规则定稿**：未登记 view 显式失败；已识别但与资源 kind 不兼容的 view 以 owner 登记的 resolve 拒绝码 `unsupported_view` 显式失败，二者均不得降级为默认视图。本 change 只引用 owner 的拒绝码，不定义第二套；本地 view/resolve 消费已实现；联邦解析仍未完成，完整入口验收由3.2跟踪。
 - [x] 8.2 **`assembly_ref` 使用 `ResourceIdentity`**：复用统一 URI owner 的既有领域定义，不另造专用 ref 类型；本决定收口类型分支，ResourceIdentity已进入本地DTO、工具及assembly查询；完整生产验收由3.1跟踪。
 - [x] 8.3 **fragment 信息映射为结构化字段**：`#information` 映射到 `view=information`；`#record={index}` 映射到 `view=records` 与 `record_index`；`#assembly={assembly_id}` 映射到 `view=assembly` 与 `assembly_ref: ResourceIdentity`。映射与禁止 fragment 的规范已定稿于 design D2 与 spec「会话上下文视图选择必须结构化」；生产实现仍由 3.1 跟踪。
+
+## 9. 会话目标入口统一（2026-10-05 补充验收，未实施）
+
+- [ ] 9.1 让send/read/wait共用已有target-main解析owner；裸Session ID和完整会话URI归一到同一稳定Gateway/workspace/Session/main-thread target，再冻结目标，不因激活工作区或channel重连改投。复用已有main-thread endpoint，不新增同义接口或文件工具目标状态机。
+- [ ] 9.2 保留各业务Job、Turn、通信ID selector的原合同，验证三入口对同一目标一致、歧义/不可达显式失败，read/wait不物化runtime；durable acceptance/observation仍由itemized8.10闭合，不因URI规范化完成而勾通信恢复。

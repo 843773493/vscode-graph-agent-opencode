@@ -18,7 +18,7 @@
 
 - 把「身份 / 地址 / 真实路径」三层分离落成**唯一 owner 与唯一实现**，并给出可机械检查的不变量。
 - 给出一套统一 URI 语法（保留 `resources` 固定段序）与规范化单一实现、**定稿**的 scope 闭集、scope_id 语义表与 kind 闭集。
-- 给出**分三套**集中登记的拒绝码（grammar 17 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
+- 给出**分三套**集中登记的拒绝码（grammar 分段编码修订闭集 + resolve 7 + 联邦解析期）与其不混用约束；resolve 闭集包含 `unsupported_view`，专用于已识别的 view 与资源 kind 不兼容。
 - 给出顶层 gateway 之间**星型解析**的边界契约，并把上界做成显式 policy 常量。
 - 登记配置来源 real path 持久化这一**已存在违约**的迁移形态，并唯一规定来源 URI、逻辑 layer/precedence 与 carrier/snapshot 的边界。
 - 明确与另外三个 change 的接口面，避免多份定义并存。
@@ -111,7 +111,7 @@
 
 ### D7：拒绝码分三套集中登记，不可混用
 
-**理由与裁定**：规范包含三个独立拒绝码闭集——`ResourceUriGrammarError.reason_code` 17 个、resolve 解析/授权期闭集 7 个（原有 6 个加 `unsupported_view`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。`unsupported_view` 专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍只登记原有 6 个 resolve 码；任务 1.3 保持未完成，须在实现中加入 `unsupported_view` 并维持闭集构造校验。三套分别对应「字符串→ParsedResourceUri 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
+**理由与裁定**：规范包含三个独立拒绝码闭集——`ResourceUriGrammarError.reason_code` 的分段编码修订闭集（现行17码快照、修订18码，见唯一spec登记）、resolve 解析/授权期闭集 7 个（原有 6 个加 `unsupported_view`）与**联邦解析期第三套**（`app/gateway/federation/errors.py` 的 `FederationError.code`，归属 `app/gateway/federation/`）。`unsupported_view` 专用于已识别的 view 与资源 kind 不兼容。当前生产 resolver 仍只登记原有 6 个 resolve 码；任务 1.3 保持未完成，须在实现中加入 `unsupported_view` 并维持闭集构造校验。三套分别对应「字符串→ParsedResourceUri 的语法期」「已解析后的解析/授权期」与「跨 gateway 联邦解析期」，混用会让阶段职责错位。集中登记可机械检查「无自造同义码」。
 
 **备选**：合并为一套码（被否：语义阶段不同，合并会丢掉「哪一期拒绝」的信息）；每个模块自带枚举（被否：正是要消除的多份定义）。
 
@@ -123,9 +123,9 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 
 **备选**：让 URI 兼任 identity 用于去重（被否：URI 允许悬空，悬空后无法去重）。
 
-### D8b：kind 闭集为 config 与 session 各登记一次（owner 裁定，消除待登记）
+### D8b：kind 闭集在唯一 owner 登记（owner 裁定，消除待登记）
 
-**决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session`。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。两者都不再由别的 change 新登记。
+**决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session` | `files`。`files` 只用于 workspace scope 的源码根；新增实现见第8组，原四值历史证据保留其验证边界。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。两者都不再由别的 change 新登记。
 
 **理由**：闭集一旦闭合，未登记 kind 会被拒绝；若把「会话上下文资源的 kind」留成待登记，并行 change `migrate-session-context-resource-uri` 的设计就无法落地。所有权在本 change，故必须现在登记而非挂成 open question。会话上下文资源的语义本体是「定位一个 Session」，既有 kind 无一覆盖，故取其语义名 `session`。
 
@@ -172,6 +172,16 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 旧开发中间数据不要求兼容：升级实现可以删除并重建不兼容的中间数据，不得为其增加双读、回填或兼容映射。该决定不改变 URI kind、语法或已有地址形态。
 
 **理由**：`layer` 描述配置为何生效，carrier 描述状态存在哪里，snapshot 描述一次完整配置状态；把这些角色压进同一个 layer 既误报来源，也让 active/pending 状态伪装成可寻址的来源。
+
+### D13：导航类型、根模板与路径编码分开
+
+本次按 spec「导航形态与操作能力必须由资源 owner 公布」定稿 directory/file/domain_object。skills/{name} 是技能包根，其后是文件 child path；files/root 是 workspace 源码树根。config/agent-spec既有地址为单文件，Session/assembly为领域对象，Session附件/工具结果由原owner公布单文件引用，不开放私有存储树。文件工具消费单独change，避免把目录工具、context激活和业务资源ID合成一种万能对象。
+
+身份段继续用既有严格profile，包括D4b distribution_id编码；该段不支持escape。文件段使用spec的单次UTF-8解码和规范重编码，保留原Unicode、大小写和字面百分号，不将filename套身份charset。中央grammar接收wire URI、构造器接收未编码segments；所有工具共用，不能各自unquote或把glob/grep pattern当路径。文件shape、child规则和operation由实际owner发布；roots只固定登记，不引入插件注册表。
+
+### D14：轻量导航与会话产物模板
+
+普通列目录/搜索/读取只需要可解析URI和内容，不要求子文件都持久注册ResourceIdentity/快照；显式追踪与历史恢复仍走来源owner。文件hash按需要计算，分页不依赖逐文件快照。本owner登记session/{session_id}/attachments/{attachment_id}和session/{session_id}/tool-results/{result_id}单文件模板；该处各段均是业务身份，不用文件编码放宽。attachments现有二进制接口仍归原owner。跨端普通文件读取/patch在目标端执行，联邦寻址不扩权，执行错误/部分或未知效果归文件操作合同。
 
 ## Risks / Trade-offs
 
