@@ -33,7 +33,7 @@ start_delegated_task({
 
 以同一业务闭包记录首个完整候选所用时间、真实入口遗漏、必要测试首次通过、返工、依赖等待和主线程补救量；接手前的 Luna 投入及已完成前置单列，不把累计耗时差直接归因于模型。结果出来后据证据选择分工及模型，未验收前不宣布 Sol 更快。
 
-fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定向验证与独审，主补实现源码仍为零；主树最终集成尚未完成。catalog 稳定差异预审与同一 Sol 的生成器验证并行，提前发现关停 writer 未排空；最终27路径包机械核验及增量独审已通过，Sol 已继续 Terminal。residency草稿早审又发现真实claim写入与卸载交错，固定三路径修正已通过增量独审。此实践支持复用未变审查、让稳定差异审查与下一段实现并行；最终准入仍须闭合实际产品入口。聚合报告只有既知阻塞而没有精确依赖时，不重复派相同调查。主协调误检的约九分钟另计；没有可比计时，不给速度倍率或永久默认结论。
+fork、Runner、Graph/runtime、catalog 与 Terminal 的固定候选已通过定向验证、机械核验与必要独审并集成主树；Terminal 实际 Web→Gateway→Workspace→Node 链路及正式会话清理已验收，主补业务源码仍为零。catalog/residency 稳定差异早审提前发现 writer 排空与 claim 准入缺口；Terminal 恢复返修与真正开发启动又发现未被组件绿灯覆盖的入口。复用未变审查，让早审与下一段实现并行；聚合报告只有既知阻塞而没有精确依赖时，不重复派相同调查。主协调错误单列，没有可比计时，不给速度倍率或永久默认结论。Browser 及后续原范围仍在实施。
 
 ## 按实际交付选择分工
 
@@ -45,11 +45,11 @@ fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定
 
 详细证据与后续效果维护在[实时台账](memory/2026/10/05/team-collaboration-state.md)，本入口只保留影响下一次决策的原因。
 
-- **交付残缺或漏实际入口。** 手筛 hunk、旧白名单曾漏签名、删除和 Web caller；Python/Node 测试绿时，真实 Terminal 创建仍因缺字段而400。用[交付校验脚本](scripts/verify_delivery.py)从固定树导出、严格重建并核 blob/hash，冻结时清点候选外源码；业务验收沿实际 UI/API→owner→存储或外部服务，不以 helper/mock/build 代替。
+- **交付残缺或漏实际入口。** 手筛 hunk、旧白名单曾漏签名、删除和 Web caller；Python/Node 测试绿时，真实 Terminal 创建仍因缺字段而400。Workspace identity CLI 改为裸 UUID 后又漏迁移开发启动脚本的 JSON 消费者，主集成才发现整组服务启动失败。下线合同检索包括 CLI stdout、启动器和进程入口，必要时做真实定向调用。用[交付校验脚本](scripts/verify_delivery.py)从固定树导出、严格重建并核 blob/hash，冻结时清点候选外源码；业务验收沿实际 UI/API→owner→存储或外部服务，不以 helper/mock/build 代替。
 - **合同与基线错配。** live、旧 HEAD 与固定候选曾混用；旧 union 回退新 owner，消费者准入形成循环依赖。显式检索 tree，核共同祖先和 preimage，唯一提供者先固定公共合同，主串行同步；共享文件按符号保语义，较新的文档也核合同来源。陈旧注释曾让审查误报已有 endpoint 缺失；派单前核实际路由及消费者，避免重建已有能力。fixture 与 standalone 生成器同属消费者：`--help` 不代真实写入及原产物合同；按授权删除过期生成库，不恢复旧兼容或另造初始化旁路。
 - **身份和异步 writer 漏项。** thread/session 混用、仅 create 带 UUID、取消等待却未收 `to_thread` writer均曾过 helper 测试。核全套 HTTP/WS、空列表/health/接管以及真实 user/internal/child 入口；归属只用明确 owner，内部执行不造 user Turn。幂等先比 durable 原请求，解析事实另冻结；fork 映射核 SQL/JSON 且输出可再次合法输入。
 - **生命周期被缓存或监听器遮蔽。** 数量 LRU 曾驱逐仍被服务持有的 catalog，重建第二实例且无人 close；注销 listener 曾漏其派生 Goal/Job writer。卸载 listener 的 await 窗口还曾允许新 claim 先落盘再登记 blocker；真实 writer 必须在持久写入前消费同一 closing 准入。崩溃遗留 lease 曾连已核停止的 PTY 也永久锁死；一次性 recovered 缓存又使丢回执后的同代重试无法重新核实。恢复与失败重试共用 owner 的定点核实/结清路径，证明身份、revision 和终态后才结清；未知或仍运行保持阻断，普通列表不清 unknown，也不能隐藏待处理资源。让唯一 registry 持有到真实释放，先关续跑准入、收 Job finalizer 和后台 writer，再关 catalog。scope 在构建前交 owner；cleanup失败保重试句柄与旧回调 fence，不以删 guard 求绿。
 - **路径和索引误操作。** 相对编辑、默认 cwd、裸 Git 与自建 archive/.venv反复错根；私有 index只隔离暂存。每次给绝对 workdir/index/编辑/产物路径，对象审查用 Git tree，运行复用指定完整 WT，不 `/tmp`、不复制整树。共享 index 从 `--absolute-git-dir` 定位；主曾误把私有 index当共享 index，约九分钟协调错误单列。无精确备份不声称精确恢复，重复误操作者收窄写权限。
 - **验证与候选脱节。** 额外 workspace的绿灯不归给固定包；重试不覆盖原 raw/exit。官方生成类型后单跑 tsc，Web build不查类型；Struct 序列化曾把退出码0变float并漏工具最终回执；业务数值保 typed/presence，实际往返核缺值、0和非零，数值等值断言不证明类型。未变绿项复用，不为补日志重跑。进程 fixture的配置 owner先就绪；屏障finally释放，路径预算fixture有限构造并先核条件可达。为 lint改await或全局替换断言曾引入新问题，小修限定函数、核postimage并定向复验，不改变合法main alias或生产拒绝条件。
 
-已通过的审查按 tree、路径和依赖复用；后续只审新增差异和受影响入口。依赖变化、真实失败或未解决疑点才重验。每次严重失败先纠正具体任务，再简洁更新本入口与台账；只有后续交付验证有效的调整才记为已解决，不继续叠加同义规则。
+已通过的审查按 tree、路径和依赖复用；后续只审新增差异和受影响入口。小范围增量且主线程未写实现时，可由主线程直接读取固定差异独审；较大公共状态机抽取使用独立只读审查者。本轮 launcher 按此前方式通过独审与真实恢复，不为每包重复等待完整审查队伍。依赖变化、真实失败或未解决疑点才重验。每次严重失败先纠正具体任务，再简洁更新本入口与台账；只有后续交付验证有效的调整才记为已解决，不继续叠加同义规则。
