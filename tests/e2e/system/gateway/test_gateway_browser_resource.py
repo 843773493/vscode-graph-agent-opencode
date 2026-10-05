@@ -64,6 +64,9 @@ async def _receive_websocket_type(websocket, expected_type: str) -> dict[str, ob
             websocket.recv(),
             timeout=max(deadline - asyncio.get_running_loop().time(), 0.1),
         )
+        # Browser 的二进制帧承载画面；控制事件只从文本 JSON 帧读取。
+        if not isinstance(raw, str):
+            continue
         message = json.loads(raw)
         if message.get("type") == expected_type:
             return message
