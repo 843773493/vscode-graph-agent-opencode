@@ -1,88 +1,63 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 16:04（北京时间）。goal **active、无预算上限**，交接及七个 change 的实施、独审、验证、集成、清理与技能实测尚未完成。已关闭调查留在 Git 历史与对应报告，不在恢复时重复泛读。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-05 16:17（北京时间）。goal **active、无预算上限**，交接与七个 change 尚未全部验收。
 
-## 当前授权与唯一实现者
+本文件保留当前基线、依赖和恢复入口。已关闭阶段的完整台账可查文档提交 `e972590dcd0bbe4122aae3bce870e7f72894ed65`；原 raw/exit、固定对象和报告仍在各任务产物中，不为补日志重跑。
 
-用户授权架构熵减、唯一 owner、显式身份、移除旧兼容；开发生成的新旧中间数据可删除，不再询问。保普通源码、未集成独有改动与来源不明文件，不删数据掩盖 fresh writer 缺陷。当前用户要求由 **一个 `gpt-6.1-sol / max`** subagent 贯穿实现；Luna 实现者均停写，只读独审保留，不为旧人数模板增派实现者、不擅换模型。Sol 实际 `turn_context` 已核。
+## 当前授权与路径
 
-- 物理 ROOT：`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
-- TEMP：`ROOT/out/tests/temp/2026/10/04/024121-team-execution`；WT：`ROOT/out/worktrees/2026/10/04/024121-team-execution`。以下证据相对 TEMP。
-- Sol 唯一运行源码根：`WT/thread_owner_implementer`。此前已通过机械与窄独审的完整源码是 **`36e084a8d28fdaaa5bcc66ead915e70c409fe521`**；WVL 首完整固定树 **`d164cf6d4a0159d6cf361a56871a0e13ae42ac5e`** 已机械核验，但因 catalog 生命周期与真实 Web Terminal 创建缺口未验收。catalog 最终返修完整树 **`29513d302e12f2482738eaecab658aa189a3551f`** 的27路径机械核验与最终增量独审已通过，原P2闭合且未确认新finding；同一 Sol 已进入 Terminal 完整纵向闭包。完整9fbb与启动器f9ac已串行集成ROOT，Terminal真实浏览器验收和正式清理已完成；同Sol继续Browser。固定包与在途 live 分开；WT HEAD 不代表两者，不能覆盖或重同步唯一 WT。状态 index：`TEMP/coordinator/git/sol-trial-status.idx`；产物：`TEMP/coordinator/artifacts/sol-efficiency-trial/`。
-- WT HEAD `ad093e0cdee2ca1225b1b9086db5e1d2c6b6b316`；**试验最初接手 preimage `e8141e9cd9677a6e3d45907526444d26baa59440`**；当前Browser交付preimage为`f9ac4a12a11910291ea58c2ac1172bcb10b1c603`。不是中央 e16 或 WT HEAD。每 shell 绝对 index/workdir/编辑路径，固定对象检索，索引隔离不隔离 live。
-- 主唯一串行提交者，index `TEMP/coordinator/git/integration.idx`；fresh read-tree → 精确 stage → guard record → 无 pathspec commit → verify → 双祖先。禁 shared index、amend/reset/rebase/push。测试必须 matrix 或进程外 timeout+4GB，uv/bun；代码静态，Web 改后 build。raw 按 candidate/attempt 保真，不覆盖失败、不补造、不为补日志复跑已绿。
-- 三保护路径：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 `/tmp`，正式 workspace 镜像测试路径、fixture 源只读。
+- 用户指定 **一个 gpt-6.1-sol/max 贯穿源码实现**，实际模型已核。`/root/sol_vertical_implementer` 是唯一实现者；Luna 实现者停写，`/root/candidate_boundary_reviewer` 仅按需只读审查。默认技能仍是无前缀 gpt-6-luna/max；本轮覆盖不等于永久默认，不为旧人数模板重复派单。
+- 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧数据、移除旧兼容，不再逐项询问。保普通源码、未集成独有改动与来源不明文件，不删数据掩盖 fresh writer 缺陷。
+- ROOT：`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 为软链接。
+- TEMP：ROOT/out/tests/temp/2026/10/04/024121-team-execution；A：TEMP/coordinator/artifacts/sol-efficiency-trial。
+- 唯一源码 WT：ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。**正在写 typed，不覆盖、复制、重同步或删除。** WT HEAD `ad093e0cdee2ca1225b1b9086db5e1d2c6b6b316` 不代表 live 或固定候选。
+- 主唯一串行提交者；作者仅 freeze/export、不改 refs、不提交、不派生。每命令绝对 workdir/index、GIT_OPTIONAL_LOCKS=0；对象审查不读 live。提交与测试保护按共同流程执行。
+- 三保护：app/gateway/control/generators.py、app/services/business/session_generation/service.py、examples/demos/Itemized_context_storage/。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
 
-已裁定：`assembly_ref=ResourceIdentity`；寻址拒绝码 `unsupported_view`；Gateway 保留 ID `current` 创建拒绝；config layer=逻辑来源 `runtime_override`，precedence 不变，active/pending 分开。delegate 复用 Session SQLite publication ledger 同事务，不造 Team JSON 权威。internal admission 无 Turn/accepted ingress，保真实 execution link。详见 `coordinator/artifacts/owner-decisions.json`。
+已裁定：assembly_ref=ResourceIdentity；unsupported_view；Gateway 创建拒绝保留 ID current；config layer=runtime_override，precedence 不变、active/pending 分开。delegate 使用 Session SQLite publication ledger 同事务，不造 Team JSON 权威；internal admission 无 Turn/accepted ingress，保真实 execution link。精确决定见 TEMP/coordinator/artifacts/owner-decisions.json。
 
-## 主树集成准备
+## ROOT 已集成与真实产品
 
-主体ROOT源码集成为 **0b3559792f5f4bb346a4ce32caef1ac816b2629f**：完整9fbb源码＋最新主协作文档，893路径严格写入，提交树1cbcda0bb31969af375f53d6e8f488527c0a6aed，preimage无漂移、三保护0、共享index不变、guard与双祖先通过。证据 sol-efficiency-trial/root-product-verification/{integration,materialization-preimages}.json。HEAD每次实核；不覆盖唯一WT。
+压缩前已核文档 HEAD：`e972590dcd0bbe4122aae3bce870e7f72894ed65`；业务源码提交：`11a925b0d6ba7f880517947d3b5207c0300cf3c9`（树 f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5）。此前主体 0b355979（893路径）及启动器 c525e346 已集成。Browser 最终 111 路径严格应用并保留四份主独有文档，含 AGENTS.md；preimage、guard、双祖先与共享 index 均通过。
 
-ROOT三个独有源码preimage已逐路径核并集成：`fork_boundary.py` blob `928f17eed7f50d14f101eee67e8e9ecb9894b0d1`与`session_context_assembly_query_service.py` blob `69b99c88e6298d60ffa418c09486326a45302367`均与29513相同；未跟踪`sessionCatalogOutboxRuntime.test.ts`原blob `fd4dcc48b9856f1b5549f1a655cf78826f5eaf77`，候选现代target fixture为`21bb0fc8eada4a41b1ae0e5907eda5aeaac71241`，原对象保留，最终核preimage。证据`sol-efficiency-trial/root-wvl-preparation/attempt-2/{result,preimage-inventory}.json`及`root-source-preservation/attempt-1/result.json`。不按无引用删独有源码，也不把旧status索引观察当真实丢失。
+主服务 unit=boxteam-dev-cff6686cbc5b0e76.service，active/running，MainPID1274667；offset16，frontend8027/Gateway8030；BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。恢复时重新核验。
 
-**当前ROOT：已集成并恢复全组，Terminal真实产品链路已验收。** 主体commit0b355（893路径）后，CLI/launcher窄修两包9fbb→32219→f9ac共5路径独立核验并串行提交 **c525e3463c14e6a7597dbd69d482a49bb52162a1**。主审发现LF-only会拒Windows CRLF，同Sol两路径增量已修并定向1pass。就绪等待会及时报告退出/collect，health后再核同PID与ready；原120s失败与测试JS转义原raw保留。真实CLI、原21绿范围、单例修复、既有systemd4及CRLF分别引用，不相加成新全组绿；两包strict/blobSHA/AST/Ruff0/Bunbuild0/保护0/deferred Browser42核过。精确原始收据与主独审在 root-product-verification/launch-forward/。
+授权业务工作区仅 ROOT/out/development-runtime/boxteam-home/boxteam_workspace 与 /data1/hyf/test_workspace/drive_bicicle。停写后 fresh 核两份旧无 schema browsers=[]并删除仅该空生成记录，普通代码和 identity 保留；证据 A/root-product-verification/browser-integration/obsolete-empty-browser-data-cleanup.json。
 
-当前unit boxteam-dev-cff6686cbc5b0e76.service active/running，MainPID1274667（Browser最终切换后），物理ROOT/home、offset16（frontend8027/Gateway8030）。实际经8027验证gateway health/workspaces/workspace均200、同一request_id；新Session mainThread绑定、UI建Terminal、iframe grant/WS与真正PTY输入输出、promote/stop后最终输出、detach/delete都过且浏览器error0。原browser-attempt2总exit1来自主误用已移除Session DELETE做末尾清理，业务断言均已完成；未重跑绿链路，只经正式navigation operation补清理，committed且pending_settlement=false、cleanup-only exit0。原browser-attempt1主误把backendID当Gateway路由ID的404也保留，均不归给作者返工；注册目标与backend稳定ID已分别核验。验收 root-product-verification/terminal-product-acceptance.json 绑定原rawSHA/exit与限定结论，不伪改失败收据。
-
-两授权workspace生成运行数据已清，普通代码、workspace identity保留，证据 runtime-data-cleanup.json。默认workspace本轮测试Session已正式删除，无新增project-root .boxteam；协作记录已提交b17be79，恢复后维护的新文档变更按本轮状态核验；Sol唯一WT继续Browser在途源码、不覆盖。下一完整Browser baseline为 **f9ac4a12a11910291ea58c2ac1172bcb10b1c603**；原其他typed/activation/delegate/federated及最终唯一WebE2E/OpenSpec仍未验收，goal保持active。
-
-## 已通过切片与效率证据（不重验未变部分）
-
-主补实现源码仍为**0**。Sol接手为2026-10-04 18:13:52.8585 UTC；fork首完整候选106.84分钟。Luna旧fork4pass17fail/33.8s是不同合同测试时长，前置与起始投入不可比，不算速度倍率。模型表现、作者返修、fixture接手和主协调成本分别记录在`sol-efficiency-trial/efficiency-comparison.json`；Terminal准确开始时间未知，`terminal_write_release_at=null`，不用catalog freeze推算耗时。
-
-| 切片 | 已通过固定范围与证据 | 仍待 |
+| 切片 | 固定交付与验收 | 证据（相对 A） |
 |---|---|---|
-| fork | 主体`f25989c37a27bead6954ab78f627b0e4dfe0c513`20路径、47pass；组合`ce5950b628a86db61826a71d4d8e05d69eafeaee`真实HTTP/startup/anchor7pass；请求意图增量`4cf1d8ddf43c7c32ce27f883e8848e72c383e6e0`11路径、新增/迁移24pass，机械及增量独审通过。`fork-intent-verification/`、`fork-intent-review/attempt-1/report.md` | 已ROOT集成；sealed model-call/retry assembly及itemized9.5整项未验收 |
-| Runner | `847e7bcf8fced202e47006f6fe9480b2cc2357dc`29路径，真实20pass、受影响unit37pass，机械与窄独审无finding。`runner-verification/attempt-1/result.json`、`runner-independent-review/attempt-1/report.md` | 已ROOT集成 |
-| Graph/runtime | `36e084a8d28fdaaa5bcc66ead915e70c409fe521`41路径，机械outside0/AST0/保护0，真实定向与独审通过。`graph-runtime-verification/attempt-2/result.json`、`graph-runtime-independent-review/attempt-1/report.md` | 已ROOT集成；真实编译图retry随activation补证 |
-| WVL | `d164cf6d4a0159d6cf361a56871a0e13ae42ac5e`作者100/完整240路径机械及38次原raw/exit核过；Web1257pass/build0/tsc0；同132path Ruff继承111、新增0、exit1。旧13Web失败、UUID/health接管及fixture已定向收口 | Terminal真实创建P1，故不是完整产品验收 |
-| catalog返修 | `d164→29513`27路径；strict/blob/SHA/AST27/保护17/raw20实核。最终`9d95d9f668d734b15672d7dc0b131d5a8a828dc1→29513`静态独审通过，Goal/Job迟到writer P2闭合、无新finding。`wvl-catalog-owner-verification/attempt-2/result.json`、`wvl-catalog-owner-independent-review/attempt-2/report.md` | 已ROOT集成 |
+| fork/Runner | fork请求意图4cf1d8、Runner847e：机械、定向测试与独审通过，已集成；sealed model-call/retry及itemized9.5整项仍待 | fork-intent-verification/、fork-intent-review/、runner-verification/、runner-independent-review/ |
+| Graph/runtime | 36e084a8：固定范围通过并集成；真实编译 reasoning-only/retry随activation补证 | graph-runtime-verification/、graph-runtime-independent-review/ |
+| WVL/catalog | 最终29513及完整9fbb已集成，registry生命周期/关闭准入与Goal/Job迟到writer闭合；不把继承Ruff红说成全仓绿 | wvl-catalog-owner-verification/attempt-2/、wvl-catalog-owner-independent-review/attempt-2/ |
+| residency | 9e7013三路径早审通过：冷读不造slot、成功drain回收、失败保owner、claim落盘前消费closing；真实屏障finally窄修通过。durable-only shutdown与全产品范围仍待 | residency-stable-pre-review/、residency-guard/attempt-1/ |
+| Terminal | 61812→9fbb恢复增量通过；真实PTY/UI/promote/stop/detach/delete及正式Session清理已验收 | terminal-owner-production/complete-delivery/、browser-owner-production/terminal-shared-recovery-delivery/、root-product-verification/terminal-product-acceptance.json |
+| Browser | f9ac→b2完整包，b2→f838释放增量3路径独审通过；主strict/blob与原87+4收据分别核过。真实Chromium首轮19.53s/exit0：UI创建、grant/WS、导航/read、promote、正式Session删除、保留发现、无Session重连、原生stop/delete；page_errors/failed_requests均0，创建Session与资源已清理 | browser-owner-production/final-delivery/、browser-owner-production/release-confirmation-forward/、root-product-verification/browser-product-acceptance.json |
 
-上述路径相对`coordinator/artifacts/sol-efficiency-trial/`。不同测试范围重叠不相加；审查者只读固定对象、未替作者跑测试。catalog消费者101、navigation9、fork7、完整custom generator1pass/249.70s、真实Provider替身生成15pass、Goal shutdown8pass、双失败因果1pass、admission11pass原raw/exit已核，**不重跑生成器或旧matrix补日志**。真实失败raw保留，继承Ruff红不得说全仓绿。
+Browser 固定最终树 `f838d13ad91cbeaa13bc83eca41f324b3dfca451`。ROOT 产品验证只背书该临时场景；唯一正式 Web E2E、LLM documented-tool discovery、remote Docker Gateway Browser/Terminal 尚未执行。已绿未变部分复用，原失败 raw/exit 保留，各组不相加。官方生成后 tsc/build 已过；继承 Ruff 诊断的精确边界见各 evidence-binding。
 
-## 当前切片与后续唯一队列
+## 当前 typed 切片
 
-精确基线、任务ID、允许范围和产物只在`coordinator/artifacts/sol-efficiency-trial/implementation-queue.json`维护；恢复读当前条目，不泛读已关闭调查。粗切片曾漏原task ID，属于主协调问题，不能归给Sol/Luna。
+- 起点 UTC：2026-10-05T07:45:36.414759+00:00（先读合同）；baseline=f838d13ad91cbeaa13bc83eca41f324b3dfca451。
+- 主已初始化状态 index：TEMP/coordinator/git/typed-canonical-status.idx，read-tree f838。作者产物：A/typed-canonical-production/。不得用 WT HEAD 或 ROOT 文档 HEAD 替代该基线。
+- 原 itemized1.5/1.6 与 context4.6、6.7/7.1 的 typed/R01–R07部分：metadata→opaque namespaced/versioned extensions；ProjectionGroup、ItemProjectionIdentity、ToolResultEvidence、ItemSourceManifest、SourceBinding与显式relation贯穿writer/SQLite/JSONL/checkpoint/fork/history/provider。已有selection_role/replacement_policy/source_ordinal和RuntimeNoticePayload保留；source_ordinal只由owner-thread registry在既有ContextContribution分配/恢复。
+- 作者已报告源码在途：contribution SourceBinding/extensions、resolver/overlay、统一serializer、registry/assembly、composer/restart/fork binding已迁，静态边改边跑；旧metadata source_ordinal过滤删除，opaque value不决策。**未冻结、未验收。** canonical四typed/关系、实际R01–R07及全caller/tests继续同一WT。supersession/attachment/fork控制读取不能只改字段名。
+- 稳定生产依赖闭包可固定早审，后续只审新增差异；不为早审裁残签名、callee、导入或消费者。不得据这条切片勾整个context6.7/7.1。
 
-1. **Terminal完整包及恢复增量已通过独审并主集成，真实产品已验收，Browser仍待。** 唯一产物根 `coordinator/artifacts/sol-efficiency-trial/terminal-owner-production/`。完整 `29513→61812a6f0ab32b786bd8e03b5405ee4d9a47d5d4` **118路径**；主strict重建/old-new blobSHA/AST66/保护0/旧historical符号全生产与tests引用0/17原rawSHA及exit已核，作者freeze时outside source0。`complete-delivery/{evidence-binding,primary-mechanical}.json`。原raw不重跑、不相加：owner87/API9/Web36/caller44/GatewayApi30/Node33；真实Workspace资源4、managedGateway2、transport12、tool+codec9、attach最终3及finally单例1都过。官方gen/check、Web tsc/build exit0；Ruff同63文件base/current30条、新0、exit1，不说全绿。真实tool发现Struct把0转float而缺最终回执，已typed退出码修复并核未结束缺值/0/9；Node失败attach清理和await版本撤销边界已根修。首轮fixture合同错配、缺退出码及Node失败保原raw，详情仅留效率JSON。
+## 后续唯一队列
 
-   原最终独审确认已停PTY崩溃lease锁死与同代丢回执重试不核Node两项P2。同Sol增量 **61812→9fbb83075656a565c27524840efe70e60f6533df，29paths**，提取唯一公共生命周期并按身份/revision/终态结清；unknown或仍running保阻断，普通list不清unknown且deleted+unknown仍可发现，已deleted重试不重放。主strict/blobSHA/AST26/5组原rawSHA与exit/保护0/两index不变/freeze外源码0全部核过，既有Luna只审新增依赖后无仍可行动finding。精确证据 browser-owner-production/terminal-shared-recovery-delivery/primary-mechanical.json 与 independent-review.md；最新owner31、caller9、真实fixture1、真实API/Gateway/tool9、crash/retry3分别过，不相加。Ruff25条同基线、新0/exit1。原真实恢复1pass2errors属测试父registry/fixture未close ActivityStore和catalog导致flock残留，同Sol修finally后3pass40.25s；不是并发测试或生产恢复返修，原失败raw保留。早审误套30min合同已撤回且未源码返工。ROOT893路径集成见上，Browser另交；主补业务源码仍0。
-2. **residency稳定差异早审与实现并行。** 原草稿 `eae79` 的冷读不造slot、成功drain回收、失败保重试owner、同一tracker递增generation已静态核；预审发现listener await中接受新blocker。Sol确认真实claim writer原先先持久写再push，外层不能保证不可达；已在关闭重核blocker后无await设置closing，writer写前消费同一准入，shutdown显式区别普通unload。稳定 `29513→9e7013e25d87542d5bfcef7f7da088c7986c12fc` 三路径 strict/blob/SHA/AST及两sharedindex主核通过，**增量独审已通过，原blocker/unload边界闭合、无确认新finding**。owner87包括1000冷读/100次unload、失败重试/旧代回调及真实NodeDebugSessionStore/claim writer屏障拒绝且无落盘。主指出测试屏障finally释放，Sol同WT窄修，`residency-guard/attempt-1` **1pass/0.80s/exit0**已核，未重跑87；完整包将含新测试blob，生产两blob仍9e。报告与机械证据统一 `residency-stable-pre-review/`，`final-report.md` SHA `45b5ace547c906872659d504e600be679fd340f8270ceda0e8a4ecc4b4140cce`。shutdown的durable-only claim及外部在途HTTP排空未由此窄审背书。Terminal实际入口定向已过、ROOT Terminal浏览器已验收；整体goal产品范围仍待；不夸成跨tracker generation唯一，不给模型速度倍率。
-3. **typed canonical与producer。** 原itemized1.5/1.6、context4.6/6.7/7.1：metadata→opaque namespaced/versioned extensions，typed ProjectionGroup/ItemProjectionIdentity/ToolResultEvidence/ItemSourceManifest/source binding贯穿writer/SQLite/JSONL/checkpoint/fork/history/provider；R01–R07真实producer及条件ToolSet roots接线。已有selection_role/replacement_policy/source_ordinal、RuntimeNoticePayload保留不重做；不只调用helper求勾、不做旧数据兼容。精确静态证据同上一项，原task清单`fixed-candidate-task-inventory-29513.json`。
-4. **activation与delegate。** activation底座已有7路径draft，上层需唯一registry、持久workspace key/freshmarker、execution/model-call冻结/恢复、原子sealbind，无None/当前源旁路；真实编译graph reasoning-only→有效正文及耗尽retry、逐model-call/canonical身份和唯一终态仍待验证，复用Runner/runtime证据。sessionVRN5.3的activation_bindings.display_uri/context_source_control_states持久新写/read-path仍未验收，不能由helper/schema推断完成。`coordinator/artifacts/activation-production-wiring/review-plan.md`。delegate复用Session SQLite publication ledger与child publication同事务，贯穿recovery/factory/startcaller，published不倒删。
-5. **远端VRN/target-main。** 固定29513 grammar无authority，远端scope在资源访问前unknown_scope；联邦port仍unavailable。主已独立核并纠正报告：`app/api/sessions.py`已有GET `/{session_id}/main-thread`与SessionMainThreadDTO，后续只接通WorkspaceSessionMainPort消费已有路由，不新造endpoint。复用channel/grant/policy/credential和本地context/cursor，唯一authority解析；真实B⇄A⇄C、同本机authority等价、一次transit/两hop/deadline、最新权限、结构化拒绝/零副作用/无locator。更正已通知同Sol；`remaining-addressing-contract-review/attempt-1/report.md`已完成，仅静态、未测试/服务。
-6. **最终产品验收。** 公共Schema依变更官方生成、单跑tsc，build不代类型检查；核实际tag/reserved而非照抄Pending19/20早期编号，不手改pb2。按原task ID与实际入口对应证据，strict OpenSpec及既有唯一Web E2E `tests/e2e/clients/web/test_basic_chat_tool_loop.py`增加持久Browser/Terminal、unload/跨Thread关联/来源Session删除/错误反馈，真实浏览器验收后清理。本goal七change全完成前保持active，不将未勾任务自动当缺源码，也不据组件绿勾整项。
+精确对象、任务ID与交付物由 A/implementation-queue.json 维护；A/current-task-index.json 是当前规划勾选索引，**不等于验收证据**。旧 fixed-candidate-task-inventory-29513.json 是历史规范快照，不据它复活已撤销的旧数据迁移或重建已有路由。
 
-## 失败经验与原始证据
+1. typed完整闭包与R01–R07后推进activation：唯一registry、持久workspace key/freshmarker、execution/model-call冻结恢复与原子sealbind；无None/当前源旁路。sessionVRN5.3 activation_bindings.display_uri/context_source_control_states持久新写/read-path仍待；真实编译reasoning-only→正文及耗尽retry、逐call/canonical身份和唯一终态补证。TEMP/coordinator/artifacts/activation-production-wiring/review-plan.md。
+2. delegate：Session SQLite publication ledger与child publication同事务，recovery/factory/startcaller全接；published不倒删。
+3. federated VRN/target-main：复用channel/grant/policy/credential和本地cursor，唯一authority语法；真实B⇄A⇄C、同本机authority等价、一次transit/两hop/deadline、最新权限/零副作用/不泄漏locator。**已有 GET /api/v1/sessions/{session_id}/main-thread，只接 WorkspaceSessionMainPort 消费者，不新增路由。** A/remaining-addressing-contract-review/attempt-1/report.md仅静态。
+4. 按七change原task ID逐项证据，官方生成公共协议并独立tsc、strict OpenSpec、既有唯一 tests/e2e/clients/web/test_basic_chat_tool_loop.py 扩展完整场景、真实产品与清理。Browser里程碑不结束goal，不以组件绿灯或测试总数勾整项。
 
-WVL裸read-tree损共享index，事故前无精确hash备份，按历史tree重建不能称逐blob精确恢复；作者已停写、收窄权限。`coordinator/artifacts/shared-index-incident/attempt-1/`。Sol释放窗口ROOT共享index基线为`d541fd806cf0f78241ab421632efa325d4a84805bcb8c5584b3faf14b582ea2d`，WT默认index为`e1cb50fdd86644b869eaa547caf1c572413c768fbb838e1cd636ea248670e73d`，路径用absolute-git-dir/index核，不能用受私有env影响的--git-path index。
+## 效率与协作效果
 
-主曾误把私有status索引当共享索引并恢复错目标，约九分钟单列；实际ROOT共享index始终不变，源码/refs未改。`sol-efficiency-trial/coordinator-resume-preflight/attempt-2/correction.json`明确撤旧误报。当前寻址审查又因陈旧port注释误报已有endpoint缺失、把helper推成activation5.3闭合；主核固定路由后同reviewer窄更正，在派单前阻止重建，没有确认实现返工，不臆算耗时；`efficiency-comparison.json`及`scope-review-correction-git.json`。
+继续单Sol：fork/Runner/runtime/catalog/Terminal/Browser固定闭包已交，主补业务源码仍为0。fork首完整候选106.84分钟；旧Luna fork4pass17fail/33.8s来自不同合同与前置，不是A/B。Terminal和Browser精确开始时间未核，不倒推耗时；typed起点单列。没有可信速度倍率或永久最优结论。作者调用方遗漏、故障返修、fixture接手与主协调成本均记 A/efficiency-comparison.json。
 
-目录迁移已释放系统盘约238GB；根terminal-manager、授权旧.boxteam与可复现副本已清，独有源码保。目录审查`docs/handoff/20261003-151500-team-collaboration-directory-review.md`，原服务环境`out/tests/temp/2026/10/03/160552-workspace-migration/coordinator/artifacts/migration-state.json`。不复用迁移排除的历史工作区、不再复制整树；切换时只清上述已明确授权的开发runtime。
+已验证改进：固定树严格交付，稳定差异早审与实现并行，未变审查复用；Browser确定拒绝回执与部分转换unknown分开，镜像同步放权威observe完成处，真实释放后才发布终态、失败保句柄。Luna仍适合本轮固定增量只读核验。screencast猜测经合法入口核查撤回，未要求作者盲修。
 
-Browser首轮owner raw已主核：attempt1=5pass2fail/1.96s，attempt2=15pass1fail9setup errors/6.25s，两个范围不相加。首组revision写死属测试合同假设；首次恢复用Node存活快照清掉无lease的持久未知动作属确认公共owner缺口，主读取固定f9ac的facts.py复核，同Sol已修普通观测并保显式终态核实；受影响两Terminal失败项与Browser未知恢复定向3pass1.25s原raw/exit已主核，不重跑无关全组。第二组同一admission fixture缺SessionThread owner及旧read_page timeout调用已窄迁，工具/transport18pass4.68s原raw/exit已主核，范围不相加。详细rawSHA/exit仅维护efficiency-comparison.json；SKILL已简洁记录普通观测不证明动作结果。
+主错误单列：私有/共享index误识别约九分钟、title合同误判、Gateway路由ID与旧Session DELETE探针假设；原失败留存，不计为作者返修。路径计数须显式--no-renames包含删除/新增。主ROOT共享index基线 d541fd806cf0f78241ab421632efa325d4a84805bcb8c5584b3faf14b582ea2d；WT默认index e1cb50fdd86644b869eaa547caf1c572413c768fbb838e1cd636ea248670e73d；由absolute-git-dir/index定位。
 
-当前Browser预审固定树`aa988896231d49891028a670e43d094ffa9f1b0e`，baseline=f9ac，71个production路径；主严格补丁重建/逐blobSHA/AST29/三保护0/两sharedindex不变已通过，证据browser-owner-production/production-preview-1/primary-mechanical.json。既有已核Luna仅只读独审，Sol继续消费者与真实Node/WS验证，预审有意不交在迁测试，不能当完整交付。主仅准备临时browser-product.mjs（静态语法过、未执行），业务源码实现仍0。
-
-Browser早审确认P2：固定aa988896的Node runHttpOperation在try外检查Agent用户锁，确定未执行的423缺少browser/failed回执，Python误置unknown，解锁后仍阻断。同Sol在生产预审2树 **e5dc5c102f66a09b54478b949d0e473ecbb11e2a** 修正式失败边界，真实非法lock、423零副作用与解锁恢复已通过阶段验证。主strict重建、72production路径逐blobSHA/AST30/三保护0/两sharedindex不变已核；aa→e5仅4路径，独审正在核运行态DELETE是否保持在飞WS排空，尚未确认该疑点。证据 production-preview-2/primary-mechanical.json；有意不含在迁测试，仍不是完整交付。原审查“no-pending提前返回、全部unknown永久不可管理”已主核并撤回：空pending可核stopped/deleted；running且旧动作未知仍须阻断，不通过普通存活列表覆盖verified求绿。
-
-真实startup失败Browser暴露owner已verified但既有lease ledger镜像仍unknown。Sol首修放在_acquire，污染正常creating Terminal；原startup-failure-and-shared-runtime-repair为2fail2error/27.59s、exit1，属于作者放置错误，保原raw。改为list/get完成权威observe_resource后同步既有镜像，定向startup Browser、共用真实Terminal[0]及wire **3pass21.46s/exit0** 原raw/exit主已核；不清未知操作、不复跑已绿全组。完整固定包仍待，效率JSON区分此返工、fixture缺真实Terminal服务与主探针错误；主补业务源码仍0。
-
-e5增量独审最终确认另一个P2，短报告已落production-preview-2/independent-review.md：新failed回执包含freeze/wake部分转换或恢复失败后仍verified的snapshot，Python接受虚假核实状态。同Sol在真实transition owner记录unknown并核Node操作准入，不撤423回执，不让控制转换重入页面队列；修复/定向验证待交。DELETE疑点已排除：唯一Python owner先advance_revision，Node撤grant/关transport并drain全部queued及concurrent executions；Gateway拒绝直接管理旁路。初步“无finding”消息不当作最终绿审。
-
-真实manual Browser UI **1pass47.10s/exit0**；local Gateway restart原 **1fail20.57s/exit1** 停在metadata.title。主最初建议把页面title断言迁为创建名，Sol仅写两处未stage断言、未跑；主独核f9ac BrowserSession 1480/2215与tool/Session mapper后撤此错误建议：spec无title不可变合同，旧title是实时页面事实，被新公共投影覆盖为创建名是确认生产回归。同Sol窄修Browser runtime title、Terminal保持record.title，保原页面title断言，API三分支 **1pass16.91s/exit0** 作者报，待完整绑定。主误导成本单列，不冒充用户裁定、不计作者源码返工。local restart修2标题过后 **1fail111.14s/exit1**：Node health已workspace_id，Gateway _adopt_browser_manager仍校验workspace_root，pending启动RuntimeError actual=None，accepted:false保旧PID；主核e5与原launcher/helper stderr确认遗漏，由同Sol将Node接管统一UUID并迁全callee/负向测试，原日志不覆盖。
-
-Browser首完整源码＋测试树 **b2d97ae11c2d5c3f049c4b28a868312b86d86a2c** 于2026-10-05T07:28:53.950305 UTC冻结；f9ac→b2为110路径/73production/54AST，主strict重建、逐blobSHA、87原rawSHA/exit、三保护0、两sharedindex不变与freeze外源码0已核，证据final-delivery/primary-mechanical.json。e5→b2仅9production路径，既有Luna增量独审中，原未变71路径不重审。UUID adoption11pass2.49s、真实Gateway restart1pass26.71s、transition失败Node7pass0.60s、Python回执2pass12.21s及真实锁1pass19.08s分别原raw/exit已核，不相加；title1pass16.91s也已核。主同类复核发现b2 close在await releaseRuntime前即closed/verified、release先清context句柄，失败可能误报终态；同Sol正在根修释放callee并另导b2增量，b2不是最终验收。真实ROOT产品、LLM discovery及remote Docker未由该包背书；typed精确开始UTC在必要Browser前向闭包结束后记录，goal仍active，主补业务源码0。
-
-
-## Browser最终释放闭包与typed推进（2026-10-05 16:04 北京时间）
-
-Browser最终组合 f838d13ad91cbeaa13bc83eca41f324b3dfca451（冻结UTC07:38:37.712529），b2增量3paths独审无finding。主strict重建/old-new blobSHA/4实际增量exit和原rawSHA/保护0/两sharedindex不变均通过。关闭、删除、discard释放失败保同一context句柄和unknown，显式close成功后发布verified；Node5pass0.540s、真实attached delete1pass24.00s分别核原收据，不相加。screencast假设经合法入口核查撤回，未派无依据源码修复。证据 sol-efficiency-trial/browser-owner-production/release-confirmation-forward/primary-mechanical.json 与 independent-review.md。
-
-ROOT已串行集成commit 11a925b0d6ba7f880517947d3b5207c0300cf3c9，tree f5efe755c3b848d74a5c8da9c2f7ab8e30b558e5，111路径逐preimage保真并保4份主独有文档（包含AGENTS.md）；guard、双祖先、sharedindex不变通过。显式--no-renames计数含删除/新增，主默认rename计数断言失败未写源码。全组offset16停写、切换、恢复exit0，同unit前端8027/Gateway8030；停写后fresh核两授权业务工作区旧无schema browsers=[]并删仅该空记录，identity与其它owner数据保留。Browser实际Chromium产品探针首轮exit0、19.53s，UI新建/真实grant及WS/导航owner read/promote/正式Session删除/保留发现/无Session重连/原生停止与owner删除全部过，page_errors和failed_requests均0；临时Scenario已验收，5.2既有唯一正式WebE2E仍未执行。证据 root-product-verification/browser-product-acceptance.json 与 browser-attempt-1/；源码绑定ROOT11a925，不背书后续activation或remote Docker。原Terminal已验收不复跑。
-
-typed真实起点UTC 2026-10-05T07:45:36.414759+00:00，唯一Sol已获实际初始化的 TEMP/coordinator/git/typed-canonical-status.idx（read-tree f838），源码根仍唯一WT/thread_owner_implementer，产物 sol-efficiency-trial/typed-canonical-production/。itemized1.5/1.6、context4.6/6.7/7.1及R01–R07持续；不仅改metadata，须迁catalog/JSONL/checkpoint/fork/history/provider、ContextContribution registry以及supersession/attachment/fork控制关系；未冻结未验收，不覆盖WT、不等ROOT产品。主补业务源码0。Browser起点未核不倒推计时，Luna旧投入及主协调错误单列，不宣称速度倍率或永久最优。七change及后续activation/delegate/federated/唯一正式WebE2E仍未完成，goal active。
-
-本次Browser切换unit恢复active/running、MainPID1274667。探针所建Session正式删除且资源已删，无待清理业务数据；两张Chromium截图只在分配的artifacts中保留作为可复查产品证据，不加入Git。当前继续单Sol，未因该里程碑终止goal。
+目录迁移已释放系统盘约238GB；旧根terminal-manager、授权旧数据与可复现副本已清，独有源码保留。原目录审查见 docs/handoff/20261003-151500-team-collaboration-directory-review.md。原始报告和提交保真；本台账压缩不重复产生总结文档。
