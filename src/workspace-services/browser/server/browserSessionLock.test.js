@@ -4,7 +4,6 @@ import { BrowserSession } from "./browserSession.js";
 function session() {
   let persistCount = 0;
   const manager = {
-    attachUrl: (id) => `http://browser.test/?browserId=${id}`,
     persist: async () => {
       persistCount += 1;
     },
@@ -14,7 +13,8 @@ function session() {
       manager,
       record: {
         browser_id: "browser_lock_test",
-        session_id: "session_lock_test",
+        workspace_id: "00000000-0000-4000-8000-000000000001",
+      transport_owner_revision: 1,
         status: "running",
       },
     }),

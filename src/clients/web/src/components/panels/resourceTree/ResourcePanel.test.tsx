@@ -57,6 +57,10 @@ function resource(
       url: `https://site-${index}.example/path`,
       resource_state: "background",
       client_count: 0,
+      retention_scope: "thread",
+      owner_revision: 1,
+      reconciliation_status: "verified",
+      thread_associations: [{ session_id: "ses_resource_tree", thread_id: "thr_resource_tree" }],
     },
     ...overrides,
   };

@@ -116,6 +116,8 @@ export class BrowserSession extends EventEmitter {
     this.cdpSession = null;
     this.streaming = false;
     this.clients = new Set();
+    this.transports = new Map();
+    this.transportOwnerRevision = record.transport_owner_revision;
     this.pendingDialog = null;
     this.pendingFileChooser = null;
     this.refSelectors = new Map();
@@ -160,10 +162,6 @@ export class BrowserSession extends EventEmitter {
 
   get id() {
     return this.record.browser_id;
-  }
-
-  get sessionId() {
-    return this.record.session_id;
   }
 
   get status() {
@@ -220,10 +218,12 @@ export class BrowserSession extends EventEmitter {
       error.code = "browser_closing";
       throw error;
     }
+    this.assertReconciled();
     await this.timeoutRecovery;
     this.pendingOperations += 1;
     try {
       await this.wake({ reason: `operation:${actor}` });
+      this.assertReconciled();
       if (this.browser || this.context || this.page || this.pageEntries.size > 0) {
         await this.ensureActivePage();
       }
@@ -525,6 +525,7 @@ export class BrowserSession extends EventEmitter {
     allowHardProtection = false,
   } = {}) {
     return await this.runResourceTransition(async () => {
+      this.assertReconciled();
       if (this.record.resource_state === "frozen") return this.snapshot();
       this.assertRunning();
       const state = await this.resourceSnapshot();
@@ -582,12 +583,15 @@ export class BrowserSession extends EventEmitter {
         await this.exposeResourceTransitionFailure(error);
         throw error;
       }
+      const previousState = this.record.resource_state;
       this.record.resource_state = "freezing";
       this.record.resource_transition_reason = reason;
       this.emit("state", this.snapshot());
       const frozenEntries = [];
+      let streamStopped = !this.streaming;
       try {
         if (this.streaming) await this.stopScreencast();
+        streamStopped = true;
         for (const entry of this.pageEntries.values()) {
           if (!allowHardProtection) {
             this.assertNoHardProtectionDuringTransition("before_suspend_rendering");
@@ -614,14 +618,21 @@ export class BrowserSession extends EventEmitter {
           await entry.cdpSession.send("Emulation.setScriptExecutionDisabled", { value: true });
         }
       } catch (error) {
-        await Promise.allSettled(
+        const rollback = await Promise.allSettled(
           frozenEntries.map((entry) => this.resumePageRendering(entry)),
         );
-        this.record.resource_state = this.clients.size > 0 ? "active" : "background";
-        this.record.resource_transition_error = error instanceof Error ? error.message : String(error);
-        await this.manager.persist();
-        this.emit("state", this.snapshot());
-        throw error;
+        const rollbackErrors = rollback.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+        if (streamStopped && rollbackErrors.length === 0) {
+          this.record.resource_state = previousState;
+        } else {
+          this.record.reconciliation_status = "unknown";
+        }
+        const failure = rollbackErrors.length === 0 ? error : new AggregateError(
+          [error, ...rollbackErrors],
+          `浏览器冻结失败且恢复未核实: ${[error, ...rollbackErrors].map((item) => item instanceof Error ? item.message : String(item)).join("; ")}`,
+        );
+        await this.exposeResourceTransitionFailure(failure);
+        throw failure;
       }
       this.record.resource_state = "frozen";
       this.record.frozen_at = nowIso();
@@ -635,6 +646,7 @@ export class BrowserSession extends EventEmitter {
 
   async wake({ reason = "resource_access" } = {}) {
     return await this.runResourceTransition(async () => {
+      this.assertReconciled();
       if (!["frozen", "discarded"].includes(this.record.resource_state)) return this.snapshot();
       const previousState = this.record.resource_state;
       const previousStatus = this.record.status;
@@ -661,11 +673,13 @@ export class BrowserSession extends EventEmitter {
           }
         }
       } catch (error) {
-        this.record.status = previousStatus;
-        this.record.resource_state = previousState;
-        this.record.resource_transition_error = error instanceof Error ? error.message : String(error);
-        await this.manager.persist();
-        this.emit("state", this.snapshot());
+        if (previousState === "frozen" || this.record.reconciliation_status === "unknown") {
+          this.record.reconciliation_status = "unknown";
+        } else {
+          this.record.status = previousStatus;
+          this.record.resource_state = previousState;
+        }
+        await this.exposeResourceTransitionFailure(error);
         throw error;
       }
       this.lastFrame = null;
@@ -694,6 +708,7 @@ export class BrowserSession extends EventEmitter {
     allowHardProtection = false,
   } = {}) {
     return await this.runResourceTransition(async () => {
+      this.assertReconciled();
       if (this.record.resource_state === "discarded") return this.snapshot();
       if (this.record.resource_state !== "frozen") {
         const error = new Error(`浏览器必须先冻结才能冷回收: browser_id=${this.id}, state=${this.record.resource_state}`);
@@ -957,7 +972,6 @@ export class BrowserSession extends EventEmitter {
     const context = this.context;
     this.browser = null;
     this.browserHandle = null;
-    this.context = null;
     this.page = null;
     this.cdpSession = null;
     this.deviceEmulationApplied = false;
@@ -969,8 +983,15 @@ export class BrowserSession extends EventEmitter {
     this.streamRelaxTimer = null;
     this.streamProfile = null;
     this.streamSamples = [];
-    await this.pointerController.reset();
-    if (context) await this.manager.runtimePool.releaseContext(context);
+    try {
+      await this.pointerController.reset();
+      if (context) await this.manager.runtimePool.releaseContext(context);
+    } catch (error) {
+      this.record.reconciliation_status = "unknown";
+      await this.exposeResourceTransitionFailure(error);
+      throw error;
+    }
+    this.context = null;
   }
 
   // 非 canonical 身份：Node 进程（无 crypto.randomUUIDv7）生成的 page_/* 本地 id
@@ -1030,7 +1051,6 @@ export class BrowserSession extends EventEmitter {
       await this.applyDeviceEmulation(entry);
     }
     this.pageEntries.set(pageId, entry);
-    this.manager.registerPageAlias?.(pageId, this.id);
     cdpSession.on("Page.screencastFrame", (event) => {
       void this.handleScreencastFrame(event, entry);
     });
@@ -1225,7 +1245,6 @@ export class BrowserSession extends EventEmitter {
     if (closedPage && entry.page !== closedPage) {
       return;
     }
-    this.manager.registerPageAlias?.(pageId, this.id);
     this.pageEntries.delete(pageId);
     if (this.closingRequested) {
       return;
@@ -1352,7 +1371,8 @@ export class BrowserSession extends EventEmitter {
       agent_access_locked: agentLockActive,
       agent_lock_owner_id: agentLockActive ? this.record.agent_lock_owner_id : null,
       agent_lock_expires_at: agentLockActive ? this.record.agent_lock_expires_at : null,
-      attach_url: this.manager.attachUrl(this.id),
+      transport_owner_revision: this.transportOwnerRevision,
+      reconciliation_status: this.record.status === "lost" ? "unknown" : this.record.reconciliation_status,
       client_count: this.clients.size,
       document_revision: this.documentRevision,
       operation_revision: this.operationQueue.revision,
@@ -1459,14 +1479,47 @@ export class BrowserSession extends EventEmitter {
     }
   }
 
-  async enqueueOperation({ actor, action, visible = true }, callback) {
-    return await this.operationQueue.enqueue({ actor, action, visible }, callback);
+  syncOwnerRevision(revision) {
+    if (!Number.isSafeInteger(revision) || revision < this.transportOwnerRevision) {
+      throw new Error("Browser 传输 owner revision 过期或无效");
+    }
+    if (revision !== this.transportOwnerRevision) {
+      this.transportOwnerRevision = revision;
+      this.record.transport_owner_revision = revision;
+      for (const client of this.transports.keys()) client.close(4009, "browser owner changed");
+      this.transports.clear();
+      this.record.updated_at = nowIso();
+    }
   }
 
-  async runInteractiveOperation({ actor, action }, callback) {
+  transportAuthorized(client) {
+    return this.transports.get(client)?.revision === this.transportOwnerRevision;
+  }
+
+  assertReconciled() {
+    if (this.record.reconciliation_status !== "verified") {
+      const error = new Error(`Browser 外部状态尚未核实: browser_id=${this.id}`);
+      error.code = "browser_resource_unknown";
+      throw error;
+    }
+  }
+
+  assertTransport(client) {
+    if (!this.transportAuthorized(client)) {
+      const error = new Error("Browser 连接授权已过期");
+      error.code = "browser_transport_revoked";
+      throw error;
+    }
+    this.assertReconciled();
+  }
+
+  async enqueueOperation({ actor, action, visible = true, revision = this.transportOwnerRevision }, callback) {
+    return await this.operationQueue.enqueue({ actor, action, visible, revision }, callback);
+  }
+
+  async runInteractiveOperation({ actor, action, revision = this.transportOwnerRevision }, callback) {
     return await this.operationQueue.runConcurrent(
-      { actor, action, visible: false, interactive: true },
-      callback,
+      { actor, action, revision, visible: false, interactive: true }, callback,
     );
   }
 
@@ -1578,15 +1631,18 @@ export class BrowserSession extends EventEmitter {
   async close({ status = "closed", reason = "browser_closed" } = {}) {
     this.closingRequested = true;
     return await this.runResourceTransition(async () => {
-      if (this.record.status === "deleted") return this.snapshot();
+      if (this.record.status === "deleted" && this.record.reconciliation_status === "verified") return this.snapshot();
       if (this.streaming && this.browser && this.cdpSession && this.record.status === "running") {
         await this.stopScreencast();
       }
+      for (const client of this.transports.keys()) client.close(4009, "browser stopped");
+      this.transports.clear();
+      await this.releaseRuntime();
       this.record.status = status;
+      this.record.reconciliation_status = "verified";
       this.record.release_reason = reason;
       this.record.ended_at = this.record.ended_at || nowIso();
       this.record.updated_at = nowIso();
-      await this.releaseRuntime();
       this.clients.clear();
       await this.manager.stateStore.deleteCheckpoint(this.id);
       this.record.checkpoint = null;
@@ -1614,6 +1670,7 @@ export class BrowserSession extends EventEmitter {
   }
 
   async attachClient(client) {
+    this.assertTransport(client);
     if (this.closingRequested) {
       const error = new Error(`浏览器正在关闭，不能 attach: browser_id=${this.id}`);
       error.code = "browser_closing";
@@ -1622,7 +1679,9 @@ export class BrowserSession extends EventEmitter {
     this.attachRequestedAtMs = Date.now();
     this.pendingAttachRequests += 1;
     try {
+      this.assertTransport(client);
       await this.wake({ reason: "user_attach" });
+      this.assertTransport(client);
       this.assertRunning();
       this.clients.add(client);
     } finally {
@@ -1632,21 +1691,30 @@ export class BrowserSession extends EventEmitter {
     this.record.last_attach_at = nowIso();
     this.record.last_user_interaction_at = this.record.last_attach_at;
     if (!this.streaming) {
+      this.assertTransport(client);
       await this.startScreencast("interactive");
+      this.assertTransport(client);
     }
+    this.assertTransport(client);
     this.boostScreencast();
     if (this.lastFrame) {
       client.sendFrame(this.lastFrame);
     } else {
       const entry = this.pageEntries.get(this.activePageId);
       if (entry) {
+        this.assertTransport(client);
         await this.captureCurrentPageFrame(entry, client);
+        this.assertTransport(client);
       }
     }
-    return await this.syncAndEmitState({ persist: false });
+    this.assertTransport(client);
+    const state = await this.syncAndEmitState({ persist: false });
+    this.assertTransport(client);
+    return state;
   }
 
   async detachClient(client) {
+    this.transports.delete(client);
     this.clients.delete(client);
     if (this.record.status !== "running" || !this.browser || !this.cdpSession) {
       this.streaming = false;

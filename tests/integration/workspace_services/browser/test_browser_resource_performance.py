@@ -9,11 +9,13 @@ import time
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
 import websockets
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
     kill_process_on_port,
@@ -82,6 +84,7 @@ def _browser_backend_process(
             **os.environ,
             "WORKSPACE_ROOT": str(workspace_root),
             "BOXTEAM_BROWSER_WORKSPACE_ROOT": str(workspace_root),
+            "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(workspace_root),
         },
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -91,6 +94,14 @@ def _browser_backend_process(
     log_file.close()
     wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", process)
     return process
+
+
+def _owner_headers(workspace_id: str) -> dict[str, str]:
+    return {"X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Resource-Owner": "workspace-browser"}
+
+
+def _create_options(workspace_id: str, url: str) -> dict[str, object]:
+    return {"workspace_id": workspace_id, "browser_id": f"browser_{uuid4().hex}", "owner_revision": 1, "url": url}
 
 
 def _descendant_pids(root_pid: int) -> set[int]:
@@ -179,13 +190,15 @@ async def _ack_browser_frame(
     return metadata
 
 
-async def _measure_attached_stream(backend_port: int, browser_id: str) -> dict[str, float]:
+async def _measure_attached_stream(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
     started_at = time.monotonic()
     frames: list[tuple[float, int]] = []
     attached = False
     interaction_sent = False
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser") as websocket:
-        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id}))
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
+        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         deadline = started_at + 8.0
         while time.monotonic() < deadline:
             if not interaction_sent and time.monotonic() >= started_at + 6.25:
@@ -247,12 +260,14 @@ async def _measure_attached_stream(backend_port: int, browser_id: str) -> dict[s
     }
 
 
-async def _measure_static_stream(backend_port: int, browser_id: str) -> dict[str, float]:
+async def _measure_static_stream(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
     started_at = time.monotonic()
     frames: list[tuple[float, int]] = []
     attached = False
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser") as websocket:
-        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id}))
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
+        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         deadline = started_at + 3.5
         while time.monotonic() < deadline:
             try:
@@ -279,9 +294,11 @@ async def _measure_static_stream(backend_port: int, browser_id: str) -> dict[str
     }
 
 
-async def _measure_latest_frame_delivery(backend_port: int, browser_id: str) -> dict[str, float]:
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser") as websocket:
-        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id}))
+async def _measure_latest_frame_delivery(backend_port: int, browser_id: str, workspace_id: str) -> dict[str, float]:
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{backend_port}", headers=_owner_headers(workspace_id)) as client:
+        grant = _data(await client.post(f"/api/browsers/{browser_id}/transport-grant", json={"owner_revision": 1, "association": None}))
+    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": browser_id, "grantToken": grant["grant_token"]}))
         first_frame: bytes | None = None
         while first_frame is None:
             message = await asyncio.wait_for(websocket.recv(), timeout=2)
@@ -291,7 +308,7 @@ async def _measure_latest_frame_delivery(backend_port: int, browser_id: str) -> 
         await asyncio.sleep(0.3)
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{backend_port}",
-            timeout=5,
+            headers=_owner_headers(workspace_id), timeout=5,
         ) as client:
             response = await client.post(
                 f"/api/browsers/{browser_id}/run",
@@ -370,11 +387,12 @@ def test_browser_resource_governance_meets_first_ci_budget(
         log_path=log_path,
     )
     measurements: dict[str, object] = {}
-    client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30)
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
     try:
         first = _data(client.post(
             "/api/browsers",
-            json={"session_id": "session_resource_perf", "url": dynamic_page_server},
+            json=_create_options(workspace_id, dynamic_page_server),
         ))
         first_id = str(first["browser_id"])
         _data(client.post(
@@ -409,7 +427,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
         for _ in range(4):
             browser = _data(client.post(
                 "/api/browsers",
-                json={"session_id": "session_resource_perf", "url": "about:blank"},
+                json=_create_options(workspace_id, "about:blank"),
             ))
             browser_ids.append(str(browser["browser_id"]))
         for browser_id, extra_pages in zip(browser_ids, [2, 2, 2, 2, 1], strict=True):
@@ -453,7 +471,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
             log_path=log_path,
         )
         client.close()
-        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=30)
+        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=_owner_headers(workspace_id), timeout=30)
         restored_record = _data(client.get(f"/api/browsers/{first_id}"))
         assert restored_record["resource_state"] == "discarded"
         shutdown_checkpoint = _data(client.get(f"/api/browsers/{shutdown_hot_id}"))
@@ -489,7 +507,7 @@ def test_browser_resource_governance_meets_first_ci_budget(
             json={"code": "await page.evaluate(() => window.scrollTo(0, 0)); return true;"},
         ))
 
-        stream = asyncio.run(_measure_attached_stream(port, first_id))
+        stream = asyncio.run(_measure_attached_stream(port, first_id, workspace_id))
         assert stream["first_frame_ms"] <= MAX_ATTACH_FIRST_FRAME_MS
         assert stream["fps"] >= MIN_INTERACTIVE_STREAM_FPS
         assert stream["bitrate_bps"] <= MAX_INTERACTIVE_STREAM_BITRATE_BPS
@@ -498,15 +516,15 @@ def test_browser_resource_governance_meets_first_ci_budget(
         assert stream["boosted_fps"] >= MIN_INTERACTIVE_STREAM_FPS
         assert stream["boosted_fps"] >= stream["relaxed_fps"] * 1.5
 
-        latest_frame = asyncio.run(_measure_latest_frame_delivery(port, first_id))
+        latest_frame = asyncio.run(_measure_latest_frame_delivery(port, first_id, workspace_id))
         assert latest_frame["next_frame_after_ack_ms"] <= MAX_LATEST_FRAME_AFTER_ACK_MS
         assert latest_frame["captured_frame_age_seconds"] >= MIN_SUPERSEDED_FRAME_AGE_SECONDS
 
         static_browser = _data(client.post(
             "/api/browsers",
-            json={"session_id": "session_resource_perf", "url": "about:blank"},
+            json=_create_options(workspace_id, "about:blank"),
         ))
-        static_stream = asyncio.run(_measure_static_stream(port, str(static_browser["browser_id"])))
+        static_stream = asyncio.run(_measure_static_stream(port, str(static_browser["browser_id"]), workspace_id))
         assert static_stream["late_frame_count"] == 0
         assert static_stream["late_bitrate_bps"] == 0
 

@@ -40,7 +40,7 @@ function genericClientMessage(message) {
 
 function typedClientMessage(message) {
   if (message.type === "attach") {
-    const value = { browserId: message.browserId };
+    const value = { browserId: message.browserId, grantToken: message.grantToken };
     if (message.participantId !== undefined) value.participantId = message.participantId;
     return create(BrowserClientMessageSchema, {
       payload: { case: "attach", value },

@@ -3,13 +3,13 @@ import { listGatewayResources } from "../../gatewayApi";
 import type {
   GatewayResourceItem,
   GatewayResourceScopeError,
-  SessionResource,
   SessionResourceAction,
 } from "../../types/backend";
-import { controlSessionResource } from "../../api";
+import { controlWorkspaceResource } from "../../api/workspaceResources";
+import type { ResourceAction, ResourceThreadRef, WorkspaceResourceDTO } from "../../api/workspaceResources";
 import { errorMessage } from "../../utils/errorMessage";
 
-export type GatewayExtensionRuntimeResource = Omit<SessionResource, "kind"> & {
+export type GatewayExtensionRuntimeResource = Omit<WorkspaceResourceDTO, "kind"> & {
   kind: "browser" | "terminal";
 };
 
@@ -146,20 +146,29 @@ export function useGatewayExtensionResources({
     };
   }, [enabled, refresh]);
 
-  const control = useCallback(async (
-    entry: GatewayExtensionResourceEntry,
-    action: SessionResourceAction,
+  const ownerControl = useCallback(async (
+    entry: GatewayExtensionResourceEntry, action: ResourceAction, thread?: ResourceThreadRef,
   ) => {
-    await controlSessionResource(
-      apiPort,
-      entry.session_id,
-      entry.resource.kind,
-      entry.resource.resource_id,
-      action,
-      entry.workspace_id,
-    );
-    await refresh(true, true);
+    // 写入先作废在途列表，完整回执不能被较早的轮询覆盖。
+    ++requestSequence.current;
+    try {
+      const resource = await controlWorkspaceResource(apiPort, entry.workspace_id, entry.resource, action, thread);
+      // 写入等待期间启动的轮询也属于旧快照；回执落地时一并作废。
+      ++requestSequence.current;
+      setEntries((current) => resource.status === "deleted"
+        ? current.filter((item) => item.key !== entry.key)
+        : current.map((item) => item.key === entry.key ? { ...item, resource: resource as GatewayExtensionRuntimeResource } : item));
+      setLoading(false);
+    } catch (error) {
+      await refresh(true, true);
+      throw error;
+    }
   }, [apiPort, refresh]);
+
+  const control = useCallback(async (entry: GatewayExtensionResourceEntry, action: SessionResourceAction) => {
+    if (action !== "cancel" && action !== "delete") throw new Error("工作区资源不支持该操作");
+    await ownerControl(entry, action === "cancel" ? "stop" : "delete");
+  }, [ownerControl]);
 
   return {
     entries,
@@ -171,5 +180,6 @@ export function useGatewayExtensionResources({
     select: setSelectedKey,
     refresh: () => refresh(false, true),
     control,
+    ownerControl,
   };
 }

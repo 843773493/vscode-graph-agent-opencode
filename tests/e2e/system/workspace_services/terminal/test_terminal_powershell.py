@@ -19,7 +19,7 @@ from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import kill_process_on_port, terminate_process
-from tests.support.terminal_tool_runtime import terminal_tool_runtime
+from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +395,7 @@ async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
     monkeypatch.setenv(
         "BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{backend.port}"
     )
-    async with terminal_tool_runtime(Path(backend.workspace_root)) as (
+    async with workspace_tool_runtime(Path(backend.workspace_root)) as (
         container,
         session_id,
         context,

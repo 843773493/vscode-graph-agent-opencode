@@ -5,7 +5,7 @@ import { stat } from "node:fs/promises";
 import { stripVTControlCharacters } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserFrameFlow } from "./browserFrameFlow.js";
-import { BrowserManager, resolveRequiredWorkspaceRoot } from "./browserManager.js";
+import { BrowserManager, resolveRequiredWorkspaceRoot, validateWorkspaceId } from "./browserManager.js";
 import { LatestPointerMoveDispatcher } from "./latestPointerMoveDispatcher.js";
 import { encodeServerMessage, parseClientMessage } from "./protocol.js";
 
@@ -55,7 +55,7 @@ function sendJson(response, status, data) {
     "content-length": Buffer.byteLength(body),
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type,x-boxteam-workspace-id",
   });
   response.end(body);
 }
@@ -108,26 +108,6 @@ async function sendDownload(response, file, mediaType = "application/octet-strea
   createReadStream(file.path).pipe(response);
 }
 
-function missingBrowserSnapshot(manager, browserId) {
-  const timestamp = new Date().toISOString();
-  return {
-    browser_id: browserId,
-    page_id: browserId,
-    session_id: "",
-    title: "Deleted Browser",
-    url: "",
-    viewport: { width: 1280, height: 800 },
-    status: "deleted",
-    created_at: timestamp,
-    updated_at: timestamp,
-    started_at: null,
-    ended_at: timestamp,
-    client_count: 0,
-    sequence: 0,
-    attach_url: manager.attachUrl(browserId),
-  };
-}
-
 function parsePositiveInt(value, fieldName) {
   const numberValue = Number(value);
   if (!Number.isInteger(numberValue) || numberValue <= 0) {
@@ -151,12 +131,45 @@ function requestActor(request) {
   return actor || "user:http";
 }
 
-async function runHttpOperation(request, browser, action, callback, { visible = true } = {}) {
-  assertAgentAccessAllowed(request, browser);
-  return await browser.enqueueOperation(
-    { actor: requestActor(request), action, visible },
-    callback,
-  );
+async function runHttpOperation(request, browser, action, callback, { visible = true, queued = true } = {}) {
+  try {
+    if (!["close", "delete"].includes(action)) browser.assertReconciled();
+    assertAgentAccessAllowed(request, browser);
+    const result = queued
+      ? await browser.enqueueOperation({ actor: requestActor(request), action, visible }, callback)
+      : await callback();
+    return { ...result, browser: browser.snapshot() };
+  } catch (error) {
+    error.browser = browser.snapshot();
+    // 执行前策略拒绝或队列结清失败均有正式回执；连接断开没有此声明。
+    error.operationOutcome = "failed";
+    throw error;
+  }
+}
+
+function requestWorkspace(request, url, mountedId) {
+  const header = request.headers["x-boxteam-workspace-id"];
+  const queries = url.searchParams.getAll("workspace_id");
+  if (Array.isArray(header) || queries.length > 1 || (header && queries[0] && header !== queries[0])) {
+    const error = new Error("Browser workspace_id 请求载体冲突");
+    error.statusCode = 400;
+    throw error;
+  }
+  const selected = header ?? queries[0];
+  try { validateWorkspaceId(selected); } catch (error) { error.statusCode = 400; throw error; }
+  if (selected !== mountedId) {
+    const error = new Error("Browser 工作区 UUID 未挂载");
+    error.statusCode = 404;
+    throw error;
+  }
+}
+
+function requireOwner(request) {
+  if (request.headers["x-boxteam-resource-owner"] !== "workspace-browser") {
+    const error = new Error("Browser 管理命令必须经 Workspace Browser owner");
+    error.statusCode = 403;
+    throw error;
+  }
 }
 
 function wsClient(socket) {
@@ -172,6 +185,7 @@ function wsClient(socket) {
     },
   });
   return {
+    close(code, reason) { socket.close(code, reason); },
     participantId: `user_${randomUUID().replaceAll("-", "")}`,
     kind: "user",
     connectedAt: new Date().toISOString(),
@@ -215,15 +229,8 @@ async function main() {
   const host = args.get("host") || process.env.BOXTEAM_BROWSER_HOST || DEFAULT_HOST;
   const port = Number(args.get("port") || process.env.BOXTEAM_BROWSER_BACKEND_PORT || DEFAULT_PORT);
   const workspaceRoot = resolveRequiredWorkspaceRoot(args);
-  const browserFrontendBaseUrl =
-    args.get("frontend-url") ||
-    process.env.BOXTEAM_BROWSER_FRONTEND_URL ||
-    "http://127.0.0.1:8016";
-
-  const manager = new BrowserManager({
-    workspaceRoot,
-    browserFrontendBaseUrl,
-  });
+  const workspaceId = validateWorkspaceId(args.get("workspace-id") || process.env.BOXTEAM_WORKSPACE_ID);
+  const manager = new BrowserManager({ workspaceRoot, workspaceId });
   await manager.init();
   manager.startResourceGovernor({
     policy: {
@@ -236,7 +243,7 @@ async function main() {
   const server = http.createServer(async (request, response) => {
     response.setHeader("access-control-allow-origin", "*");
     response.setHeader("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
-    response.setHeader("access-control-allow-headers", "content-type");
+    response.setHeader("access-control-allow-headers", "content-type,x-boxteam-workspace-id");
     if (request.method === "OPTIONS") {
       response.writeHead(204);
       response.end();
@@ -249,7 +256,7 @@ async function main() {
         sendJson(response, 200, {
           ok: true,
           process_id: process.pid,
-          workspace_root: workspaceRoot,
+          workspace_id: workspaceId,
           browser_count: manager.list().length,
           browser_runtime: manager.runtimePool.snapshot(),
           resource_governor: manager.resourceGovernorSnapshot(),
@@ -257,9 +264,13 @@ async function main() {
         return;
       }
 
+      requestWorkspace(request, url, workspaceId);
+      const artifactRequest = /^\/api\/browsers\/[^/]+\/(downloads|screenshots)\/[^/]+$/.test(pathname);
+      if (!artifactRequest) requireOwner(request);
+
       if (request.method === "GET" && pathname === "/api/browsers") {
         sendJson(response, 200, {
-          data: manager.list({ sessionId: url.searchParams.get("session_id") }),
+          data: manager.list(),
         });
         return;
       }
@@ -267,7 +278,9 @@ async function main() {
       if (request.method === "POST" && pathname === "/api/browsers") {
         const payload = await readJson(request);
         const browser = await manager.create({
-          sessionId: payload.session_id,
+          workspaceId: payload.workspace_id,
+          browserId: payload.browser_id,
+          ownerRevision: payload.owner_revision,
           title: payload.title,
           url: payload.url,
           viewport: payload.viewport,
@@ -300,19 +313,20 @@ async function main() {
         const action = browserMatch[2] || "";
 
         if (request.method === "GET" && !action) {
-          try {
-            sendJson(response, 200, { data: manager.get(browserId).snapshot() });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            if (
-              message.startsWith("浏览器页面不存在") &&
-              url.searchParams.get("missing_as_deleted") === "1"
-            ) {
-              sendJson(response, 200, { data: missingBrowserSnapshot(manager, browserId) });
-              return;
-            }
-            throw error;
-          }
+          sendJson(response, 200, { data: manager.get(browserId).snapshot() });
+          return;
+        }
+        if (request.method === "POST" && action === "owner-revision") {
+          const payload = await readJson(request);
+          await manager.syncOwnerRevision(browserId, payload.owner_revision);
+          sendJson(response, 200, { data: manager.get(browserId).snapshot() });
+          return;
+        }
+        if (request.method === "POST" && action === "transport-grant") {
+          const payload = await readJson(request);
+          sendJson(response, 200, { data: manager.issueTransportGrant(browserId, {
+            ownerRevision: payload.owner_revision, association: payload.association,
+          }) });
           return;
         }
 
@@ -332,8 +346,10 @@ async function main() {
 
         if (request.method === "PATCH" && action === "agent-lock") {
           const payload = await readJson(request);
+          const browser = manager.get(browserId);
           sendJson(response, 200, {
-            data: await manager.setAgentAccessLocked(browserId, payload.locked, payload.owner_id),
+            data: await runHttpOperation(request, browser, "agent-lock",
+              () => manager.setAgentAccessLocked(browserId, payload.locked, payload.owner_id), { queued: false }),
           });
           return;
         }
@@ -342,7 +358,8 @@ async function main() {
           const payload = await readJson(request);
           const browser = manager.get(browserId);
           sendJson(response, 200, {
-            data: await browser.setResourcePolicy(payload.policy),
+            data: await runHttpOperation(request, browser, "resource-policy",
+              () => browser.setResourcePolicy(payload.policy), { queued: false }),
           });
           return;
         }
@@ -366,19 +383,22 @@ async function main() {
 
         if (request.method === "POST" && action === "freeze") {
           const browser = manager.get(browserId);
-          sendJson(response, 200, { data: await browser.freeze({ reason: "manual" }) });
+          sendJson(response, 200, { data: await runHttpOperation(request, browser, "freeze",
+            () => browser.freeze({ reason: "manual" }), { queued: false }) });
           return;
         }
 
         if (request.method === "POST" && action === "wake") {
           const browser = manager.get(browserId);
-          sendJson(response, 200, { data: await browser.wake({ reason: "manual" }) });
+          sendJson(response, 200, { data: await runHttpOperation(request, browser, "wake",
+            () => browser.wake({ reason: "manual" }), { queued: false }) });
           return;
         }
 
         if (request.method === "POST" && action === "discard") {
           const browser = manager.get(browserId);
-          sendJson(response, 200, { data: await browser.discard({ reason: "manual" }) });
+          sendJson(response, 200, { data: await runHttpOperation(request, browser, "discard",
+            () => browser.discard({ reason: "manual" }), { queued: false }) });
           return;
         }
 
@@ -474,20 +494,15 @@ async function main() {
         if (request.method === "POST" && action === "close") {
           const browser = manager.get(browserId);
           sendJson(response, 200, {
-            data: await runHttpOperation(request, browser, "close", () => manager.close(browserId)),
+            data: await runHttpOperation(request, browser, "close", () => manager.close(browserId), { queued: false }),
           });
           return;
         }
 
         if (request.method === "DELETE" && !action) {
           const browser = manager.get(browserId);
-          assertAgentAccessAllowed(request, browser);
-          const canDeleteWithoutPageOperation = browser.status !== "running"
-            || ["frozen", "discarded"].includes(browser.record.resource_state);
           sendJson(response, 200, {
-            data: canDeleteWithoutPageOperation
-              ? await manager.delete(browserId)
-              : await runHttpOperation(request, browser, "delete", () => manager.delete(browserId)),
+            data: await runHttpOperation(request, browser, "delete", () => manager.delete(browserId), { queued: false }),
           });
           return;
         }
@@ -496,7 +511,7 @@ async function main() {
       notFound(response);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const status = message.startsWith("浏览器页面不存在")
+      const status = error?.statusCode || (message.startsWith("浏览器页面不存在")
         ? 404
         : message.startsWith("浏览器下载不存在")
           ? 404
@@ -508,7 +523,7 @@ async function main() {
             "browser_resource_protected",
             "browser_resource_protected_during_transition",
             "browser_must_be_frozen_before_discard",
-            "browser_session_logical_limit_exceeded",
+            "browser_workspace_logical_limit_exceeded",
             "browser_closing",
             "browser_checkpoint_index_changed_externally",
           ].includes(error?.code)
@@ -525,9 +540,10 @@ async function main() {
             ? 423
           : error?.code === "browser_tool_timeout"
             ? 408
-          : 500;
+          : 500);
       sendJson(response, status, {
         error: message,
+        ...(error?.browser ? { browser: error.browser, operation_outcome: error.operationOutcome } : {}),
         ...(error?.code
           ? { code: error.code }
           : message.startsWith("浏览器页面不存在")
@@ -550,15 +566,26 @@ async function main() {
   });
 
   const wss = new WebSocketServer({ server, path: "/browser" });
-  wss.on("connection", (socket) => {
+  wss.on("connection", (socket, request) => {
     const client = wsClient(socket);
+    try {
+      requestWorkspace(request, new URL(request.url, "http://127.0.0.1"), workspaceId);
+    } catch (error) {
+      client.sendJson({ type: "error", message: error.message });
+      socket.close(1008, error.message.slice(0, 120));
+      return;
+    }
     let attachedBrowser = null;
     let queued = Promise.resolve();
 
-    const onFrame = (frame) => client.sendFrame(frame);
-    const onState = (state) => client.sendJson({ type: "state", browserId: state.browser_id, state });
+    // 撤销后的事件只丢弃旧连接输出；输入仍由 assertTransport 明确拒绝。
+    const canSend = () => attachedBrowser?.transportAuthorized(client) === true;
+    const onFrame = (frame) => { if (canSend()) client.sendFrame(frame); };
+    const onState = (state) => {
+      if (canSend()) client.sendJson({ type: "state", browserId: state.browser_id, state });
+    };
     const onParticipantPointer = (pointer) => {
-      if (pointer.participantId !== client.participantId) {
+      if (canSend() && pointer.participantId !== client.participantId) {
         client.sendJson({
           type: "participantPointer",
           browserId: attachedBrowser?.id,
@@ -585,21 +612,23 @@ async function main() {
     }
 
     async function runUserOperation(
-      message,
-      action,
-      callback,
-      { visible = true, interactive = false } = {},
+      message, action, callback, { visible = true, interactive = false } = {},
     ) {
-      const operation = { actor: `user:${client.participantId}`, action, visible };
+      const browser = attachedBrowser;
+      if (!browser || message.browserId !== browser.id) throw new Error("Browser 消息与已授权连接不一致");
+      browser.assertTransport(client);
+      const operation = {
+        actor: `user:${client.participantId}`, action, visible,
+        revision: browser.transports.get(client).revision,
+      };
       const result = interactive
-        ? await attachedBrowser.runInteractiveOperation(operation, callback)
-        : await attachedBrowser.enqueueOperation(operation, callback);
+        ? await browser.runInteractiveOperation(operation, callback)
+        : await browser.enqueueOperation(operation, callback);
+      browser.assertTransport(client);
       if (message.clientOperationId) {
         client.sendJson({
-          type: "operationAck",
-          browserId: attachedBrowser.id,
-          clientOperationId: message.clientOperationId,
-          operation: result.operation,
+          type: "operationAck", browserId: browser.id,
+          clientOperationId: message.clientOperationId, operation: result.operation,
         });
       }
       return result;
@@ -608,15 +637,20 @@ async function main() {
     async function handleMessage(message) {
       if (message.type === "attach") {
         await detach(false);
-        if (message.participantId) {
-          client.participantId = message.participantId;
-        }
-        attachedBrowser = manager.get(message.browserId);
-        attachedBrowser.on("frame", onFrame);
-        attachedBrowser.on("state", onState);
-        attachedBrowser.on("participant-pointer", onParticipantPointer);
-        const state = await attachedBrowser.attachClient(client);
-        client.sendJson({ type: "attached", browserId: message.browserId, state });
+        const browser = manager.get(message.browserId);
+        const grant = manager.consumeTransportGrant(browser.id, message.grantToken);
+        if (message.participantId) client.participantId = message.participantId;
+        browser.transports.set(client, grant);
+        attachedBrowser = browser;
+        browser.assertTransport(client);
+        browser.on("frame", onFrame);
+        browser.on("state", onState);
+        browser.on("participant-pointer", onParticipantPointer);
+        const output = await browser.runInteractiveOperation({
+          actor: `user:${client.participantId}`, action: "attach", revision: grant.revision,
+        }, () => browser.attachClient(client));
+        browser.assertTransport(client);
+        client.sendJson({ type: "attached", browserId: browser.id, state: output });
         return;
       }
 
@@ -625,18 +659,18 @@ async function main() {
         return;
       }
 
-      if (!attachedBrowser) {
-        throw new Error("尚未 attach 到浏览器页面");
-      }
+      const browser = attachedBrowser;
+      if (!browser || message.browserId !== browser.id) throw new Error("尚未授权此 Browser");
+      browser.assertTransport(client);
 
       if (message.type === "pointer") {
         await runUserOperation(
           message,
           `pointer:${message.action}`,
-          () => attachedBrowser.dispatchPointer(message),
+          () => browser.dispatchPointer(message),
           { visible: false, interactive: true },
         );
-        attachedBrowser.emit("participant-pointer", {
+        browser.emit("participant-pointer", {
           participantId: client.participantId,
           x: message.x,
           y: message.y,
@@ -648,7 +682,7 @@ async function main() {
         await runUserOperation(
           message,
           `key:${message.action}`,
-          () => attachedBrowser.dispatchKey(message),
+          () => browser.dispatchKey(message),
           { visible: false, interactive: true },
         );
         return;
@@ -657,13 +691,13 @@ async function main() {
         await runUserOperation(
           message,
           "insertText",
-          () => attachedBrowser.insertText(message.text),
+          () => browser.insertText(message.text),
           { visible: false, interactive: true },
         );
         return;
       }
       if (message.type === "handleDialog") {
-        await runUserOperation(message, "dialog", () => attachedBrowser.handleDialog({
+        await runUserOperation(message, "dialog", () => browser.handleDialog({
             acceptModal: message.accept,
             promptText: message.promptText,
           }));
@@ -673,7 +707,7 @@ async function main() {
         await runUserOperation(
           message,
           "selectFiles",
-          () => attachedBrowser.handleDialog({ filePayloads: message.files }),
+          () => browser.handleDialog({ filePayloads: message.files }),
         );
         return;
       }
@@ -681,12 +715,12 @@ async function main() {
         const output = await runUserOperation(
           message,
           "readClipboard",
-          () => attachedBrowser.readClipboardText(),
+          () => browser.readClipboardText(),
           { visible: false, interactive: true },
         );
         client.sendJson({
           type: "clipboardText",
-          browserId: attachedBrowser.id,
+          browserId: browser.id,
           text: output.result,
         });
         return;
@@ -695,7 +729,7 @@ async function main() {
         const output = await runUserOperation(
           message,
           message.type,
-          () => attachedBrowser.inspectElement({
+          () => browser.inspectElement({
             x: Number(message.x),
             y: Number(message.y),
           }),
@@ -708,14 +742,14 @@ async function main() {
             );
         client.sendJson({
           type: message.type === "selectElement" ? "elementSelected" : "elementHovered",
-          browserId: attachedBrowser.id,
+          browserId: browser.id,
           mode: message.mode === "rich" ? "rich" : "basic",
           element,
         });
         return;
       }
       if (message.type === "viewport") {
-        await runUserOperation(message, "viewport", () => attachedBrowser.setViewport(
+        await runUserOperation(message, "viewport", () => browser.setViewport(
             parsePositiveInt(message.width, "width"),
             parsePositiveInt(message.height, "height"),
           ));
@@ -725,7 +759,7 @@ async function main() {
         await runUserOperation(
           message,
           "device-profile",
-          () => attachedBrowser.setDeviceProfile(message.profileId, message.orientation),
+          () => browser.setDeviceProfile(message.profileId, message.orientation),
         );
         return;
       }
@@ -733,7 +767,7 @@ async function main() {
         await runUserOperation(
           message,
           "device-settings",
-          () => attachedBrowser.setDeviceSettings(message.settings || {}),
+          () => browser.setDeviceSettings(message.settings || {}),
         );
         return;
       }
@@ -741,7 +775,7 @@ async function main() {
         await runUserOperation(
           message,
           "save-device-preset",
-          () => attachedBrowser.saveDevicePreset(message.name),
+          () => browser.saveDevicePreset(message.name),
           { visible: false, interactive: true },
         );
         return;
@@ -750,7 +784,7 @@ async function main() {
         const output = await runUserOperation(
           message,
           "debug-snapshot",
-          () => attachedBrowser.debugSnapshot(),
+          () => browser.debugSnapshot(),
           { visible: false, interactive: true },
         );
         const data = Object.hasOwn(output, "result")
@@ -760,7 +794,7 @@ async function main() {
             );
         client.sendJson({
           type: "debugSnapshot",
-          browserId: attachedBrowser.id,
+          browserId: browser.id,
           data,
         });
         return;
@@ -769,12 +803,12 @@ async function main() {
         const output = await runUserOperation(
           message,
           "capture-screenshot",
-          async () => ({ result: await attachedBrowser.captureClientScreenshot() }),
+          async () => ({ result: await browser.captureClientScreenshot() }),
           { visible: false, interactive: true },
         );
         client.sendJson({
           type: "screenshotResult",
-          browserId: attachedBrowser.id,
+          browserId: browser.id,
           mimeType: "image/png",
           data: output.result.toString("base64"),
         });
@@ -783,26 +817,26 @@ async function main() {
       if (message.type === "command") {
         const state = await runUserOperation(message, `command:${message.name}`, () => {
           if (message.name === "stop") {
-            return attachedBrowser.stopLoading();
+            return browser.stopLoading();
           }
           if (message.name === "newPage") {
-            return attachedBrowser.createPage(message.url);
+            return browser.createPage(message.url);
           }
           if (message.name === "activatePage") {
-            return attachedBrowser.activatePage(message.pageId);
+            return browser.activatePage(message.pageId);
           }
           if (message.name === "closePage") {
-            return attachedBrowser.closePage(message.pageId);
+            return browser.closePage(message.pageId);
           }
           if (message.name === "find") {
-            return attachedBrowser.findText(message.query, message.backwards === true);
+            return browser.findText(message.query, message.backwards === true);
           }
           if (message.name === "clearNetwork") {
-            return attachedBrowser.clearNetworkRequests();
+            return browser.clearNetworkRequests();
           }
-          return attachedBrowser.navigate(message.name === "goto" ? "url" : message.name, message.url);
+          return browser.navigate(message.name === "goto" ? "url" : message.name, message.url);
         });
-        client.sendJson({ type: "commandResult", browserId: attachedBrowser.id, output: "命令已完成", state });
+        client.sendJson({ type: "commandResult", browserId: browser.id, output: "命令已完成", state });
         return;
       }
       throw new Error(`未知 WebSocket 消息类型: ${message.type}`);
@@ -854,6 +888,7 @@ async function main() {
         if (!attachedBrowser || attachedBrowser.id !== message.browserId) {
           return;
         }
+        try { attachedBrowser.assertTransport(client); } catch (error) { reportMessageError(message, error); return; }
         client.acknowledgeFrame(message.frameId, {
           decodeMs: message.decodeMs,
           drawMs: message.drawMs,

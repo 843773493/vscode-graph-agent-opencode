@@ -24,6 +24,11 @@ export declare type BrowserAttach = Message<"boxteam.browser.v1.BrowserAttach"> 
    * @generated from field: optional string participant_id = 2;
    */
   participantId?: string | undefined;
+
+  /**
+   * @generated from field: string grant_token = 3;
+   */
+  grantToken: string;
 };
 
 /**

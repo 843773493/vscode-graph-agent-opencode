@@ -37,13 +37,7 @@ def test_representative_boundaries_round_trip_through_protobuf_wire() -> None:
     decoded_terminal = terminal_pb2.TerminalSession.FromString(terminal_wire)
     assert terminal_session_to_json(decoded_terminal) == terminal_value
 
-    browser_value = {
-        "browser_id": "browser_123",
-        "page_id": "page_123",
-        "session_id": "session_123",
-        "status": "running",
-        "url": cast(dict[str, object], cast(dict[str, object], baseline["browser_websocket"])["state"])["state"]["url"],
-    }
+    browser_value = cast(dict[str, object], cast(dict[str, object], cast(dict[str, object], baseline["browser_websocket"])["state"])["state"])
     browser_wire = browser_page_to_proto(browser_value).SerializeToString()
     decoded_browser = browser_pb2.BrowserPage.FromString(browser_wire)
     assert browser_page_to_json(decoded_browser) == browser_value

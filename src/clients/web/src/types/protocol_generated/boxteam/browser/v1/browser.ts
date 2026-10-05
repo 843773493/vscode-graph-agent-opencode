@@ -91,7 +91,6 @@ export interface BrowserViewport {
 export interface BrowserPage {
   browser_id: string;
   page_id: string;
-  session_id: string;
   title: string;
   url: string;
   viewport: BrowserViewport | undefined;
@@ -100,6 +99,9 @@ export interface BrowserPage {
   metadata: { [key: string]: any } | undefined;
   created_at: string | undefined;
   updated_at: string | undefined;
+  workspace_id: string;
+  transport_owner_revision: number;
+  reconciliation_status: string;
 }
 
 export interface BrowserJsonMessage {
@@ -145,7 +147,6 @@ function createBaseBrowserPage(): BrowserPage {
   return {
     browser_id: "",
     page_id: "",
-    session_id: "",
     title: "",
     url: "",
     viewport: undefined,
@@ -154,6 +155,9 @@ function createBaseBrowserPage(): BrowserPage {
     metadata: undefined,
     created_at: undefined,
     updated_at: undefined,
+    workspace_id: "",
+    transport_owner_revision: 0,
+    reconciliation_status: "",
   };
 }
 
@@ -162,7 +166,6 @@ export const BrowserPage: MessageFns<BrowserPage> = {
     return {
       browser_id: isSet(object.browser_id) ? globalThis.String(object.browser_id) : "",
       page_id: isSet(object.page_id) ? globalThis.String(object.page_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       title: isSet(object.title) ? globalThis.String(object.title) : "",
       url: isSet(object.url) ? globalThis.String(object.url) : "",
       viewport: isSet(object.viewport) ? BrowserViewport.fromJSON(object.viewport) : undefined,
@@ -171,6 +174,11 @@ export const BrowserPage: MessageFns<BrowserPage> = {
       metadata: isObject(object.metadata) ? object.metadata : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      transport_owner_revision: isSet(object.transport_owner_revision)
+        ? globalThis.Number(object.transport_owner_revision)
+        : 0,
+      reconciliation_status: isSet(object.reconciliation_status) ? globalThis.String(object.reconciliation_status) : "",
     };
   },
 
@@ -181,9 +189,6 @@ export const BrowserPage: MessageFns<BrowserPage> = {
     }
     if (message.page_id !== "") {
       obj.page_id = message.page_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
     }
     if (message.title !== "") {
       obj.title = message.title;
@@ -209,6 +214,15 @@ export const BrowserPage: MessageFns<BrowserPage> = {
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.transport_owner_revision !== 0) {
+      obj.transport_owner_revision = Math.round(message.transport_owner_revision);
+    }
+    if (message.reconciliation_status !== "") {
+      obj.reconciliation_status = message.reconciliation_status;
+    }
     return obj;
   },
 
@@ -219,7 +233,6 @@ export const BrowserPage: MessageFns<BrowserPage> = {
     const message = createBaseBrowserPage();
     message.browser_id = object.browser_id ?? "";
     message.page_id = object.page_id ?? "";
-    message.session_id = object.session_id ?? "";
     message.title = object.title ?? "";
     message.url = object.url ?? "";
     message.viewport = (object.viewport !== undefined && object.viewport !== null)
@@ -230,6 +243,9 @@ export const BrowserPage: MessageFns<BrowserPage> = {
     message.metadata = object.metadata ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
+    message.workspace_id = object.workspace_id ?? "";
+    message.transport_owner_revision = object.transport_owner_revision ?? 0;
+    message.reconciliation_status = object.reconciliation_status ?? "";
     return message;
   },
 };

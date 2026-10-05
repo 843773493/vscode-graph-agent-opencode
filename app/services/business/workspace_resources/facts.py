@@ -46,7 +46,7 @@ def index_resources(
 
 
 def observe_resource(
-    record: OwnedResourceRecord, runtime: ResourceSnapshot | None, recovered: bool, kind: ResourceKind,
+    record: OwnedResourceRecord, runtime: ResourceSnapshot | None, kind: ResourceKind,
 ) -> None:
     if runtime is None:
         if record.status != "deleted":
@@ -59,8 +59,8 @@ def observe_resource(
     was_creating = record.status == "creating"
     record.status = str(runtime["status"])
     recovery = str(runtime.get("reconciliation_status", "unknown"))
-    # 同进程未知结果不得被一次列表查询无条件抹去。
-    if not recovered or record.reconciliation_status == "verified" or was_creating:
+    # 已持久化的未知动作结果跨重启保留，存活快照不能证明旧动作是否执行。
+    if record.reconciliation_status == "verified" or was_creating:
         record.reconciliation_status = recovery
         record.error = None if recovery == "verified" else "Node 运行时 身份或连接尚待核实"
 
@@ -95,7 +95,8 @@ def resource_projection(
     )
     return {
         **(runtime or {}), f"{kind}_id": record.resource_id, "resource_id": record.resource_id,
-        "workspace_id": record.workspace_id, "kind": kind, "title": record.title,
+        "workspace_id": record.workspace_id, "kind": kind,
+        "title": runtime["title"] if kind == "browser" and runtime is not None else record.title,
         "session_id": record.source_thread.session_id, "source_thread_id": record.source_thread.thread_id,
         "source_thread": asdict(record.source_thread), "retention_scope": record.retention_scope,
         "thread_associations": [asdict(ref) for ref in record.thread_associations],

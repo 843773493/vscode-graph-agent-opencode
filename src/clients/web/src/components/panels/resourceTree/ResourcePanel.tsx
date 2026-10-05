@@ -41,7 +41,7 @@ export default function ResourcePanel({
   activePreviewPath,
   onRefresh,
   onControl,
-  onTerminalControl,
+  onOwnerControl,
   onOpenTerminalPreview,
   onOpenTerminalExtension,
   onOpenBrowserPreview,
@@ -62,7 +62,7 @@ export default function ResourcePanel({
     resourceId: string,
     action: SessionResourceAction,
   ) => Promise<void>;
-  onTerminalControl?: (resourceId: string, action: "promote" | "detach", thread?: ResourceThreadRef) => Promise<void>;
+  onOwnerControl?: (resourceId: string, action: "promote" | "detach" | "attach", thread?: ResourceThreadRef) => Promise<void>;
   onOpenTerminalPreview: (terminalId: string) => void;
   onOpenTerminalExtension?: (terminalId: string) => void;
   onOpenBrowserPreview: (browserId: string) => void;
@@ -192,16 +192,16 @@ export default function ResourcePanel({
       });
   };
 
-  const handleTerminalControl = async (resourceId: string, action: "promote" | "detach", thread?: ResourceThreadRef) => {
-    if (!onTerminalControl) return;
+  const handleOwnerControl = async (resourceId: string, action: "promote" | "detach" | "attach", thread?: ResourceThreadRef) => {
+    if (!onOwnerControl) return;
     setBusyResourceId(resourceId);
     setNotice("");
     setNoticeTechnicalDetails("");
     try {
-      await onTerminalControl(resourceId, action, thread);
-      setNotice(action === "promote" ? "终端已保留到当前工作区" : "已解除指定线程与终端的关联");
+      await onOwnerControl(resourceId, action, thread);
+      setNotice(action === "promote" ? "资源已保留到当前工作区" : "已更新资源与线程的关联");
     } catch (cause) {
-      setNotice("终端管理失败，请查看错误详情后重试。");
+      setNotice("资源管理失败，请查看错误详情后重试。");
       setNoticeTechnicalDetails(errorMessage(cause));
     } finally {
       setBusyResourceId(null);
@@ -396,7 +396,7 @@ export default function ResourcePanel({
                               selected={isPreviewedResource(resource, activePreviewPath)}
                               busy={busyResourceId === resource.resource_id}
                               onControl={handleControl}
-                              onTerminalControl={onTerminalControl ? handleTerminalControl : undefined}
+                              onOwnerControl={onOwnerControl ? handleOwnerControl : undefined}
                               onCopy={handleCopy}
                               onOpenTerminal={handleOpenTerminal}
                               onOpenTerminalExtension={onOpenTerminalExtension}

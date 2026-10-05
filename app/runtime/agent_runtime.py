@@ -33,8 +33,8 @@ from app.agents.policy import (
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
@@ -65,7 +65,7 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_terminal_resource_owner(self) -> TerminalResourceOwner: ...
 
-    def get_browser_manager_client(self) -> BrowserManagerClient: ...
+    def get_browser_resource_owner(self) -> BrowserResourceOwner: ...
 
     def get_session_context_query_service(self) -> SessionContextQueryProtocol: ...
 
@@ -130,7 +130,7 @@ def build_session_agent_runtime(
         session_subagent_service=dependency_provider.get_session_subagent_service(),
         team_service=dependency_provider.get_team_service(),
         terminal_resource_owner=dependency_provider.get_terminal_resource_owner(),
-        browser_manager_client=dependency_provider.get_browser_manager_client(),
+        browser_resource_owner=dependency_provider.get_browser_resource_owner(),
         session_context_query_service=(
             dependency_provider.get_session_context_query_service()
         ),

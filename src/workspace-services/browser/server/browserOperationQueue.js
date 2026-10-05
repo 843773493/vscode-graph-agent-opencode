@@ -5,26 +5,31 @@ export class BrowserOperationQueue {
     this.owner = owner;
     this.revision = Number(revision || 0);
     this.tail = Promise.resolve();
+    this.executions = new Set();
   }
 
-  async enqueue({ actor, action, visible = true, interactive = false }, callback) {
+  async enqueue({ actor, action, visible = true, interactive = false, revision }, callback) {
     const operation = this.createOperation({ actor, action, visible, interactive });
     const execution = this.tail.then(async () => {
+      this.assertRevision(revision);
       await this.owner.prepareForOperation({ actor, action });
       this.owner.beginOperation(operation);
       operation.started_at = nowIso();
-      if (visible) {
-        this.owner.record.active_operation = operation;
-        this.owner.emit("state", this.owner.snapshot());
-      }
       try {
+        this.assertRevision(revision);
+        if (visible) {
+          this.owner.record.active_operation = operation;
+          this.owner.emit("state", this.owner.snapshot());
+        }
         const result = await callback();
+        this.assertRevision(revision);
         const completed = {
           ...operation,
           status: "completed",
           completed_at: nowIso(),
         };
         await this.finish(completed, visible);
+        this.assertRevision(revision);
         return result && typeof result === "object" && !Array.isArray(result)
           ? { ...result, operation: completed, operation_revision: operation.operation_revision }
           : { result, operation: completed, operation_revision: operation.operation_revision };
@@ -42,36 +47,57 @@ export class BrowserOperationQueue {
       }
     });
     this.tail = execution.then(() => undefined, () => undefined);
-    return await execution;
+    return await this.track(execution);
   }
 
-  async runConcurrent({ actor, action, visible = true, interactive = false }, callback) {
+  async runConcurrent({ actor, action, visible = true, interactive = false, revision }, callback) {
     const operation = this.createOperation({ actor, action, visible, interactive });
-    await this.owner.prepareForOperation({ actor, action });
-    this.owner.beginOperation(operation);
-    operation.started_at = nowIso();
+    const execution = (async () => {
+      this.assertRevision(revision);
+      await this.owner.prepareForOperation({ actor, action });
+      this.owner.beginOperation(operation);
+      operation.started_at = nowIso();
+      try {
+        this.assertRevision(revision);
+        const result = await callback();
+        this.assertRevision(revision);
+        const completed = { ...operation, status: "completed", completed_at: nowIso() };
+        await this.finish(completed, false);
+        this.assertRevision(revision);
+        return result && typeof result === "object" && !Array.isArray(result)
+          ? { ...result, operation: completed, operation_revision: operation.operation_revision }
+          : { result, operation: completed, operation_revision: operation.operation_revision };
+      } catch (error) {
+        await this.finish({
+          ...operation, status: "failed", completed_at: nowIso(),
+          error: error instanceof Error ? error.message : String(error),
+        }, false);
+        throw error;
+      } finally {
+        this.owner.endOperation(operation);
+      }
+    })();
+    return await this.track(execution);
+  }
+
+  async track(execution) {
+    this.executions.add(execution);
     try {
-      const result = await callback();
-      const completed = {
-        ...operation,
-        status: "completed",
-        completed_at: nowIso(),
-      };
-      await this.finish(completed, false);
-      return result && typeof result === "object" && !Array.isArray(result)
-        ? { ...result, operation: completed, operation_revision: operation.operation_revision }
-        : { result, operation: completed, operation_revision: operation.operation_revision };
-    } catch (error) {
-      const failed = {
-        ...operation,
-        status: "failed",
-        completed_at: nowIso(),
-        error: error instanceof Error ? error.message : String(error),
-      };
-      await this.finish(failed, false);
-      throw error;
+      return await execution;
     } finally {
-      this.owner.endOperation(operation);
+      this.executions.delete(execution);
+    }
+  }
+
+  async drain() {
+    await Promise.allSettled([...this.executions]);
+  }
+
+  assertRevision(revision) {
+    if (revision !== this.owner.transportOwnerRevision) {
+      const error = new Error("Browser 操作授权版本已撤销");
+      error.code = "browser_transport_revoked";
+      throw error;
     }
   }
 

@@ -12,21 +12,3 @@ def background_task_available_actions(
     if status in ACTIVE_TASK_STATUSES:
         return ["cancel", "delete"]
     return ["delete"]
-
-
-def browser_available_actions(
-    status: str,
-    *,
-    resource_state: str | None = None,
-    has_checkpoint: bool = False,
-) -> list[SessionResourceAction]:
-    if status == "deleted":
-        return []
-    if resource_state == "discarded" and has_checkpoint and status in {
-        "running",
-        "lost",
-    }:
-        return ["resume", "delete"]
-    if status == "running":
-        return ["cancel", "delete"]
-    return ["delete"]

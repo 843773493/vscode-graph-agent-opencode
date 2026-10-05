@@ -324,7 +324,8 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             browser_url = browser_test_data_url()
             expected_page_title = "Gateway Docker Browser"
             browser_response = await client.post(
-                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers",
+                "/api/v1/resources/browsers",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id},
                 json={
                     "session_id": session_id,
                     "url": browser_url,
@@ -334,12 +335,12 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
             created_browser = browser_response.json().get("data")
             if not isinstance(created_browser, dict):
                 raise TypeError(f"Browser Manager 创建响应无效: {browser_response.text}")
-            browser_id = created_browser.get("browser_id")
-            page_id = created_browser.get("page_id")
+            browser_id = created_browser.get("resource_id")
+            page_id = created_browser["metadata"].get("page_id")
             assert isinstance(browser_id, str), created_browser
             assert isinstance(page_id, str), created_browser
-            assert created_browser.get("url") == browser_url, created_browser
-            assert created_browser.get("title") == expected_page_title, created_browser
+            assert created_browser["metadata"].get("url") == browser_url, created_browser
+            assert created_browser["metadata"].get("title") == expected_page_title, created_browser
 
             gateway_config_path = boxteam_home / "config" / "gateway.jsonc"
             gateway_config = commentjson.loads(
@@ -523,26 +524,33 @@ async def test_gateway_restart_reuses_local_browser_manager_and_live_page(
                 == first_browser_manager_pid
             )
             restored_browser_response = await client.get(
-                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers/{browser_id}"
+                f"/api/v1/resources/{browser_id}",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id}
             )
             assert restored_browser_response.status_code == 200, (
                 restored_browser_response.text
             )
             restored_browser = restored_browser_response.json()["data"]
-            assert restored_browser["browser_id"] == browser_id
-            assert restored_browser["page_id"] == page_id
-            assert restored_browser["session_id"] == session_id
-            assert restored_browser["url"] == browser_url
-            assert restored_browser["title"] == expected_page_title
+            assert restored_browser["resource_id"] == browser_id
+            assert restored_browser["metadata"]["page_id"] == page_id
+            assert restored_browser["source_thread"]["session_id"] == session_id
+            assert restored_browser["metadata"]["url"] == browser_url
+            assert restored_browser["metadata"]["title"] == expected_page_title
             assert restored_browser["status"] == "running"
-            delete_response = await client.delete(
-                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers/{browser_id}"
+            detached = await client.post(
+                f"/api/v1/resources/{browser_id}/detach", headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                json={"expected_revision": restored_browser["owner_revision"], "thread": restored_browser["source_thread"]},
+            )
+            assert detached.status_code == 200, detached.text
+            delete_response = await client.post(
+                f"/api/v1/resources/{browser_id}/delete", headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                json={"expected_revision": detached.json()["data"]["owner_revision"]},
             )
             assert delete_response.status_code == 200, delete_response.text
             deleted_browser = delete_response.json().get("data")
             assert isinstance(deleted_browser, dict), delete_response.text
-            assert deleted_browser.get("deleted") is True, deleted_browser
-            assert deleted_browser.get("browser_id") == browser_id, deleted_browser
+            assert deleted_browser.get("status") == "deleted", deleted_browser
+            assert deleted_browser.get("resource_id") == browser_id, deleted_browser
     finally:
         try:
             if launcher_process is not None:
@@ -656,7 +664,8 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             session_id = session_response.json()["data"]["session_id"]
 
             browser_response = await client.post(
-                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers",
+                "/api/v1/resources/browsers",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id},
                 json={
                     "session_id": session_id,
                     "title": "Remote Docker Browser",
@@ -664,7 +673,8 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
                 },
             )
             assert browser_response.status_code == 200, browser_response.text
-            browser_id = browser_response.json()["data"]["browser_id"]
+            browser_resource = browser_response.json()["data"]
+            browser_id = browser_resource["resource_id"]
 
             terminal_response = await client.post(
                 "/api/v1/resources/terminals",
@@ -709,13 +719,18 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             assert terminal_attach.status_code == 200
             assert "持久终端" in terminal_attach.text
 
+            browser_grant = await client.post(
+                f"/api/v1/resources/{browser_id}/transport-grant", headers={"X-BoxTeam-Workspace-Id": workspace_id},
+                json={"expected_revision": browser_resource["owner_revision"], "thread": browser_resource["source_thread"]},
+            )
+            browser_grant.raise_for_status()
             browser_ws_url = (
                 f"ws://127.0.0.1:{gateway.port}/api/gateway/workspaces/"
                 f"{workspace_id}/browser-manager/browser?token=local-dev-token"
             )
             async with websockets.connect(browser_ws_url) as websocket:
                 await websocket.send(
-                    json.dumps({"type": "attach", "browserId": browser_id})
+                    json.dumps({"type": "attach", "browserId": browser_id, "grantToken": browser_grant.json()["data"]["grant_token"]})
                 )
                 attached = await _receive_websocket_type(websocket, "attached")
                 assert attached["browserId"] == browser_id
@@ -776,10 +791,11 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             timeout=60,
         ) as restarted_client:
             restored_response = await restarted_client.get(
-                f"/api/gateway/workspaces/{workspace_id}/browser-manager/api/browsers/{browser_id}"
+                f"/api/v1/resources/{browser_id}",
+                headers={"X-BoxTeam-Workspace-Id": workspace_id}
             )
             assert restored_response.status_code == 200, restored_response.text
-            assert restored_response.json()["data"]["browser_id"] == browser_id
+            assert restored_response.json()["data"]["resource_id"] == browser_id
     finally:
         if gateway is not None:
             close_gateway_process(gateway)

@@ -110,6 +110,13 @@ class SessionResourceMapper:
 
         metadata = {
             "page_id": browser.get("page_id") or browser_id,
+            "retention_scope": browser["retention_scope"],
+            "source_thread": browser["source_thread"],
+            "thread_associations": browser["thread_associations"],
+            "owner_revision": browser["owner_revision"],
+            "reconciliation_status": browser["reconciliation_status"],
+            "reclaim_at": browser["reclaim_at"],
+            "error": browser["error"],
             "url": browser.get("url"),
             "title": browser.get("title"),
             "viewport": browser.get("viewport"),

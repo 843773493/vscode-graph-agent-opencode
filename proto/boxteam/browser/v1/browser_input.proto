@@ -7,6 +7,7 @@ import "boxteam/browser/v1/browser.proto";
 message BrowserAttach {
   string browser_id = 1;
   optional string participant_id = 2;
+  string grant_token = 3;
 }
 
 message BrowserDetach {

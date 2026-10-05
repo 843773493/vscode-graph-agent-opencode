@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import (
     kill_process_on_port,
     terminate_process,
@@ -45,6 +46,7 @@ def start_browser_manager_processes(
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
     env["BOXTEAM_BROWSER_WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
 
     backend_process = subprocess.Popen(
         [
@@ -120,6 +122,7 @@ def start_browser_frontend_process(
         raise RuntimeError("未找到 node，无法启动浏览器 attach 前端")
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = str(workspace_root)
+    env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(workspace_root)
     process = subprocess.Popen(
         [
             node_bin,

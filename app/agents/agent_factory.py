@@ -78,8 +78,8 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
@@ -429,7 +429,7 @@ def create_my_deep_agent(
     team_service: TeamCoordinationProtocol | None = None,
     config_service: ConfigService | None = None,
     terminal_resource_owner: TerminalResourceOwner | None = None,
-    browser_manager_client: BrowserManagerClient | None = None,
+    browser_resource_owner: BrowserResourceOwner | None = None,
     node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
@@ -606,9 +606,9 @@ def create_my_deep_agent(
                 continue
             _absorb_builtin_tool(tool)
     else:
-        if browser_manager_client is None:
+        if browser_resource_owner is None:
             raise RuntimeError(
-                "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserManagerClient"
+                "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
             )
         if communication_binding_lookup is None:
             raise RuntimeError(
@@ -655,7 +655,7 @@ def create_my_deep_agent(
             session_orchestrator=session_orchestrator,
             config_service=config_service,
             terminal_resource_owner=terminal_resource_owner,
-            browser_manager_client=browser_manager_client,
+            browser_resource_owner=browser_resource_owner,
             invocation_context=tool_invocation_context,
             node_debug_service=node_debug_service,
         )
@@ -875,7 +875,7 @@ def create_runtime_deep_agent_for_session(
     model_visibility_overrides: Mapping[str, bool] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     terminal_resource_owner: TerminalResourceOwner | None = None,
-    browser_manager_client: BrowserManagerClient | None = None,
+    browser_resource_owner: BrowserResourceOwner | None = None,
     node_debug_service: NodeDebugService | None = None,
     session_context_query_service: SessionContextQueryProtocol | None = None,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
@@ -971,7 +971,7 @@ def create_runtime_deep_agent_for_session(
         session_subagent_service=session_subagent_service,
         team_service=team_service,
         terminal_resource_owner=terminal_resource_owner,
-        browser_manager_client=browser_manager_client,
+        browser_resource_owner=browser_resource_owner,
         node_debug_service=node_debug_service,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,

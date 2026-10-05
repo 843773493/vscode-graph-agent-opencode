@@ -180,7 +180,15 @@ export async function restoreBrowserCheckpoint(session, checkpoint) {
       : checkpoint.pages[0].page_id;
     await session.activatePage(activePageId);
   } catch (error) {
-    await session.releaseRuntime();
+    try {
+      await session.releaseRuntime();
+    } catch (releaseError) {
+      session.record.reconciliation_status = "unknown";
+      throw new AggregateError(
+        [error, releaseError],
+        `恢复浏览器失败且运行时释放未核实: ${error.message}; ${releaseError.message}`,
+      );
+    }
     throw error;
   }
   return checkpoint;

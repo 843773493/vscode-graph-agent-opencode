@@ -344,7 +344,7 @@ def _factory_context(tmp_path: Path, service: MagicMock) -> CustomToolFactoryCon
         session_orchestrator=MagicMock(),
         config_service=MagicMock(),
         terminal_resource_owner=MagicMock(),
-        browser_manager_client=MagicMock(),
+        browser_resource_owner=MagicMock(),
         invocation_context=ToolInvocationContext(),
         node_debug_service=service,
     )

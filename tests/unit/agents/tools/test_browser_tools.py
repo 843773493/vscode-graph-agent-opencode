@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 
-from app.agents.custom_tools import CustomToolFactoryContext
-from app.agents.tool_invocation_context import ToolInvocationContext
+from app.abstractions.browser_resources import BrowserRequestError
+from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
+    ToolInvocationContext,
+)
 from app.agents.tools.browser import (
+    OpenBrowserPageInput,
     RunPlaywrightCodeInput,
     create_list_browser_page_tool,
     create_navigate_page_tool,
@@ -17,386 +22,156 @@ from app.agents.tools.browser import (
     create_run_playwright_code_tool,
     create_screenshot_page_tool,
 )
-from app.services.infrastructure.browser_manager_client import (
-    BrowserManagerClient,
-    BrowserManagerRequestError,
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.turn_execution_scope import (
+    TurnExecutionScope,
+    reset_current_turn_execution_scope,
+    set_current_turn_execution_scope,
 )
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.browser_manager_client import BrowserManagerClient
+from tests.support.browser_owner import BrowserBundle, build_browser_bundle
+from tests.support.terminal_owner import CHILD, SESSION_A, THREAD_A, WORKSPACE_ID
 
 
-def _context(browser_manager_client: MagicMock) -> CustomToolFactoryContext:
-    return CustomToolFactoryContext(
-        session_id="ses_user_browser",
-        agent_id="default",
-        sender_agent_id="default",
-        workspace_root=Path.cwd(),
-        background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
-        job_event_bus=MagicMock(),
-        job_service=MagicMock(),
-        session_context_query_service=MagicMock(),
-        workspace_session_context_client=MagicMock(),
-        session_orchestrator=MagicMock(),
-        config_service=MagicMock(),
-        terminal_resource_owner=MagicMock(),
-        browser_manager_client=browser_manager_client,
-        invocation_context=ToolInvocationContext(),
+@pytest.fixture
+def bundle(tmp_path: Path) -> BrowserBundle:
+    return build_browser_bundle(tmp_path)
+
+
+@pytest.fixture
+def context(bundle: BrowserBundle) -> Iterator[SimpleNamespace]:
+    invocation = ToolInvocationContext(thread_binding=ThreadRuntimeBinding(SESSION_A, THREAD_A))
+    token = invocation.set_tool_call_id("tool-browser-test")
+    scope_token = set_current_turn_execution_scope(TurnExecutionScope("execution-browser-test"))
+    admission = ExecutionAdmission(
+        session_id=SESSION_A, thread_id=THREAD_A, execution_id="execution-browser-test",
+        job_id="job-browser-test", admission_idempotency_key="admission-browser-test",
+        execution_origin="internal", turn_id=None,
     )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(SESSION_A, THREAD_A), langgraph_thread_id=THREAD_A),
+        execution_admission_scope(admission, langgraph_thread_id=THREAD_A),
+    ):
+        try:
+            yield SimpleNamespace(session_id=SESSION_A, browser_resource_owner=bundle.owner,
+                                  invocation_context=invocation)
+        finally:
+            invocation.reset_tool_call_id(token)
+            reset_current_turn_execution_scope(scope_token)
 
 
-def test_run_playwright_code_default_timeout_matches_browser_service() -> None:
+def test_browser_schema_keeps_default_timeout_and_explicit_retention_scope() -> None:
     assert RunPlaywrightCodeInput.model_fields["timeoutMs"].default == 10000
+    scope = OpenBrowserPageInput.model_json_schema()["properties"]["retention_scope"]
+    assert scope["default"] == "thread"
+    assert scope["enum"] == ["thread", "workspace"]
 
 
 @pytest.mark.asyncio
-async def test_run_playwright_code_forwards_the_default_timeout() -> None:
-    browser_client = MagicMock()
-    browser_client.run_playwright_code = AsyncMock(return_value={"result": "ok"})
-
-    tool = create_run_playwright_code_tool(_context(browser_client))
-    result = json.loads(
-        await tool.ainvoke({"pageId": "browser_test", "code": "return 'ok';"})
+async def test_run_playwright_code_forwards_default_timeout_with_real_owner_lease(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+    browser = await bundle.create()
+    tool = create_run_playwright_code_tool(context)
+    result = json.loads(await tool.ainvoke({"pageId": browser["resource_id"], "code": "return 'ok';"}))
+    assert result["result"] == "ok"
+    assert bundle.transport.calls[-1] == (
+        browser["resource_id"], "run", {"code": "return 'ok';", "timeoutMs": 10000}, "agent",
     )
-
-    assert result == {"result": "ok"}
-    browser_client.run_playwright_code.assert_awaited_once_with(
-        "browser_test",
-        {"code": "return 'ok';", "timeoutMs": 10000},
-    )
+    assert bundle.leases.leases_for_resource(browser["resource_id"]) == []
 
 
 @pytest.mark.asyncio
-async def test_navigate_page_preserves_browser_page_id_separate_from_tab_id() -> None:
-    browser_client = MagicMock()
-    browser_client.navigate_page = AsyncMock(
-        return_value={
-            "browser_id": "browser_test",
-            "page_id": "page_internal",
-            "session_id": "ses_user_browser",
-            "status": "running",
-            "active_page_id": "page_internal",
-            "pages": [
-                {
-                    "page_id": "page_internal",
-                    "title": "Export",
-                    "url": "http://127.0.0.1:8787/",
-                    "active": True,
-                }
-            ],
-        }
-    )
-
-    tool = create_navigate_page_tool(_context(browser_client))
-    result = json.loads(
-        await tool.ainvoke(
-            {
-                "pageId": "browser_test",
-                "type": "url",
-                "url": "http://127.0.0.1:8787/",
-            }
-        )
-    )
-
-    assert result["pageId"] == "browser_test"
-    assert result["browserId"] == "browser_test"
+@pytest.mark.parametrize("factory,payload", [
+    (create_navigate_page_tool, {"type": "url", "url": "https://example.test"}),
+    (create_read_page_tool, {}),
+])
+async def test_page_results_separate_browser_identity_from_internal_tabs(
+    bundle: BrowserBundle, context: SimpleNamespace, factory, payload: dict[str, object],
+) -> None:
+    browser = await bundle.create()
+    rid = browser["resource_id"]
+    perform = bundle.transport.perform
+    async def envelope(*args: object, **kwargs: object) -> dict[str, object]:
+        result = await perform(*args, **kwargs)
+        return {**result["browser"], **result}
+    bundle.transport.perform = envelope
+    result = json.loads(await factory(context).ainvoke({"pageId": rid, **payload}))
+    assert result["pageId"] == result["browserId"] == rid
     assert result["activePageId"] == "page_internal"
-    assert "page_id" not in result
-
-
-@pytest.mark.asyncio
-async def test_read_page_does_not_leak_internal_page_handle_as_browser_page_id() -> None:
-    browser_client = MagicMock()
-    browser_client.read_page = AsyncMock(
-        return_value={
-            "page_id": "page_recovered_internal",
-            "status": "running",
-            "active_page_id": "page_recovered_internal",
-            "pages": [
-                {
-                    "page_id": "page_recovered_internal",
-                    "title": "Export",
-                    "actual_url": "http://127.0.0.1:8765/parry_arena.html",
-                    "active": True,
-                }
-            ],
-        }
-    )
-
-    tool = create_read_page_tool(_context(browser_client))
-    result = json.loads(await tool.ainvoke({"pageId": "browser_test"}))
-
-    assert result["pageId"] == "browser_test"
-    assert result["browserId"] == "browser_test"
-    assert result["activePageId"] == "page_recovered_internal"
-    assert result["pages"] == [
-        {
-            "tabId": "page_recovered_internal",
-            "title": "Export",
-            "url": "http://127.0.0.1:8765/parry_arena.html",
-            "active": True,
-        }
-    ]
+    assert result["pages"][0]["tabId"] == "page_internal"
     assert "page_id" not in result
     assert "active_page_id" not in result
 
 
 @pytest.mark.asyncio
-async def test_retryable_browser_timeout_is_a_recoverable_tool_result() -> None:
-    browser_client = MagicMock()
-    browser_client.run_playwright_code = AsyncMock(
-        side_effect=BrowserManagerRequestError(
-            method="POST",
-            path="/api/browsers/browser_test/run",
-            status=408,
-            payload={
-                "code": "browser_tool_timeout",
-                "error": "Playwright 代码执行超时: 15000ms；浏览器页面已重置，可重试",
-                "retryable": True,
-                "recovery": "page_reset",
-                "timeout_ms": 15000,
-            },
-        )
-    )
-
-    tool = create_run_playwright_code_tool(_context(browser_client))
-    result = json.loads(
-        await tool.ainvoke(
-            {
-                "pageId": "browser_test",
-                "code": "await page.waitForTimeout(20000);",
-                "timeoutMs": 15000,
-            }
-        )
-    )
-
-    assert result == {
-        "status": "error",
-        "error": "Playwright 代码执行超时: 15000ms；浏览器页面已重置，可重试 (code=browser_tool_timeout, retryable=true, recovery=page_reset)",
-        "retryable": True,
-        "code": "browser_tool_timeout",
-        "recovery": "page_reset",
-        "timeoutMs": 15000,
-    }
-
-
-@pytest.mark.asyncio
-async def test_retryable_missing_browser_page_is_a_recoverable_tool_result() -> None:
-    browser_client = MagicMock()
-    browser_client.run_playwright_code = AsyncMock(
-        side_effect=BrowserManagerRequestError(
-            method="POST",
-            path="/api/browsers/page_internal/run",
-            status=404,
-            payload={
-                "code": "browser_page_not_found",
-                "error": "浏览器页面不存在: page_internal",
-                "retryable": True,
-                "recovery": "list_or_open_browser_page",
-            },
-        )
-    )
-
-    tool = create_run_playwright_code_tool(_context(browser_client))
-    result = json.loads(
-        await tool.ainvoke(
-            {"pageId": "page_internal", "code": "return await page.title();"}
-        )
-    )
-
-    assert result == {
-        "status": "error",
-        "error": "浏览器页面不存在: page_internal (code=browser_page_not_found, retryable=true, recovery=list_or_open_browser_page)",
-        "retryable": True,
-        "code": "browser_page_not_found",
-        "recovery": "list_or_open_browser_page",
-    }
-
-
-@pytest.mark.asyncio
-async def test_retryable_read_page_timeout_is_a_recoverable_tool_result() -> None:
-    browser_client = MagicMock()
-    browser_client.read_page = AsyncMock(
-        side_effect=BrowserManagerRequestError(
-            method="GET",
-            path="/api/browsers/browser_test/read",
-            status=408,
-            payload={
-                "code": "browser_tool_timeout",
-                "error": "浏览器页面读取超时: 10000ms；浏览器页面已重置，可重试",
-                "retryable": True,
-                "recovery": "page_reset",
-                "timeout_ms": 10000,
-            },
-        )
-    )
-
-    tool = create_read_page_tool(_context(browser_client))
-    result = json.loads(await tool.ainvoke({"pageId": "browser_test"}))
-
-    assert result == {
-        "status": "error",
-        "error": "浏览器页面读取超时: 10000ms；浏览器页面已重置，可重试 (code=browser_tool_timeout, retryable=true, recovery=page_reset)",
-        "retryable": True,
-        "code": "browser_tool_timeout",
-        "recovery": "page_reset",
-        "timeoutMs": 10000,
-    }
-
-
-@pytest.mark.asyncio
-async def test_transport_read_page_timeout_is_a_recoverable_tool_result() -> None:
-    browser_client = BrowserManagerClient(backend_url="http://browser.test")
-    tool = create_read_page_tool(_context(browser_client))
-
-    with patch.object(
-        browser_client,
-        "_json_request_sync",
-        side_effect=TimeoutError("timed out"),
-    ):
-        result = json.loads(await tool.ainvoke({"pageId": "browser_test"}))
-
+@pytest.mark.parametrize("factory,arguments,action", [
+    (create_run_playwright_code_tool, {"code": "return 1;"}, "run"),
+    (create_read_page_tool, {}, "read"),
+    (create_screenshot_page_tool, {}, "screenshot"),
+])
+async def test_retryable_timeout_remains_structured_and_owner_unknown_is_visible(
+    bundle: BrowserBundle, context: SimpleNamespace, factory, arguments: dict[str, object], action: str,
+) -> None:
+    browser = await bundle.create()
+    bundle.transport.failure = BrowserRequestError(method="POST", path=f"/{action}", status=408, payload={
+        "code": "browser_tool_timeout", "error": "动作超时", "retryable": True,
+        "recovery": "page_reset", "timeout_ms": 15000,
+    })
+    result = json.loads(await factory(context).ainvoke({"pageId": browser["resource_id"], **arguments}))
     assert result["status"] == "error"
-    assert result["code"] == "browser_tool_timeout"
     assert result["retryable"] is True
-    assert result["recovery"] == "page_reset"
+    assert result["timeoutMs"] == 15000
+    assert result["code"] == "browser_tool_timeout"
+    assert (await bundle.owner.get_resource(browser["resource_id"]))["reconciliation_status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_transport_timeout_uses_real_client_error_contract(bundle: BrowserBundle, context: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    browser = await bundle.create()
+    client = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
+    def timeout(*args: object) -> dict[str, object]:
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(client, "_json_request_sync", timeout)
+    monkeypatch.setattr(bundle.transport, "perform", client.perform)
+    result = json.loads(await create_read_page_tool(context).ainvoke({"pageId": browser["resource_id"]}))
+    assert result["code"] == "browser_tool_timeout"
     assert result["timeoutMs"] == 30000
-    assert "浏览器管理器操作超时" in result["error"]
+    assert result["recovery"] == "page_reset"
 
 
 @pytest.mark.asyncio
-async def test_retryable_screenshot_timeout_is_a_recoverable_tool_result() -> None:
-    browser_client = MagicMock()
-    browser_client.screenshot_page = AsyncMock(
-        side_effect=BrowserManagerRequestError(
-            method="POST",
-            path="/api/browsers/browser_test/screenshot",
-            status=408,
-            payload={
-                "code": "browser_tool_timeout",
-                "error": "浏览器截图超时: 10000ms；浏览器页面已重置，可重试",
-                "retryable": True,
-                "recovery": "page_reset",
-                "timeout_ms": 10000,
-            },
-        )
-    )
-
-    tool = create_screenshot_page_tool(_context(browser_client))
-    result = json.loads(await tool.ainvoke({"pageId": "browser_test"}))
-
-    assert result == {
-        "status": "error",
-        "error": "浏览器截图超时: 10000ms；浏览器页面已重置，可重试 (code=browser_tool_timeout, retryable=true, recovery=page_reset)",
-        "retryable": True,
-        "code": "browser_tool_timeout",
-        "recovery": "page_reset",
-        "timeoutMs": 10000,
-    }
+async def test_list_is_exact_thread_read_only_and_summary_contains_no_paths(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+    browser = await bundle.create()
+    await bundle.create(thread=CHILD)
+    result = json.loads(await create_list_browser_page_tool(context).ainvoke({}))
+    assert result["count"] == 1
+    assert result["pages"][0]["pageId"] == browser["resource_id"]
+    assert "workspace_root" not in json.dumps(result)
+    assert "checkpoint" not in json.dumps(result)
+    assert "attach_url" not in json.dumps(result)
+    assert bundle.transport.calls == []
 
 
 @pytest.mark.asyncio
-async def test_list_browser_page_is_read_only_and_returns_safe_summary() -> None:
-    browser_client = MagicMock()
-    browser_client.list_browsers_from_state.return_value = [
-        {
-            "browser_id": "browser_running",
-            "session_id": "ses_user_browser",
-            "status": "running",
-            "resource_state": "frozen",
-            "client_count": 1,
-            "title": "Bilibili",
-            "url": "https://www.bilibili.com/",
-            "actual_url": "https://www.bilibili.com/video/BV1",
-            "active_page_id": "page_video",
-            "agent_access_locked": True,
-            "updated_at": "2026-07-26T17:21:15.004Z",
-            "attach_url": "http://127.0.0.1/private",
-            "checkpoint": {"path": "/private/checkpoint.json"},
-            "pages": [
-                {
-                    "page_id": "page_video",
-                    "title": "Video",
-                    "url": "https://www.bilibili.com/",
-                    "actual_url": "https://www.bilibili.com/video/BV1",
-                    "active": True,
-                }
-            ],
-        },
-        {
-            "browser_id": "browser_deleted",
-            "session_id": "ses_user_browser",
-            "status": "deleted",
-            "pages": [],
-        },
-    ]
-
-    tool = create_list_browser_page_tool(_context(browser_client))
-    result = json.loads(await tool.ainvoke({}))
-
-    assert result == {
-        "count": 1,
-        "pages": [
-            {
-                "pageId": "browser_running",
-                "browserId": "browser_running",
-                "title": "Bilibili",
-                "url": "https://www.bilibili.com/video/BV1",
-                "status": "running",
-                "resourceState": "frozen",
-                "clientCount": 1,
-                "activePageId": "page_video",
-                "pages": [
-                    {
-                        "tabId": "page_video",
-                        "title": "Video",
-                        "url": "https://www.bilibili.com/video/BV1",
-                        "active": True,
-                    }
-                ],
-                "agentAccessLocked": True,
-                "updatedAt": "2026-07-26T17:21:15.004Z",
-            }
-        ],
-    }
-    browser_client.list_browsers_from_state.assert_called_once_with(
-        "ses_user_browser"
-    )
-    browser_client.create_browser.assert_not_called()
-    browser_client.navigate_page.assert_not_called()
-    browser_client.read_page.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_open_browser_page_reuses_user_created_running_browser() -> None:
-    browser_client = MagicMock()
-    browser_client.list_browsers_from_state.return_value = [
-        {
-            "browser_id": "browser_user_created",
-            "session_id": "ses_user_browser",
-            "status": "running",
-            "url": "about:blank",
-            "title": "用户浏览器",
-        }
-    ]
-    browser_client.create_browser = AsyncMock()
-    browser_client.navigate_page = AsyncMock(
-        return_value={
-            "browser_id": "browser_user_created",
-            "url": "https://example.com",
-            "title": "Example",
-        }
-    )
-    browser_client.read_page = AsyncMock(return_value={"summary": "Example"})
-
-    tool = create_open_browser_page_tool(_context(browser_client))
-    result = json.loads(
-        await tool.ainvoke({"url": "https://example.com", "forceNew": False})
-    )
-
-    assert result["pageId"] == "browser_user_created"
+async def test_open_reuses_only_current_thread_and_explicit_workspace_promotes(bundle: BrowserBundle, context: SimpleNamespace) -> None:
+    browser = await bundle.create()
+    await bundle.create(thread=CHILD)
+    result = json.loads(await create_open_browser_page_tool(context).ainvoke({
+        "url": "https://example.test", "retention_scope": "workspace",
+    }))
+    assert result["pageId"] == browser["resource_id"]
     assert result["reused"] is True
-    browser_client.create_browser.assert_not_awaited()
-    browser_client.navigate_page.assert_awaited_once_with(
-        browser_id="browser_user_created",
-        navigation_type="url",
-        url="https://example.com",
-    )
+    assert result["retention_scope"] == "workspace"
+    assert bundle.transport.creates == 2
+    assert [call[1] for call in bundle.transport.calls] == ["navigate", "read"]
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_missing_runtime_binding_before_any_side_effect(bundle: BrowserBundle) -> None:
+    context = SimpleNamespace(session_id=SESSION_A, browser_resource_owner=bundle.owner,
+                              invocation_context=ToolInvocationContext())
+    with pytest.raises(RuntimeError, match="真实 ThreadRuntimeBinding"):
+        await create_open_browser_page_tool(context).ainvoke({"url": "about:blank"})
+    assert bundle.transport.creates == 0

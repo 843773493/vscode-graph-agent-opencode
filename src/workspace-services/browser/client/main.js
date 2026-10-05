@@ -19,6 +19,10 @@ const params = new URLSearchParams(window.location.search);
 const browserId = params.get("browserId");
 const workspaceId = params.get("workspaceId");
 const gatewayMode = Boolean(workspaceId);
+const nativeWorkspaceId = window.BOXTEAM_WORKSPACE_ID;
+const ownerApiBase = gatewayMode ? window.location.origin : window.BOXTEAM_WORKSPACE_BACKEND_URL;
+let ownerResource = null;
+let grantLoading = false;
 const participantStorageKey = `boxteam-browser-participant:${workspaceId || "local"}:${browserId || "unknown"}`;
 let participantId = window.sessionStorage.getItem(participantStorageKey);
 if (!participantId) {
@@ -281,8 +285,19 @@ async function copyBrowserLogs() {
 
 async function initializeGatewayAuth() {
   if (!gatewayMode) {
+    if (typeof nativeWorkspaceId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(nativeWorkspaceId)) {
+      throw new Error("浏览器前端缺少受控工作区 UUID");
+    }
+    if (typeof ownerApiBase !== "string" || !ownerApiBase || !window.BOXTEAM_WORKSPACE_API_TOKEN) {
+      throw new Error("独立浏览器必须显式配置工作区 owner API 地址与凭据，或从 Gateway 打开浏览器");
+    }
+    backendRequestHeaders = {
+      "X-BoxTeam-Workspace-Id": nativeWorkspaceId,
+      "X-Local-Token": window.BOXTEAM_WORKSPACE_API_TOKEN,
+    };
     return;
   }
+  backendRequestHeaders["X-BoxTeam-Workspace-Id"] = workspaceId;
   const response = await fetch(`${window.location.origin}/api/gateway/auth/local-credential`);
   if (!response.ok) {
     throw new Error(`获取 Gateway 本地凭据失败: ${response.status}`);
@@ -319,7 +334,7 @@ function setAttachButtonMode(mode) {
 
 function updateControls() {
   const hasBrowserId = Boolean(browserId);
-  const running = currentStatus === "running";
+  const running = currentStatus === "running" && ownerResource?.reconciliation_status === "verified";
   const addressAvailable = hasBrowserId
     && !deleted
     && !["closed", "failed", "lost", "deleted", "invalid"].includes(currentStatus);
@@ -959,35 +974,59 @@ function acknowledgeFrame(message, { decodeMs = 0, drawMs = 0 } = {}) {
   });
 }
 
-async function loadSnapshot() {
-  if (!browserId) {
-    currentStatus = "invalid";
-    browserIdElement.textContent = "URL 缺少 browserId";
-    overlay.hidden = false;
-    overlay.textContent = "链接缺少 browserId 参数";
-    setStatus("URL 缺少 browserId 参数", true);
-    updateControls();
-    return null;
-  }
-  const response = await fetch(
-    `${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}?missing_as_deleted=1`,
-    { cache: "no-store", headers: backendRequestHeaders },
-  );
-  if (response.status === 404) {
-    markDeleted("浏览器页面已删除或不存在");
-    return null;
-  }
-  if (!response.ok) {
-    throw new Error(`读取浏览器状态失败: ${response.status}`);
-  }
+async function ownerRequest(suffix = "", body = undefined) {
+  const response = await fetch(`${ownerApiBase}/api/v1/resources/${encodeURIComponent(browserId)}${suffix}`, {
+    method: body === undefined ? "GET" : "POST", cache: "no-store",
+    headers: { ...backendRequestHeaders, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   const payload = await response.json();
-  const snapshot = payload.data;
-  if (snapshot.status === "deleted") {
-    markDeleted("浏览器页面已删除", snapshot);
-    return snapshot;
+  if (!response.ok) throw new Error(`Browser owner 请求失败 ${response.status}: ${JSON.stringify(payload.detail ?? payload.error ?? payload)}`);
+  if (!payload.data) throw new Error("Browser owner 响应缺少完整 data");
+  return payload.data;
+}
+
+function acceptOwnerResource(resource) {
+  if (resource.resource_id !== browserId || resource.kind !== "browser"
+    || !resource.source_thread || !Number.isInteger(resource.owner_revision)) {
+    throw new Error("Browser owner 完整投影格式错误");
   }
-  applyState(snapshot);
+  ownerResource = resource;
+  const snapshot = { ...resource.metadata, ...resource, browser_id: resource.resource_id };
+  if (resource.status === "deleted") markDeleted("浏览器页面已删除", snapshot);
+  else applyState(snapshot);
   return snapshot;
+}
+
+function transportThread() {
+  const sessionId = params.get("sessionId");
+  const threadId = params.get("threadId");
+  if (Boolean(sessionId) !== Boolean(threadId)) throw new Error("Browser 传输 Thread 参数不完整");
+  if (ownerResource.retention_scope === "thread" && !threadId) {
+    throw new Error("临时浏览器连接缺少明确的 Thread；请从关联资源入口打开");
+  }
+  return sessionId ? { session_id: sessionId, thread_id: threadId } : undefined;
+}
+
+async function refreshAfterFailure(error) {
+  let message = error instanceof Error ? error.message : String(error);
+  try { await loadSnapshot(); }
+  catch (refreshError) { message += `；刷新失败: ${refreshError.message}`; }
+  setStatus(message, true);
+}
+
+async function ownerCommand(action) {
+  try {
+    await loadSnapshot();
+    acceptOwnerResource(await ownerRequest(`/${action}`, { expected_revision: ownerResource.owner_revision }));
+  } catch (error) {
+    await refreshAfterFailure(error);
+  }
+}
+
+async function loadSnapshot() {
+  if (!browserId) throw new Error("URL 缺少 browserId 参数");
+  return acceptOwnerResource(await ownerRequest());
 }
 
 async function syncBrowserState() {
@@ -998,7 +1037,7 @@ async function syncBrowserState() {
   if (!snapshot) {
     return;
   }
-  if (snapshot.status !== "running" && attached) {
+  if ((snapshot.status !== "running" || snapshot.reconciliation_status !== "verified") && attached) {
     attached = false;
     socket?.close();
     socket = null;
@@ -1011,9 +1050,6 @@ function startStatusPolling() {
     return;
   }
   statusPollTimer = window.setInterval(() => {
-    if (attached && socket?.readyState === WebSocket.OPEN) {
-      return;
-    }
     void syncBrowserState().catch((error) => {
       setStatus(error instanceof Error ? error.message : String(error), true);
     });
@@ -1151,7 +1187,7 @@ async function renderLatestFrame() {
   }
 }
 
-function attach() {
+async function attach() {
   if (!browserId) {
     setStatus("URL 缺少 browserId 参数", true);
     return;
@@ -1165,19 +1201,37 @@ function attach() {
     setStatus("正在连接浏览器...");
     return;
   }
-  socket = new WebSocket(
-    backendWsUrl(backendBaseUrl, gatewayMode ? gatewayToken : null),
-  );
+  if (grantLoading) return;
+  grantLoading = true;
+  let grant;
+  try {
+    await loadSnapshot();
+    grant = await ownerRequest("/transport-grant", {
+      expected_revision: ownerResource.owner_revision, thread: transportThread(),
+    });
+    acceptOwnerResource(grant.resource);
+  } catch (error) {
+    await refreshAfterFailure(error);
+    setAttachButtonMode("detached");
+    return;
+  } finally { grantLoading = false; }
+  if (manualDetach) return;
+  const transportUrl = new URL(backendWsUrl(backendBaseUrl, gatewayMode ? gatewayToken : null));
+  if (!gatewayMode) transportUrl.searchParams.set("workspace_id", nativeWorkspaceId);
+  const currentSocket = new WebSocket(transportUrl);
+  socket = currentSocket;
   socket.binaryType = "arraybuffer";
   setAttachButtonMode("attaching");
   setStatus("正在连接浏览器...");
 
-  socket.addEventListener("open", () => {
+  currentSocket.addEventListener("open", () => {
+    if (socket !== currentSocket) return;
     reconnectAttempt = 0;
-    send({ type: "attach", browserId, participantId });
+    send({ type: "attach", browserId, participantId, grantToken: grant.grant_token });
   });
 
-  socket.addEventListener("message", (event) => {
+  currentSocket.addEventListener("message", (event) => {
+    if (socket !== currentSocket) return;
     if (event.data instanceof ArrayBuffer) {
       const view = new DataView(event.data);
       if (view.byteLength < 4) {
@@ -1286,7 +1340,9 @@ function attach() {
     throw new Error(`未知服务端消息类型: ${message.type}`);
   });
 
-  socket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", () => {
+    if (socket !== currentSocket) return;
+    socket = null;
     attached = false;
     setAttachButtonMode("detached");
     if (!deleted && currentStatus === "running") {
@@ -1298,7 +1354,8 @@ function attach() {
     updateControls();
   });
 
-  socket.addEventListener("error", () => {
+  currentSocket.addEventListener("error", () => {
+    if (socket !== currentSocket) return;
     setStatus("WebSocket 连接失败", true);
   });
 }
@@ -1412,8 +1469,7 @@ handleBrowserShortcut = createBrowserShortcuts({
 
 bindBrowserToolbarEvents({
   browserId,
-  backendBaseUrl,
-  requestHeaders: backendRequestHeaders,
+  ownerCommand,
   attachToggle,
   refreshStateButton,
   backButton,
@@ -1430,8 +1486,6 @@ bindBrowserToolbarEvents({
   command,
   navigate,
   updateControls,
-  applyState,
-  markDeleted,
   setStatus,
 });
 
@@ -1750,27 +1804,19 @@ async function requestAgentLock(locked, { silent = false } = {}) {
   }
   agentLockToggle.disabled = true;
   try {
-    const response = await fetch(
-      `${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}/agent-lock`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...backendRequestHeaders },
-        body: JSON.stringify({ locked, owner_id: participantId }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`更新 AI 操作锁失败: ${response.status}`);
-    }
-    const payload = await response.json();
-    applyState(payload.data);
+    await loadSnapshot();
+    const result = await ownerRequest("/browser-operation", {
+      expected_revision: ownerResource.owner_revision, thread: transportThread(),
+      action: "agent-lock", payload: { locked, owner_id: participantId },
+    });
+    acceptOwnerResource(result.browser);
     if (!silent) {
       setStatus(locked
         ? "已锁定 AI 操作；用户仍可正常操作浏览器"
         : "已允许 AI 操作；用户和 AI 均可操作浏览器");
     }
   } catch (error) {
-    await syncBrowserState();
-    setStatus(error instanceof Error ? error.message : String(error), true);
+    await refreshAfterFailure(error);
   } finally {
     updateControls();
   }

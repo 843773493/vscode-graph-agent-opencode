@@ -40,7 +40,7 @@ def registry(tmp_path) -> GatewayWorkspaceRegistry:
 
 
 @pytest.mark.asyncio
-async def test_auxiliary_proxy_rejects_path_folded_out_of_service_prefix(
+async def test_auxiliary_proxy_rejects_direct_resource_management_before_forwarding(
     registry: GatewayWorkspaceRegistry,
 ) -> None:
     """远端辅助服务带路径前缀时，%2e%2e 折叠越出前缀必须响亮失败而不是转发。"""
@@ -81,9 +81,9 @@ async def test_auxiliary_proxy_rejects_path_folded_out_of_service_prefix(
     finally:
         await client.aclose()
 
-    assert captured.value.status_code == 400
+    assert captured.value.status_code == 403
     detail = str(captured.value.detail)
-    assert "越出上游命名空间" in detail or "点段" in detail
+    assert "/api/v1/resources" in detail
     assert calls == []
     assert registry.route_reference_counts("gw_aux") == (0, 0)
 
@@ -169,7 +169,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
         {
             "type": "http",
             "method": "GET",
-            "path": "/api/gateway/workspaces/gw_bad/terminal-manager/terminal",
+            "path": "/api/gateway/workspaces/gw_bad/terminal-manager/health",
             "query_string": b"",
             "headers": [],
             "app": application,
@@ -182,7 +182,7 @@ async def test_auxiliary_http_releases_reference_when_registry_raises_runtime(
         await proxy_auxiliary_http(
             workspace_id="gw_bad",
             service_path="terminal-manager",
-            path="terminal",
+            path="health",
             request=request,
             auth=GatewayAuthContext(kind="local"),
         )

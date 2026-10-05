@@ -12,6 +12,7 @@ export const protobufPackage = "boxteam.browser.v1";
 export interface BrowserAttach {
   browser_id: string;
   participant_id?: string | undefined;
+  grant_token: string;
 }
 
 export interface BrowserDetach {
@@ -64,7 +65,7 @@ export interface BrowserClientMessage {
 }
 
 function createBaseBrowserAttach(): BrowserAttach {
-  return { browser_id: "", participant_id: undefined };
+  return { browser_id: "", participant_id: undefined, grant_token: "" };
 }
 
 export const BrowserAttach: MessageFns<BrowserAttach> = {
@@ -72,6 +73,7 @@ export const BrowserAttach: MessageFns<BrowserAttach> = {
     return {
       browser_id: isSet(object.browser_id) ? globalThis.String(object.browser_id) : "",
       participant_id: isSet(object.participant_id) ? globalThis.String(object.participant_id) : undefined,
+      grant_token: isSet(object.grant_token) ? globalThis.String(object.grant_token) : "",
     };
   },
 
@@ -83,6 +85,9 @@ export const BrowserAttach: MessageFns<BrowserAttach> = {
     if (message.participant_id !== undefined) {
       obj.participant_id = message.participant_id;
     }
+    if (message.grant_token !== "") {
+      obj.grant_token = message.grant_token;
+    }
     return obj;
   },
 
@@ -93,6 +98,7 @@ export const BrowserAttach: MessageFns<BrowserAttach> = {
     const message = createBaseBrowserAttach();
     message.browser_id = object.browser_id ?? "";
     message.participant_id = object.participant_id ?? undefined;
+    message.grant_token = object.grant_token ?? "";
     return message;
   },
 };

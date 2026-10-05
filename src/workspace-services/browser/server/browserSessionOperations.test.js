@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { BrowserSession } from "./browserSession.js";
+import { BrowserRuntimePool } from "./resources/browserRuntimePool.js";
 
 function session() {
   return new BrowserSession({
     manager: {
-      attachUrl: (id) => `http://browser.test/?browserId=${id}`,
       persist: async () => undefined,
       stateStore: { deleteCheckpoint: async () => undefined },
     },
     record: {
       browser_id: "browser_operation_test",
-      session_id: "session_operation_test",
+      workspace_id: "00000000-0000-4000-8000-000000000001",
+      transport_owner_revision: 1,
+      reconciliation_status: "verified",
       status: "running",
     },
   });
@@ -47,7 +49,242 @@ function liveSession() {
   return { browser, cdpCalls, getNavigationCount: () => navigationCount };
 }
 
+function transitionSession(onCommand = () => undefined) {
+  const browser = session();
+  const commands = [];
+  const persisted = [];
+  const states = new Map();
+  browser.record.resource_state = "background";
+  browser.browser = {};
+  browser.context = { storageState: async () => ({ cookies: [], origins: [] }) };
+  browser.manager.persist = async () => { persisted.push(browser.snapshot()); };
+  browser.manager.runCheckpointCapture = async (callback) => await callback();
+  browser.manager.stateStore.writeCheckpoint = async () => ({ size_bytes: 1 });
+  browser.manager.runtimePool = { releaseContext: async () => undefined };
+  browser.resourceSnapshot = async () => ({ resource_hard_protection_reasons: [], resource_soft_protection_reasons: [] });
+  browser.inspectPageEntryProtectionReasons = async () => [];
+  for (const pageId of ["page_first", "page_second"]) {
+    const state = { lifecycle: "active", disabled: false };
+    states.set(pageId, state);
+    const page = {
+      isClosed: () => false, title: async () => pageId, url: () => "about:blank",
+      evaluate: async () => ({ scroll_x: 0, scroll_y: 0, controls: [], session_storage: { available: false } }),
+    };
+    const cdpSession = { send: async (method, params) => {
+      commands.push([pageId, method, params]);
+      onCommand(pageId, method, params);
+      if (method === "Page.setWebLifecycleState") state.lifecycle = params.state;
+      if (method === "Emulation.setScriptExecutionDisabled") state.disabled = params.value;
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: pageId } } };
+      if (method === "CSS.createStyleSheet") return { styleSheetId: `style_${pageId}` };
+    } };
+    browser.pageEntries.set(pageId, { pageId, page, cdpSession, webSockets: new Set() });
+  }
+  const active = browser.pageEntries.get("page_first");
+  browser.activePageId = active.pageId;
+  browser.page = active.page;
+  browser.cdpSession = active.cdpSession;
+  return { browser, commands, persisted, states };
+}
+
 describe("浏览器统一操作队列", () => {
+  test.each([false, true])("冻结中途失败只有已核实恢复才能保留 verified: rollback_failed=%s", async (rollbackFailed) => {
+    const { browser, persisted, states } = transitionSession((pageId, method, params) => {
+      if (pageId === "page_second" && method === "Emulation.setScriptExecutionDisabled" && params.value) {
+        throw new Error("第二页冻结失败");
+      }
+      if (rollbackFailed && pageId === "page_first" && method === "Page.setWebLifecycleState" && params.state === "active") {
+        throw new Error("第一页恢复失败");
+      }
+    });
+    await expect(browser.freeze()).rejects.toThrow("第二页冻结失败");
+    expect(states.get("page_second")).toEqual({ lifecycle: "active", disabled: false });
+    expect(persisted.at(-1).reconciliation_status).toBe(rollbackFailed ? "unknown" : "verified");
+    expect(persisted.at(-1).resource_state).toBe(rollbackFailed ? "freezing" : "background");
+    if (!rollbackFailed) {
+      expect(states.get("page_first")).toEqual({ lifecycle: "active", disabled: false });
+      return;
+    }
+    expect(persisted.at(-1).resource_transition_error).toContain("第一页恢复失败");
+    let calls = 0;
+    await expect(browser.enqueueOperation({ actor: "agent", action: "read" }, () => { calls += 1; }))
+      .rejects.toMatchObject({ code: "browser_resource_unknown" });
+    const client = {};
+    browser.transports.set(client, { revision: 1 });
+    expect(() => browser.assertTransport(client)).toThrow("尚未核实");
+    expect(calls).toBe(0);
+    expect(browser.pendingOperations).toBe(0);
+    expect(browser.inFlightOperations).toBe(0);
+    browser.transports.clear();
+    await expect(browser.close()).resolves.toMatchObject({ status: "closed", reconciliation_status: "verified" });
+  });
+
+  test("多页 wake 中途失败不会把已恢复页伪装为 frozen，未知事实阻止后续 callback", async () => {
+    let waking = false;
+    const { browser, persisted, states } = transitionSession((pageId, method, params) => {
+      if (waking && pageId === "page_second" && method === "Page.setWebLifecycleState" && params.state === "active") {
+        throw new Error("第二页唤醒失败");
+      }
+    });
+    await browser.freeze();
+    waking = true;
+    await expect(browser.wake()).rejects.toThrow("第二页唤醒失败");
+    expect(states.get("page_first")).toEqual({ lifecycle: "active", disabled: false });
+    expect(states.get("page_second").lifecycle).toBe("frozen");
+    expect(persisted.at(-1)).toMatchObject({ resource_state: "restoring", reconciliation_status: "unknown" });
+    let calls = 0;
+    await expect(browser.runInteractiveOperation({ actor: "user", action: "click" }, () => { calls += 1; }))
+      .rejects.toMatchObject({ code: "browser_resource_unknown" });
+    await expect(browser.wake()).rejects.toMatchObject({ code: "browser_resource_unknown" });
+    expect(calls).toBe(0);
+    expect(browser.pendingOperations).toBe(0);
+  });
+
+  test("冻结前的明确保护拒绝保持 verified 且没有页面副作用", async () => {
+    const { browser, commands, persisted } = transitionSession();
+    browser.resourceSnapshot = async () => ({ resource_hard_protection_reasons: ["pending_dialog"], resource_soft_protection_reasons: [] });
+    await expect(browser.freeze()).rejects.toMatchObject({ code: "browser_resource_protected" });
+    expect(commands).toEqual([]);
+    expect(persisted.at(-1)).toMatchObject({ resource_state: "background", reconciliation_status: "verified" });
+  });
+
+  test.each([false, true])("冷回收恢复失败只有运行时释放已核实才能保留 discarded: release_failed=%s", async (releaseFailed) => {
+    const browser = session();
+    const persisted = [];
+    let releases = 0;
+    browser.record.resource_state = "discarded";
+    browser.manager.persist = async () => { persisted.push(browser.snapshot()); };
+    browser.manager.stateStore.readCheckpoint = async () => ({
+      version: 1, browser_id: browser.id, pages: [{ page_id: "page_restore" }], storage_state: {},
+    });
+    browser.manager.runtimePool = {
+      acquireContext: async () => ({ browser: {}, context: { newPage: async () => { throw new Error("新页恢复失败"); } } }),
+      releaseContext: async () => {
+        releases += 1;
+        if (releaseFailed) throw new Error("运行时释放失败");
+      },
+    };
+    await expect(browser.wake()).rejects.toThrow("新页恢复失败");
+    expect(releases).toBe(1);
+    expect(persisted.at(-1)).toMatchObject({
+      resource_state: releaseFailed ? "restoring" : "discarded",
+      reconciliation_status: releaseFailed ? "unknown" : "verified",
+    });
+    if (releaseFailed) expect(persisted.at(-1).resource_transition_error).toContain("运行时释放失败");
+  });
+
+  test.each(["close", "delete", "discard"])("%s 的 context 释放失败保留同一真实句柄和 unknown，显式关闭重试才核终态", async (action) => {
+    const { browser, persisted } = transitionSession();
+    const context = browser.context;
+    let failed = true;
+    let closes = 0;
+    context.close = async () => {
+      closes += 1;
+      if (failed) throw new Error("context 关闭失败");
+    };
+    const pool = new BrowserRuntimePool();
+    pool.contexts.add(context);
+    browser.manager.runtimePool = pool;
+    if (action === "discard") {
+      await browser.freeze();
+      browser.manager.stateStore.readCheckpoint = async () => ({ pages: [
+        { page_id: "page_first", title: "First", url: "about:blank" },
+      ] });
+    }
+    const release = action === "discard" ? browser.discard() : browser.close({ status: action === "delete" ? "deleted" : "closed" });
+    await expect(release).rejects.toThrow("context 关闭失败");
+    expect(browser.context).toBe(context);
+    expect(pool.contexts.has(context)).toBe(true);
+    expect(persisted.at(-1)).toMatchObject({ status: "running", reconciliation_status: "unknown" });
+    if (action === "discard") expect(persisted.at(-1).resource_state).toBe("discarding");
+    let calls = 0;
+    await expect(browser.enqueueOperation({ actor: "agent", action: "run" }, () => { calls += 1; }))
+      .rejects.toThrow();
+    expect(calls).toBe(0);
+    failed = false;
+    await expect(browser.close({ status: "deleted" }))
+      .resolves.toMatchObject({ status: "deleted", reconciliation_status: "verified" });
+    expect(closes).toBe(2);
+    expect(browser.context).toBeNull();
+    expect(pool.contexts.size).toBe(0);
+    pool.cancelIdleShutdown();
+  });
+
+  test.each(["queued", "interactive"])("prepare await 期间撤销 %s 操作不泄漏计数，也不执行 callback", async (mode) => {
+    const browser = session();
+    let release;
+    let prepared;
+    const preparation = new Promise((resolve) => { prepared = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    browser.wake = async () => { prepared(); await barrier; };
+    let calls = 0;
+    const method = mode === "queued" ? "enqueueOperation" : "runInteractiveOperation";
+    const result = browser[method]({ actor: "agent", action: "read", revision: 1 }, async () => { calls += 1; })
+      .catch((error) => error);
+    await preparation;
+    expect(browser.pendingOperations).toBe(1);
+    browser.syncOwnerRevision(2);
+    release();
+    expect(await result).toMatchObject({ code: "browser_transport_revoked" });
+    await browser.operationQueue.drain();
+    expect(calls).toBe(0);
+    expect(browser.pendingOperations).toBe(0);
+    expect(browser.inFlightOperations).toBe(0);
+    expect(browser.operationQueue.executions.size).toBe(0);
+  });
+
+  test("撤销等待已开始的动作结束，队列中旧版本动作不执行", async () => {
+    const browser = session();
+    let release;
+    let started;
+    const entered = new Promise((resolve) => { started = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const first = browser.enqueueOperation({ actor: "agent", action: "run", revision: 1 }, async () => {
+      started();
+      await barrier;
+      return { value: "旧回执" };
+    }).catch((error) => error);
+    await entered;
+    let queuedCalls = 0;
+    const second = browser.enqueueOperation({ actor: "agent", action: "read", revision: 1 }, async () => { queuedCalls += 1; })
+      .catch((error) => error);
+    browser.syncOwnerRevision(2);
+    let drained = false;
+    const drain = browser.operationQueue.drain().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    release();
+    await drain;
+    expect(await first).toMatchObject({ code: "browser_transport_revoked" });
+    expect(await second).toMatchObject({ code: "browser_transport_revoked" });
+    expect(queuedCalls).toBe(0);
+    expect(browser.pendingOperations).toBe(0);
+    expect(browser.inFlightOperations).toBe(0);
+  });
+
+  test("attach wake await 期间撤销不加入客户端，旧传输明确拒绝", async () => {
+    const browser = session();
+    let release;
+    let waking;
+    const entered = new Promise((resolve) => { waking = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const closed = [];
+    const client = { close: (...arguments_) => closed.push(arguments_) };
+    browser.transports.set(client, { revision: 1 });
+    browser.wake = async () => { waking(); await barrier; };
+    const attach = browser.attachClient(client).catch((error) => error);
+    await entered;
+    expect(browser.pendingAttachRequests).toBe(1);
+    browser.syncOwnerRevision(2);
+    release();
+    expect(await attach).toMatchObject({ code: "browser_transport_revoked" });
+    expect(browser.pendingAttachRequests).toBe(0);
+    expect(browser.clients.size).toBe(0);
+    expect(browser.transportAuthorized(client)).toBe(false);
+    expect(() => browser.assertTransport(client)).toThrow("授权已过期");
+    expect(closed).toEqual([[4009, "browser owner changed"]]);
+  });
+
   test("同一新标签页并发注册只生成一个稳定 pageId", async () => {
     const browser = session();
     let cdpSessionCount = 0;

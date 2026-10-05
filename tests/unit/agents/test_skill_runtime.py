@@ -74,7 +74,7 @@ def _custom_tool_context(tmp_path) -> CustomToolFactoryContext:
         session_orchestrator=MagicMock(),
         config_service=MagicMock(),
         terminal_resource_owner=MagicMock(),
-        browser_manager_client=MagicMock(),
+        browser_resource_owner=MagicMock(),
         invocation_context=ToolInvocationContext(),
     )
 

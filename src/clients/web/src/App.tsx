@@ -1,5 +1,6 @@
 import { useWorkspaceTerminalResources } from "./hooks/workspace/useWorkspaceTerminalResources";
-import { getWorkspaceResource } from "./api/workspaceResources";
+import { controlWorkspaceResource, getWorkspaceResource } from "./api/workspaceResources";
+import { getSessionMainThread } from "./api/session/sessions";
 import WorkbenchStatusBar from "./components/WorkbenchStatusBar";
 import PendingQueueBar from "./components/chat/PendingQueueBar";
 import Composer from "./components/composer/Composer";
@@ -966,6 +967,15 @@ export default function AppShell() {
                           onSelect={extensionResources.select}
                           onRefresh={() => void extensionResources.refresh()}
                           onControl={extensionResources.control}
+                          currentSession={activeSession && activeSessionWorkspaceId ? { workspaceId: activeSessionWorkspaceId, sessionId: activeSession.session_id } : null}
+                          onOwnerControl={async (entry, action, thread) => {
+                            if (action === "attach" && !thread) {
+                              if (!activeSession || activeSessionWorkspaceId !== entry.workspace_id) throw new Error("请选择同工作区的目标会话");
+                              const main = await getSessionMainThread(resolvedApiPort, activeSession.session_id, entry.workspace_id);
+                              thread = { session_id: main.session_id, thread_id: main.thread_id };
+                            }
+                            await extensionResources.ownerControl(entry, action, thread);
+                          }}
                           onOpen={openExtensionResource}
                           onCreateReplacement={createExtensionReplacement}
                         />
@@ -986,11 +996,12 @@ export default function AppShell() {
                               }
                             }}
                             onControl={controlSessionResource}
-                            onTerminalControl={async (resourceId, action, thread) => {
-                              if (!activeSession || !activeSessionWorkspaceId) throw new Error("终端管理需要当前会话和工作区");
+                            onOwnerControl={async (resourceId, action, thread) => {
+                              if (!activeSession || !activeSessionWorkspaceId) throw new Error("资源管理需要当前会话和工作区");
                               try {
                                 const ownerResource = await getWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, resourceId);
-                                await workspaceTerminals.control(ownerResource, action, thread);
+                                await controlWorkspaceResource(resolvedApiPort, activeSessionWorkspaceId, ownerResource, action, thread);
+                                if (ownerResource.kind === "terminal") await workspaceTerminals.refresh();
                               } finally {
                                 await refreshSessionResources(activeSession.session_id);
                               }

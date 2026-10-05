@@ -3,6 +3,7 @@ import path from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { validateWorkspaceId } from "../server/browserManager.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8016;
@@ -142,6 +143,9 @@ async function main() {
     process.env.BOXTEAM_BROWSER_BACKEND_URL ||
     DEFAULT_BACKEND_URL;
   const workspaceRoot = resolveWorkspaceRoot(args);
+  const workspaceId = validateWorkspaceId(args.get("workspace-id") ?? process.env.BOXTEAM_WORKSPACE_ID);
+  const identity = JSON.parse(await readFile(path.join(workspaceRoot, ".boxteam", "workspace-identity.json"), "utf8"));
+  if (identity.workspace_id !== workspaceId) throw new Error("Browser 前端工作区 UUID 与权威身份不一致");
   const assetRoot = resolveAssetRoot(args);
 
   const server = http.createServer(async (request, response) => {
@@ -151,7 +155,7 @@ async function main() {
         send(
           response,
           200,
-          JSON.stringify({ ok: true, backend_url: backendUrl, workspace_root: workspaceRoot, asset_root: assetRoot }),
+          JSON.stringify({ ok: true, backend_url: backendUrl, workspace_id: workspaceId }),
           "application/json; charset=utf-8",
         );
         return;
@@ -162,7 +166,7 @@ async function main() {
         send(
           response,
           200,
-          `window.BOXTEAM_BROWSER_BACKEND_URL = ${JSON.stringify(browserBackendUrl)};\n`,
+          `window.BOXTEAM_BROWSER_BACKEND_URL = ${JSON.stringify(browserBackendUrl)};\nwindow.BOXTEAM_WORKSPACE_ID = ${JSON.stringify(workspaceId)};\nwindow.BOXTEAM_WORKSPACE_BACKEND_URL = ${JSON.stringify(args.get("workspace-backend-url") ?? process.env.BOXTEAM_WORKSPACE_BACKEND_URL ?? null)};\nwindow.BOXTEAM_WORKSPACE_API_TOKEN = ${JSON.stringify(process.env.BOXTEAM_WORKSPACE_API_TOKEN ?? null)};\n`,
           "application/javascript; charset=utf-8",
         );
         return;

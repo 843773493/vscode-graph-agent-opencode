@@ -7,9 +7,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_terminal_resource_owner, verify_local_token
+from app.api.deps import (
+    get_browser_resource_owner,
+    get_terminal_resource_owner,
+    verify_local_token,
+)
 from app.api.resources import router
 from app.core.trace_middleware import TraceMiddleware
+from tests.support.browser_owner import BrowserBundle, build_browser_bundle
 from tests.support.terminal_owner import (
     SESSION_A,
     THREAD_A,
@@ -24,15 +29,23 @@ def bundle(tmp_path: Path) -> Bundle:
 
 
 @pytest.fixture
-def client(bundle: Bundle) -> Iterator[TestClient]:
+def client(bundle: Bundle, browser_bundle: BrowserBundle) -> Iterator[TestClient]:
     app = FastAPI()
     app.add_middleware(TraceMiddleware)
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_terminal_resource_owner] = lambda: bundle.owner
+    app.dependency_overrides[get_browser_resource_owner] = lambda: browser_bundle.owner
     app.dependency_overrides[verify_local_token] = lambda: "authenticated-test"
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def browser_bundle(tmp_path: Path) -> BrowserBundle:
+    root = tmp_path / "browser-owner"
+    root.mkdir()
+    return build_browser_bundle(root)
 
 
 def _create(client: TestClient, *, scope: str = "thread") -> dict[str, object]:

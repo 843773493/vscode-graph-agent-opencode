@@ -29,6 +29,21 @@ export async function createWorkspaceTerminal(
   ));
 }
 
+export async function createWorkspaceBrowser(
+  port: number, workspaceId: string, sessionId: string,
+  retentionScope: "thread" | "workspace" = "thread", threadId?: string,
+): Promise<WorkspaceResourceDTO> {
+  return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceDTO>>(
+    port, "/api/v1/resources/browsers", {
+      method: "POST", headers: workspaceHeader(workspaceId),
+      body: JSON.stringify({
+        session_id: sessionId, thread_id: threadId, retention_scope: retentionScope,
+        title: "用户浏览器", url: "about:blank", viewport: { width: 1280, height: 800 },
+      }),
+    },
+  ));
+}
+
 export async function controlWorkspaceResource(
   port: number, workspaceId: string, resource: WorkspaceResourceDTO,
   action: ResourceAction, thread?: ResourceThreadRef,

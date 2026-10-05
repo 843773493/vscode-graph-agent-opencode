@@ -6,9 +6,8 @@ import os
 import shutil
 import subprocess
 import time
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -16,7 +15,10 @@ from urllib.request import Request, urlopen
 import httpx
 import pytest
 import websockets
+from fastapi import FastAPI
 
+from app.abstractions.browser_resources import BrowserRequestError
+from app.agents.custom_tools import CustomToolFactoryContext
 from app.agents.tools.browser import (
     create_click_element_tool,
     create_drag_element_tool,
@@ -30,9 +32,12 @@ from app.agents.tools.browser import (
     create_screenshot_page_tool,
     create_type_in_page_tool,
 )
-from app.services.infrastructure.browser_manager_client import (
-    BrowserManagerClient,
-    BrowserManagerRequestError,
+from app.core.trace_middleware import TraceMiddleware
+from app.core.workspace_identity import load_or_create_workspace_id
+from app.main import workspace_api
+from app.services.business.workspace_resources.records import ThreadRef
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    start_terminal_backend,
 )
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
@@ -42,6 +47,10 @@ from tests.support.processes import (
     wait_for_http_ok,
 )
 from tests.support.trace import get_trace_payload
+from tests.support.workspace_tool_runtime import (
+    WorkspaceToolRuntime,
+    workspace_tool_runtime,
+)
 from tests.support.workspaces import prepare_test_workspace
 
 CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
@@ -52,13 +61,6 @@ CUSTOM_TOOL_WORKSPACE_TEMPLATE_ITEMS = (
 
 def _browser_ports(integration_backend_port: int) -> tuple[int, int]:
     return integration_backend_port + 60, integration_backend_port + 61
-
-
-def _tool_context(session_id: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        session_id=session_id,
-        browser_manager_client=BrowserManagerClient(),
-    )
 
 
 def _json_tool_result(raw: object) -> dict[str, object]:
@@ -185,6 +187,7 @@ def browser_manager_env(
         "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{backend_port}",
         "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
         "BOXTEAM_BROWSER_WORKSPACE_ROOT": workspace_root,
+        "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{backend_port + 2}",
     }
     previous = {key: os.environ.get(key) for key in updates}
     os.environ.update(updates)
@@ -216,6 +219,7 @@ def browser_manager_processes(
     env = os.environ.copy()
     env["WORKSPACE_ROOT"] = workspace_root
     env["BOXTEAM_BROWSER_WORKSPACE_ROOT"] = workspace_root
+    env["BOXTEAM_WORKSPACE_ID"] = load_or_create_workspace_id(Path(workspace_root))
 
     backend_process = subprocess.Popen(
         [
@@ -258,7 +262,9 @@ def browser_manager_processes(
         text=True,
     )
 
+    terminal_process = None
     try:
+        terminal_process = start_terminal_backend(backend_port=backend_port + 2, workspace_root=workspace_root)
         wait_for_http_ok(f"http://127.0.0.1:{backend_port}/health", backend_process)
         wait_for_http_ok(f"http://127.0.0.1:{frontend_port}/health", frontend_process)
         yield backend_port, frontend_port
@@ -267,22 +273,90 @@ def browser_manager_processes(
         terminate_process(backend_process)
         kill_process_on_port(frontend_port)
         kill_process_on_port(backend_port)
+        if terminal_process is not None:
+            terminate_process(terminal_process)
+        kill_process_on_port(backend_port + 2)
+
+
+@pytest.fixture
+def browser_application() -> FastAPI:
+    application = FastAPI()
+    application.add_middleware(TraceMiddleware)
+    application.include_router(workspace_api, prefix="/api/v1")
+    return application
+
+
+@pytest.fixture
+async def browser_runtime(
+    browser_manager_processes: tuple[int, int],
+    integration_workspace_root_path: str,
+    browser_application: FastAPI,
+) -> AsyncIterator[WorkspaceToolRuntime]:
+    del browser_manager_processes
+    async with workspace_tool_runtime(Path(integration_workspace_root_path), application=browser_application) as runtime:
+        yield runtime
+
+
+@pytest.fixture
+def browser_context(browser_runtime: WorkspaceToolRuntime) -> CustomToolFactoryContext:
+    container, session_id, invocation = browser_runtime
+    return CustomToolFactoryContext(
+        session_id=session_id, agent_id="default", sender_agent_id="default",
+        workspace_root=container.workspace_root,
+        background_task_registry=container.background_task_registry,
+        background_message_bus=container.background_message_bus, job_event_bus=container.job_event_bus,
+        job_service=container.job_service, session_context_query_service=container.session_context_query_service,
+        workspace_session_context_client=container.agent_execution_service._dependency_provider.get_workspace_session_context_client(),
+        session_orchestrator=container.session_orchestrator, config_service=container.config_service,
+        terminal_resource_owner=container.terminal_resource_owner,
+        browser_resource_owner=container.browser_resource_owner, invocation_context=invocation,
+    )
+
+
+@pytest.fixture
+async def integration_client(
+    browser_runtime: WorkspaceToolRuntime, browser_application: FastAPI,
+) -> AsyncIterator[httpx.AsyncClient]:
+    container, _session, _context = browser_runtime
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=browser_application), base_url="http://workspace.test",
+        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": container.workspace_id},
+    ) as client:
+        yield client
+
+
+async def _grant(client: httpx.AsyncClient, resource_id: str, context: CustomToolFactoryContext) -> dict[str, object]:
+    detail = await client.get(f"/api/v1/resources/{resource_id}")
+    assert detail.status_code == 200, detail.text
+    resource = detail.json()["data"]
+    granted = await client.post(f"/api/v1/resources/{resource_id}/transport-grant", json={
+        "expected_revision": resource["owner_revision"],
+        "thread": {"session_id": context.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
+    })
+    assert granted.status_code == 200, granted.text
+    return granted.json()["data"]
+
+
+async def _detach_delete(client: httpx.AsyncClient, resource_id: str, context: CustomToolFactoryContext) -> httpx.Response:
+    detail = (await client.get(f"/api/v1/resources/{resource_id}")).json()["data"]
+    detached = await client.post(f"/api/v1/resources/{resource_id}/detach", json={
+        "expected_revision": detail["owner_revision"],
+        "thread": {"session_id": context.session_id, "thread_id": context.invocation_context.thread_binding.thread_id},
+    })
+    assert detached.status_code == 200, detached.text
+    return await client.post(f"/api/v1/resources/{resource_id}/delete", json={"expected_revision": detached.json()["data"]["owner_revision"]})
 
 
 @pytest.mark.asyncio
 async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
     integration_workspace_root_path: str,
 ):
     backend_port, frontend_port = browser_manager_processes
-    create_session_response = await integration_client.post(
-        "/api/v1/sessions",
-        json={"title": "Browser Custom Tools E2E"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-    context = _tool_context(session_id)
+    session_id = browser_context.session_id
+    context = browser_context
 
     list_pages = create_list_browser_page_tool(context)
     open_page = create_open_browser_page_tool(context)
@@ -448,7 +522,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     # 截图的对外可寻址改由浏览器管理器只读端点承载（裁定修正 2）。
     shot_status, shot_body = await asyncio.to_thread(
         _read_http,
-        f"http://127.0.0.1:{backend_port}{screenshot_url}",
+        f"http://127.0.0.1:{backend_port}{screenshot_url}?workspace_id={browser_context.browser_resource_owner.workspace_id}",
     )
     assert shot_status == 200
     assert shot_body[:8] == b"\x89PNG\r\n\x1a\n"
@@ -458,7 +532,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     missing_shot_status, missing_shot_body = await asyncio.to_thread(
         _read_http_error_status_and_body,
         f"http://127.0.0.1:{backend_port}"
-        f"/api/browsers/{page_id}/screenshots/screenshot_doesnotexist",
+        f"/api/browsers/{page_id}/screenshots/screenshot_doesnotexist?workspace_id={browser_context.browser_resource_owner.workspace_id}",
     )
     assert missing_shot_status == 404
     missing_shot_payload = json.loads(missing_shot_body)
@@ -469,7 +543,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     missing_browser_status, missing_browser_body = await asyncio.to_thread(
         _read_http_error_status_and_body,
         f"http://127.0.0.1:{backend_port}"
-        "/api/browsers/browser_doesnotexist/screenshots/screenshot_x",
+        f"/api/browsers/browser_doesnotexist/screenshots/screenshot_x?workspace_id={browser_context.browser_resource_owner.workspace_id}",
     )
     assert missing_browser_status == 404
     missing_browser_payload = json.loads(missing_browser_body)
@@ -511,7 +585,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     )
     assert browser_resource["status"] == "running"
     assert "cancel" in browser_resource["available_actions"]
-    assert "delete" in browser_resource["available_actions"]
+    assert "delete" not in browser_resource["available_actions"]
     assert "attach_url" not in browser_resource["metadata"]
 
     frontend_status, html_body = await asyncio.to_thread(
@@ -522,8 +596,10 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     assert frontend_status == 200
     assert "可附加浏览器" in html
 
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser") as websocket:
-        await websocket.send(json.dumps({"type": "attach", "browserId": page_id}))
+    grant = await _grant(integration_client, page_id, browser_context)
+    workspace_id = grant["resource"]["workspace_id"]
+    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": page_id, "grantToken": grant["grant_token"]}))
         attached = await _recv_ws_type(websocket, "attached")
         assert attached["browserId"] == page_id
         await websocket.send(json.dumps({"type": "detach"}))
@@ -547,10 +623,7 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
     ]:
         assert tool_name in skill_text
 
-    delete_response = await integration_client.post(
-        f"/api/v1/sessions/{session_id}/resources/browser/{page_id}/control",
-        json={"action": "delete"},
-    )
+    delete_response = await _detach_delete(integration_client, page_id, browser_context)
     assert delete_response.status_code == 200
     assert delete_response.json()["data"]["status"] == "deleted"
 
@@ -568,14 +641,10 @@ async def test_browser_custom_tools_are_invokable_and_exposed_as_resource(
 async def test_agent_lists_current_browser_website_through_documented_tool(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
 ):
-    create_session_response = await integration_client.post(
-        "/api/v1/sessions",
-        json={"title": "Browser Website Discovery E2E"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-    context = _tool_context(session_id)
+    session_id = browser_context.session_id
+    context = browser_context
     open_page = create_open_browser_page_tool(context)
     opened = _json_tool_result(
         await open_page.ainvoke(
@@ -648,14 +717,9 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
 async def test_playwright_timeout_recovery_allows_immediate_page_actions(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
 ):
-    create_session_response = await integration_client.post(
-        "/api/v1/sessions",
-        json={"title": "Browser Timeout Recovery E2E"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-    context = _tool_context(session_id)
+    context = browser_context
     open_page = create_open_browser_page_tool(context)
     run_playwright_code = create_run_playwright_code_tool(context)
     read_page = create_read_page_tool(context)
@@ -704,14 +768,9 @@ async def test_playwright_timeout_recovery_allows_immediate_page_actions(
 async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
 ):
-    create_session_response = await integration_client.post(
-        "/api/v1/sessions",
-        json={"title": "Browser New Page Minimal Actions E2E"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-    context = _tool_context(session_id)
+    context = browser_context
     open_page = create_open_browser_page_tool(context)
     navigate_page = create_navigate_page_tool(context)
     run_playwright_code = create_run_playwright_code_tool(context)
@@ -761,7 +820,7 @@ async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
     )
     assert screenshot["mime_type"] == "image/png"
 
-    with pytest.raises(BrowserManagerRequestError) as selector_info:
+    with pytest.raises(BrowserRequestError) as selector_info:
         await run_playwright_code.ainvoke(
             {
                 "pageId": page_id,
@@ -796,15 +855,11 @@ async def test_new_browser_page_allows_minimal_actions_without_explicit_timeout(
 async def test_browser_open_failure_is_exposed_as_failed_resource(
     browser_manager_processes: tuple[int, int],
     integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
 ):
-    browser_backend_port, _browser_frontend_port = browser_manager_processes
-    create_session_response = await integration_client.post(
-        "/api/v1/sessions",
-        json={"title": "Browser Open Failure E2E"},
-    )
-    assert create_session_response.status_code == 200
-    session_id = create_session_response.json()["data"]["session_id"]
-    open_page = create_open_browser_page_tool(_tool_context(session_id))
+    del browser_manager_processes
+    session_id = browser_context.session_id
+    open_page = create_open_browser_page_tool(browser_context)
 
     with pytest.raises(RuntimeError) as exc_info:
         await open_page.ainvoke(
@@ -820,46 +875,88 @@ async def test_browser_open_failure_is_exposed_as_failed_resource(
     resources = resources_response.json()["data"]["items"]
     failed_browser = next(resource for resource in resources if resource["kind"] == "browser")
     assert failed_browser["status"] == "failed"
-    assert failed_browser["available_actions"] == ["delete"]
+    assert failed_browser["available_actions"] == []
     assert "page.goto" in failed_browser["metadata"]["error_message"]
 
-    delete_request = Request(
-        f"http://127.0.0.1:{browser_backend_port}/api/browsers/"
-        f"{failed_browser['resource_id']}",
-        method="DELETE",
-    )
-    delete_status, delete_body = await asyncio.to_thread(_read_http, delete_request)
-    assert delete_status == 200
-    deleted = json.loads(delete_body)["data"]
-    assert deleted["deleted"] is True
-    assert deleted["browser"]["status"] == "deleted"
+    deleted = await _detach_delete(integration_client, failed_browser["resource_id"], browser_context)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["data"]["status"] == "deleted"
 
 
 @pytest.mark.asyncio
 async def test_browser_delete_while_attached_keeps_manager_alive(
     browser_manager_processes: tuple[int, int],
+    integration_client: httpx.AsyncClient,
+    browser_context: CustomToolFactoryContext,
 ):
     backend_port, _frontend_port = browser_manager_processes
-    context = _tool_context("delete_attached_browser")
+    context = browser_context
     open_page = create_open_browser_page_tool(context)
     opened = _json_tool_result(
         await open_page.ainvoke({"url": _browser_test_data_url(), "forceNew": True})
     )
     page_id = str(opened["pageId"])
 
-    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser") as websocket:
-        await websocket.send(json.dumps({"type": "attach", "browserId": page_id}))
+    grant = await _grant(integration_client, page_id, browser_context)
+    workspace_id = grant["resource"]["workspace_id"]
+    async with websockets.connect(f"ws://127.0.0.1:{backend_port}/browser?workspace_id={workspace_id}") as websocket:
+        await websocket.send(json.dumps({"type": "attach", "browserId": page_id, "grantToken": grant["grant_token"]}))
         attached = await _recv_ws_type(websocket, "attached")
         assert attached["browserId"] == page_id
-        delete_request = Request(
-            f"http://127.0.0.1:{backend_port}/api/browsers/{page_id}",
-            method="DELETE",
-        )
-        delete_status, _ = await asyncio.to_thread(_read_http, delete_request)
-        assert delete_status == 200
+        deleted = await _detach_delete(integration_client, page_id, browser_context)
+        assert deleted.status_code == 200, deleted.text
 
     health_status, _ = await asyncio.to_thread(
         _read_http,
         f"http://127.0.0.1:{backend_port}/health",
     )
     assert health_status == 200
+
+
+@pytest.mark.asyncio
+async def test_real_node_agent_lock_rejection_preserves_owner_and_never_executes_callback(
+    browser_context: CustomToolFactoryContext,
+) -> None:
+    opened = _json_tool_result(await create_open_browser_page_tool(browser_context).ainvoke({
+        "url": _browser_test_data_url(), "forceNew": True,
+    }))
+    resource_id = opened["pageId"]
+    owner = browser_context.browser_resource_owner
+    resource = await owner.get_resource(resource_id)
+    thread = ThreadRef(browser_context.session_id, browser_context.invocation_context.thread_binding.thread_id)
+    arguments = {
+        "expected_revision": resource["owner_revision"], "thread": thread,
+        "holder_id": "request:lock-real", "operation_id": "lock-real",
+    }
+    with pytest.raises(BrowserRequestError) as invalid:
+        await owner.perform(resource_id, action="agent-lock", payload={"locked": True, "owner_id": "user-real"}, **arguments)
+    assert invalid.value.payload["operation_outcome"] == "failed"
+    unchanged = await owner.get_resource(resource_id)
+    assert unchanged["reconciliation_status"] == "verified"
+    assert unchanged["agent_access_locked"] is False
+    assert owner._leases.leases_for_resource(resource_id) == []
+    await owner.perform(resource_id, action="agent-lock", payload={"locked": True, "owner_id": "user_real_lock_owner"}, **arguments)
+    run = create_run_playwright_code_tool(browser_context)
+    with pytest.raises(BrowserRequestError) as rejected:
+        await run.ainvoke({
+            "pageId": resource_id,
+            "code": "return await page.evaluate(() => window.rejectedCallbackCount = (window.rejectedCallbackCount || 0) + 1);",
+        })
+    assert rejected.value.status == 423
+    assert rejected.value.payload["operation_outcome"] == "failed"
+    assert (await owner.get_resource(resource_id))["reconciliation_status"] == "verified"
+    assert owner._leases.leases_for_resource(resource_id) == []
+    await owner.perform(resource_id, action="agent-lock", payload={"locked": False, "owner_id": "user_real_lock_owner"}, **arguments)
+    executed = _json_tool_result(await run.ainvoke({
+        "pageId": resource_id,
+        "code": "return await page.evaluate(() => window.rejectedCallbackCount = (window.rejectedCallbackCount || 0) + 1);",
+    }))
+    assert executed["result"] == 1
+    promoted = await owner.command(
+        resource_id, action="promote", expected_revision=resource["owner_revision"],
+        holder_id="request:promote-real", operation_id="promote-real",
+    )
+    assert promoted["retention_scope"] == "workspace"
+    assert promoted["reconciliation_status"] == "verified"
+    await owner.command(resource_id, action="stop", expected_revision=promoted["owner_revision"],
+                        holder_id="request:stop-real", operation_id="stop-real")

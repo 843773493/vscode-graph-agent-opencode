@@ -6,7 +6,7 @@ import type {
 } from "../../../types/backend";
 import { formatDateTime } from "../../../utils/format";
 import type { ResourceThreadRef } from "../../../api/workspaceResources";
-import { terminalThreadAssociations } from "../../../state/display/terminalResourceDisplay";
+import { resourceThreadAssociations } from "../../../state/display/workspaceResourceDisplay";
 import {
   actionLabel,
   metadataRows,
@@ -29,13 +29,14 @@ export default function ResourceTreeRow({
   selected,
   busy,
   onControl,
-  onTerminalControl,
+  onOwnerControl,
   onCopy,
   onOpenTerminal,
   onOpenTerminalExtension,
   onOpenBrowser,
   onReplaceBrowser,
   extensionWindow = false,
+  canAttachCurrent = false,
 }: {
   resource: SessionResource;
   selected: boolean;
@@ -45,18 +46,19 @@ export default function ResourceTreeRow({
     resourceId: string,
     action: SessionResourceAction,
   ) => void;
-  onTerminalControl?: (resourceId: string, action: "promote" | "detach", thread?: ResourceThreadRef) => void;
+  onOwnerControl?: (resourceId: string, action: "promote" | "detach" | "attach", thread?: ResourceThreadRef) => void;
   onCopy: (resourceId: string) => void;
   onOpenTerminal: (resourceId: string) => void;
   onOpenTerminalExtension?: (resourceId: string) => void;
   onOpenBrowser: (resourceId: string) => void;
   onReplaceBrowser: () => void;
   extensionWindow?: boolean;
+  canAttachCurrent?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = metadataRows(resource);
-  const canOpen = resource.status === "running" &&
-    (resource.kind === "browser" || (resource.kind === "terminal" && resource.metadata.reconciliation_status === "verified"));
+  const canOpen = resource.status === "running" && resource.metadata.reconciliation_status === "verified"
+    && (resource.metadata.retention_scope === "workspace" || resourceThreadAssociations(resource).length > 0);
   const title = resourceTreeTitle(resource);
   const description = resourceTreeDescription(resource);
 
@@ -183,13 +185,16 @@ export default function ResourceTreeRow({
               </button>
             ) : null}
           </div>
-          {resource.kind === "terminal" ? <div className="resource-tree-lifecycle">
+          {["terminal", "browser"].includes(resource.kind) ? <div className="resource-tree-lifecycle">
             <span>{resource.metadata.retention_scope === "workspace" ? "保留到工作区" : "随来源线程释放"}</span>
-            {resource.metadata.retention_scope === "thread" && onTerminalControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onTerminalControl(resource.resource_id, "promote")}>保留到工作区</button> : null}
-            {terminalThreadAssociations(resource).filter((ref) => ref.session_id === resource.session_id).map((ref) => <span key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
+            {resource.metadata.retention_scope === "thread" && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "promote")}>保留到工作区</button> : null}
+            {resourceThreadAssociations(resource).filter((ref) => extensionWindow || ref.session_id === resource.session_id).map((ref) => <span key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
               线程 {ref.thread_id.slice(-8)}
-              {onTerminalControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onTerminalControl(resource.resource_id, "detach", ref)}>解除关联</button> : null}
+              {onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "detach", ref)}>解除关联</button> : null}
             </span>)}
+            {canAttachCurrent && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "attach")}>关联当前会话</button> : null}
+            {typeof resource.metadata.reclaim_at === "string" ? <span>无关联，将于 {formatDateTime(resource.metadata.reclaim_at)} 回收</span> : null}
+            {resource.metadata.error ? <span role="alert">{String(resource.metadata.error)}</span> : null}
           </div> : null}
           {rows.length > 0 ? (
             <details className="resource-details">

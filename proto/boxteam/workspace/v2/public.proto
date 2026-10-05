@@ -1325,12 +1325,30 @@ message WorkspaceResourceCommandRequest {
   optional ResourceThreadRef thread = 2;
 }
 
-message TerminalTransportGrantDTO {
+message ResourceTransportGrantDTO {
   string resource_id = 1;
   uint64 owner_revision = 2;
   string grant_token = 3;
   string expires_at = 4;
   WorkspaceResourceDTO resource = 5;
+}
+
+message BrowserResourceCreateRequest {
+  string session_id = 1;
+  optional string thread_id = 2;
+  string retention_scope = 3;
+  string title = 4;
+  string url = 5;
+  google.protobuf.Struct viewport = 6;
+  optional string device_profile = 7;
+  optional string device_orientation = 8;
+}
+
+message BrowserResourceOperationRequest {
+  uint64 expected_revision = 1;
+  optional ResourceThreadRef thread = 2;
+  string action = 3;
+  google.protobuf.Struct payload = 4;
 }
 
 message SessionStatusChangedExecutionEventDTO {

@@ -47,11 +47,6 @@ export declare type BrowserPage = Message<"boxteam.browser.v1.BrowserPage"> & {
   pageId: string;
 
   /**
-   * @generated from field: string session_id = 3;
-   */
-  sessionId: string;
-
-  /**
    * @generated from field: string title = 4;
    */
   title: string;
@@ -90,6 +85,21 @@ export declare type BrowserPage = Message<"boxteam.browser.v1.BrowserPage"> & {
    * @generated from field: google.protobuf.Timestamp updated_at = 11;
    */
   updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string workspace_id = 12;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: uint64 transport_owner_revision = 13;
+   */
+  transportOwnerRevision: bigint;
+
+  /**
+   * @generated from field: string reconciliation_status = 14;
+   */
+  reconciliationStatus: string;
 };
 
 /**

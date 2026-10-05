@@ -193,7 +193,7 @@ describe("Gateway 用户访问控制请求", () => {
 });
 
 describe("手动创建会话连接", () => {
-  test("终端请求工作区 owner，浏览器复用 manager，并绑定当前会话", async () => {
+  test("终端和浏览器都请求工作区 owner，并绑定当前会话", async () => {
     const requests: Array<{ url: string; body: Record<string, unknown>; workspaceId: string | null }> = [];
     globalThis.fetch = Object.assign(
       async (...args: Parameters<typeof fetch>) => {
@@ -213,7 +213,7 @@ describe("手动创建会话连接", () => {
         });
         return url.includes("/api/v1/resources/terminals")
           ? Response.json({ data: { resource_id: "term_manual" }, request_id: "req_manual_terminal" })
-          : Response.json({ data: { browser_id: "browser_manual" } });
+          : Response.json({ data: { resource_id: "browser_manual" }, request_id: "req_manual_browser" });
       },
       { preconnect: originalFetch.preconnect },
     );
@@ -240,12 +240,14 @@ describe("手动创建会话连接", () => {
     expect(requests[0].workspaceId).toBe("gw_manual");
     expect(requests[0].body).toMatchObject({ session_id: "ses_manual", retention_scope: "thread" });
     expect(requests[1].url).toContain(
-      "/api/gateway/workspaces/gw_manual/browser-manager/api/browsers",
+      "/api/v1/resources/browsers",
     );
     expect(requests[1].body).toMatchObject({
       session_id: "ses_manual",
+      retention_scope: "thread",
       url: "about:blank",
     });
+    expect(requests[1].workspaceId).toBe("gw_manual");
   });
 });
 

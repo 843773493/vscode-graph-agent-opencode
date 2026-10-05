@@ -67,7 +67,7 @@ async function fetchThroughRoute(route) {
   await route.fulfill({ response });
 }
 
-await context.route("**/browser-manager/api/browsers/*", async (route) => {
+await context.route("**/api/v1/resources/*", async (route) => {
   const request = route.request();
   if (!delayedInitialSnapshot && request.method() === "GET") {
     delayedInitialSnapshot = true;
@@ -116,7 +116,7 @@ try {
 
   const createResponsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST"
-      && response.url().includes("/browser-manager/api/browsers"),
+      && response.url().includes("/api/v1/resources/browsers"),
     { timeout: 30_000 },
   );
   const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
@@ -124,8 +124,8 @@ try {
   const createResponse = await createResponsePromise;
   assertCondition(createResponse.ok(), `新建浏览器请求失败: ${createResponse.status()}`);
   const createPayload = await createResponse.json();
-  const browserId = createPayload?.data?.browser_id;
-  assertCondition(typeof browserId === "string" && browserId, "新建浏览器响应缺少 browser_id");
+  const browserId = createPayload?.data?.resource_id;
+  assertCondition(typeof browserId === "string" && browserId, "新建浏览器响应缺少 resource_id");
   result.browser_id = browserId;
 
   // 产品链路：新建浏览器后由 openExtensionWindow 打开扩展窗口，

@@ -73,6 +73,7 @@ HOP_BY_HOP_HEADERS = frozenset(
 # federation 对端都不能替当前 Gateway 伪造目标工作区的幂等身份。
 GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
     {
+        "x-boxteam-resource-owner",
         "host",
         "x-request-id",
         "x-local-token",

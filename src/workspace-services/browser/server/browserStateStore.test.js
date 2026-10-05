@@ -19,7 +19,7 @@ async function testStore(limits) {
   );
   await mkdir(workspaceRoot, { recursive: true });
   return {
-    store: new BrowserStateStore({ workspaceRoot, checkpointLimits: limits }),
+    store: new BrowserStateStore({ workspaceRoot, workspaceId: "00000000-0000-4000-8000-000000000001", checkpointLimits: limits }),
     cleanup: () => rm(workspaceRoot, { recursive: true, force: true }),
   };
 }

@@ -72,8 +72,8 @@ export class BrowserRuntimePool {
 
   async releaseContext(context) {
     if (!context || !this.contexts.has(context)) return;
-    this.contexts.delete(context);
     await context.close();
+    this.contexts.delete(context);
     if (this.contexts.size === 0) this.scheduleIdleShutdown();
   }
 

@@ -21,7 +21,6 @@ from app.abstractions.session_context import (
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
-    BrowserManagerClientProtocol,
 )
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
@@ -29,6 +28,7 @@ from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 if TYPE_CHECKING:
+    from app.services.business.browser_resources.owner import BrowserResourceOwner
     from app.services.business.terminal_resources.owner import TerminalResourceOwner
     from app.services.infrastructure.node_debug.service import NodeDebugService
 
@@ -48,7 +48,7 @@ class CustomToolFactoryContext:
     session_orchestrator: SessionOrchestratorProtocol
     config_service: CustomToolConfigProtocol
     terminal_resource_owner: TerminalResourceOwner
-    browser_manager_client: BrowserManagerClientProtocol
+    browser_resource_owner: BrowserResourceOwner
     invocation_context: ToolInvocationContext
     session_target_resolver: SessionTargetResolverProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
@@ -146,7 +146,7 @@ def build_custom_tool_bundle(
     session_orchestrator: SessionOrchestratorProtocol,
     config_service: CustomToolConfigProtocol,
     terminal_resource_owner: TerminalResourceOwner,
-    browser_manager_client: BrowserManagerClientProtocol,
+    browser_resource_owner: BrowserResourceOwner,
     invocation_context: ToolInvocationContext,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     node_debug_service: NodeDebugService | None = None,
@@ -165,7 +165,7 @@ def build_custom_tool_bundle(
         session_orchestrator=session_orchestrator,
         config_service=config_service,
         terminal_resource_owner=terminal_resource_owner,
-        browser_manager_client=browser_manager_client,
+        browser_resource_owner=browser_resource_owner,
         invocation_context=invocation_context,
         session_target_resolver=session_target_resolver,
         node_debug_service=node_debug_service,

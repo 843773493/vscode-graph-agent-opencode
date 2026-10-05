@@ -8,7 +8,7 @@ from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.gateway import GatewayConnectionKind
-from app.schemas.internal_v2.session_resource import SessionResourceDTO
+from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]
 WorkspaceNavigationPlacementMode = Literal["before", "after", "last"]
@@ -103,7 +103,7 @@ class GatewayResourceDTO(BaseModel):
     connection_kind: GatewayConnectionKind
     session_id: str
     session_title: str
-    resource: SessionResourceDTO
+    resource: WorkspaceResourceDTO
 
 
 class GatewayResourceListDTO(BaseModel):

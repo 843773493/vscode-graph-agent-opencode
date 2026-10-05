@@ -8,9 +8,6 @@ import pytest
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.domain.itemized.enums import PayloadKind
 from app.services.business.message_service import MessageService
-from app.services.business.session_resource_actions import (
-    browser_available_actions,
-)
 from app.services.business.session_resource_providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
@@ -30,7 +27,7 @@ from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from tests.support.message_service import build_message_service
 
 
-def _terminal_snapshot(record: dict[str, object]) -> dict[str, object]:
+def _owner_snapshot(record: dict[str, object]) -> dict[str, object]:
     ref = {"session_id": record["session_id"], "thread_id": "thr_018f0000000070008000000000000001"}
     return {
         "retention_scope": "thread", "source_thread": ref, "thread_associations": [ref],
@@ -41,7 +38,7 @@ def _terminal_snapshot(record: dict[str, object]) -> dict[str, object]:
 
 class FakeTerminalResourceOwner:
     def __init__(self, terminals: list[dict[str, object]] | None = None) -> None:
-        self.terminals = [_terminal_snapshot(record) for record in terminals or []]
+        self.terminals = [_owner_snapshot(record) for record in terminals or []]
         self.deleted_terminal_ids: list[str] = []
         self.killed_terminal_ids: list[str] = []
         self.listed_session_ids: list[str | None] = []
@@ -82,59 +79,33 @@ class FakeTerminalResourceOwner:
         return len(self.terminals)
 
 
-class FakeBrowserManagerClient:
+class FakeBrowserResourceOwner:
     def __init__(self, browsers: list[dict[str, object]] | None = None) -> None:
-        self.browsers = browsers or []
+        self.browsers = [_owner_snapshot(browser) for browser in (browsers or [])]
         self.deleted_browser_ids: list[str] = []
         self.woken_browser_ids: list[str] = []
 
-    def attach_url(self, browser_id: str) -> str:
-        return f"http://127.0.0.1:8016/?browserId={browser_id}"
+    async def list_resources(self, *, session_id: str) -> list[dict[str, object]]:
+        return [browser for browser in self.browsers if browser["status"] != "deleted"
+                and any(ref["session_id"] == session_id for ref in browser["thread_associations"])]
 
-    def list_browsers_from_state(self, session_id: str) -> list[dict[str, object]]:
-        return [
-            browser
-            for browser in self.browsers
-            if browser.get("session_id") == session_id
-        ]
+    async def get_resource(self, resource_id: str) -> dict[str, object]:
+        return next(browser for browser in self.browsers if browser["browser_id"] == resource_id)
 
-    async def close_browser(self, browser_id: str) -> dict[str, object]:
-        return {
-            "browser_id": browser_id,
-            "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
-            "status": "closed",
-            "created_at": "2026-07-05T01:02:03+00:00",
-            "updated_at": "2026-07-05T01:02:04+00:00",
-        }
+    async def command(self, resource_id: str, *, action: str, **arguments: object) -> dict[str, object]:
+        assert action == "stop"
+        return {**await self.get_resource(resource_id), "status": "closed"}
 
-    async def delete_browser(self, browser_id: str) -> dict[str, object]:
-        self.deleted_browser_ids.append(browser_id)
-        return {
-            "deleted": True,
-            "browser_id": browser_id,
-            "browser": {
-                "browser_id": browser_id,
-                "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
-                "status": "deleted",
-                "created_at": "2026-07-05T01:02:03+00:00",
-                "updated_at": "2026-07-05T01:02:04+00:00",
-            },
-        }
+    async def perform(self, resource_id: str, *, action: str, **arguments: object) -> dict[str, object]:
+        assert action == "wake"
+        self.woken_browser_ids.append(resource_id)
+        return {"browser": {**await self.get_resource(resource_id), "status": "running",
+                "resource_state": "active", "title": "Restored page", "url": "https://example.com/restored"}}
 
-    async def wake_browser(self, browser_id: str) -> dict[str, object]:
-        self.woken_browser_ids.append(browser_id)
-        return {
-            "browser_id": browser_id,
-            "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
-            "status": "running",
-            "resource_state": "active",
-            "created_at": "2026-07-05T01:02:03+00:00",
-            "updated_at": "2026-07-05T01:02:05+00:00",
-            "title": "Restored page",
-            "url": "https://example.com/restored",
-        }
-
-
+    async def cleanup_session(self, session_id: str) -> int:
+        resources = await self.list_resources(session_id=session_id)
+        self.deleted_browser_ids.extend(browser["browser_id"] for browser in resources)
+        return len(resources)
 
 
 class FakeMessageService:
@@ -170,7 +141,7 @@ def _provider_registry(
     *,
     task_registry: BackgroundTaskRegistry,
     terminal_manager: FakeTerminalResourceOwner,
-    browser_manager: FakeBrowserManagerClient,
+    browser_owner: FakeBrowserResourceOwner,
     message_service: FakeMessageService | MessageService,
 ) -> SessionResourceProviderRegistry:
     mapper = _resource_mapper()
@@ -185,7 +156,7 @@ def _provider_registry(
                 resource_mapper=mapper,
             ),
             BrowserResourceProvider(
-                browser_manager=browser_manager,
+                browser_owner=browser_owner,
                 resource_mapper=mapper,
             ),
         ]
@@ -202,7 +173,7 @@ def test_deleted_terminal_resource_explains_historical_status():
         "ended_at": "2026-07-05T01:02:05+00:00",
     }
     resource = _resource_mapper().terminal_to_resource(
-        _terminal_snapshot(terminal),
+        _owner_snapshot(terminal),
         available_actions=[],
     )
 
@@ -223,15 +194,15 @@ def test_running_browser_resource_maps_identity_and_actions():
         "url": "https://example.com",
     }
     resource = _resource_mapper().browser_to_resource(
-        browser,
-        available_actions=browser_available_actions(str(browser["status"])),
+        _owner_snapshot(browser),
+        available_actions=["cancel"],
     )
 
     assert resource.kind == "browser"
     assert resource.status == "running"
     assert resource.metadata["page_id"] == "browser_123"
     assert "attach_url" not in resource.metadata
-    assert resource.available_actions == ["cancel", "delete"]
+    assert resource.available_actions == ["cancel"]
 
 
 def test_terminal_resource_projection_excludes_real_path():
@@ -246,7 +217,7 @@ def test_terminal_resource_projection_excludes_real_path():
         "cwd_relative": "app",
     }
     resource = _resource_mapper().terminal_to_resource(
-        _terminal_snapshot(terminal),
+        _owner_snapshot(terminal),
         available_actions=[],
     )
 
@@ -270,12 +241,8 @@ def test_browser_resource_projection_excludes_checkpoint_real_path():
         },
     }
     resource = _resource_mapper().browser_to_resource(
-        browser,
-        available_actions=browser_available_actions(
-            str(browser["status"]),
-            resource_state=str(browser["resource_state"]),
-            has_checkpoint=bool(browser.get("checkpoint")),
-        ),
+        _owner_snapshot(browser),
+        available_actions=[],
     )
 
     assert resource.metadata["checkpoint_available"] is True
@@ -284,7 +251,7 @@ def test_browser_resource_projection_excludes_checkpoint_real_path():
 
 
 @pytest.mark.asyncio
-async def test_cold_recycled_browser_exposes_resume_action():
+async def test_lost_browser_has_no_action_even_with_checkpoint():
     browser = {
         "browser_id": "browser_cold",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
@@ -295,14 +262,14 @@ async def test_cold_recycled_browser_exposes_resume_action():
         "updated_at": "2026-07-05T01:02:04+00:00",
     }
     provider = BrowserResourceProvider(
-        browser_manager=FakeBrowserManagerClient(browsers=[browser]),
+        browser_owner=FakeBrowserResourceOwner(browsers=[browser]),
         resource_mapper=_resource_mapper(),
     )
 
     resources = await provider.list_resources("ses_019b94653e71714b8d406f83ab3d2b3b")
     resource = resources[0]
 
-    assert resource.available_actions == ["resume", "delete"]
+    assert resource.available_actions == []
     assert "可以重新打开" in str(resource.metadata["status_note"])
 
 
@@ -383,7 +350,7 @@ async def test_browser_fast_listing_excludes_closed_state_records() -> None:
         "status": "closed",
     }
     provider = BrowserResourceProvider(
-        browser_manager=FakeBrowserManagerClient(
+        browser_owner=FakeBrowserResourceOwner(
             browsers=[browser, closed_browser]
         ),
         resource_mapper=_resource_mapper(),
@@ -399,15 +366,15 @@ async def test_browser_provider_resumes_cold_recycled_browser():
     browser = {
         "browser_id": "browser_cold",
         "session_id": "ses_019b94653e71714b8d406f83ab3d2b3b",
-        "status": "lost",
+        "status": "running",
         "resource_state": "discarded",
         "checkpoint": {"version": 1, "browser_id": "browser_cold"},
         "created_at": "2026-07-05T01:02:03+00:00",
         "updated_at": "2026-07-05T01:02:04+00:00",
     }
-    browser_manager = FakeBrowserManagerClient(browsers=[browser])
+    browser_owner = FakeBrowserResourceOwner(browsers=[browser])
     provider = BrowserResourceProvider(
-        browser_manager=browser_manager,
+        browser_owner=browser_owner,
         resource_mapper=_resource_mapper(),
     )
 
@@ -420,8 +387,8 @@ async def test_browser_provider_resumes_cold_recycled_browser():
 
     assert result.status == "running"
     assert result.resource is not None
-    assert result.resource.available_actions == ["cancel", "delete"]
-    assert browser_manager.woken_browser_ids == ["browser_cold"]
+    assert result.resource.available_actions == ["cancel"]
+    assert browser_owner.woken_browser_ids == ["browser_cold"]
 
 
 @pytest.mark.asyncio
@@ -435,7 +402,7 @@ async def test_browser_provider_excludes_deleted_records(
     registry = BackgroundTaskRegistry(
         history_store=BackgroundTaskHistoryStore(sessions_dir=sessions_dir)
     )
-    browser_manager = FakeBrowserManagerClient(
+    browser_owner = FakeBrowserResourceOwner(
         browsers=[
             {
                 "browser_id": "browser_deleted",
@@ -452,7 +419,7 @@ async def test_browser_provider_excludes_deleted_records(
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_manager=FakeTerminalResourceOwner(),
-            browser_manager=browser_manager,
+            browser_owner=browser_owner,
             message_service=FakeMessageService(),
         ),
     )
@@ -489,7 +456,7 @@ async def test_list_includes_closed_background_task_history(
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_manager=FakeTerminalResourceOwner(),
-            browser_manager=FakeBrowserManagerClient(),
+            browser_owner=FakeBrowserResourceOwner(),
             message_service=FakeMessageService(),
         ),
     )
@@ -529,7 +496,7 @@ async def test_list_excludes_deleted_background_task_history(
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_manager=FakeTerminalResourceOwner(),
-            browser_manager=FakeBrowserManagerClient(),
+            browser_owner=FakeBrowserResourceOwner(),
             message_service=FakeMessageService(),
         ),
     )
@@ -567,7 +534,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
             }
         ],
     )
-    browser_client = FakeBrowserManagerClient(
+    browser_client = FakeBrowserResourceOwner(
         browsers=[
             {
                 "browser_id": "browser_cleanup",
@@ -585,7 +552,7 @@ async def test_cleanup_session_cleans_jobs_background_tasks_and_terminals(
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_manager=terminal_client,
-            browser_manager=browser_client,
+            browser_owner=browser_client,
             message_service=FakeMessageService(),
         ),
     )
@@ -640,7 +607,7 @@ async def test_cancel_background_task_does_not_inject_monitor_reminder(
         provider_registry=_provider_registry(
             task_registry=registry,
             terminal_manager=FakeTerminalResourceOwner(),
-            browser_manager=FakeBrowserManagerClient(),
+            browser_owner=FakeBrowserResourceOwner(),
             message_service=message_service,
         ),
     )

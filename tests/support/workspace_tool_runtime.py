@@ -1,10 +1,12 @@
-"""用正式服务图、catalog 与真实 acceptance 装配 Terminal 工具测试。"""
+"""用正式服务图、catalog 与真实 acceptance 装配 工作区资源工具测试。"""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+from fastapi import FastAPI
 
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
@@ -26,13 +28,15 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.main import _workspace_lifespan
 from app.schemas.internal_v2.session import SessionCreateRequest
 
-TerminalToolRuntime = tuple[AppContainer, str, ToolInvocationContext]
+WorkspaceToolRuntime = tuple[AppContainer, str, ToolInvocationContext]
 
 
 @asynccontextmanager
-async def terminal_tool_runtime(
+async def workspace_tool_runtime(
     workspace_root: Path,
-) -> AsyncIterator[TerminalToolRuntime]:
+    *,
+    application: FastAPI | None = None,
+) -> AsyncIterator[WorkspaceToolRuntime]:
     workspace_id = load_or_create_workspace_id(workspace_root)
     with (
         WorkspaceContainerRegistry(
@@ -44,10 +48,12 @@ async def terminal_tool_runtime(
         catalog_provider_scope(registry),
     ):
         container = registry.get(workspace_id)
+        if application is not None:
+            application.state.workspace_container_registry = registry
         try:
             async with _workspace_lifespan(container):
                 session = await container.session_service.create(
-                    SessionCreateRequest(title="真实 Terminal 工具调用")
+                    SessionCreateRequest(title="真实 工作区资源工具调用")
                 )
                 thread_id = container.session_catalog.resolver.main_thread_id(
                     session.session_id
@@ -64,10 +70,10 @@ async def terminal_tool_runtime(
                         session.session_id,
                         thread_id=thread_id,
                         accepted_ingress_id=message_id,
-                        acceptance_idempotency_key=f"terminal-tool:{message_id}",
+                        acceptance_idempotency_key=f"workspace-tool:{message_id}",
                         job_id=create_prefixed_id("job"),
                         admission_idempotency_key=create_prefixed_id("adm"),
-                        payload="运行真实 Terminal 工具",
+                        payload="运行真实 工作区资源工具",
                         payload_kind="text",
                         turn_id=create_prefixed_id("turn"),
                         root_item_id=f"item-{message_id}",
@@ -79,7 +85,7 @@ async def terminal_tool_runtime(
                     )
                     scope = TurnExecutionScope(admission.execution_id)
                     scope_token = set_current_turn_execution_scope(scope)
-                    call_token = context.set_tool_call_id("terminal-real-tool")
+                    call_token = context.set_tool_call_id("workspace-real-tool")
                     with execution_admission_scope(
                         admission, langgraph_thread_id=thread_id
                     ):
@@ -89,9 +95,10 @@ async def terminal_tool_runtime(
                             context.reset_tool_call_id(call_token)
                             reset_current_turn_execution_scope(scope_token)
                             await scope.close()
-                            await container.terminal_resource_owner.cleanup_session(
-                                session.session_id
-                            )
+                            await container.browser_resource_owner.cleanup_session(session.session_id)
+                            await container.terminal_resource_owner.cleanup_session(session.session_id)
         finally:
+            if application is not None:
+                application.state.workspace_container_registry = None
             container.workspace_activity_service.store.close()
             container.session_catalog.close()

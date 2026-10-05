@@ -41,6 +41,7 @@ from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
@@ -179,7 +180,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         session_service: SessionService,
         checkpointer: BaseCheckpointSaver,
         terminal_resource_owner: TerminalResourceOwner,
-        browser_manager_client: BrowserManagerClient,
+        browser_resource_owner: BrowserResourceOwner,
         session_context_query_service: SessionContextQueryService,
         workspace_session_context_client: WorkspaceSessionContextClientProtocol,
         session_target_resolver: SessionTargetResolverProtocol,
@@ -189,7 +190,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._session_service = session_service
         self._checkpointer = checkpointer
         self._terminal_resource_owner = terminal_resource_owner
-        self._browser_manager_client = browser_manager_client.for_actor("agent")
+        self._browser_resource_owner = browser_resource_owner
         self._session_context_query_service = session_context_query_service
         self._workspace_session_context_client = workspace_session_context_client
         self._session_target_resolver = session_target_resolver
@@ -222,8 +223,8 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     def get_terminal_resource_owner(self) -> TerminalResourceOwner:
         return self._terminal_resource_owner
 
-    def get_browser_manager_client(self) -> BrowserManagerClient:
-        return self._browser_manager_client
+    def get_browser_resource_owner(self) -> BrowserResourceOwner:
+        return self._browser_resource_owner
 
     def get_session_context_query_service(self) -> SessionContextQueryService:
         return self._session_context_query_service
@@ -324,6 +325,7 @@ class AppContainer:
     session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
     terminal_resource_owner: TerminalResourceOwner
+    browser_resource_owner: BrowserResourceOwner
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
@@ -545,7 +547,7 @@ def _build_app_container(
         config_service=config_service,
         workspace_id=workspace_id,
     )
-    browser_manager_client = BrowserManagerClient(config_service=config_service)
+    browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service)
     workspace_session_context_transport = GatewaySessionContextClient(
         config_service=config_service,
         local_token_supplier=get_gateway_local_token,
@@ -632,12 +634,18 @@ def _build_app_container(
         transport=terminal_manager_client, leases=external_resource_leases,
         thread_release_fence=thread_residency_tracker.is_unloading_generation,
     )
+    browser_resource_owner = BrowserResourceOwner(
+        workspace_root=resolved_workspace_root, workspace_id=workspace_id,
+        sessions=session_service, threads=session_path_resolver,
+        transport=browser_manager_client, leases=external_resource_leases,
+        thread_release_fence=thread_residency_tracker.is_unloading_generation,
+    )
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
         checkpointer=checkpointer,
         terminal_resource_owner=terminal_resource_owner,
-        browser_manager_client=browser_manager_client,
+        browser_resource_owner=browser_resource_owner,
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
         session_target_resolver=session_target_resolver,
@@ -649,6 +657,7 @@ def _build_app_container(
     # ResidencyBlockerSource 拉取磁盘 durable claim 兜底（重启恢复），不建第二套
     # dispose/LifetimeScope 抽象；tracker 直接持有真实 thread generation scope。
     thread_residency_tracker.add_unload_listener(terminal_resource_owner.release_thread)
+    thread_residency_tracker.add_unload_listener(browser_resource_owner.release_thread)
     node_debug_service = NodeDebugService(
         workspace_root=resolved_workspace_root,
         config_service=config_service,
@@ -832,7 +841,7 @@ def _build_app_container(
                 resource_mapper=session_resource_mapper,
             ),
             BrowserResourceProvider(
-                browser_manager=browser_manager_client,
+                browser_owner=browser_resource_owner,
                 resource_mapper=session_resource_mapper,
             ),
         ]
@@ -933,6 +942,7 @@ def _build_app_container(
         session_resource_service=session_resource_service,
         context_compaction_service=context_compaction_service,
         terminal_resource_owner=terminal_resource_owner,
+        browser_resource_owner=browser_resource_owner,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         terminal_steering_service=terminal_steering_service,

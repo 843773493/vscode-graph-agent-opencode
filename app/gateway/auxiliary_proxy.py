@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Callable
 from functools import partial
 from typing import Annotated, Protocol
@@ -96,26 +97,26 @@ def _proxy_request_headers(
         ).get(connection_id)
         headers["X-BoxTeam-Federation-Token"] = credential.token
         headers["X-BoxTeam-Workspace-Id"] = remote_workspace_id
-    elif target is not None and service == "terminal_manager":
-        headers["X-BoxTeam-Workspace-Id"] = _terminal_workspace_id(target)
+    elif target is not None and service in {"terminal_manager", "browser_manager"}:
+        headers["X-BoxTeam-Workspace-Id"] = _auxiliary_workspace_id(target)
     return headers
 
 
-def _terminal_workspace_id(target: WorkspaceTarget) -> str:
+def _auxiliary_workspace_id(target: WorkspaceTarget) -> str:
     workspace_id = target.backend_workspace_id
     if workspace_id is None:
         raise RuntimeError(
-            f"终端代理 target 缺少受控 backend UUID: workspace_id={target.workspace_id}"
+            f"辅助服务代理 target 缺少受控 backend UUID: workspace_id={target.workspace_id}"
         )
     return validate_workspace_id(workspace_id)
 
 
-def _validate_terminal_target_header(
+def _validate_auxiliary_target_header(
     target: WorkspaceTarget, backend_workspace_id: str | None
 ) -> None:
     if backend_workspace_id is not None and (
         target.connection_kind == "remote_gateway"
-        or backend_workspace_id != _terminal_workspace_id(target)
+        or backend_workspace_id != _auxiliary_workspace_id(target)
     ):
         raise HTTPException(status_code=400, detail="终端 Gateway target 与 backend UUID 冲突")
 
@@ -161,8 +162,12 @@ async def proxy_auxiliary_http(
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
 ):
     service = _service_name(service_path)
-    if service == "terminal_manager" and path.strip("/") != "health":
-        raise HTTPException(status_code=403, detail="Terminal 管理请使用工作区 /api/v1/resources owner API")
+    artifact_read = (
+        service == "browser_manager" and request.method == "GET"
+        and re.fullmatch(r"api/browsers/[^/]+/(downloads|screenshots)/[^/]+", path.strip("/")) is not None
+    )
+    if service in {"terminal_manager", "browser_manager"} and path.strip("/") != "health" and not artifact_read:
+        raise HTTPException(status_code=403, detail="资源管理请使用工作区 /api/v1/resources owner API")
     proxy_target_to_proto(
         workspace_id=workspace_id,
         service=service,
@@ -173,8 +178,8 @@ async def proxy_auxiliary_http(
         target = registry.resolve(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    if service == "terminal_manager":
-        _validate_terminal_target_header(
+    if service in {"terminal_manager", "browser_manager"}:
+        _validate_auxiliary_target_header(
             target, request.headers.get("X-BoxTeam-Backend-Workspace-Id")
         )
     if auth.kind == "federation" and target.connection_kind != "local":
@@ -307,11 +312,11 @@ async def _proxy_auxiliary_websocket(
     registry = _registry(websocket.app)
     try:
         target = registry.resolve(workspace_id)
-        if service == "terminal_manager":
-            _validate_terminal_target_header(
+        if service in {"terminal_manager", "browser_manager"}:
+            _validate_auxiliary_target_header(
                 target, websocket.headers.get("X-BoxTeam-Backend-Workspace-Id")
             )
-            _validate_terminal_target_header(
+            _validate_auxiliary_target_header(
                 target, websocket.query_params.get("workspace_id")
             )
         federation_token = websocket.headers.get("x-boxteam-federation-token")
@@ -354,8 +359,8 @@ async def _proxy_auxiliary_websocket(
         # 按请求注入 Gateway 自身稳定身份，与两条 HTTP 代理同一来源；WebSocket 握手
         # 只转发这里显式写入的头部，客户端无法自带同名头，故无需额外剥离。
         upstream_headers["X-BoxTeam-Gateway-Id"] = load_proxy_gateway_id()
-        if service == "terminal_manager" and target.connection_kind != "remote_gateway":
-            upstream_headers["X-BoxTeam-Workspace-Id"] = _terminal_workspace_id(target)
+        if service in {"terminal_manager", "browser_manager"} and target.connection_kind != "remote_gateway":
+            upstream_headers["X-BoxTeam-Workspace-Id"] = _auxiliary_workspace_id(target)
         if target.connection_kind == "remote_gateway":
             connection_id = target.remote_gateway_connection_id
             if connection_id is None:

@@ -73,6 +73,16 @@ async def _stop_activity_pruning(task: asyncio.Task[None]) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
+
+async def _sweep_browser_orphans_periodically(container: AppContainer) -> None:
+    while True:
+        try:
+            await container.browser_resource_owner.sweep_orphans()
+        except Exception:
+            logger.exception("Browser owner 孤儿回收未收敛；资源仍保留阻断事实")
+        await asyncio.sleep(1)
+
+
 async def _drain_workspace_jobs(container: AppContainer) -> None:
     await container.goal_runtime_service.close_admission()
     container.job_service.close_admission()
@@ -204,6 +214,11 @@ async def _workspace_lifespan(container: AppContainer):
                 name=f"workspace-activity-prune:{container.workspace_id}",
             )
             resources.push_async_callback(_stop_activity_pruning, task)
+            browser_sweep = asyncio.create_task(
+                _sweep_browser_orphans_periodically(container),
+                name=f"browser-orphan-reclaim:{container.workspace_id}",
+            )
+            resources.push_async_callback(_stop_activity_pruning, browser_sweep)
             yield
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
-    BrowserManagerClientProtocol,
 )
 from app.core.background_task_registry import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
@@ -11,12 +10,13 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceDTO,
     SessionResourceKind,
 )
+from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.session_resource_actions import (
     background_task_available_actions,
-    browser_available_actions,
 )
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import ResourceConflict
+from app.services.business.workspace_resources.records import ThreadRef
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 
 _ACTIVE_TERMINAL_STATUSES = frozenset({"created", "running"})
@@ -142,105 +142,48 @@ class TerminalResourceProvider:
 class BrowserResourceProvider:
     kind: SessionResourceKind = "browser"
 
-    def __init__(
-        self,
-        *,
-        browser_manager: BrowserManagerClientProtocol,
-        resource_mapper: SessionResourceMapper,
-    ) -> None:
-        self._browser_manager = browser_manager
+    def __init__(self, *, browser_owner: BrowserResourceOwner, resource_mapper: SessionResourceMapper) -> None:
+        self._owner = browser_owner
         self._resource_mapper = resource_mapper
 
-    async def list_resources(
-        self,
-        session_id: str,
-        *,
-        include_history: bool = True,
-    ) -> list[SessionResourceDTO]:
-        browsers = self._browser_manager.list_browsers_from_state(session_id)
-        if not include_history:
-            browsers = [
-                browser
-                for browser in browsers
-                if browser.get("status") in _CURRENT_BROWSER_STATUSES
-            ]
+    async def list_resources(self, session_id: str, *, include_history: bool = True) -> list[SessionResourceDTO]:
+        browsers = await self._owner.list_resources(session_id=session_id)
         return [
-            self._to_resource(dict(browser))
-            for browser in browsers
-            if browser.get("status") != "deleted"
+            self._to_resource(item, session_id) for item in browsers
+            if any(ref["session_id"] == session_id for ref in item["thread_associations"])
+            and (include_history or item["status"] in _CURRENT_BROWSER_STATUSES)
         ]
 
-    async def control(
-        self,
-        *,
-        session_id: str,
-        resource_id: str,
-        action: SessionResourceAction,
-        operation_id: str,
-    ) -> SessionResourceControlResultDTO:
-        browser = self._get_record(session_id, resource_id)
+    async def control(self, *, session_id: str, resource_id: str, action: SessionResourceAction, operation_id: str) -> SessionResourceControlResultDTO:
+        browser = await self._owner.get_resource(resource_id)
+        refs = [item for item in browser["thread_associations"] if item["session_id"] == session_id]
+        if not refs:
+            raise ValueError(f"Browser 不属于当前 Session 的 Thread 关联: {resource_id}")
         if action == "cancel":
-            result = await self._browser_manager.close_browser(resource_id)
-            resource = self._to_resource(dict(result))
-            return SessionResourceControlResultDTO(
-                session_id=session_id,
-                resource_id=resource_id,
-                kind=self.kind,
-                action=action,
-                status=resource.status,
-                resource=resource,
+            result = await self._owner.command(
+                resource_id, action="stop", expected_revision=browser["owner_revision"],
+                holder_id=f"request:{operation_id}", operation_id=operation_id,
             )
-        if action == "resume":
-            result = await self._browser_manager.wake_browser(resource_id)
-            resource = self._to_resource(dict(result))
-            return SessionResourceControlResultDTO(
-                session_id=session_id,
-                resource_id=resource_id,
-                kind=self.kind,
-                action=action,
-                status=resource.status,
-                resource=resource,
+        elif action == "resume":
+            receipt = await self._owner.perform(
+                resource_id, action="wake", payload={}, expected_revision=browser["owner_revision"],
+                thread=ThreadRef(**refs[0]), holder_id=f"request:{operation_id}", operation_id=operation_id,
             )
-        if action == "delete":
-            result = await self._browser_manager.delete_browser(resource_id)
-            deleted_browser = result.get("browser") if isinstance(result, dict) else None
-            resource = self._to_resource(
-                dict(deleted_browser)
-                if isinstance(deleted_browser, dict)
-                else {**browser, "status": "deleted"}
-            )
-            return SessionResourceControlResultDTO(
-                session_id=session_id,
-                resource_id=resource_id,
-                kind=self.kind,
-                action=action,
-                status="deleted",
-                resource=resource,
-            )
-        raise ValueError(f"browser 资源不支持操作: {action}")
+            result = receipt["browser"]
+        elif action == "delete":
+            raise ResourceConflict("Browser 仍有 Thread 关联；请在工作区 Browser 面板解除关联后删除")
+        else:
+            raise ValueError(f"Browser 不支持操作: {action}")
+        resource = self._to_resource(result, session_id)
+        return SessionResourceControlResultDTO(session_id=session_id, resource_id=resource_id, kind=self.kind, action=action, status=resource.status, resource=resource)
 
     async def cleanup_session(self, session_id: str) -> int:
-        browsers = self._browser_manager.list_browsers_from_state(session_id)
-        for browser in browsers:
-            browser_id = browser.get("browser_id")
-            if not isinstance(browser_id, str) or not browser_id:
-                raise RuntimeError(f"浏览器记录缺少 browser_id: session_id={session_id}")
-            await self._browser_manager.delete_browser(browser_id)
-        return len(browsers)
+        return await self._owner.cleanup_session(session_id)
 
-    def _get_record(self, session_id: str, browser_id: str) -> dict[str, object]:
-        for browser in self._browser_manager.list_browsers_from_state(session_id):
-            if browser.get("browser_id") == browser_id:
-                return dict(browser)
-        raise ValueError(f"browser 不存在或不属于当前 session: {browser_id}")
-
-    def _to_resource(self, browser: dict[str, object]) -> SessionResourceDTO:
-        status = str(browser.get("status") or "unknown")
-        return self._resource_mapper.browser_to_resource(
-            browser,
-            available_actions=browser_available_actions(
-                status,
-                resource_state=str(browser.get("resource_state") or ""),
-                has_checkpoint=bool(browser.get("checkpoint")),
-            ),
-        )
+    def _to_resource(self, browser: dict[str, object], session_id: str) -> SessionResourceDTO:
+        actions = []
+        if browser["reconciliation_status"] == "verified" and browser["status"] == "running":
+            actions.append("cancel")
+            if browser.get("resource_state") in {"frozen", "discarded"}:
+                actions.append("resume")
+        return self._resource_mapper.browser_to_resource({**browser, "session_id": session_id}, available_actions=actions)

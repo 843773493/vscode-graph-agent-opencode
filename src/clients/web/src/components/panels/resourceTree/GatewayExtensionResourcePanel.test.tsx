@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { SessionResource } from "../../../types/backend";
 import type { GatewayExtensionResourceEntry } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
 import GatewayExtensionResourcePanel from "./GatewayExtensionResourcePanel";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
@@ -45,18 +44,20 @@ function installFakeDocument(execCommandResult: boolean): { copied: number } {
 }
 
 function entry(): GatewayExtensionResourceEntry {
-  const resource: SessionResource = {
+  const resource: GatewayExtensionResourceEntry["resource"] = {
     resource_id: "terminal_abcdef0123456789",
-    session_id: "ses_gateway_extension",
+    workspace_id: "workspace_test",
     kind: "terminal",
-    name: "终端 / 主终端",
     status: "running",
     created_at: "2026-07-26T01:00:00Z",
     updated_at: "2026-07-26T02:00:00Z",
-    started_at: null,
-    ended_at: null,
-    available_actions: ["delete"],
-    metadata: { cwd_relative: "." },
+    retention_scope: "workspace",
+    source_thread: { session_id: "ses_gateway_extension", thread_id: "thr_source" },
+    thread_associations: [],
+    owner_revision: 1,
+    reconciliation_status: "verified",
+    available_actions: ["stop", "delete"],
+    metadata: { title: "主终端", cwd_relative: "." },
   };
   return {
     key: "workspace_test:ses_gateway_extension",
@@ -66,7 +67,7 @@ function entry(): GatewayExtensionResourceEntry {
     workspace_name: "测试工作区",
     session_id: "ses_gateway_extension",
     session_title: "测试会话",
-    resource: resource as GatewayExtensionResourceEntry["resource"],
+    resource,
   };
 }
 
@@ -82,6 +83,8 @@ function panelProps() {
     onControl: async () => {},
     onOpen: () => {},
     onCreateReplacement: async () => {},
+    currentSession: null,
+    onOwnerControl: async () => {},
   };
 }
 

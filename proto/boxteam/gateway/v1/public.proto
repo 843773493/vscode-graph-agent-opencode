@@ -6,7 +6,7 @@ import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 // Gateway 控制面公开 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
-// SessionResource 等 Workspace 业务对象通过 Struct 作为 Gateway 快照边界传递。
+// WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 
 message AcquireGatewayUserRequest {
   optional string client_label = 1;

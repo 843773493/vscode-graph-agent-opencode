@@ -25,7 +25,8 @@ message BrowserViewport {
 message BrowserPage {
   string browser_id = 1;
   string page_id = 2;
-  string session_id = 3;
+  reserved 3;
+  reserved "session_id";
   string title = 4;
   string url = 5;
   BrowserViewport viewport = 6;
@@ -34,6 +35,9 @@ message BrowserPage {
   google.protobuf.Struct metadata = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
+  string workspace_id = 12;
+  uint64 transport_owner_revision = 13;
+  string reconciliation_status = 14;
 }
 
 message BrowserJsonMessage {

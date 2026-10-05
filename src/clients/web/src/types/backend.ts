@@ -1,5 +1,6 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
+import type { WorkspaceResourceDTO } from "./protocol_generated/boxteam/workspace/v2/public";
 import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from "./protocol";
 
 export type {
@@ -430,7 +431,7 @@ export type GatewayWorkspaceList = Omit<
 
 export type GatewayResourceScopeError = GatewayResourceScopeErrorDTO;
 export type GatewayResourceItem = Omit<GatewayResourceDTO, "resource"> & {
-  resource: SessionResource;
+  resource: WorkspaceResourceDTO;
 };
 export type GatewayResourceList = Omit<GatewayResourceListDTO, "items" | "errors"> & {
   items: GatewayResourceItem[];

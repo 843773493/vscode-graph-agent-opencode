@@ -356,9 +356,6 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
     )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
-
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
         workspace_root=workspace_root,
@@ -399,9 +396,6 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
     )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
-
-    workspace_root = tmp_path / "workspace"
-    workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
         workspace_root=workspace_root,
@@ -429,7 +423,7 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
     )
 
 
-def test_only_terminal_manager_receives_backend_workspace_uuid(
+def test_both_resource_managers_receive_backend_workspace_uuid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -456,7 +450,7 @@ def test_only_terminal_manager_receives_backend_workspace_uuid(
         project_root=project_root,
         workspace_root=tmp_path,
         service="terminal",
-        terminal_workspace_id="00000000-0000-4000-8000-000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000001",
         port=41002,
         log_dir=tmp_path / "logs",
     )
@@ -464,6 +458,7 @@ def test_only_terminal_manager_receives_backend_workspace_uuid(
         project_root=project_root,
         workspace_root=tmp_path,
         service="browser",
+        workspace_id="00000000-0000-4000-8000-000000000001",
         port=41003,
         log_dir=tmp_path / "logs",
     )
@@ -473,7 +468,9 @@ def test_only_terminal_manager_receives_backend_workspace_uuid(
     assert commands[0][commands[0].index("--workspace-id") + 1] == (
         "00000000-0000-4000-8000-000000000001"
     )
-    assert "--workspace-id" not in commands[1]
+    assert commands[1][commands[1].index("--workspace-id") + 1] == (
+        "00000000-0000-4000-8000-000000000001"
+    )
 
 
 def test_workspace_ssh_port_forward_reuses_alias_and_long_lived_options(

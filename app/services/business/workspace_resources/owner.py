@@ -103,7 +103,7 @@ class WorkspaceResourceOwner:
                     lifetime_scope=record.retention_scope,
                 )
                 runtime = observed.get(record.resource_id)
-                observe_resource(record, runtime, self._recovered, self.kind)
+                observe_resource(record, runtime, self.kind)
                 statuses[record.resource_id] = lease_status(record)
             # 每个领域只对账自身 lease，不修改另一 owner 的运行事实。
             self._leases.reconcile(statuses, kind=self.lease_kind)
@@ -157,7 +157,7 @@ class WorkspaceResourceOwner:
             lease_refs[record.resource_id] = self._acquire(record, ref, holder_id, operation_id)
             try:
                 runtime = await create(record)
-                observe_resource(record, runtime, self._recovered, self.kind)
+                observe_resource(record, runtime, self.kind)
                 self._verified(record)
                 self._store.persist()
                 self._sync_ledger(record)
@@ -180,7 +180,8 @@ class WorkspaceResourceOwner:
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
             result: list[ResourceSnapshot] = []
             for record in self._store.records.values():
-                observe_resource(record, observed.get(record.resource_id), self._recovered, self.kind)
+                observe_resource(record, observed.get(record.resource_id), self.kind)
+                self._sync_ledger(record)
                 if record.status == "deleted" and record.reconciliation_status == "verified":
                     continue
                 if (
@@ -222,7 +223,8 @@ class WorkspaceResourceOwner:
             record = self._require(resource_id)
             observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.records, self.kind)
             runtime = observed.get(resource_id)
-            observe_resource(record, runtime, self._recovered, self.kind)
+            observe_resource(record, runtime, self.kind)
+            self._sync_ledger(record)
             self._store.persist()
             return resource_projection(record, runtime, self.kind)
 
@@ -329,7 +331,7 @@ class WorkspaceResourceOwner:
                     return await self._stop_or_delete(record, delete=action == "delete", reason=stop_reason)
                 await self._advance_revision(record)
                 runtime = await self._transport.get_resource(resource_id)
-                observe_resource(record, runtime, self._recovered, self.kind)
+                observe_resource(record, runtime, self.kind)
                 self._verified(record)
                 if action == "promote":
                     record.retention_scope = "workspace"
@@ -379,7 +381,7 @@ class WorkspaceResourceOwner:
             runtime = result.get(self.kind)
             if not isinstance(runtime, dict):
                 raise TypeError("外部资源 owner 未收到停止/删除的完整外部回执")
-            observe_resource(record, runtime, self._recovered, self.kind)
+            observe_resource(record, runtime, self.kind)
             self._verified(record)
             if record.status not in STOPPED_STATUSES or (delete and record.status != "deleted"):
                 raise RuntimeError(
@@ -559,7 +561,7 @@ class WorkspaceResourceOwner:
             with self._management_lease(record, thread, holder_id, operation_id):
                 try:
                     runtime = await self._transport.get_resource(resource_id)
-                    observe_resource(record, runtime, self._recovered, self.kind)
+                    observe_resource(record, runtime, self.kind)
                     self._verified(record)
                     self._store.persist()
                     grant = await self._transport.issue_transport_grant(
@@ -586,7 +588,8 @@ class WorkspaceResourceOwner:
         revision = runtime.get("transport_owner_revision")
         if not isinstance(revision, int) or revision < record.owner_revision:
             return
-        observe_resource(record, runtime, False, self.kind)
+        observe_resource(record, runtime, self.kind)
+        record.reconciliation_status = "verified"
         record.owner_revision = revision
         for lease in pending:
             self._leases.settle(lease.lease_id)

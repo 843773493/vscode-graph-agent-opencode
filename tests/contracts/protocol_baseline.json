@@ -1,29 +1,29 @@
 {
-  "description": "协议迁移前的最小公开边界快照，字段来自当前运行时 JSON/SSE/WS 代码。",
+  "description": "当前 owner 传输边界的最小公开快照，字段来自运行时 JSON/SSE/WS 代码。",
   "http_json": {
     "request": {
       "method": "POST",
       "path": "/api/terminals",
       "json": {
-        "session_id": "session_123",
+        "terminal_id": "term_019be93d195b7ce48842923ced187ecb",
+        "owner_revision": 1,
         "title": "shell",
         "cwd": "/workspace",
         "cols": 120,
         "rows": 32,
-        "workspace_id": "00000000-0000-4000-8000-000000000001",
-        "source_thread_id": "thr_018f0000000070008000000000000001",
-        "retention_scope": "thread"
+        "workspace_id": "00000000-0000-4000-8000-000000000001"
       },
       "headers": {
-        "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001"
+        "X-BoxTeam-Workspace-Id": "00000000-0000-4000-8000-000000000001",
+        "X-BoxTeam-Resource-Owner": "workspace-terminal"
       }
     },
     "response": {
       "status": 200,
       "json": {
         "data": {
-          "terminal_id": "terminal_123",
-          "session_id": "session_123",
+          "terminal_id": "term_019be93d195b7ce48842923ced187ecb",
+          "transport_owner_revision": 1,
           "status": "running",
           "cols": 120,
           "rows": 32,
@@ -34,7 +34,7 @@
     "error": {
       "status": 500,
       "json": {
-        "error": "终端未运行: terminal_id=terminal_123, status=exited"
+        "error": "终端未运行: terminal_id=term_019be93d195b7ce48842923ced187ecb, status=exited"
       }
     }
   },
@@ -73,23 +73,26 @@
   "terminal_websocket": {
     "client": {
       "type": "attach",
-      "terminalId": "terminal_123",
+      "terminalId": "term_019be93d195b7ce48842923ced187ecb",
+      "grantToken": "single-use-terminal-grant",
       "afterSequence": 4
     },
     "server": {
       "type": "attached",
-      "terminalId": "terminal_123",
+      "terminalId": "term_019be93d195b7ce48842923ced187ecb",
       "replayMode": "incremental",
       "resumeFromSequence": 4,
       "snapshot": {
-        "terminal_id": "terminal_123",
+        "terminal_id": "term_019be93d195b7ce48842923ced187ecb",
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+        "transport_owner_revision": 1,
         "status": "running",
         "buffer": "hello\\n"
       }
     },
     "output": {
       "type": "output",
-      "terminalId": "terminal_123",
+      "terminalId": "term_019be93d195b7ce48842923ced187ecb",
       "sequence": 5,
       "data": "world\\n"
     },
@@ -101,22 +104,32 @@
   "browser_websocket": {
     "client": {
       "type": "attach",
-      "browserId": "browser_123",
+      "browserId": "browser_019be93d195b7ce48842923ced187ecb",
+      "grantToken": "single-use-browser-grant",
       "participantId": "user_12345678"
     },
     "server": {
       "type": "attached",
-      "browserId": "browser_123",
+      "browserId": "browser_019be93d195b7ce48842923ced187ecb",
       "state": {
-        "browser_id": "browser_123",
+        "browser_id": "browser_019be93d195b7ce48842923ced187ecb",
+        "page_id": "page_123",
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+        "transport_owner_revision": 1,
+        "reconciliation_status": "verified",
         "status": "running",
         "url": "https://example.com"
       }
     },
     "state": {
       "type": "state",
-      "browserId": "browser_123",
+      "browserId": "browser_019be93d195b7ce48842923ced187ecb",
       "state": {
+        "browser_id": "browser_019be93d195b7ce48842923ced187ecb",
+        "page_id": "page_123",
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+        "transport_owner_revision": 1,
+        "reconciliation_status": "verified",
         "status": "running",
         "url": "https://example.com"
       }

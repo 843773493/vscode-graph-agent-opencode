@@ -1,5 +1,6 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { BrowserSession } from "./browserSession.js";
 import { BrowserStateStore } from "./browserStateStore.js";
@@ -12,14 +13,16 @@ import {
   resolveBrowserDeviceState,
 } from "./browserDeviceProfiles.js";
 
-function browserId() {
-  // 非 canonical 身份：browser 后端由 Node 启动（BOXTEAM_NODE_BIN），实测
-  // Node 22 无 crypto.randomUUIDv7；本进程生成的 browser_/* 本地 id 允许继续
-  // 使用 v4，它们不是 session/thread 身份，不进入 canonical 校验器命名空间。
-  return `browser_${randomUUID().replaceAll("-", "")}`;
+const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const DEFAULT_MAX_LOGICAL_BROWSERS_PER_WORKSPACE = 500;
+
+export function validateWorkspaceId(value) {
+  if (typeof value !== "string" || !WORKSPACE_ID_PATTERN.test(value)) {
+    throw new Error("BrowserManager 必须显式提供标准 UUID workspace_id");
+  }
+  return value;
 }
 
-const DEFAULT_MAX_LOGICAL_BROWSERS_PER_SESSION = 500;
 const DEFAULT_CHECKPOINT_RESERVATION_BYTES = 4 * 1024 * 1024;
 
 function checkpointPageSummaries(checkpoint) {
@@ -64,18 +67,16 @@ export function resolveRequiredWorkspaceRoot(args) {
 export class BrowserManager {
   constructor({
     workspaceRoot = resolveWorkspaceRoot(),
-    browserFrontendBaseUrl = "http://127.0.0.1:8016",
+    workspaceId,
     runtimePool = null,
-    maxLogicalBrowsersPerSession = DEFAULT_MAX_LOGICAL_BROWSERS_PER_SESSION,
+    maxLogicalBrowsersPerWorkspace = DEFAULT_MAX_LOGICAL_BROWSERS_PER_WORKSPACE,
     checkpointReservationBytes = DEFAULT_CHECKPOINT_RESERVATION_BYTES,
   } = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
-    this.stateStore = new BrowserStateStore({ workspaceRoot: this.workspaceRoot });
-    this.browserFrontendBaseUrl = browserFrontendBaseUrl.replace(/\/$/, "");
+    this.workspaceId = validateWorkspaceId(workspaceId);
+    this.stateStore = new BrowserStateStore({ workspaceRoot: this.workspaceRoot, workspaceId: this.workspaceId });
     this.sessions = new Map();
-    // Browser 工具对外使用 browser_id；恢复/重置页面时内部 page_id 会变化，
-    // 这里保留短期别名，避免模型收到旧 page_id 后被错误判定为页面不存在。
-    this.pageAliases = new Map();
+    this.transportGrants = new Map();
     this.persistTail = Promise.resolve();
     this.persistTimer = null;
     this.createAdmissionTail = Promise.resolve();
@@ -84,7 +85,7 @@ export class BrowserManager {
       onDisconnect: (generation) => this.handleRuntimeDisconnect(generation),
     });
     this.resourceGovernor = null;
-    this.maxLogicalBrowsersPerSession = maxLogicalBrowsersPerSession;
+    this.maxLogicalBrowsersPerWorkspace = maxLogicalBrowsersPerWorkspace;
     this.checkpointReservationBytes = checkpointReservationBytes;
   }
 
@@ -127,6 +128,10 @@ export class BrowserManager {
   }
 
   async init() {
+    const identity = JSON.parse(await readFile(path.join(this.workspaceRoot, ".boxteam", "workspace-identity.json"), "utf8"));
+    if (validateWorkspaceId(identity.workspace_id) !== this.workspaceId) {
+      throw new Error("Browser 工作区 UUID 与权威身份文件不一致");
+    }
     const records = await this.stateStore.readRecords();
     if (records === null) {
       await this.persist();
@@ -184,17 +189,8 @@ export class BrowserManager {
       }
       const session = new BrowserSession({ manager: this, record });
       this.sessions.set(session.id, session);
-      this.registerPageAlias(record.page_id, session.id);
-      this.registerPageAlias(record.active_page_id, session.id);
-      for (const page of record.discarded_pages || []) {
-        this.registerPageAlias(page?.page_id, session.id);
-      }
     }
     await this.persist();
-  }
-
-  attachUrl(id) {
-    return `${this.browserFrontendBaseUrl}/?browserId=${encodeURIComponent(id)}`;
   }
 
   async writeScreenshot(id, buffer) {
@@ -250,52 +246,59 @@ export class BrowserManager {
     }, delayMs);
   }
 
-  list({ sessionId = null } = {}) {
+  list() {
     return [...this.sessions.values()]
-      .filter((session) => !sessionId || session.sessionId === sessionId)
       .map((session) => session.snapshot())
       .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
   }
 
   get(id) {
     const session = this.sessions.get(id);
-    if (session) return session;
-
-    const aliasedBrowserId = this.pageAliases.get(id);
-    const aliasedSession = aliasedBrowserId
-      ? this.sessions.get(aliasedBrowserId)
-      : null;
-    if (aliasedSession) return aliasedSession;
-
-    for (const candidate of this.sessions.values()) {
-      if (candidate.pageEntries?.has(id)
-        || candidate.record?.page_id === id
-        || candidate.record?.active_page_id === id
-        || (candidate.record?.discarded_pages || []).some((page) => page?.page_id === id)) {
-        this.registerPageAlias(id, candidate.id);
-        return candidate;
-      }
-    }
-    throw new Error(`浏览器页面不存在: ${id}`);
+    if (!session) throw new Error(`浏览器页面不存在: ${id}`);
+    return session;
   }
 
-  registerPageAlias(pageId, browserId) {
-    if (typeof pageId !== "string" || pageId.length === 0
-      || typeof browserId !== "string" || browserId.length === 0
-      || pageId === browserId) {
-      return;
+  async syncOwnerRevision(id, revision) {
+    this.get(id).syncOwnerRevision(revision);
+    for (const [token, grant] of this.transportGrants) {
+      if (grant.browserId === id && grant.revision !== revision) this.transportGrants.delete(token);
     }
-    this.pageAliases.set(pageId, browserId);
+    await this.get(id).operationQueue.drain();
+    await this.persist();
   }
 
-  forgetPageAliases(browserId) {
-    for (const [pageId, ownerId] of this.pageAliases) {
-      if (ownerId === browserId) this.pageAliases.delete(pageId);
+  issueTransportGrant(id, { ownerRevision, association }) {
+    const browser = this.get(id);
+    browser.assertReconciled();
+    if (browser.transportOwnerRevision !== ownerRevision || browser.status !== "running") {
+      throw new Error("Browser 传输版本或运行状态冲突");
     }
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = Date.now() + 30_000;
+    for (const [existing, grant] of this.transportGrants) {
+      if (grant.expiresAt <= Date.now()) this.transportGrants.delete(existing);
+    }
+    this.transportGrants.set(token, { browserId: id, revision: ownerRevision, association, expiresAt });
+    return {
+      resource_id: id, owner_revision: ownerRevision,
+      grant_token: token, expires_at: new Date(expiresAt).toISOString(),
+    };
+  }
+
+  consumeTransportGrant(id, token) {
+    const grant = this.transportGrants.get(token);
+    this.transportGrants.delete(token);
+    if (!grant || grant.browserId !== id || grant.expiresAt <= Date.now()
+      || this.get(id).transportOwnerRevision !== grant.revision) {
+      throw new Error("Browser 一次传输授权无效、过期或已消费");
+    }
+    return grant;
   }
 
   async create({
-    sessionId,
+    workspaceId,
+    browserId,
+    ownerRevision,
     title = "Browser Page",
     url = "about:blank",
     viewport = null,
@@ -303,8 +306,9 @@ export class BrowserManager {
     deviceOrientation = DEFAULT_BROWSER_DEVICE_ORIENTATION,
   }) {
     const admission = this.createAdmissionTail.then(async () => {
-      if (!sessionId) {
-        throw new Error("session_id 不能为空");
+      if (workspaceId !== this.workspaceId || !/^browser_[0-9a-f]{32}$/.test(browserId)
+        || !Number.isSafeInteger(ownerRevision) || ownerRevision < 1 || this.sessions.has(browserId)) {
+        throw new Error("Browser 创建必须使用当前 Python owner 的唯一身份、工作区与版本");
       }
       const pressureLevel = this.resourceGovernor?.snapshot().last_sample?.level || "normal";
       if (["critical", "emergency"].includes(pressureLevel)) {
@@ -314,13 +318,13 @@ export class BrowserManager {
       }
       const managedStatuses = new Set(["created", "running"]);
       const logicalBrowserCount = [...this.sessions.values()].filter((session) => (
-        session.sessionId === sessionId && managedStatuses.has(session.status)
+        managedStatuses.has(session.status)
       )).length;
-      if (logicalBrowserCount >= this.maxLogicalBrowsersPerSession) {
+      if (logicalBrowserCount >= this.maxLogicalBrowsersPerWorkspace) {
         const error = new Error(
-          `会话浏览器数量达到硬上限: session_id=${sessionId}, count=${logicalBrowserCount}, max=${this.maxLogicalBrowsersPerSession}`,
+          `工作区浏览器数量达到硬上限: workspace_id=${workspaceId}, count=${logicalBrowserCount}, max=${this.maxLogicalBrowsersPerWorkspace}`,
         );
-        error.code = "browser_session_logical_limit_exceeded";
+        error.code = "browser_workspace_logical_limit_exceeded";
         throw error;
       }
       const budget = await this.stateStore.checkpointBudgetSnapshot();
@@ -338,7 +342,7 @@ export class BrowserManager {
         error.max_workspace_bytes = budget.max_bytes;
         throw error;
       }
-      const id = browserId();
+      const id = browserId;
       const timestamp = nowIso();
       const deviceState = resolveBrowserDeviceState(deviceProfile, deviceOrientation);
       const session = new BrowserSession({
@@ -346,7 +350,9 @@ export class BrowserManager {
         record: {
           browser_id: id,
           page_id: id,
-          session_id: sessionId,
+          workspace_id: workspaceId,
+          transport_owner_revision: ownerRevision,
+          reconciliation_status: "verified",
           title,
           url: normalizeBrowserUrl(url),
           viewport: viewport || { ...deviceState.viewport },
@@ -390,7 +396,6 @@ export class BrowserManager {
   async delete(id) {
     const session = this.get(id);
     const snapshot = await session.close({ status: "deleted", reason: "browser_deleted_by_user" });
-    this.forgetPageAliases(session.id);
     await this.persist();
     return { deleted: true, browser_id: session.id, browser: snapshot };
   }

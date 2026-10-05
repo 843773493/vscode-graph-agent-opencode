@@ -25,8 +25,9 @@ function sameCheckpointSizes(left, right) {
 }
 
 export class BrowserStateStore {
-  constructor({ workspaceRoot, checkpointLimits = DEFAULT_CHECKPOINT_LIMITS }) {
+  constructor({ workspaceRoot, workspaceId, checkpointLimits = DEFAULT_CHECKPOINT_LIMITS }) {
     this.workspaceRoot = path.resolve(workspaceRoot);
+    this.workspaceId = workspaceId;
     this.stateDir = path.join(this.workspaceRoot, ".boxteam", "browser-manager");
     this.screenshotDir = path.join(this.stateDir, "screenshots");
     this.downloadDir = path.join(this.stateDir, "downloads");
@@ -223,8 +224,15 @@ export class BrowserStateStore {
     try {
       const raw = await readFile(this.stateFile, "utf8");
       const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed.browsers)) {
+      if (parsed.schema_version !== 2 || parsed.workspace_id !== this.workspaceId
+        || !Array.isArray(parsed.browsers)) {
         throw new Error(`浏览器状态文件格式错误: ${this.stateFile}`);
+      }
+      const ids = new Set();
+      for (const record of parsed.browsers) {
+        this.validateRecord(record);
+        if (ids.has(record.browser_id)) throw new Error("Browser 运行记录身份重复");
+        ids.add(record.browser_id);
       }
       return parsed.browsers;
     } catch (error) {
@@ -235,7 +243,24 @@ export class BrowserStateStore {
     }
   }
 
+  validateRecord(record) {
+    if (!record || typeof record !== "object" || Array.isArray(record)
+      || record.workspace_id !== this.workspaceId || !/^browser_[0-9a-f]{32}$/.test(record.browser_id)
+      || !Number.isSafeInteger(record.transport_owner_revision) || record.transport_owner_revision < 1
+      || !["verified", "unknown", "reconcile_required"].includes(record.reconciliation_status)) {
+      throw new Error("Browser 运行记录缺少有效的 owner 身份、工作区或版本");
+    }
+    for (const key of ["session_id", "source_thread", "thread_associations", "retention_scope", "attach_url", "workspace_root"]) {
+      if (Object.hasOwn(record, key)) throw new Error(`Browser 运行记录禁止包含领域字段: ${key}`);
+    }
+    if (record.checkpoint?.path || record.downloads?.some((item) => item.path || item.file_path)) {
+      throw new Error("Browser 运行记录禁止持久化真实产物路径");
+    }
+  }
+
   async write(payload) {
+    for (const record of payload.browsers) this.validateRecord(record);
+    payload = { ...payload, schema_version: 2, workspace_id: this.workspaceId };
     await mkdir(this.stateDir, { recursive: true });
     const temporaryFile = `${this.stateFile}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporaryFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");

@@ -423,7 +423,7 @@ export function useWorkspacePreviewTabs({
     onStatusChange(`已选择终端: ${terminalId}`);
   };
 
-  const openBrowserPreview = (browserId: string) => {
+  const openBrowserPreview = (browserId: string, thread?: ResourceThreadRef) => {
     if (!workspaceId) {
       throw new Error("打开浏览器需要当前会话的 Gateway workspace_id");
     }
@@ -440,7 +440,7 @@ export function useWorkspacePreviewTabs({
         path: tabPath,
         name: `浏览器 ${browserId.slice(0, 8)}`,
         browserId,
-        attachUrl: buildGatewayAttachUrl("browser", workspaceId, browserId, true),
+        attachUrl: buildGatewayAttachUrl("browser", workspaceId, browserId, true, thread),
       },
     ]);
     onStatusChange(`已选择浏览器: ${browserId}`);

@@ -496,7 +496,7 @@ def start_local_node_service_process(
     service: str,
     port: int,
     log_dir: Path,
-    terminal_workspace_id: str | None = None,
+    workspace_id: str,
 ) -> ManagedProcess:
     if service not in {"terminal", "browser"}:
         raise ValueError(f"不支持的本地辅助服务: {service}")
@@ -524,24 +524,10 @@ def start_local_node_service_process(
         "--workspace-root",
         str(workspace_root),
     ]
-    if service == "terminal":
-        if terminal_workspace_id is None:
-            raise ValueError("启动 Terminal Manager 必须提供 Workspace backend UUID")
-        try:
-            parsed_workspace_id = UUID(terminal_workspace_id)
-        except ValueError as error:
-            raise ValueError(
-                "启动 Terminal Manager 必须提供 backend UUID: "
-                f"{terminal_workspace_id!r}"
-            ) from error
-        if str(parsed_workspace_id) != terminal_workspace_id:
-            raise ValueError(
-                "启动 Terminal Manager 必须提供标准 backend UUID 文本: "
-                f"{terminal_workspace_id!r}"
-            )
-        command.extend(["--workspace-id", terminal_workspace_id])
-    elif terminal_workspace_id is not None:
-        raise ValueError("启动 Browser Manager 不接受 Terminal Workspace UUID")
+    parsed_workspace_id = UUID(workspace_id)
+    if str(parsed_workspace_id) != workspace_id:
+        raise ValueError("辅助服务必须提供标准 backend UUID 文本")
+    command.extend(["--workspace-id", workspace_id])
     if service == "browser":
         command.extend(
             ["--frontend-url", os.environ.get("BOXTEAM_BROWSER_FRONTEND_URL", "http://127.0.0.1")]

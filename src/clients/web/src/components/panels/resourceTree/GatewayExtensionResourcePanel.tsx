@@ -4,6 +4,8 @@ import type {
   GatewayExtensionResourceEntry,
   GatewayExtensionResourceError,
 } from "../../../hooks/gatewayExtensions/useGatewayExtensionResources";
+import type { ResourceThreadRef } from "../../../api/workspaceResources";
+import { workspaceResourceDisplay } from "../../../state/display/workspaceResourceDisplay";
 import { kindLabel } from "../../../state/display/resourceDisplay";
 import { copyTextToClipboard } from "../../../utils/clipboard";
 import { errorMessage } from "../../../utils/errorMessage";
@@ -22,6 +24,8 @@ interface GatewayExtensionResourcePanelProps {
     entry: GatewayExtensionResourceEntry,
     action: SessionResourceAction,
   ) => Promise<void>;
+  currentSession: { workspaceId: string; sessionId: string } | null;
+  onOwnerControl: (entry: GatewayExtensionResourceEntry, action: "promote" | "attach" | "detach", thread?: ResourceThreadRef) => Promise<void>;
   onOpen: (entry: GatewayExtensionResourceEntry) => void;
   onCreateReplacement: (entry: GatewayExtensionResourceEntry) => Promise<void>;
 }
@@ -39,12 +43,12 @@ function groupResources(
 ): ResourceScopeGroup[] {
   const groups = new Map<string, ResourceScopeGroup>();
   for (const entry of entries) {
-    const key = `${entry.workspace_id}:${entry.session_id}`;
+    const key = entry.workspace_id;
     const current = groups.get(key) ?? {
       key,
       gatewayName: entry.gateway_name,
       workspaceName: entry.workspace_name,
-      sessionTitle: entry.session_title || "未命名会话",
+      sessionTitle: entry.workspace_name,
       entries: [],
     };
     current.entries.push(entry);
@@ -66,6 +70,8 @@ export default function GatewayExtensionResourcePanel({
   onSelect,
   onRefresh,
   onControl,
+  currentSession,
+  onOwnerControl,
   onOpen,
   onCreateReplacement,
 }: GatewayExtensionResourcePanelProps) {
@@ -93,7 +99,7 @@ export default function GatewayExtensionResourcePanel({
     if (action === "delete") {
       const confirmed = await confirm({
         title: `删除${kindLabel(entry.resource.kind)}`,
-        message: `确认删除 ${entry.resource.name}？删除后只保留历史记录。`,
+        message: `确认删除 ${workspaceResourceDisplay(entry.resource).name}？删除后只保留历史记录。`,
         confirmText: "删除",
         danger: true,
       });
@@ -104,7 +110,7 @@ export default function GatewayExtensionResourcePanel({
     setNoticeIsError(false);
     try {
       await onControl(entry, action);
-      setNotice(`已更新 ${entry.resource.name} 的状态`);
+      setNotice(`已更新 ${workspaceResourceDisplay(entry.resource).name} 的状态`);
     } catch (error) {
       setNoticeIsError(true);
       setNotice(`操作失败：${errorMessage(error)}`);
@@ -141,7 +147,7 @@ export default function GatewayExtensionResourcePanel({
         </div>
         <div className="panel-header-meta">
           <span>{activeCount} 个运行中</span>
-          <span>{groups.length} 个会话</span>
+          <span>{groups.length} 个工作区</span>
         </div>
         <button
           type="button"
@@ -158,7 +164,7 @@ export default function GatewayExtensionResourcePanel({
         </button>
       </div>
       <div className="gateway-extension-scope-hint">
-        所有 Gateway、工作区和会话申请的浏览器/终端；不跟随标准窗口当前会话。
+        按工作区查看浏览器和终端，包括持久资源与待回收的临时资源。
       </div>
       {notice ? (
         <div
@@ -218,7 +224,7 @@ export default function GatewayExtensionResourcePanel({
                     {group.entries.map((entry) => (
                       <ResourceTreeRow
                         key={entry.key}
-                        resource={entry.resource}
+                        resource={workspaceResourceDisplay(entry.resource)}
                         selected={entry.key === selectedKey}
                         busy={busyKey === entry.key}
                         onControl={(kind, resourceId, action) => {
@@ -230,6 +236,17 @@ export default function GatewayExtensionResourcePanel({
                           }
                           void handleControl(entry, action);
                         }}
+                        onOwnerControl={(_, action, thread) => {
+                          setBusyKey(entry.key);
+                          setNotice(null);
+                          void onOwnerControl(entry, action, thread ?? (action === "attach" && entry.resource.retention_scope === "thread" ? entry.resource.source_thread : undefined))
+                            .then(() => { setNoticeIsError(false); setNotice("资源关联与保留状态已更新"); })
+                            .catch((error: unknown) => { setNoticeIsError(true); setNotice(errorMessage(error)); })
+                            .finally(() => setBusyKey(null));
+                        }}
+                        canAttachCurrent={Boolean(currentSession && currentSession.workspaceId === entry.workspace_id
+                          && !entry.resource.thread_associations.some((ref) => ref.session_id === currentSession.sessionId)
+                          && (entry.resource.retention_scope === "workspace" || entry.resource.source_thread?.session_id === currentSession.sessionId))}
                         onCopy={(resourceId) => {
                           handleCopyResourceId(resourceId);
                         }}
@@ -241,7 +258,12 @@ export default function GatewayExtensionResourcePanel({
                           onSelect(entry.key);
                           onOpen(entry);
                         }}
-                        onReplaceBrowser={() => void onCreateReplacement(entry)}
+                        onReplaceBrowser={() => {
+                          setBusyKey(entry.key);
+                          void onCreateReplacement(entry)
+                            .catch((error: unknown) => { setNoticeIsError(true); setNotice(errorMessage(error)); })
+                            .finally(() => setBusyKey(null));
+                        }}
                         extensionWindow
                       />
                     ))}

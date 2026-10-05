@@ -222,6 +222,9 @@ export function parseClientMessage(raw) {
   if (message.type !== "detach") {
     assertBrowserId(message);
   }
+  if (message.type === "attach" && (typeof message.grantToken !== "string" || !message.grantToken)) {
+    throw new Error("Browser attach 缺少一次传输授权");
+  }
   if (message.type === "attach" && message.participantId !== undefined) {
     if (typeof message.participantId !== "string" || !/^user_[a-zA-Z0-9_-]{8,80}$/.test(message.participantId)) {
       throw new Error("participantId 格式非法");

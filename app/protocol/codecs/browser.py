@@ -17,14 +17,14 @@ def _status(value: object) -> int:
 
 
 def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPage:
-    required = ("browser_id", "page_id", "session_id", "status")
+    required = ("browser_id", "page_id", "workspace_id", "status")
     for field_name in required:
         if not isinstance(value.get(field_name), str) or not value[field_name]:
             raise ValueError(f"Browser 页面缺少字段: {field_name}")
     page = browser_pb2.BrowserPage(
         browser_id=cast(str, value["browser_id"]),
         page_id=cast(str, value["page_id"]),
-        session_id=cast(str, value["session_id"]),
+        workspace_id=cast(str, value["workspace_id"]),
         status=_status(value["status"]),
     )
     for field_name in ("title", "url"):
@@ -48,6 +48,14 @@ def browser_page_to_proto(value: Mapping[str, object]) -> browser_pb2.BrowserPag
         if not isinstance(sequence, int) or sequence < 0:
             raise ValueError("Browser 页面 sequence 必须是非负整数")
         page.sequence = sequence
+    revision = value.get("transport_owner_revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise ValueError("Browser 页面 transport_owner_revision 必须是正整数")
+    page.transport_owner_revision = revision
+    recovery = value.get("reconciliation_status")
+    if recovery not in {"verified", "unknown", "reconcile_required"}:
+        raise ValueError("Browser 页面 reconciliation_status 无效")
+    page.reconciliation_status = recovery
     page.metadata.CopyFrom(struct_from_mapping({"raw": dict(value)}))
     return page
 
@@ -58,4 +66,8 @@ def browser_page_to_json(value: browser_pb2.BrowserPage) -> dict[str, object]:
     raw = struct_to_mapping(value.metadata).get("raw")
     if not isinstance(raw, dict):
         raise TypeError(f"Browser Protobuf 页面 raw metadata 格式错误: browser_id={value.browser_id}")
-    return cast(dict[str, object], raw)
+    result = cast(dict[str, object], raw)
+    result["workspace_id"] = value.workspace_id
+    result["transport_owner_revision"] = value.transport_owner_revision
+    result["reconciliation_status"] = value.reconciliation_status
+    return result

@@ -106,7 +106,7 @@ class TerminalOperations(ResourceOperations):
                 runtime = result.get("terminal", result)
                 if not isinstance(runtime, dict):
                     raise TypeError("Terminal operation 缺少 PTY 完整事实")
-                observe_resource(record, runtime, self._owner._recovered, self._owner.kind)
+                observe_resource(record, runtime, self._owner.kind)
                 self._owner._store.persist()
                 projection = resource_projection(record, runtime, self._owner.kind)
                 return {**result, "terminal": projection} if "terminal" in result else projection

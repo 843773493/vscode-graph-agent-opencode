@@ -15,9 +15,9 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
 )
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import terminate_process
-from tests.support.terminal_tool_runtime import (
-    TerminalToolRuntime,
-    terminal_tool_runtime,
+from tests.support.workspace_tool_runtime import (
+    WorkspaceToolRuntime,
+    workspace_tool_runtime,
 )
 
 
@@ -26,13 +26,13 @@ async def terminal_runtime(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
-) -> AsyncIterator[TerminalToolRuntime]:
+) -> AsyncIterator[WorkspaceToolRuntime]:
     root = Path(integration_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
     monkeypatch.setenv("BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{port}")
     process = start_terminal_backend(backend_port=port, workspace_root=str(root))
     try:
-        async with terminal_tool_runtime(root) as runtime:
+        async with workspace_tool_runtime(root) as runtime:
             yield runtime
     finally:
         terminate_process(process)
@@ -41,7 +41,7 @@ async def terminal_runtime(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exit_code", [0, 9])
 async def test_real_tool_acceptance_owner_lease_pty_and_final_receipt(
-    terminal_runtime: TerminalToolRuntime, exit_code: int
+    terminal_runtime: WorkspaceToolRuntime, exit_code: int
 ) -> None:
     container, session_id, context = terminal_runtime
     owner = container.terminal_resource_owner
@@ -105,10 +105,10 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
         import asyncio, json, os, sys
         from pathlib import Path
         from app.core.turn_execution_scope import get_current_turn_execution_scope
-        from tests.support.terminal_tool_runtime import terminal_tool_runtime
+        from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
         async def crash():
-            async with terminal_tool_runtime(Path(sys.argv[1])) as (container, session_id, context):
+            async with workspace_tool_runtime(Path(sys.argv[1])) as (container, session_id, context):
                 owner = container.terminal_resource_owner
                 scope = get_current_turn_execution_scope()
                 async with owner.operation(
@@ -163,7 +163,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delete_happened", [True, False])
 async def test_real_tracker_same_generation_retry_requires_confirmed_pty_termination(
-    terminal_runtime: TerminalToolRuntime, monkeypatch: pytest.MonkeyPatch,
+    terminal_runtime: WorkspaceToolRuntime, monkeypatch: pytest.MonkeyPatch,
     delete_happened: bool,
 ) -> None:
     from app.core.execution_admission_context import require_current_execution_admission

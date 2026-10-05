@@ -6,7 +6,6 @@ import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -220,9 +219,9 @@ async def _adopt_local_node_service(
     *,
     service_url: str,
     service_name: str,
-    identity_field: Literal["workspace_id", "workspace_root"],
-    expected_identity: str,
+    backend_workspace_id: str,
 ) -> AdoptedManagedProcess | None:
+    _validate_backend_workspace_id(backend_workspace_id)
     parsed = urlparse(service_url)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
         raise ValueError(
@@ -243,12 +242,11 @@ async def _adopt_local_node_service(
     payload = response.json()
     if not isinstance(payload, dict):
         raise TypeError(f"持久化 {service_name} 健康响应必须是 JSON 对象: {service_url}")
-    if payload.get(identity_field) != expected_identity:
-        identity_error = "backend UUID 不匹配" if identity_field == "workspace_id" else "工作区身份不匹配"
+    if payload.get("workspace_id") != backend_workspace_id:
         raise RuntimeError(
-            f"持久化 {service_name} {identity_error}: "
-            f"url={service_url}, expected={expected_identity}, "
-            f"actual={payload.get(identity_field)!r}"
+            f"持久化 {service_name} backend UUID 不匹配: "
+            f"url={service_url}, expected={backend_workspace_id}, "
+            f"actual={payload.get('workspace_id')!r}"
         )
     process_id = payload.get("process_id")
     if isinstance(process_id, bool) or not isinstance(process_id, int):
@@ -261,13 +259,12 @@ async def _adopt_local_node_service(
 async def _adopt_browser_manager(
     *,
     service_url: str,
-    workspace_root: Path,
+    backend_workspace_id: str,
 ) -> AdoptedManagedProcess | None:
     return await _adopt_local_node_service(
         service_url=service_url,
         service_name="Browser Manager",
-        identity_field="workspace_root",
-        expected_identity=str(workspace_root.resolve()),
+        backend_workspace_id=backend_workspace_id,
     )
 
 
@@ -276,12 +273,10 @@ async def _adopt_terminal_manager(
     service_url: str,
     backend_workspace_id: str,
 ) -> AdoptedManagedProcess | None:
-    _validate_backend_workspace_id(backend_workspace_id)
     return await _adopt_local_node_service(
         service_url=service_url,
         service_name="Terminal Manager",
-        identity_field="workspace_id",
-        expected_identity=backend_workspace_id,
+        backend_workspace_id=backend_workspace_id,
     )
 
 
@@ -438,7 +433,7 @@ async def start_managed_local_workspace_runtime(
     adopted_browser = (
         await _adopt_browser_manager(
             service_url=reusable_browser_url,
-            workspace_root=workspace_root,
+            backend_workspace_id=backend_workspace_id,
         )
         if reusable_browser_url
         else None
@@ -468,7 +463,7 @@ async def start_managed_local_workspace_runtime(
                 service="terminal",
                 port=terminal_port,
                 log_dir=log_dir,
-                terminal_workspace_id=backend_workspace_id,
+                workspace_id=backend_workspace_id,
             )
             terminal_process = terminal.process
         else:
@@ -482,6 +477,7 @@ async def start_managed_local_workspace_runtime(
                 project_root=project_root,
                 workspace_root=workspace_root,
                 service="browser",
+                workspace_id=backend_workspace_id,
                 port=browser_port,
                 log_dir=log_dir,
             )

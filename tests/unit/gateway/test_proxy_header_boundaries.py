@@ -33,6 +33,7 @@ _EXPECTED_GATEWAY_DROPPED_HEADERS = frozenset(
         "x-boxteam-workspace-id",
         "x-boxteam-gateway-id",
         "x-boxteam-navigation-actor",
+        "x-boxteam-resource-owner",
     }
 )
 

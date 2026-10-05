@@ -5904,9 +5904,9 @@ export declare type WorkspaceResourceCommandRequest = Message<"boxteam.workspace
 export declare const WorkspaceResourceCommandRequestSchema: GenMessage<WorkspaceResourceCommandRequest>;
 
 /**
- * @generated from message boxteam.workspace.v2.TerminalTransportGrantDTO
+ * @generated from message boxteam.workspace.v2.ResourceTransportGrantDTO
  */
-export declare type TerminalTransportGrantDTO = Message<"boxteam.workspace.v2.TerminalTransportGrantDTO"> & {
+export declare type ResourceTransportGrantDTO = Message<"boxteam.workspace.v2.ResourceTransportGrantDTO"> & {
   /**
    * @generated from field: string resource_id = 1;
    */
@@ -5934,10 +5934,92 @@ export declare type TerminalTransportGrantDTO = Message<"boxteam.workspace.v2.Te
 };
 
 /**
- * Describes the message boxteam.workspace.v2.TerminalTransportGrantDTO.
- * Use `create(TerminalTransportGrantDTOSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.ResourceTransportGrantDTO.
+ * Use `create(ResourceTransportGrantDTOSchema)` to create a new message.
  */
-export declare const TerminalTransportGrantDTOSchema: GenMessage<TerminalTransportGrantDTO>;
+export declare const ResourceTransportGrantDTOSchema: GenMessage<ResourceTransportGrantDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.BrowserResourceCreateRequest
+ */
+export declare type BrowserResourceCreateRequest = Message<"boxteam.workspace.v2.BrowserResourceCreateRequest"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: optional string thread_id = 2;
+   */
+  threadId?: string | undefined;
+
+  /**
+   * @generated from field: string retention_scope = 3;
+   */
+  retentionScope: string;
+
+  /**
+   * @generated from field: string title = 4;
+   */
+  title: string;
+
+  /**
+   * @generated from field: string url = 5;
+   */
+  url: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct viewport = 6;
+   */
+  viewport?: JsonObject | undefined;
+
+  /**
+   * @generated from field: optional string device_profile = 7;
+   */
+  deviceProfile?: string | undefined;
+
+  /**
+   * @generated from field: optional string device_orientation = 8;
+   */
+  deviceOrientation?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.BrowserResourceCreateRequest.
+ * Use `create(BrowserResourceCreateRequestSchema)` to create a new message.
+ */
+export declare const BrowserResourceCreateRequestSchema: GenMessage<BrowserResourceCreateRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.BrowserResourceOperationRequest
+ */
+export declare type BrowserResourceOperationRequest = Message<"boxteam.workspace.v2.BrowserResourceOperationRequest"> & {
+  /**
+   * @generated from field: uint64 expected_revision = 1;
+   */
+  expectedRevision: bigint;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ResourceThreadRef thread = 2;
+   */
+  thread?: ResourceThreadRef | undefined;
+
+  /**
+   * @generated from field: string action = 3;
+   */
+  action: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct payload = 4;
+   */
+  payload?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.BrowserResourceOperationRequest.
+ * Use `create(BrowserResourceOperationRequestSchema)` to create a new message.
+ */
+export declare const BrowserResourceOperationRequestSchema: GenMessage<BrowserResourceOperationRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionStatusChangedExecutionEventDTO

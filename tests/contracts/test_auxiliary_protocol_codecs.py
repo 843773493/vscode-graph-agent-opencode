@@ -52,7 +52,9 @@ def test_browser_snapshot_round_trip_preserves_extended_json_fields() -> None:
     value = {
         "browser_id": "browser_123",
         "page_id": "page_123",
-        "session_id": "session_123",
+        "workspace_id": "00000000-0000-4000-8000-000000000001",
+        "transport_owner_revision": 9_007_199_254_740_993,
+        "reconciliation_status": "verified",
         "status": "running",
         "url": "https://example.com",
         "viewport": {"width": 1280, "height": 800},
@@ -61,7 +63,9 @@ def test_browser_snapshot_round_trip_preserves_extended_json_fields() -> None:
 
     encoded = browser_page_to_proto(value)
 
-    assert browser_page_to_json(encoded) == value
+    decoded = browser_page_to_json(encoded)
+    assert isinstance(decoded["transport_owner_revision"], int)
+    assert decoded == value
 
 
 def test_gateway_adapter_uses_only_gateway_protocol_fields() -> None:

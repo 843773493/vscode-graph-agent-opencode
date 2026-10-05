@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Literal
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
+from app.abstractions.browser_resources import BrowserAction, BrowserRequestError
+from app.abstractions.workspace_resources import RetentionScope
 from app.agents.custom_tools import CustomToolFactoryContext
-from app.services.infrastructure.browser_manager_client import (
-    BrowserManagerRequestError,
-)
+from app.core.execution_admission_context import require_current_execution_admission
+from app.core.turn_execution_scope import get_current_turn_execution_scope
+from app.services.business.browser_resources.operations import BrowserOperations
 
 # 浏览器导航类型闭集：输入模型与工具内联签名共用同一事实来源。
 NavigatePageType = Literal[
@@ -26,7 +29,7 @@ NavigatePageType = Literal[
 MouseButton = Literal["left", "right", "middle"]
 
 
-def _json_result(payload: dict[str, Any]) -> str:
+def _json_result(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -47,7 +50,13 @@ class OpenBrowserPageInput(BaseModel):
     )
     forceNew: bool = Field(
         default=False,
-        description="为 false 时优先接管当前会话已有的运行中浏览器；为 true 时新建浏览器。",
+        description="为 false 时优先接管当前精确 Thread 已关联且可用的运行中浏览器；为 true 时新建浏览器。",
+    )
+
+
+    retention_scope: RetentionScope = Field(
+        default="thread",
+        description="thread 为来源 Thread 的临时浏览器；workspace 为持久浏览器，复用临时浏览器时会提升保留范围。",
     )
 
 
@@ -121,7 +130,7 @@ class RunPlaywrightCodeInput(PageIdInput):
     )
 
 
-def _browser_page_summary(browser: dict[str, Any]) -> dict[str, Any]:
+def _browser_page_summary(browser: dict[str, object]) -> dict[str, object]:
     browser_id = browser.get("browser_id")
     if not isinstance(browser_id, str) or not browser_id:
         raise RuntimeError(f"浏览器记录缺少 browser_id: {browser!r}")
@@ -131,7 +140,7 @@ def _browser_page_summary(browser: dict[str, Any]) -> dict[str, Any]:
         raw_pages = []
     if not isinstance(raw_pages, list):
         raise TypeError(f"浏览器记录 pages 不是数组: browser_id={browser_id}")
-    pages: list[dict[str, Any]] = []
+    pages: list[dict[str, object]] = []
     for raw_page in raw_pages:
         if not isinstance(raw_page, dict):
             raise TypeError(f"浏览器标签页记录不是对象: browser_id={browser_id}")
@@ -163,10 +172,10 @@ def _browser_page_summary(browser: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stable_page_tool_result(
-    browser: dict[str, Any],
+    browser: dict[str, object],
     *,
     browser_id: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """保留页面详情，同时把浏览器会话句柄与内部标签页 ID 明确分开。"""
     resolved_browser_id = browser_id or browser.get("browser_id")
     if not isinstance(resolved_browser_id, str) or not resolved_browser_id:
@@ -196,8 +205,8 @@ def _stable_page_tool_result(
     return result
 
 
-def _retryable_browser_error_result(error: BrowserManagerRequestError) -> str:
-    payload: dict[str, Any] = {
+def _retryable_browser_error_result(error: BrowserRequestError) -> str:
+    payload: dict[str, object] = {
         "status": "error",
         "error": str(error),
         "retryable": True,
@@ -212,12 +221,34 @@ def _retryable_browser_error_result(error: BrowserManagerRequestError) -> str:
     return _json_result(payload)
 
 
-async def _run_retryable_browser_operation(
-    operation: Callable[[], Awaitable[dict[str, Any]]],
-) -> dict[str, Any] | str:
+@asynccontextmanager
+async def _browser_operation(context: CustomToolFactoryContext) -> AsyncIterator[BrowserOperations]:
+    binding = context.invocation_context.thread_binding
+    if binding is None or binding.session_id != context.session_id:
+        raise RuntimeError("Browser 工具缺少匹配会话的真实 ThreadRuntimeBinding")
+    admission = require_current_execution_admission(langgraph_thread_id=binding.thread_id)
+    if (admission.session_id, admission.thread_id) != (binding.session_id, binding.thread_id):
+        raise RuntimeError("Browser 工具 binding 与 execution admission 冲突")
+    scope = get_current_turn_execution_scope()
+    if scope is None or scope.is_closed:
+        raise RuntimeError("Browser 工具缺少活动 execution scope")
+    scope.raise_if_cancelled()
+    async with context.browser_resource_owner.operation(
+        session_id=binding.session_id, thread_id=binding.thread_id,
+        holder_id=scope.turn_stream_id, operation_id=context.invocation_context.require_tool_call_id(),
+        created_by_turn_id=admission.turn_id,
+    ) as operations:
+        yield operations
+
+
+async def _run_browser_action(
+    context: CustomToolFactoryContext, browser_id: str,
+    action: BrowserAction, payload: dict[str, object] | None = None,
+) -> dict[str, object] | str:
     try:
-        return await operation()
-    except BrowserManagerRequestError as error:
+        async with _browser_operation(context) as operations:
+            return await operations.perform(browser_id, action, payload)
+    except BrowserRequestError as error:
         if error.retryable is not True:
             raise
         return _retryable_browser_error_result(error)
@@ -225,75 +256,55 @@ async def _run_retryable_browser_operation(
 
 def create_list_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def list_browser_page() -> str:
-        browsers = context.browser_manager_client.list_browsers_from_state(
-            context.session_id
-        )
-        pages = [
-            _browser_page_summary(dict(browser))
-            for browser in browsers
-            if browser.get("status") != "deleted"
-        ]
-        return _json_result({"count": len(pages), "pages": pages})
+        async with _browser_operation(context) as operations:
+            browsers = await operations.list_resources()
+            pages = [_browser_page_summary(browser) for browser in browsers]
+            return _json_result({"count": len(pages), "pages": pages})
 
     return StructuredTool.from_function(
-        coroutine=list_browser_page,
-        name="listBrowserPage",
-        description=(
-            "只读列出当前 Session 中未删除的可附加浏览器页面，返回 pageId、"
-            "网址、标题、资源状态、连接人数和标签页摘要；不会创建、唤醒或导航页面。"
-        ),
+        coroutine=list_browser_page, name="listBrowserPage",
+        description="只读列出当前精确 Thread 已关联的浏览器，返回稳定 pageId 和标签页摘要。",
         args_schema=ListBrowserPageInput,
     )
 
 
 def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool:
-    async def open_browser_page(url: str, forceNew: bool = False) -> str:
-        browser = None
-        if not forceNew:
-            browser = next(
-                (
-                    candidate
-                    for candidate in context.browser_manager_client.list_browsers_from_state(
-                        context.session_id
-                    )
-                    if candidate.get("status") == "running"
-                ),
-                None,
-            )
-        reused = browser is not None
-        if browser is None:
-            browser = await context.browser_manager_client.create_browser(
-                session_id=context.session_id,
-                title="Agent browser",
-                url=url,
-            )
-        else:
-            browser = await context.browser_manager_client.navigate_page(
-                browser_id=str(browser["browser_id"]),
-                navigation_type="url",
-                url=url,
-            )
-        browser_id = str(browser["browser_id"])
-        page = await context.browser_manager_client.read_page(browser_id)
-        return _json_result(
-            {
-                "pageId": browser_id,
-                "browserId": browser_id,
-                "url": browser.get("url"),
-                "title": browser.get("title"),
-                "forceNew": forceNew,
-                "reused": reused,
-                "summary": page.get("summary"),
-            }
-        )
+    async def open_browser_page(
+        url: str, forceNew: bool = False, retention_scope: RetentionScope = "thread",
+    ) -> str:
+        async with _browser_operation(context) as operations:
+            browser = None if forceNew else next((
+                candidate for candidate in await operations.list_resources()
+                if candidate["status"] == "running" and candidate["reconciliation_status"] == "verified"
+            ), None)
+            reused = browser is not None
+            if browser is None:
+                browser = await operations.create_browser(url=url, retention_scope=retention_scope)
+            else:
+                browser_id = str(browser["browser_id"])
+                if retention_scope == "workspace" and browser["retention_scope"] == "thread":
+                    browser = await operations.promote(browser_id)
+                receipt = await operations.perform(browser_id, "navigate", {"type": "url", "url": url})
+                browser = receipt["browser"]
+            browser_id = str(browser["browser_id"])
+            page = await operations.perform(browser_id, "read")
+            current = page["browser"]
+            return _json_result({
+                "pageId": browser_id, "browserId": browser_id,
+                "url": current.get("url"), "title": current.get("title"),
+                "forceNew": forceNew, "reused": reused, "summary": page.get("summary"),
+                "retention_scope": current["retention_scope"],
+                "owner_revision": current["owner_revision"],
+                "source_thread": current["source_thread"],
+                "thread_associations": current["thread_associations"],
+            })
 
     return StructuredTool.from_function(
-        coroutine=open_browser_page,
-        name="openBrowserPage",
+        coroutine=open_browser_page, name="openBrowserPage",
         description=(
-            "在可附加浏览器中打开 URL；默认接管当前会话已有页面，forceNew=true 时新建。"
-            "BoxTeam 工作台请使用 8011，工作区应用请使用已提供的预览端口（如 8765）；"
-            "不要直接导航动态 Workspace backend 的 8010。"
+            "打开 URL；默认复用当前精确 Thread 已关联的页面，forceNew=true 时新建。"
+            "默认 thread 临时保留，retention_scope=workspace 创建或提升为工作区持久浏览器。"
+            "BoxTeam 工作台使用 8011，工作区应用使用已提供的预览端口。"
         ),
         args_schema=OpenBrowserPageInput,
     )
@@ -302,9 +313,7 @@ def create_open_browser_page_tool(context: CustomToolFactoryContext) -> BaseTool
 def create_read_page_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def read_page(pageId: str) -> str:
         resolved_page_id = _page_id(pageId)
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.read_page(resolved_page_id)
-        )
+        page = await _run_browser_action(context, resolved_page_id, "read")
         if isinstance(page, str):
             return page
         return _json_result(
@@ -326,17 +335,12 @@ def create_navigate_page_tool(context: CustomToolFactoryContext) -> BaseTool:
         url: str | None = None,
         tabId: str | None = None,
     ) -> str:
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.navigate_page(
-                browser_id=_page_id(pageId),
-                navigation_type=type,
-                url=url,
-                tab_id=tabId,
-            )
+        page = await _run_browser_action(
+            context, _page_id(pageId), "navigate", {"type": type, "url": url, "tab_id": tabId},
         )
         if isinstance(page, str):
             return page
-        return _json_result(_stable_page_tool_result(page))
+        return _json_result(_stable_page_tool_result(page, browser_id=str(page["browser"]["browser_id"])))
 
     return StructuredTool.from_function(
         coroutine=navigate_page,
@@ -355,9 +359,8 @@ def create_click_element_tool(context: CustomToolFactoryContext) -> BaseTool:
         dblClick: bool = False,
         button: MouseButton = "left",
     ) -> str:
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.click_element(
-                _page_id(pageId),
+        page = await _run_browser_action(
+            context, _page_id(pageId), "click",
                 {
                     "ref": ref,
                     "selector": selector,
@@ -365,7 +368,6 @@ def create_click_element_tool(context: CustomToolFactoryContext) -> BaseTool:
                     "dblClick": dblClick,
                     "button": button,
                 },
-            )
         )
         if isinstance(page, str):
             return page
@@ -392,9 +394,8 @@ def create_type_in_page_tool(context: CustomToolFactoryContext) -> BaseTool:
         selector: str | None = None,
         element: str | None = None,
     ) -> str:
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.type_in_page(
-                _page_id(pageId),
+        page = await _run_browser_action(
+            context, _page_id(pageId), "type",
                 {
                     "text": text,
                     "submit": submit,
@@ -403,7 +404,6 @@ def create_type_in_page_tool(context: CustomToolFactoryContext) -> BaseTool:
                     "selector": selector,
                     "element": element,
                 },
-            )
         )
         if isinstance(page, str):
             return page
@@ -424,11 +424,9 @@ def create_hover_element_tool(context: CustomToolFactoryContext) -> BaseTool:
         selector: str | None = None,
         element: str | None = None,
     ) -> str:
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.hover_element(
-                _page_id(pageId),
+        page = await _run_browser_action(
+            context, _page_id(pageId), "hover",
                 {"ref": ref, "selector": selector, "element": element},
-            )
         )
         if isinstance(page, str):
             return page
@@ -452,9 +450,8 @@ def create_drag_element_tool(context: CustomToolFactoryContext) -> BaseTool:
         toSelector: str | None = None,
         toElement: str | None = None,
     ) -> str:
-        page = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.drag_element(
-                _page_id(pageId),
+        page = await _run_browser_action(
+            context, _page_id(pageId), "drag",
                 {
                     "fromRef": fromRef,
                     "fromSelector": fromSelector,
@@ -463,7 +460,6 @@ def create_drag_element_tool(context: CustomToolFactoryContext) -> BaseTool:
                     "toSelector": toSelector,
                     "toElement": toElement,
                 },
-            )
         )
         if isinstance(page, str):
             return page
@@ -484,15 +480,13 @@ def create_handle_dialog_tool(context: CustomToolFactoryContext) -> BaseTool:
         promptText: str | None = None,
         selectFiles: list[str] | None = None,
     ) -> str:
-        result = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.handle_dialog(
-                _page_id(pageId),
+        result = await _run_browser_action(
+            context, _page_id(pageId), "dialog",
                 {
                     "acceptModal": acceptModal,
                     "promptText": promptText,
                     "selectFiles": selectFiles,
                 },
-            )
         )
         if isinstance(result, str):
             return result
@@ -514,16 +508,14 @@ def create_screenshot_page_tool(context: CustomToolFactoryContext) -> BaseTool:
         element: str | None = None,
         scrollIntoViewIfNeeded: bool = False,
     ) -> str:
-        result = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.screenshot_page(
-                _page_id(pageId),
+        result = await _run_browser_action(
+            context, _page_id(pageId), "screenshot",
                 {
                     "ref": ref,
                     "selector": selector,
                     "element": element,
                     "scrollIntoViewIfNeeded": scrollIntoViewIfNeeded,
                 },
-            )
         )
         if isinstance(result, str):
             return result
@@ -542,11 +534,9 @@ def create_screenshot_page_tool(context: CustomToolFactoryContext) -> BaseTool:
 
 def create_run_playwright_code_tool(context: CustomToolFactoryContext) -> BaseTool:
     async def run_playwright_code(pageId: str, code: str, timeoutMs: int = 10000) -> str:
-        result = await _run_retryable_browser_operation(
-            lambda: context.browser_manager_client.run_playwright_code(
-                _page_id(pageId),
+        result = await _run_browser_action(
+            context, _page_id(pageId), "run",
                 {"code": code, "timeoutMs": timeoutMs},
-            )
         )
         if isinstance(result, str):
             return result

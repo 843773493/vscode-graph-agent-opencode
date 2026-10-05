@@ -1122,7 +1122,6 @@ def test_gateway_restart_detaches_browser_and_closes_other_services() -> None:
 
 @pytest.mark.asyncio
 async def test_gateway_adopts_matching_browser_manager(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Response:
@@ -1134,7 +1133,7 @@ async def test_gateway_adopts_matching_browser_manager(
             return {
                 "ok": True,
                 "process_id": 43210,
-                "workspace_root": str(tmp_path.resolve()),
+                "workspace_id": "00000000-0000-4000-8000-000000000001",
             }
 
     class Client:
@@ -1158,7 +1157,7 @@ async def test_gateway_adopts_matching_browser_manager(
 
     adopted = await _adopt_browser_manager(
         service_url="http://127.0.0.1:42002",
-        workspace_root=tmp_path,
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
     )
 
     assert adopted is not None
@@ -1166,13 +1165,11 @@ async def test_gateway_adopts_matching_browser_manager(
 
 
 @pytest.mark.asyncio
-async def test_gateway_rejects_persisted_browser_manager_url_without_port(
-    tmp_path: Path,
-) -> None:
+async def test_gateway_rejects_persisted_browser_manager_url_without_port() -> None:
     with pytest.raises(ValueError, match="缺少端口"):
         await _adopt_browser_manager(
             service_url="http://127.0.0.1",
-            workspace_root=tmp_path,
+            backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
 
@@ -1221,12 +1218,14 @@ async def test_gateway_adopts_matching_terminal_manager(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("service", ["terminal", "browser"])
 @pytest.mark.parametrize(
     "mismatch",
     ["wrong-backend-uuid", "missing-backend-uuid", "malformed-backend-uuid"],
 )
-async def test_gateway_rejects_mismatched_terminal_manager_without_adoption(
+async def test_gateway_rejects_mismatched_node_manager_without_adoption(
     monkeypatch: pytest.MonkeyPatch,
+    service: str,
     mismatch: str,
 ) -> None:
     requested_urls: list[str] = []
@@ -1267,13 +1266,15 @@ async def test_gateway_rejects_mismatched_terminal_manager_without_adoption(
         Client,
     )
 
+    adopt = _adopt_terminal_manager if service == "terminal" else _adopt_browser_manager
+    service_url = f"http://127.0.0.1:{42001 if service == 'terminal' else 42002}"
     with pytest.raises(RuntimeError):
-        await _adopt_terminal_manager(
-            service_url="http://127.0.0.1:42001",
+        await adopt(
+            service_url=service_url,
             backend_workspace_id="00000000-0000-4000-8000-000000000001",
         )
 
-    assert requested_urls == ["http://127.0.0.1:42001/health"]
+    assert requested_urls == [f"{service_url}/health"]
 
 
 @pytest.mark.asyncio
@@ -1484,7 +1485,7 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
 
     def start_node(**kwargs: object) -> _RuntimeProcess:
         started_services.append(
-            (str(kwargs["service"]), str(kwargs.get("terminal_workspace_id")))
+            (str(kwargs["service"]), str(kwargs.get("workspace_id")))
         )
         return _RuntimeProcess()
 
@@ -1518,7 +1519,7 @@ async def test_managed_runtime_reclaims_persisted_backend_before_fresh_start(
         "terminal",
         "00000000-0000-4000-8000-000000000001",
     )
-    assert started_services[1] == ("browser", "None")
+    assert started_services[1] == ("browser", "00000000-0000-4000-8000-000000000001")
     assert runtime.service_urls["workspace_api"] == "http://127.0.0.1:42000"
     assert runtime.processes["workspace_api"] is fresh_backend
 

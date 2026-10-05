@@ -8,9 +8,9 @@ from urllib.error import HTTPError
 
 import pytest
 
+from app.abstractions.browser_resources import BrowserRequestError
 from app.services.infrastructure.browser_manager_client import (
     BrowserManagerClient,
-    BrowserManagerRequestError,
 )
 from app.services.infrastructure.config_service import ConfigService
 
@@ -29,26 +29,24 @@ class _Response:
         return self._body
 
 
-def test_agent_client_sends_actor_header() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test").for_actor(
-        "agent"
-    )
+def test_owner_client_sends_workspace_owner_and_per_call_actor_headers() -> None:
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     with patch(
         "app.services.infrastructure.browser_manager_client.urlopen",
         return_value=_Response({"data": {"summary": "ok"}}),
     ) as mocked_urlopen:
-        assert client._json_request_sync("GET", "/api/browsers/browser_1/read", None)[
+        assert client._json_request_sync("GET", "/api/browsers/browser_1/read", None, "agent")[
             "data"
         ] == {"summary": "ok"}
 
     request = mocked_urlopen.call_args.args[0]
     assert request.get_header("X-boxteam-actor") == "agent"
+    assert request.get_header("X-boxteam-workspace-id") == "00000000-0000-4000-8000-000000000001"
+    assert request.get_header("X-boxteam-resource-owner") == "workspace-browser"
 
 
 def test_locked_error_is_reported_as_clean_tool_message() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test").for_actor(
-        "agent"
-    )
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     body = json.dumps(
         {
             "code": "browser_agent_access_locked",
@@ -73,9 +71,7 @@ def test_locked_error_is_reported_as_clean_tool_message() -> None:
 
 
 def test_timeout_error_preserves_retry_metadata() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test").for_actor(
-        "agent"
-    )
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     body = json.dumps(
         {
             "code": "browser_tool_timeout",
@@ -95,7 +91,7 @@ def test_timeout_error_preserves_retry_metadata() -> None:
     with patch(
         "app.services.infrastructure.browser_manager_client.urlopen",
         side_effect=http_error,
-    ), pytest.raises(BrowserManagerRequestError, match="可重试") as error_info:
+    ), pytest.raises(BrowserRequestError, match="可重试") as error_info:
         client._json_request_sync("POST", "/api/browsers/browser_1/run", {})
 
     error = error_info.value
@@ -106,7 +102,7 @@ def test_timeout_error_preserves_retry_metadata() -> None:
 
 
 def test_playwright_request_timeout_covers_declared_browser_budget() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test")
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     with patch(
         "app.services.infrastructure.browser_manager_client.urlopen",
         return_value=_Response({"data": {"result": "ok"}}),
@@ -122,7 +118,7 @@ def test_playwright_request_timeout_covers_declared_browser_budget() -> None:
 
 
 def test_non_playwright_request_keeps_short_default_timeout() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test")
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     with patch(
         "app.services.infrastructure.browser_manager_client.urlopen",
         return_value=_Response({"data": {"summary": "ok"}}),
@@ -136,7 +132,7 @@ def test_browser_backend_url_is_resolved_from_current_config_snapshot() -> None:
     config_service = Mock(spec=ConfigService)
     current_url = ["http://browser-a"]
     config_service.get_browser_backend_url.side_effect = lambda: current_url[0]
-    client = BrowserManagerClient(config_service=config_service)
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", config_service=config_service)
     with patch(
         "app.services.infrastructure.browser_manager_client.urlopen",
         return_value=_Response({"data": {"summary": "ok"}}),
@@ -155,16 +151,15 @@ def test_browser_backend_url_is_resolved_from_current_config_snapshot() -> None:
 
 @pytest.mark.asyncio
 async def test_async_transport_timeout_becomes_retryable_browser_error() -> None:
-    client = BrowserManagerClient(backend_url="http://browser.test")
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
     with patch.object(
         client,
         "_json_request_sync",
         side_effect=TimeoutError("timed out"),
     ), pytest.raises(
-        BrowserManagerRequestError,
-        match="浏览器管理器操作超时",
+        BrowserRequestError, match="浏览器管理器操作超时",
     ) as error_info:
-        await client.read_page("browser_1")
+        await client.perform("browser_1", "read", {}, actor="agent")
 
     error = error_info.value
     assert error.status == 408

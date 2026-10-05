@@ -1,39 +1,10 @@
 import type { CreatableSessionConnectionKind } from "../../types/frontend";
-import { requestJson } from "../http";
-import { createWorkspaceTerminal } from "../workspaceResources";
+import { createWorkspaceBrowser, createWorkspaceTerminal } from "../workspaceResources";
 
 export interface CreatedSessionConnection {
   kind: CreatableSessionConnectionKind;
   resourceId: string;
 }
-
-interface ManagerResourceResponse {
-  data?: Record<string, unknown>;
-}
-
-interface SessionConnectionCreateRequest {
-  service: string;
-  path: string;
-  payload: Record<string, unknown>;
-  idField: string;
-}
-
-const SESSION_CONNECTION_CREATE_REQUESTS: Record<
-  "browser",
-  (sessionId: string) => SessionConnectionCreateRequest
-> = {
-  browser: (sessionId) => ({
-    service: "browser-manager",
-    path: "api/browsers",
-    payload: {
-      session_id: sessionId,
-      title: "用户浏览器",
-      url: "about:blank",
-      viewport: { width: 1280, height: 800 },
-    },
-    idField: "browser_id",
-  }),
-};
 
 export async function createSessionConnection(
   port: number,
@@ -41,23 +12,8 @@ export async function createSessionConnection(
   sessionId: string,
   kind: CreatableSessionConnectionKind,
 ): Promise<CreatedSessionConnection> {
-  if (kind === "terminal") {
-    const resource = await createWorkspaceTerminal(port, workspaceId, sessionId);
-    return { kind, resourceId: resource.resource_id };
-  }
-  const encodedWorkspaceId = encodeURIComponent(workspaceId);
-  const request = SESSION_CONNECTION_CREATE_REQUESTS[kind](sessionId);
-  const response = await requestJson<ManagerResourceResponse>(
-    port,
-    `/api/gateway/workspaces/${encodedWorkspaceId}/${request.service}/${request.path}`,
-    {
-      method: "POST",
-      body: JSON.stringify(request.payload),
-    },
-  );
-  const resourceId = response.data?.[request.idField];
-  if (typeof resourceId !== "string" || !resourceId) {
-    throw new Error(`${request.service} 创建响应缺少 ${request.idField}`);
-  }
-  return { kind, resourceId };
+  const resource = kind === "terminal"
+    ? await createWorkspaceTerminal(port, workspaceId, sessionId)
+    : await createWorkspaceBrowser(port, workspaceId, sessionId);
+  return { kind, resourceId: resource.resource_id };
 }

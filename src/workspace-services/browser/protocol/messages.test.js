@@ -12,6 +12,7 @@ describe("Browser Protobuf JSON adapter", () => {
       type: "attach",
       browserId: "browser_123",
       participantId: "user_12345678",
+      grantToken: "grant-once",
     }));
     const detach = JSON.parse(encodeBrowserClientMessage({
       type: "detach",
@@ -19,6 +20,7 @@ describe("Browser Protobuf JSON adapter", () => {
     }));
 
     expect(attach.browserId).toBe("browser_123");
+    expect(attach.grantToken).toBe("grant-once");
     expect(detach).toEqual({ type: "detach", browserId: "browser_123" });
   });
 

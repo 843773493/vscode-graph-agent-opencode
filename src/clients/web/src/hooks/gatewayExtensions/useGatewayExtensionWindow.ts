@@ -8,7 +8,7 @@ import type {
 } from "./useGatewayExtensionResources";
 import type { SessionResource } from "../../types/backend";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
-import { terminalPreviewThread } from "../../state/display/terminalResourceDisplay";
+import { resourcePreviewThread, workspaceResourceDisplay } from "../../state/display/workspaceResourceDisplay";
 import { buildGatewayAttachUrl } from "../../utils/attachUrls";
 import {
   EXTENSION_WINDOW_NAME,
@@ -26,7 +26,7 @@ interface UseGatewayExtensionWindowOptions {
   sessionResources: SessionResource[];
   extensionResources: ReturnType<typeof useGatewayExtensionResources>;
   openAuxiliaryTab: (tab: WorkspaceAuxiliaryTab) => void;
-  openBrowserPreview: (browserId: string) => void;
+  openBrowserPreview: (browserId: string, thread?: ResourceThreadRef) => void;
   openTerminalPreview: (terminalId: string, thread?: ResourceThreadRef) => void;
   apiPort: number;
   activeSessionWorkspaceId: string | null;
@@ -80,11 +80,13 @@ export function useGatewayExtensionWindow({
       setExtensionWindowFallback(true);
       openAuxiliaryTab(kind === "debug" ? "debug" : "resources");
       if (kind === "browser") {
-        openBrowserPreview(resourceId ?? "");
+        const resource = sessionResources.find((candidate) => candidate.kind === "browser" && candidate.resource_id === resourceId);
+        if (!resource) throw new Error("浏览器不在当前会话的权威关联清单中");
+        openBrowserPreview(resource.resource_id, resourcePreviewThread(resource, activeSessionId ?? ""));
       } else if (kind === "terminal") {
         const resource = sessionResources.find((candidate) => candidate.kind === "terminal" && candidate.resource_id === resourceId);
         if (!resource) throw new Error("终端不在当前会话的权威关联清单中");
-        openTerminalPreview(resource.resource_id, terminalPreviewThread(resource, activeSessionId ?? ""));
+        openTerminalPreview(resource.resource_id, resourcePreviewThread(resource, activeSessionId ?? ""));
       }
       setStatus("扩展窗口未能打开，已在当前页面切换为扩展窗口模式；请检查浏览器弹窗权限。");
       return;
@@ -99,10 +101,11 @@ export function useGatewayExtensionWindow({
     );
   };
   const createExtensionReplacement = async (entry: GatewayExtensionResourceEntry) => {
+    if (!activeSessionId || activeSessionWorkspaceId !== entry.workspace_id) throw new Error("新建浏览器需要先选择同工作区的有效会话");
     const created = await createSessionConnection(
       apiPort,
       entry.workspace_id,
-      entry.session_id,
+      activeSessionId,
       "browser",
     );
     await extensionResources.refresh();
@@ -114,12 +117,15 @@ export function useGatewayExtensionWindow({
       selectedExtensionEntry.resource.kind === "terminal")
     ? selectedExtensionEntry
     : null;
-  const extensionPreviewTab: WorkspaceRuntimePreviewTab | null = extensionPreviewEntry
+  const extensionCanOpen = extensionPreviewEntry?.resource.status === "running"
+    && extensionPreviewEntry.resource.reconciliation_status === "verified"
+    && (extensionPreviewEntry.resource.retention_scope === "workspace" || extensionPreviewEntry.resource.thread_associations.length > 0);
+  const extensionPreviewTab: WorkspaceRuntimePreviewTab | null = extensionPreviewEntry && extensionCanOpen
     ? extensionPreviewEntry.resource.kind === "browser"
       ? {
           previewType: "browser",
           path: `gateway-resource://${extensionPreviewEntry.key}`,
-          name: extensionPreviewEntry.resource.name,
+          name: workspaceResourceDisplay(extensionPreviewEntry.resource).name,
           scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
           browserId: extensionPreviewEntry.resource.resource_id,
           attachUrl: buildGatewayAttachUrl(
@@ -127,12 +133,13 @@ export function useGatewayExtensionWindow({
             extensionPreviewEntry.workspace_id,
             extensionPreviewEntry.resource.resource_id,
             true,
+            resourcePreviewThread(workspaceResourceDisplay(extensionPreviewEntry.resource), extensionPreviewEntry.session_id),
           ),
         }
       : {
           previewType: "terminal",
           path: `gateway-resource://${extensionPreviewEntry.key}`,
-          name: extensionPreviewEntry.resource.name,
+          name: workspaceResourceDisplay(extensionPreviewEntry.resource).name,
           scopeLabel: `${extensionPreviewEntry.gateway_name} · ${extensionPreviewEntry.workspace_name} · ${extensionPreviewEntry.session_title}`,
           terminalId: extensionPreviewEntry.resource.resource_id,
           attachUrl: buildGatewayAttachUrl(
@@ -140,7 +147,7 @@ export function useGatewayExtensionWindow({
             extensionPreviewEntry.workspace_id,
             extensionPreviewEntry.resource.resource_id,
             true,
-            terminalPreviewThread(extensionPreviewEntry.resource, extensionPreviewEntry.session_id),
+            resourcePreviewThread(workspaceResourceDisplay(extensionPreviewEntry.resource), extensionPreviewEntry.session_id),
           ),
         }
     : null;

@@ -1302,12 +1302,30 @@ export interface WorkspaceResourceCommandRequest {
   thread?: ResourceThreadRef | undefined;
 }
 
-export interface TerminalTransportGrantDTO {
+export interface ResourceTransportGrantDTO {
   resource_id: string;
   owner_revision: number;
   grant_token: string;
   expires_at: string;
   resource: WorkspaceResourceDTO | undefined;
+}
+
+export interface BrowserResourceCreateRequest {
+  session_id: string;
+  thread_id?: string | undefined;
+  retention_scope: string;
+  title: string;
+  url: string;
+  viewport: { [key: string]: any } | undefined;
+  device_profile?: string | undefined;
+  device_orientation?: string | undefined;
+}
+
+export interface BrowserResourceOperationRequest {
+  expected_revision: number;
+  thread?: ResourceThreadRef | undefined;
+  action: string;
+  payload: { [key: string]: any } | undefined;
 }
 
 export interface SessionStatusChangedExecutionEventDTO {
@@ -10652,12 +10670,12 @@ export const WorkspaceResourceCommandRequest: MessageFns<WorkspaceResourceComman
   },
 };
 
-function createBaseTerminalTransportGrantDTO(): TerminalTransportGrantDTO {
+function createBaseResourceTransportGrantDTO(): ResourceTransportGrantDTO {
   return { resource_id: "", owner_revision: 0, grant_token: "", expires_at: "", resource: undefined };
 }
 
-export const TerminalTransportGrantDTO: MessageFns<TerminalTransportGrantDTO> = {
-  fromJSON(object: any): TerminalTransportGrantDTO {
+export const ResourceTransportGrantDTO: MessageFns<ResourceTransportGrantDTO> = {
+  fromJSON(object: any): ResourceTransportGrantDTO {
     return {
       resource_id: isSet(object.resource_id) ? globalThis.String(object.resource_id) : "",
       owner_revision: isSet(object.owner_revision) ? globalThis.Number(object.owner_revision) : 0,
@@ -10667,7 +10685,7 @@ export const TerminalTransportGrantDTO: MessageFns<TerminalTransportGrantDTO> = 
     };
   },
 
-  toJSON(message: TerminalTransportGrantDTO): unknown {
+  toJSON(message: ResourceTransportGrantDTO): unknown {
     const obj: any = {};
     if (message.resource_id !== "") {
       obj.resource_id = message.resource_id;
@@ -10687,11 +10705,11 @@ export const TerminalTransportGrantDTO: MessageFns<TerminalTransportGrantDTO> = 
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<TerminalTransportGrantDTO>, I>>(base?: I): TerminalTransportGrantDTO {
-    return TerminalTransportGrantDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<ResourceTransportGrantDTO>, I>>(base?: I): ResourceTransportGrantDTO {
+    return ResourceTransportGrantDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<TerminalTransportGrantDTO>, I>>(object: I): TerminalTransportGrantDTO {
-    const message = createBaseTerminalTransportGrantDTO();
+  fromPartial<I extends Exact<DeepPartial<ResourceTransportGrantDTO>, I>>(object: I): ResourceTransportGrantDTO {
+    const message = createBaseResourceTransportGrantDTO();
     message.resource_id = object.resource_id ?? "";
     message.owner_revision = object.owner_revision ?? 0;
     message.grant_token = object.grant_token ?? "";
@@ -10699,6 +10717,127 @@ export const TerminalTransportGrantDTO: MessageFns<TerminalTransportGrantDTO> = 
     message.resource = (object.resource !== undefined && object.resource !== null)
       ? WorkspaceResourceDTO.fromPartial(object.resource)
       : undefined;
+    return message;
+  },
+};
+
+function createBaseBrowserResourceCreateRequest(): BrowserResourceCreateRequest {
+  return {
+    session_id: "",
+    thread_id: undefined,
+    retention_scope: "",
+    title: "",
+    url: "",
+    viewport: undefined,
+    device_profile: undefined,
+    device_orientation: undefined,
+  };
+}
+
+export const BrowserResourceCreateRequest: MessageFns<BrowserResourceCreateRequest> = {
+  fromJSON(object: any): BrowserResourceCreateRequest {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      retention_scope: isSet(object.retention_scope) ? globalThis.String(object.retention_scope) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      url: isSet(object.url) ? globalThis.String(object.url) : "",
+      viewport: isObject(object.viewport) ? object.viewport : undefined,
+      device_profile: isSet(object.device_profile) ? globalThis.String(object.device_profile) : undefined,
+      device_orientation: isSet(object.device_orientation) ? globalThis.String(object.device_orientation) : undefined,
+    };
+  },
+
+  toJSON(message: BrowserResourceCreateRequest): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.retention_scope !== "") {
+      obj.retention_scope = message.retention_scope;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.url !== "") {
+      obj.url = message.url;
+    }
+    if (message.viewport !== undefined) {
+      obj.viewport = message.viewport;
+    }
+    if (message.device_profile !== undefined) {
+      obj.device_profile = message.device_profile;
+    }
+    if (message.device_orientation !== undefined) {
+      obj.device_orientation = message.device_orientation;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<BrowserResourceCreateRequest>, I>>(base?: I): BrowserResourceCreateRequest {
+    return BrowserResourceCreateRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<BrowserResourceCreateRequest>, I>>(object: I): BrowserResourceCreateRequest {
+    const message = createBaseBrowserResourceCreateRequest();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? undefined;
+    message.retention_scope = object.retention_scope ?? "";
+    message.title = object.title ?? "";
+    message.url = object.url ?? "";
+    message.viewport = object.viewport ?? undefined;
+    message.device_profile = object.device_profile ?? undefined;
+    message.device_orientation = object.device_orientation ?? undefined;
+    return message;
+  },
+};
+
+function createBaseBrowserResourceOperationRequest(): BrowserResourceOperationRequest {
+  return { expected_revision: 0, thread: undefined, action: "", payload: undefined };
+}
+
+export const BrowserResourceOperationRequest: MessageFns<BrowserResourceOperationRequest> = {
+  fromJSON(object: any): BrowserResourceOperationRequest {
+    return {
+      expected_revision: isSet(object.expected_revision) ? globalThis.Number(object.expected_revision) : 0,
+      thread: isSet(object.thread) ? ResourceThreadRef.fromJSON(object.thread) : undefined,
+      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      payload: isObject(object.payload) ? object.payload : undefined,
+    };
+  },
+
+  toJSON(message: BrowserResourceOperationRequest): unknown {
+    const obj: any = {};
+    if (message.expected_revision !== 0) {
+      obj.expected_revision = Math.round(message.expected_revision);
+    }
+    if (message.thread !== undefined) {
+      obj.thread = ResourceThreadRef.toJSON(message.thread);
+    }
+    if (message.action !== "") {
+      obj.action = message.action;
+    }
+    if (message.payload !== undefined) {
+      obj.payload = message.payload;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<BrowserResourceOperationRequest>, I>>(base?: I): BrowserResourceOperationRequest {
+    return BrowserResourceOperationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<BrowserResourceOperationRequest>, I>>(
+    object: I,
+  ): BrowserResourceOperationRequest {
+    const message = createBaseBrowserResourceOperationRequest();
+    message.expected_revision = object.expected_revision ?? 0;
+    message.thread = (object.thread !== undefined && object.thread !== null)
+      ? ResourceThreadRef.fromPartial(object.thread)
+      : undefined;
+    message.action = object.action ?? "";
+    message.payload = object.payload ?? undefined;
     return message;
   },
 };

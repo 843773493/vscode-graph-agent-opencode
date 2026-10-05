@@ -23,18 +23,17 @@ function installCreateSessionConnectionStub(port: number): void {
       if (url.includes("/api/gateway/auth/local-credential")) {
         return Response.json({ code: 0, message: "ok", request_id: "req_token", data: { token: "test-token" } });
       }
-      const match = /\/api\/gateway\/workspaces\/([^/]+)\/([^/]+)\/api\/(browsers|terminals)/.exec(url);
+      const match = /\/api\/v1\/resources\/(browsers|terminals)/.exec(url);
       if (match) {
-        const workspaceId = decodeURIComponent(match[1]);
-        const service = match[2];
-        const kind = service === "browser-manager" ? "browser" : "terminal";
+        const workspaceId = new Headers(init?.headers).get("X-BoxTeam-Workspace-ID")!;
+        const kind = match[1] === "browsers" ? "browser" : "terminal";
         const payload = JSON.parse(String(init?.body)) as { session_id: string };
         createSessionConnectionCalls.push([port, workspaceId, payload.session_id, kind]);
         return Response.json({
           code: 0,
           message: "ok",
           request_id: "req_create",
-          data: kind === "browser" ? { browser_id: createdConnectionResourceId } : { terminal_id: createdConnectionResourceId },
+          data: entry(kind, createdConnectionResourceId).resource,
         });
       }
       throw new Error("未预期的请求: " + url);
@@ -76,13 +75,20 @@ function entry(
     connection_kind: "local",
     resource: {
       resource_id: resourceId,
-      session_id: "s1",
+      workspace_id: "w1",
       kind,
-      name: `${kind}-${resourceId}`,
       status,
-      metadata: kind === "terminal" ? { retention_scope: "thread", reconciliation_status: "verified", thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }] } : {},
+      retention_scope: "thread",
+      reconciliation_status: "verified",
+      source_thread: { session_id: "s1", thread_id: "thr_actual_child" },
+      thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }],
+      owner_revision: 1,
+      created_at: "2026-09-21T00:00:00Z",
+      updated_at: "2026-09-21T00:00:00Z",
+      available_actions: ["stop", "promote", "detach"],
+      metadata: { title: `${kind}-${resourceId}` },
     },
-  } as unknown as GatewayExtensionResourceEntry;
+  };
 }
 
 function sessionResource(
@@ -99,7 +105,9 @@ function sessionResource(
     created_at: "2026-09-21T00:00:00Z",
     updated_at: "2026-09-21T00:00:00Z",
     available_actions: ["cancel"],
-    metadata: kind === "terminal" ? { retention_scope: "thread", reconciliation_status: "verified", thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }] } : {},
+    metadata: { retention_scope: "thread", reconciliation_status: "verified", owner_revision: 1,
+      source_thread: { session_id: "s1", thread_id: "thr_actual_child" },
+      thread_associations: [{ session_id: "s1", thread_id: "thr_actual_child" }] },
   };
 }
 
@@ -276,7 +284,7 @@ describe("useGatewayExtensionWindow 打开扩展窗口", () => {
 
   test("window.open 返回 falsy 时进入 fallback：置 fallback、打开预览并报错", async () => {
     stubWindow({ open: () => null });
-    const mounted = await mountHook();
+    const mounted = await mountHook({ sessionResources: [sessionResource("browser", "b9", "running")] });
 
     act(() => mounted.hook.openExtensionWindow("browser", "b9"));
 
@@ -391,7 +399,7 @@ describe("useGatewayExtensionWindow 预览标签选择", () => {
     );
     expect(tab.attachUrl).toBe(
       "http://127.0.0.1:8011/api/gateway/attach/browser/?" +
-        `workspaceId=${selected.workspace_id}&browserId=${selected.resource.resource_id}&embedded=1`,
+        `workspaceId=${selected.workspace_id}&browserId=${selected.resource.resource_id}&sessionId=s1&threadId=thr_actual_child&embedded=1`,
     );
   });
 

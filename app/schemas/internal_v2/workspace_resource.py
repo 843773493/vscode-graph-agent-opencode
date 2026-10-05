@@ -17,7 +17,7 @@ class ResourceThreadRef(BaseModel):
 class WorkspaceResourceDTO(BaseModel):
     resource_id: str
     workspace_id: str
-    kind: Literal["terminal"]
+    kind: Literal["terminal", "browser"]
     retention_scope: Literal["thread", "workspace"]
     source_thread: ResourceThreadRef
     thread_associations: list[ResourceThreadRef]
@@ -61,9 +61,28 @@ class WorkspaceResourceCommandRequest(BaseModel):
     thread: ResourceThreadRef | None = None
 
 
-class TerminalTransportGrantDTO(BaseModel):
+class ResourceTransportGrantDTO(BaseModel):
     resource_id: str
     owner_revision: int
     grant_token: str
     expires_at: str
     resource: WorkspaceResourceDTO
+
+
+class BrowserResourceCreateRequest(BaseModel):
+    session_id: CanonicalSessionId
+    thread_id: CanonicalThreadId | None = None
+    retention_scope: Literal["thread", "workspace"] = "thread"
+    title: str = "用户浏览器"
+    url: str = "about:blank"
+    viewport: dict[str, int] | None = None
+    device_profile: str | None = None
+    device_orientation: str | None = None
+
+
+class BrowserResourceOperationRequest(WorkspaceResourceCommandRequest):
+    action: Literal[
+        "read", "navigate", "click", "hover", "type", "drag", "dialog", "screenshot", "run",
+        "resource-policy", "freeze", "wake", "discard", "device-profile", "agent-lock",
+    ]
+    payload: dict[str, object] = Field(default_factory=dict)

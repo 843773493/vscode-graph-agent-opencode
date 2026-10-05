@@ -14,9 +14,7 @@ from app.schemas.gateway_control import (
     GatewayResourceListDTO,
     GatewayResourceScopeErrorDTO,
 )
-from app.schemas.internal_v2.common import CursorPage
-from app.schemas.internal_v2.session import SessionDTO
-from app.schemas.internal_v2.session_resource import SessionResourceListDTO
+from app.schemas.internal_v2.workspace_resource import WorkspaceResourceListDTO
 
 
 class GatewayResourceCatalogService:
@@ -66,74 +64,10 @@ class GatewayResourceCatalogService:
             f"{self._gateway_name(target)} · {target.name}"
         )
         try:
-            sessions = await self._list_sessions(target, request_id=request_id)
+            data = await self._get_data(target, "resources", request_id=request_id)
+            resources = WorkspaceResourceListDTO.model_validate(data)
         except (httpx.HTTPError, LookupError, RuntimeError, TypeError, ValueError) as error:
             return [], [self._scope_error(target.workspace_id, workspace_label, error)]
-
-        resource_results = await asyncio.gather(
-            *(
-                self._load_session_resources(
-                    target,
-                    session,
-                    request_id=request_id,
-                )
-                for session in sessions
-            ),
-            return_exceptions=True,
-        )
-        items: list[GatewayResourceDTO] = []
-        errors: list[GatewayResourceScopeErrorDTO] = []
-        for session, result in zip(sessions, resource_results, strict=True):
-            if isinstance(result, BaseException):
-                errors.append(
-                    self._scope_error(
-                        f"{target.workspace_id}:{session.session_id}",
-                        f"{workspace_label} · {session.title}",
-                        result,
-                    )
-                )
-                continue
-            items.extend(result)
-        return items, errors
-
-    async def _list_sessions(
-        self,
-        target: WorkspaceTarget,
-        *,
-        request_id: str,
-    ) -> list[SessionDTO]:
-        sessions: list[SessionDTO] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, str] = {"limit": "200"}
-            if cursor:
-                params["cursor"] = cursor
-            data = await self._get_data(
-                target,
-                "sessions",
-                request_id=request_id,
-                params=params,
-            )
-            page = CursorPage[SessionDTO].model_validate(data)
-            sessions.extend(page.items)
-            if not page.has_more or not page.next_cursor:
-                return sessions
-            cursor = page.next_cursor
-
-    async def _load_session_resources(
-        self,
-        target: WorkspaceTarget,
-        session: SessionDTO,
-        *,
-        request_id: str,
-    ) -> list[GatewayResourceDTO]:
-        data = await self._get_data(
-            target,
-            f"sessions/{session.session_id}/resources",
-            request_id=request_id,
-            params={"include_history": "false"},
-        )
-        resource_list = SessionResourceListDTO.model_validate(data)
         return [
             GatewayResourceDTO(
                 gateway_connection_id=target.remote_gateway_connection_id,
@@ -141,13 +75,12 @@ class GatewayResourceCatalogService:
                 workspace_id=target.workspace_id,
                 workspace_name=target.name,
                 connection_kind=target.connection_kind,
-                session_id=session.session_id,
-                session_title=session.title,
+                session_id=resource.source_thread.session_id,
+                session_title=resource.source_thread.session_id,
                 resource=resource,
             )
-            for resource in resource_list.items
-            if resource.kind in {"browser", "terminal"}
-        ]
+            for resource in resources.items
+        ], []
 
     async def _get_data(
         self,

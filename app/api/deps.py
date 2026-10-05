@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Protocol, TypeVar, cast
+from typing import Annotated, Protocol, TypeVar, cast
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.path_utils import SessionCatalogComponents, workspace_context
@@ -12,6 +12,7 @@ from app.core.trace_middleware import get_request_id  # noqa: F401
 from app.core.workspace_identity import validate_workspace_id
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
 from app.services.business.session_changes_service import SessionChangesService
@@ -32,6 +33,7 @@ from app.services.business.session_skill_tracking_service import (
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
+from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
 from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
@@ -82,6 +84,7 @@ class _AppContainerProtocol(Protocol):
     session_context_query_service: SessionContextQueryService
     session_resource_service: SessionResourceService
     terminal_resource_owner: TerminalResourceOwner
+    browser_resource_owner: BrowserResourceOwner
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
     log_service: LogService
@@ -108,6 +111,23 @@ T = TypeVar("T")
 
 def get_terminal_resource_owner(request: Request) -> TerminalResourceOwner:
     return _require_service(request, "terminal_resource_owner", TerminalResourceOwner, "Terminal owner 尚未初始化")
+
+
+
+def get_browser_resource_owner(request: Request) -> BrowserResourceOwner:
+    return _require_service(request, "browser_resource_owner", BrowserResourceOwner, "Browser owner 尚未初始化")
+
+
+def get_workspace_resource_owner(
+    resource_id: str,
+    terminal_owner: Annotated[TerminalResourceOwner, Depends(get_terminal_resource_owner)],
+    browser_owner: Annotated[BrowserResourceOwner, Depends(get_browser_resource_owner)],
+) -> WorkspaceResourceOwner:
+    if resource_id.startswith("term_"):
+        return terminal_owner
+    if resource_id.startswith("browser_"):
+        return browser_owner
+    raise HTTPException(status_code=404, detail="资源身份不属于已注册的领域 owner")
 
 
 def _require_service(

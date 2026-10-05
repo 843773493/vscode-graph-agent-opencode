@@ -1,7 +1,6 @@
 export function bindBrowserToolbarEvents({
   browserId,
-  backendBaseUrl,
-  requestHeaders,
+  ownerCommand,
   attachToggle,
   refreshStateButton,
   backButton,
@@ -18,8 +17,6 @@ export function bindBrowserToolbarEvents({
   command,
   navigate,
   updateControls,
-  applyState,
-  markDeleted,
   setStatus,
 }) {
   attachToggle.addEventListener("click", () => {
@@ -56,16 +53,7 @@ export function bindBrowserToolbarEvents({
       setStatus("URL 缺少 browserId 参数", true);
       return;
     }
-    const response = await fetch(`${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}/close`, {
-      method: "POST",
-      headers: requestHeaders,
-    });
-    if (!response.ok) {
-      setStatus(`关闭失败: ${response.status}`, true);
-      return;
-    }
-    const payload = await response.json();
-    applyState(payload.data);
+    await ownerCommand("stop");
   });
 
   deleteBrowserButton.addEventListener("click", async () => {
@@ -77,15 +65,6 @@ export function bindBrowserToolbarEvents({
       return;
     }
     detach();
-    const response = await fetch(`${backendBaseUrl}/api/browsers/${encodeURIComponent(browserId)}`, {
-      method: "DELETE",
-      headers: requestHeaders,
-    });
-    if (!response.ok) {
-      setStatus(`删除失败: ${response.status}`, true);
-      return;
-    }
-    const payload = await response.json();
-    markDeleted("浏览器页面已删除", payload.data?.browser ?? null);
+    await ownerCommand("delete");
   });
 }

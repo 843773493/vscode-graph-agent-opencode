@@ -1,70 +1,50 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
+import httpx
 import pytest
 
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
 from app.gateway.registry import WorkspaceTarget
-from app.schemas.internal_v2.session import SessionDTO
-from app.services.business.session_context_resource import (
-    session_resource_identity,
-    session_resource_vrn,
-)
+from tests.support.terminal_owner import SESSION_A, THREAD_A, WORKSPACE_ID
 
 
-class _Response:
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> dict[str, object]:
-        return {"data": {"session_id": "ses_live", "items": []}}
-
-
-class _HttpClient:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, object]]] = []
-
-    async def get(self, url: str, **kwargs: object) -> _Response:
-        self.calls.append((url, kwargs))
-        return _Response()
+@pytest.fixture
+def target() -> WorkspaceTarget:
+    return WorkspaceTarget(workspace_id="gw_test", name="测试工作区", root_path="/unused/catalog",
+                           backend_url="http://workspace.test", connection_kind="local",
+                           backend_workspace_id=WORKSPACE_ID, managed=True)
 
 
 @pytest.mark.asyncio
-async def test_resource_catalog_uses_fast_workspace_resource_projection() -> None:
-    http_client = _HttpClient()
-    service = GatewayResourceCatalogService(
-        registry=object(),  # type: ignore[arg-type]
-        http_client=http_client,  # type: ignore[arg-type]
-    )
-    target = WorkspaceTarget(
-        workspace_id="gw_test",
-        name="测试工作区",
-        root_path="/tmp/test-workspace",
-        backend_url="http://127.0.0.1:8010",
-        connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
-        managed=True,
-    )
-    session = SessionDTO(
-        session_id="ses_live",
-        workspace_id="gw_test",
-        resource_identity=session_resource_identity("gw_test", "ses_live"),
-        vrn=session_resource_vrn("gw_test", "ses_live"),
-        scope="workspace",
-        title="运行中会话",
-        current_agent_id="agent_test",
-        created_at=datetime(2026, 7, 5, 1, 2, 3, tzinfo=UTC),
-        updated_at=datetime(2026, 7, 5, 1, 2, 4, tzinfo=UTC),
-    )
+async def test_catalog_loads_unassociated_workspace_browser_without_source_session(target: WorkspaceTarget) -> None:
+    calls: list[str] = []
+    def request(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+        return httpx.Response(200, json={"data": {"workspace_id": WORKSPACE_ID, "items": [{
+            "resource_id": "browser_owned", "workspace_id": WORKSPACE_ID, "kind": "browser",
+            "retention_scope": "workspace", "source_thread": {"session_id": SESSION_A, "thread_id": THREAD_A},
+            "thread_associations": [], "owner_revision": 3, "status": "running",
+            "reconciliation_status": "verified", "unattached_since": None, "reclaim_at": None,
+            "available_actions": ["stop", "delete"], "metadata": {"title": "持久浏览器"},
+            "created_at": "2026-10-05T00:00:00Z", "updated_at": "2026-10-05T00:00:00Z", "error": None,
+        }]}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(request)) as client:
+        service=GatewayResourceCatalogService(registry=object(), http_client=client)
+        resources, errors=await service._load_workspace(target, request_id="req_resources")
+    assert errors == []
+    assert len(resources) == 1
+    assert resources[0].resource.thread_associations == []
+    assert resources[0].resource.retention_scope == "workspace"
+    assert calls == ["http://workspace.test/api/v1/resources"]
 
-    resources = await service._load_session_resources(
-        target,
-        session,
-        request_id="req_resources",
-    )
 
+@pytest.mark.asyncio
+async def test_catalog_owner_failure_exposes_workspace_error(target: WorkspaceTarget) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(503))) as client:
+        service=GatewayResourceCatalogService(registry=object(), http_client=client)
+        resources, errors=await service._load_workspace(target, request_id="req_failed")
     assert resources == []
-    assert len(http_client.calls) == 1
-    _url, kwargs = http_client.calls[0]
-    assert kwargs["params"] == {"include_history": "false"}
+    assert len(errors) == 1
+    assert errors[0].scope_key == "gw_test"
+    assert "503" in errors[0].message
