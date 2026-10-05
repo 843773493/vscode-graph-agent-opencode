@@ -130,7 +130,7 @@
 2. **`Resource activation/provenance` 层尚不存在**（OpenSpec 第 9 节未实施）。
 3. **`replaceable_source` 仍暂存在 `ContextItem.metadata`**（`itemized_context_middleware.py` 有 TODO），应迁移为 typed 领域字段。
 4. **SessionThread 未成为统一 owner**（`ContextRef.session_id` 无 `thread_id`，OpenSpec 第 8 节要求 `(session_id, thread_id)` 定位）。
-5. **前端会话目录 outbox 尚未接线**（`add-itemized-rollout-context` §8.1-H / §10.8 F4，接线门控 §10.1）：`sessionCatalogProjection.ts`(371) / `sessionCatalogOutboxIdbFake.ts`(138) / `sessionCatalogOutboxStore.ts`(221) 生产零调用，但**属在途接线目标，禁止当死码删除**。
+5. **前端会话目录 outbox 已接线，完整连续操作验收未闭合**（2026-10-06 fixed3f复核，OpenSpec 8.1-G/H、10.8）：App/hooks与folder CRUD/move、session rename/parent/delete已消费同一outbox；backend已有跨进程flock＋durable generation worker，旧同步端点/非递归第二writer已下线，不按历史“零caller”重做。真实剩余是pending父Folder建child被UI拒绝、两个后端测试文件仍调用已删同步方法，以及即时pending/失败/重开对账的最终验收。主fixed核验与只读报告见本run `coordinator/artifacts/sol-efficiency-trial/session-catalog-outbox-current-owner-review/attempt-1/`，未运行当前完整组、未勾任务。
 6. **配置来源轴与公共地址字段已完成独立切片**：用户确定 layer 表示逻辑来源，读侧 `sqlite` → `runtime_override`，precedence 不变，active/pending snapshot 从来源清单分开；`f42b6f77` 已实施验收。公共配置字段 `path/schema_path` → nullable `vrn/schema_vrn` 由 `69d77eea` 完成，R11 独审及 46+10+73+2 项关联验证通过；其它持久化 VRN 接线仍须完成。
 7. **uuidv7 change** 的前缀数已实核为 33 个、33 个唯一值；自然创建、真实时钟回拨及路径预算已集成验收，49/49 任务完成。关联 SessionThread 与端到端迁移验收仍按 `add-itemized` 第 8 节单独推进，不能由 UUID 验收代替；证据见 `coordinator/artifacts/u07-main-validation.json` 与实时台账。
 

@@ -94,10 +94,17 @@ SQLite 中的 `Turn.status` 必须使用闭合集合 `open | active | completed 
 
 本轮字段重构须把用于查找、排序、唯一性、恢复和安全判定的核心控制信息放入带 CHECK/FK/UNIQUE 约束的明确 SQLite 列或 typed projection/manifest，字段 owner 与 JSONL typed core/registry binding 对齐：例如 `projection_group` 的 ordinal/size/form、已确认工具结果身份、source revision、`ContextContribution.selection_role`/`replacement_policy`/typed source binding，以及只由 registry 分配的 `(session_id, thread_id, source_ordinal)`。普通 `extensions_json` 仅保存 namespaced/versioned opaque annotation，不建隐藏决策索引，不从它恢复核心缺失列；`payload_kind=extension` 的正文仍以 canonical JSONL payload 为事实源。SQLite 的 item catalog 与投影只复制/索引已提交 JSONL item 的必要核心字段，不能成为可与 JSONL 分歧的第二 payload 事实源；registry/assembly/control 的自身权威列继续留在 SQLite。schema writer、reader、fork/remap、checkpoint codec、history/provider projector必须共用同一领域类型/序列化合同，拒绝旧实验 v2 `metadata_json` 决策路径。现有实验 v2 字段形态不要求兼容迁移或双写；正常打开不匹配新 schema 的数据要报告明确 schema-incompatible，保留原件供显式重建，不得以空扩展或默认值修补。既有 v1 一次性导入规则独立保留。
 
+本轮不提供旧实验 v2 schema1/2/3 的兼容升级入口或旧 `metadata_json` artifact reader；这些开发数据与其升级专属接口、fixture 和测试不属于支持合同。现行 bootstrap/schema journal、事务执行与完整性校验仍归原 storage owner。独立 `legacy_import_v1_to_v2` 只处理 v1 message-line，并直接生成现行 typed v2，不得复用或重新引入上述旧实验升级链。
+
 #### Scenario: SQLite schema 迁移
 
 - **WHEN** 软件升级需要增加 item catalog、Turn root 或 assembly 表结构
 - **THEN** 对本变更支持的已声明源版本，系统通过 `schema_migrations` 在事务中执行有序 migration，并更新 `database_meta.schema_version` 与 rollout format metadata；本轮明确不支持的旧实验 v2 通用 metadata 字段形态不得被自动转换或兼容读取
+
+#### Scenario: 旧实验 v2 开发数据明确拒绝
+
+- **WHEN** 正常启动、读取、fork 或恢复遇到旧实验 v2 schema1/2/3、旧 metadata 字段或缺少当前 typed owner 核心列的数据
+- **THEN** 系统明确报告 schema-incompatible，不执行旧升级 parser、不猜补 owner/来源事实、不修改原 SQLite/JSONL/detail；开发者可按授权删除后由现行 writer 重建，普通请求不得隐式清库
 
 #### Scenario: 扩展值不能修补缺失的核心索引
 

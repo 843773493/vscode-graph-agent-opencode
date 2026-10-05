@@ -28,6 +28,7 @@
 - 不在本变更中实现 provenance 的前端展示；只提供后端/存储可扩展的 identity、reference 和受保护详情边界。
 - 不在本变更中实现ResourceRegistry、watcher/provider、URI resolver或CSM；只消费`add-context-injection-lifecycle`封存的typed resource selection。
 - 不删除作为 migration/rollback audit 的 v1 原始 artifact 或既有已完成 OpenSpec 变更；不保留旧 session/history/provider/checkpoint runtime API 作为兼容路径。旧聚合职责和临时 import shim 的删除必须等待实现验证与主 spec 同步，并作为本 change 完成门槛。
+- 不为旧实验 v2 schema1/2/3 或通用 metadata 开发数据重建升级兼容。其专属 schema/artifact/protected-upgrade 链在全量调用清理后删除；现行 typed detail 的加解密、fork、恢复及 storage bootstrap/journal/事务校验继续归原 owner，独立 v1 importer 直接生成现行 typed v2。
 
 ## Decisions
 
