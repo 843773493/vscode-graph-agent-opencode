@@ -8,8 +8,8 @@
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
-- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。R 切片基线 **7f8dc1e385d5e430e4e7a497a03c070a0408a255**；恢复状态 index=TEMP/coordinator/git/r-sol-retirement-resume-b086.idx，主已初始化于b086；该index不代表当前live。WT HEAD 不代表 live 或固定候选。
-- 主串行集成，作者仅编辑、freeze/export，不改 refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
+- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。当前历史迁移固定基线是 tree **0b0642393aee621ccec38a102991a2b3567633ee**；恢复观察 index=TEMP/coordinator/git/r-sol-history-resume-0b064.idx，主已初始化于该tree。作者只读此index；WT HEAD及观察index都不能代替live，差异显式给固定对象。R最初7f8dc、b086/209481索引仅为历史证据，不再作为恢复坐标。
+- 主串行集成与机械冻结导出，作者仅编辑、定向静态分析和运行检查，不改 index/refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
 - 另一聊天草稿 `docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md` 按用户新授权只读参考，其原件仍不改写。
 
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **326e2177dbcd7212f2f4480c5cce55d1f0ddb12b**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e只改交接文档。本轮重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
+本文更新前ROOT HEAD **4fa857e8f95597941df2b08295e38ea4dfc48b6c**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e/4fa只改交接与技能文档。本轮在326e重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -103,6 +103,7 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - 作者无超时rg扫`/`找日志，主核PID/cwd后只SIGTERM该rg，延迟534.29秒；恢复同Sol并重发绝对WT/index/A，入口限定根及外部超时。恢复replay通过，后续自主完整交付效果待证。证据 `sol-unbounded-search-correction/attempt-1/`。
 - 两退休reviewer容量错误无新报告，主独审增量并复用删除边界。主误把AGENTS owned路径当删除已撤；旧Gateway缺句柄假诊断、private index/旧tree混读、preload猜错等另计主成本，不归作者/模型。
 - Sol对固定tree跑git log/-S得到空结果，不能据此判断提交来源；已纠正为先核对象类型，仅commit核历史，入口原基线条款补一句，后续效果待证。cursor旧items为空断言又与active design:692的冻结include冲突；主独核合同，允许迁为精确轻量摘要/不读完整body，保分页完整性，其它断言仍保留，尚未验收。证据 `skill-object-type-correction/attempt-1/receipt.json`。
+- 再次上下文恢复后Sol用裸Git读到相对旧WT HEAD的1057路径及history既有67+/21-历史差异；重发坐标并初始化0b064私有观察index后，真实工具已确认当前history与base相同、display匹配已绿blob，尚未交新增候选。18测试/140断言基线清单在 `r-history-loading-primary-review/baseline-inventory-attempt-1/`；已调整顺序为先一次迁完已明确签名并验证代表入口，再闭合复杂fixture，完整验收不减。证据 `r-history-loading-primary-review/restore-state-index-attempt-1/receipt.json`；不因观察超时或没有shell进程重启活跃agent，不为这次重复问题新增同义技能规则。
 - 比较只维护 `efficiency-comparison.json`；继承前置、作者返工、依赖等待、主机械导出和主错误分列。无同起点可比计时，不报倍率/永久最佳模型；继续一个Sol贯穿、独审和主串行集成。
 
 旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index观察ROOT=`98850fa4…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
