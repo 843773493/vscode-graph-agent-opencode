@@ -46,7 +46,7 @@ fork、Runner 取消和 Graph/runtime 的固定候选及窄返修已有真实定
 详细证据与后续效果维护在[实时台账](memory/2026/10/05/team-collaboration-state.md)，本入口只保留影响下一次决策的原因。
 
 - **交付残缺或漏实际入口。** 手筛 hunk、旧白名单曾漏签名、删除和 Web caller；Python/Node 测试绿时，真实 Terminal 创建仍因缺字段而400。用[交付校验脚本](scripts/verify_delivery.py)从固定树导出、严格重建并核 blob/hash，冻结时清点候选外源码；业务验收沿实际 UI/API→owner→存储或外部服务，不以 helper/mock/build 代替。
-- **合同与基线错配。** live、旧 HEAD 与固定候选曾混用；旧 union 回退新 owner，消费者准入形成循环依赖。显式检索 tree，核共同祖先和 preimage，唯一提供者先固定公共合同，主串行同步；共享文件按符号保语义，较新的文档也核合同来源。fixture 与 standalone 生成器同属消费者：`--help` 不代真实写入及原产物合同；按授权删除过期生成库，不恢复旧兼容或另造初始化旁路。
+- **合同与基线错配。** live、旧 HEAD 与固定候选曾混用；旧 union 回退新 owner，消费者准入形成循环依赖。显式检索 tree，核共同祖先和 preimage，唯一提供者先固定公共合同，主串行同步；共享文件按符号保语义，较新的文档也核合同来源。陈旧注释曾让审查误报已有 endpoint 缺失；派单前核实际路由及消费者，避免重建已有能力。fixture 与 standalone 生成器同属消费者：`--help` 不代真实写入及原产物合同；按授权删除过期生成库，不恢复旧兼容或另造初始化旁路。
 - **身份和异步 writer 漏项。** thread/session 混用、仅 create 带 UUID、取消等待却未收 `to_thread` writer均曾过 helper 测试。核全套 HTTP/WS、空列表/health/接管以及真实 user/internal/child 入口；归属只用明确 owner，内部执行不造 user Turn。幂等先比 durable 原请求，解析事实另冻结；fork 映射核 SQL/JSON 且输出可再次合法输入。
 - **生命周期被缓存或监听器遮蔽。** 数量 LRU 曾驱逐仍被服务持有的 catalog，重建第二实例且无人 close；注销 listener 曾漏其派生 Goal/Job writer。让唯一 registry 持有到真实释放，先关续跑准入、收 Job finalizer 和后台 writer，再关 catalog。scope 在构建前交 owner；cleanup失败保重试句柄与旧回调 fence，不以删 guard 求绿。
 - **路径和索引误操作。** 相对编辑、默认 cwd、裸 Git 与自建 archive/.venv反复错根；私有 index只隔离暂存。每次给绝对 workdir/index/编辑/产物路径，对象审查用 Git tree，运行复用指定完整 WT，不 `/tmp`、不复制整树。共享 index 从 `--absolute-git-dir` 定位；主曾误把私有 index当共享 index，约九分钟协调错误单列。无精确备份不声称精确恢复，重复误操作者收窄写权限。
