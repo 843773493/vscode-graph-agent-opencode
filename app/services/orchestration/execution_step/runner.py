@@ -572,14 +572,9 @@ class StepRunner:
                     agent_id=resolved_agent_id,
                     config_service=self.ports.config_service,
                 )
-            execution_overrides = self.ports.tool_selection_store.execution_overrides(
-                resolved_agent_id
-            )
-            model_visibility_overrides = (
-                self.ports.tool_selection_store.model_visibility_overrides(
-                    resolved_agent_id
-                )
-            )
+            tool_selection = self.ports.tool_selection_store.snapshot(resolved_agent_id)
+            execution_overrides = tool_selection.execution_overrides
+            model_visibility_overrides = tool_selection.model_visibility_overrides
             configured_custom_tool_names = {
                 tool_name
                 for tool_name in configured_custom_tool_names

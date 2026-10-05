@@ -389,12 +389,9 @@ class AgentExecutionService(JobStepExecutor):
         with self._config_service.use_snapshot(config_snapshot):
             resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
             config_revision = self._config_service.get_revision()
-            execution_overrides = self._tool_selection_store.execution_overrides(
-                resolved_agent_id
-            )
-            model_visibility_overrides = (
-                self._tool_selection_store.model_visibility_overrides(resolved_agent_id)
-            )
+            tool_selection = self._tool_selection_store.snapshot(resolved_agent_id)
+            execution_overrides = tool_selection.execution_overrides
+            model_visibility_overrides = tool_selection.model_visibility_overrides
             mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
             run_mode = mode_getter() if callable(mode_getter) else None
             include_team_tools = (

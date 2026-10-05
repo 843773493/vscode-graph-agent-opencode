@@ -14,6 +14,8 @@ else:
     import fcntl
 
 
+from app.abstractions.tool_selection import ToolSelectionSnapshot
+
 _TOOL_SELECTION_LOCK_TIMEOUT_SECONDS = 10.0
 _TOOL_SELECTION_LOCK_POLL_INTERVAL_SECONDS = 0.05
 
@@ -25,20 +27,15 @@ class ToolSelectionStore:
         self._path = boxteam_root / "settings" / "tool_selection.json"
         self._lock_path = boxteam_root / "settings" / "tool_selection.lock"
 
-    def execution_overrides(self, agent_id: str) -> dict[str, bool]:
-        settings = self._agent_settings(agent_id)
-        return dict(settings["execution_overrides"])
-
-    def model_visibility_overrides(self, agent_id: str) -> dict[str, bool]:
-        settings = self._agent_settings(agent_id)
-        return dict(settings["model_visibility_overrides"])
-
-    def disabled_tools(self, agent_id: str) -> set[str]:
-        return {
-            tool_id
-            for tool_id, enabled in self.execution_overrides(agent_id).items()
-            if enabled is False
-        }
+    def snapshot(self, agent_id: str) -> ToolSelectionSnapshot:
+        """同一把共享锁下取得精确的执行/可见性选择事实。"""
+        with self._file_lock(shared=True):
+            settings = self._agent_settings_from_payload(self._read_unlocked(), agent_id)
+            return ToolSelectionSnapshot(
+                agent_id,
+                settings["execution_overrides"],
+                settings["model_visibility_overrides"],
+            )
 
     def apply_changes(
         self,
@@ -65,10 +62,6 @@ class ToolSelectionStore:
                 "model_visibility_overrides": dict(sorted(visibility.items())),
             }
             self._write(payload)
-
-    def _agent_settings(self, agent_id: str) -> dict[str, object]:
-        with self._file_lock(shared=True):
-            return self._agent_settings_from_payload(self._read_unlocked(), agent_id)
 
     @staticmethod
     def _agent_settings_from_payload(
@@ -110,16 +103,6 @@ class ToolSelectionStore:
         for agent_id, settings in payload.items():
             if not isinstance(agent_id, str):
                 raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
-            if isinstance(settings, list):
-                # TODO: 在完成旧版工作区配置迁移后移除旧的 disabled-tools 列表兼容。
-                if not all(isinstance(tool_id, str) for tool_id in settings):
-                    raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
-                disabled = {tool_id: False for tool_id in settings}
-                normalized[agent_id] = {
-                    "execution_overrides": disabled,
-                    "model_visibility_overrides": dict(disabled),
-                }
-                continue
             if not isinstance(settings, dict):
                 raise TypeError(f"工具选择配置 Agent 项格式错误: {self._path}")
             normalized[agent_id] = settings

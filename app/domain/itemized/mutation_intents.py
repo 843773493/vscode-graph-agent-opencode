@@ -25,6 +25,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+from app.domain.itemized.epoch.root_compilation import (
+    SOURCE_POLICY_KEYS,
+    RootPlacement,
+    SourcePolicyKey,
+)
 from app.domain.itemized.schema import validate_extensions
 
 IntentFailureOutcome = Literal[
@@ -202,6 +207,8 @@ class ApplySourceLifecycleDecision:
     content: str | None = None
     item_id: str | None = None
     turn_scope: SourceItemTurnScope = "pending_next_turn"
+    root_placement: RootPlacement = "tail_only"
+    policy_key: SourcePolicyKey | None = None
     extensions: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -277,6 +284,13 @@ class ApplySourceLifecycleDecision:
                 "ApplySourceLifecycleDecision.turn_scope 只能是 ambient/"
                 f"pending_next_turn: {self.turn_scope!r}"
             )
+        if self.root_placement not in {"root_eligible", "tail_only"}:
+            raise ValueError("ApplySourceLifecycleDecision.root_placement 非法")
+        if self.policy_key is not None and (
+            self.policy_key not in SOURCE_POLICY_KEYS
+            or self.root_placement != "root_eligible"
+        ):
+            raise ValueError("source policy 必须是已登记的 root_eligible 规则")
         validate_extensions(self.extensions, field="ApplySourceLifecycleDecision.extensions")
         if self.decision_kind in {"base", "delta", "rebuild", "observe_pending"}:
             if self.content is None:

@@ -168,6 +168,33 @@ def test_activation_delta_maps_to_base_source_lifecycle_intent() -> None:
     assert intent.from_revision is None
 
 
+@pytest.mark.parametrize(
+    ("root_placement", "policy_key"),
+    [("root_eligible", "filesystem_rules"), ("tail_only", None)],
+)
+def test_real_lifecycle_preserves_descriptor_root_policy(root_placement, policy_key):
+    mutation_port = _RecordingMutationIntentPort()
+    manager = ContextSourceManager(
+        owner=OWNER, control_state_port=_FakeControlStatePort(),
+        mutation_intent_port=mutation_port,
+    )
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="instruction:R06", source_kind="filesystem_rules",
+            name="Filesystem 规则", description="文件访问规则",
+            internal_locator="instruction-producer://R06",
+            root_placement=root_placement, policy_key=policy_key,
+        ),
+        tracking_status="tracked",
+    )
+    manager.observe("instruction:R06", "遵守工作区路径规则")
+    batch = manager.prepare_pending()
+    manager.commit_model_call_pending(batch)
+    (intent,) = mutation_port.intents
+    assert intent.root_placement == root_placement
+    assert intent.policy_key == policy_key
+
+
 def test_commit_rejects_pending_drift_fail_closed() -> None:
     """提交前 pending 变化时 fail closed：零持久化推进、零事件、可重试。"""
     port = _FakeControlStatePort()

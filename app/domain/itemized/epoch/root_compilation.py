@@ -34,6 +34,13 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.validation import _non_empty_string
 
+SourcePolicyKey = Literal[
+    "team_coordination", "todo_list", "compact_conversation", "filesystem_rules",
+]
+SOURCE_POLICY_KEYS: frozenset[str] = frozenset(
+    {"team_coordination", "todo_list", "compact_conversation", "filesystem_rules"}
+)
+
 RootPlacement = Literal["root_eligible", "tail_only"]
 """source owner 声明的根资格;默认外部内容与未受信指引恒为 tail_only。"""
 
@@ -346,6 +353,7 @@ def validate_epoch_root_uniqueness(
 
 
 __all__ = [
+    "SOURCE_POLICY_KEYS",
     "CompiledRootItem",
     "CompiledRootSourceProvenance",
     "IncludedReason",
@@ -354,6 +362,7 @@ __all__ = [
     "RootCompileConflictError",
     "RootPlacement",
     "RootPlacementViolationError",
+    "SourcePolicyKey",
     "WireRole",
     "compile_root_item",
     "resolve_source_wire_role",

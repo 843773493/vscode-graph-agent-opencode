@@ -14,15 +14,14 @@ def test_tool_selection_persists_explicit_runtime_overrides(tmp_path: Path) -> N
         changes={"apply_patch": (False, False), "source_debug": (True, True)},
     )
 
-    assert store.execution_overrides("default") == {
+    assert store.snapshot("default").execution_overrides == {
         "apply_patch": False,
         "source_debug": True,
     }
-    assert store.model_visibility_overrides("default") == {
+    assert store.snapshot("default").model_visibility_overrides == {
         "apply_patch": False,
         "source_debug": True,
     }
-    assert store.disabled_tools("default") == {"apply_patch"}
 
 
 def test_runtime_override_can_enable_a_config_hidden_tool(tmp_path: Path) -> None:
@@ -33,8 +32,8 @@ def test_runtime_override_can_enable_a_config_hidden_tool(tmp_path: Path) -> Non
         changes={"start_debugging": (True, True)},
     )
 
-    assert store.execution_overrides("default")["start_debugging"] is True
-    assert store.model_visibility_overrides("default")["start_debugging"] is True
+    assert store.snapshot("default").execution_overrides["start_debugging"] is True
+    assert store.snapshot("default").model_visibility_overrides["start_debugging"] is True
 
 
 def test_tool_selection_keeps_agent_settings_independent(tmp_path: Path) -> None:
@@ -49,8 +48,8 @@ def test_tool_selection_keeps_agent_settings_independent(tmp_path: Path) -> None
         changes={"apply_patch": (False, False)},
     )
 
-    assert store.disabled_tools("default") == {"read_file"}
-    assert store.disabled_tools("reviewer") == {"apply_patch"}
+    assert store.snapshot("default").execution_overrides == {"read_file": False}
+    assert store.snapshot("reviewer").execution_overrides == {"apply_patch": False}
 
 
 def test_execution_disabled_tool_cannot_be_model_visible(tmp_path: Path) -> None:
@@ -63,7 +62,7 @@ def test_execution_disabled_tool_cannot_be_model_visible(tmp_path: Path) -> None
         )
 
 
-def test_tool_selection_reads_legacy_disabled_tool_lists(tmp_path: Path) -> None:
+def test_tool_selection_rejects_retired_disabled_tool_lists(tmp_path: Path) -> None:
     settings_dir = tmp_path / ".boxteam" / "settings"
     settings_dir.mkdir(parents=True)
     (settings_dir / "tool_selection.json").write_text(
@@ -73,9 +72,8 @@ def test_tool_selection_reads_legacy_disabled_tool_lists(tmp_path: Path) -> None
 
     store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
 
-    assert store.execution_overrides("default") == {"apply_patch": False}
-    assert store.model_visibility_overrides("default") == {"apply_patch": False}
-    assert store.disabled_tools("default") == {"apply_patch"}
+    with pytest.raises(TypeError, match="Agent 项格式错误"):
+        store.snapshot("default")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="仅在 POSIX 上覆盖 fcntl 文件锁")
@@ -101,4 +99,21 @@ def test_tool_selection_lock_times_out_when_file_lock_is_busy(
     store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
 
     with pytest.raises(TimeoutError, match="工具选择配置锁获取超时"):
-        store.execution_overrides("default")
+        store.snapshot("default")
+
+
+def test_snapshot_is_frozen_across_later_selection_changes(tmp_path: Path) -> None:
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+    store.apply_changes(agent_id="default", changes={"read_file": (True, True)})
+    first = store.snapshot("default")
+    first.execution_overrides["read_file"] = False
+    store.apply_changes(agent_id="default", changes={"read_file": (True, False)})
+    second = store.snapshot("default")
+
+    assert first.execution_overrides == {"read_file": True}
+    assert first.model_visibility_overrides == {"read_file": True}
+    assert second.execution_overrides == {"read_file": True}
+    assert second.model_visibility_overrides == {"read_file": False}
+    assert first.revision != second.revision
+    store.apply_changes(agent_id="default", changes={"read_file": (True, False)})
+    assert store.snapshot("default").revision == second.revision

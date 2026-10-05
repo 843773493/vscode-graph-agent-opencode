@@ -11,7 +11,6 @@ from __future__ import annotations
 import pytest
 
 from app.domain.itemized.enums import PayloadKind
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.epoch.prefix_epoch import (
     PENDING_TRANSITION_REASONS,
     REBUILD_EPOCH_REASONS,
@@ -36,6 +35,7 @@ from app.domain.itemized.epoch.prefix_epoch import (
     toolset_compatibility_key,
     verify_stable_prefix,
 )
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.refs import ToolSetRef
 
 PROFILE = "openai-responses:v1"
@@ -181,6 +181,7 @@ def _skill_load_toolset_ref(snapshot_id: str, plan_id: str, *, with_mode: bool) 
     return ToolSetRef.from_tool_snapshot(
         snapshot_id=snapshot_id,
         session_id="ses_" + "0" * 32,
+        thread_id="thread-epoch",
         plan_id=plan_id,
         tools=(
             {

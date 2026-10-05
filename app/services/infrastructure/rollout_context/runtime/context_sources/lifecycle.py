@@ -231,6 +231,12 @@ class SourceLifecycleMixin:
                 decisions = []
                 for delta in batch.deltas:
                     state = self._sources[delta.source_id]
+                    descriptor = state.descriptor
+                    if descriptor is None:
+                        raise RuntimeError(
+                            "source lifecycle 决策缺少 owner 重新绑定的 descriptor: "
+                            f"source_id={delta.source_id}"
+                        )
                     # 内存 delta 保留 activation 作为首次注入的外部合同；
                     # mutation intent 的 source lifecycle 语义将首次激活表达为 base。
                     decision_kind = "base" if delta.kind == "activation" else delta.kind
@@ -247,6 +253,8 @@ class SourceLifecycleMixin:
                             else None
                         ),
                         content=delta.content,
+                        root_placement=descriptor.root_placement,
+                        policy_key=descriptor.policy_key,
                     )
                     decision = build_source_lifecycle_decision(
                         observation,

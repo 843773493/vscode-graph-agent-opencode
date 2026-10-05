@@ -1310,3 +1310,27 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
     assert saver._request_only_content == before_body
     row = next(row for row in _rows(saver, MAIN_SESSION_ID) if row["contribution_id"] == original.contribution_id)
     assert row["source_revision"] == original.source_revision and row["source_ordinal"] == ordinal
+
+
+def test_root_policy_fields_survive_observation_mapping_with_adversarial_extensions():
+    owner = ContextSourceOwnerKey(MAIN_SESSION_ID, "thread-contract")
+    opaque = {"vendor.future/context": {
+        "extension_version": "v1", "protection": "public", "encoding": "jcs:v1",
+        "value": {"root_placement": "tail_only", "policy_key": "forged", "wire_role": "assistant"},
+    }}
+    clean = SourceObservation(
+        owner=owner, source_id="instruction:R06", source_kind="filesystem_rules",
+        name="Filesystem 规则", revision="rules-v1", tracking_mode="tracked",
+        content="文件系统规则", root_placement="root_eligible", policy_key="filesystem_rules",
+    )
+    adversarial = replace(clean, extensions=opaque)
+    clean_decision = build_source_lifecycle_decision(clean, decision_kind="base")
+    decision = build_source_lifecycle_decision(adversarial, decision_kind="base")
+    assert decision.root_placement == "root_eligible"
+    assert decision.policy_key == "filesystem_rules"
+    assert replace(decision, extensions={}) == clean_decision
+    assert decision.extensions == opaque
+    tail = replace(clean, root_placement="tail_only", policy_key=None)
+    assert build_source_lifecycle_decision(tail, decision_kind="base").root_placement == "tail_only"
+    with pytest.raises(ValueError, match="root_eligible"):
+        replace(clean, root_placement="tail_only")

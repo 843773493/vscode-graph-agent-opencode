@@ -17,8 +17,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from app.domain.itemized.epoch.root_compilation import (
+    SOURCE_POLICY_KEYS,
+    RootPlacement,
+    SourcePolicyKey,
+)
 from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
-from app.domain.itemized.epoch.root_compilation import RootPlacement
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -35,16 +39,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
 InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07"]
 """设计表 4.6 列出的初始 instruction producer 身份。"""
 
-ConditionalPolicyKey = Literal[
-    "team_coordination",
-    "todo_list",
-    "compact_conversation",
-    "filesystem_rules",
-]
-"""条件化 instruction producer 绑定的精确 ToolSet policy key。
 
-未声明 policy_key 的 producer 是无条件 root，不随 ToolSet revision 变化。
-"""
 
 
 class InstructionProducerError(RuntimeError):
@@ -72,7 +67,7 @@ class InstructionProducerSpec:
     root_placement: RootPlacement
     content: str
     revision: str
-    policy_key: ConditionalPolicyKey | None = None
+    policy_key: SourcePolicyKey | None = None
     wired: bool = True
 
     def __post_init__(self) -> None:
@@ -92,7 +87,7 @@ class InstructionProducerSpec:
                 "InstructionProducerSpec.root_placement 只能是 "
                 f"root_eligible|tail_only: {self.root_placement!r}"
             )
-        if self.policy_key is not None and self.policy_key not in _POLICY_KEYS:
+        if self.policy_key is not None and self.policy_key not in SOURCE_POLICY_KEYS:
             raise ValueError(
                 f"InstructionProducerSpec.policy_key 未登记: {self.policy_key!r}"
             )
@@ -150,7 +145,7 @@ def assert_producer_registrable(spec: InstructionProducerSpec) -> None:
 
 def assert_toolset_policy_binding(
     spec: InstructionProducerSpec,
-    enabled_policy_keys: Sequence[ConditionalPolicyKey],
+    enabled_policy_keys: Sequence[SourcePolicyKey],
 ) -> None:
     """条件化规则必须绑定精确 ToolSet policy，否则拒绝编译进 root。
 
@@ -158,7 +153,7 @@ def assert_toolset_policy_binding(
     """
     assert_producer_registrable(spec)
     keys = set(enabled_policy_keys)
-    unknown = keys - _POLICY_KEYS
+    unknown = keys - SOURCE_POLICY_KEYS
     if unknown:
         raise InstructionProducerError(
             "instruction-producer-policy-unknown",
@@ -176,14 +171,14 @@ def assert_toolset_policy_binding(
 
 def build_toolset_policy_keys(
     enabled_tool_names: Sequence[str],
-) -> tuple[ConditionalPolicyKey, ...]:
+) -> tuple[SourcePolicyKey, ...]:
     """从最终可见工具名解析条件化 policy key。
 
     判定只使用工具名这一 ToolSet 事实，producer 正文不参与；返回顺序固定，
     因此同一 ToolSet 得到逐字节一致的 policy 集合。
     """
     names = {name for name in enabled_tool_names if isinstance(name, str) and name}
-    keys: list[ConditionalPolicyKey] = []
+    keys: list[SourcePolicyKey] = []
     if "create_team" in names:
         keys.append("team_coordination")
     if "write_todos" in names:
@@ -254,6 +249,8 @@ class InstructionProducerObservation:
             activation_boundary=self.activation_boundary,
             from_revision=self.from_revision,
             content=self.spec.content,
+            root_placement=self.spec.root_placement,
+            policy_key=self.spec.policy_key,
         )
 
     def lifecycle_decision(
@@ -278,6 +275,8 @@ def instruction_producer_descriptor(
         name=spec.name,
         description=spec.name,
         internal_locator=f"instruction-producer://{spec.producer_id}",
+        root_placement=spec.root_placement,
+        policy_key=spec.policy_key,
     )
 
 
@@ -309,14 +308,6 @@ def register_instruction_producer(
 _KNOWN_PRODUCER_IDS: frozenset[str] = frozenset(
     {"R01", "R02", "R03", "R04", "R05", "R06", "R07"}
 )
-_POLICY_KEYS: frozenset[str] = frozenset(
-    {
-        "team_coordination",
-        "todo_list",
-        "compact_conversation",
-        "filesystem_rules",
-    }
-)
 _FORBIDDEN_METADATA_KEYS: frozenset[str] = frozenset(
     {
         "root_placement",
@@ -334,12 +325,12 @@ _FORBIDDEN_METADATA_KEYS: frozenset[str] = frozenset(
 
 
 __all__ = [
-    "ConditionalPolicyKey",
     "InstructionProducerError",
     "InstructionProducerId",
     "InstructionProducerObservation",
     "InstructionProducerSpec",
     "RootPlacement",
+    "SourcePolicyKey",
     "assert_producer_registrable",
     "assert_toolset_policy_binding",
     "build_toolset_policy_keys",

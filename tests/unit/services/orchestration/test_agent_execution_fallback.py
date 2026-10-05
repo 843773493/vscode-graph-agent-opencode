@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.path_utils import get_session_catalog_components
@@ -92,8 +93,9 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     job_event_bus.publish = AsyncMock()
     session_changes_service = MagicMock()
     tool_selection_store = MagicMock()
-    tool_selection_store.execution_overrides.return_value = {}
-    tool_selection_store.model_visibility_overrides.return_value = {}
+    tool_selection_store.snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
+        agent_id, {}, {},
+    )
 
     dependency_provider = MagicMock()
     dependency_provider.get_message_service.return_value = MagicMock()
@@ -697,10 +699,9 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
 async def test_primary_success_no_fallback(mock_dependencies):
     """测试：主模型成功时，不使用 fallback。"""
     deps = mock_dependencies
-    deps["tool_selection_store"].execution_overrides.return_value = {
-        "apply_patch": False,
-        "test_tool_2": False,
-    }
+    deps["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
+        agent_id, {"apply_patch": False, "test_tool_2": False}, {},
+    )
     service = _make_service(deps)
 
     with patch(

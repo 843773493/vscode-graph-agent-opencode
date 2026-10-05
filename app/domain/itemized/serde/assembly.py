@@ -9,6 +9,7 @@ from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.selection import ContextSelectionEntry
+from app.domain.itemized.serde.epoch import context_seal_binding_from_dict
 from app.domain.itemized.serde.registry import (
     _optional_non_negative_int,
     _optional_string,
@@ -59,6 +60,7 @@ def context_assembly_snapshot_from_dict(
         "plan_state",
         "tool_set_refs",
         "selection",
+        "seal_binding",
     }
     missing = sorted(required - set(value))
     if missing:
@@ -291,4 +293,8 @@ def context_assembly_snapshot_from_dict(
         tool_set_refs=tool_refs,
         selection=tuple(parsed_selection),
         plan_state=_required_string(value["plan_state"], "plan_state"),
+        seal_binding=(
+            context_seal_binding_from_dict(value["seal_binding"])
+            if value["seal_binding"] is not None else None
+        ),
     )

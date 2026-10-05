@@ -7,6 +7,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+from app.domain.itemized.epoch.root_compilation import (
+    SOURCE_POLICY_KEYS,
+    RootPlacement,
+    SourcePolicyKey,
+)
+
 SkillLoadMode = Literal["snapshot", "tracked", "untrack"]
 
 
@@ -20,6 +26,8 @@ class ContextSourceDescriptor:
     description: str
     internal_locator: str
     resource_uri: str | None = None
+    root_placement: RootPlacement = "tail_only"
+    policy_key: SourcePolicyKey | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -33,6 +41,13 @@ class ContextSourceDescriptor:
                 raise ValueError(f"ContextSourceDescriptor.{field_name} 必须是非空字符串")
         if not isinstance(self.description, str):
             raise TypeError("ContextSourceDescriptor.description 必须是字符串")
+        if self.root_placement not in {"root_eligible", "tail_only"}:
+            raise ValueError("ContextSourceDescriptor.root_placement 非法")
+        if self.policy_key is not None and (
+            self.policy_key not in SOURCE_POLICY_KEYS
+            or self.root_placement != "root_eligible"
+        ):
+            raise ValueError("ContextSourceDescriptor policy 必须是 root_eligible 规则")
         if self.resource_uri is not None and (
             not isinstance(self.resource_uri, str) or not self.resource_uri
         ):

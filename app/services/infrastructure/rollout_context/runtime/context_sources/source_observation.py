@@ -17,6 +17,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+from app.domain.itemized.epoch.root_compilation import (
+    SOURCE_POLICY_KEYS,
+    RootPlacement,
+    SourcePolicyKey,
+)
 from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
     MutationIntentOwner,
@@ -58,6 +63,8 @@ class SourceObservation:
     activation_boundary: SourceActivationBoundary = "turn"
     from_revision: str | None = None
     content: str | None = None
+    root_placement: RootPlacement = "tail_only"
+    policy_key: SourcePolicyKey | None = None
     extensions: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -86,6 +93,13 @@ class SourceObservation:
                 raise ValueError(
                     "SourceObservation: from_revision 不得等于当前 revision"
                 )
+        if self.root_placement not in {"root_eligible", "tail_only"}:
+            raise ValueError("SourceObservation.root_placement 非法")
+        if self.policy_key is not None and (
+            self.policy_key not in SOURCE_POLICY_KEYS
+            or self.root_placement != "root_eligible"
+        ):
+            raise ValueError("SourceObservation policy 必须是 root_eligible 规则")
         validate_extensions(self.extensions, field="SourceObservation.extensions")
 
     @property
@@ -203,6 +217,8 @@ def build_source_lifecycle_decision(
         pending_only=pending_only,
         content=content,
         item_id=item_id,
+        root_placement=observation.root_placement,
+        policy_key=observation.policy_key,
         extensions=observation.extensions,
     )
 

@@ -46,10 +46,9 @@ class ToolService:
     async def list(self, agent_id: str = "default") -> list[ToolDTO]:
         tools = self._tool_catalog.get_available_tools(agent_id)
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
-        execution_overrides = self._selection_store.execution_overrides(agent_id)
-        visibility_overrides = self._selection_store.model_visibility_overrides(
-            agent_id
-        )
+        selection = self._selection_store.snapshot(agent_id)
+        execution_overrides = selection.execution_overrides
+        visibility_overrides = selection.model_visibility_overrides
         return [
             self._build_tool_dto(
                 tool,
@@ -121,9 +120,9 @@ class ToolService:
                 f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
             )
         resolver = self._config_service.get_tool_policy_resolver(request.agent_id)
-        execution_overrides = self._selection_store.execution_overrides(
+        execution_overrides = self._selection_store.snapshot(
             request.agent_id
-        )
+        ).execution_overrides
         catalog_tools = {
             tool["id"]: tool
             for tool in self._tool_catalog.get_available_tools(request.agent_id)

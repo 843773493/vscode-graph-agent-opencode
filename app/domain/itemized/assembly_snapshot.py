@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from app.domain.itemized.enums import (
     DetailProtection,
 )
+from app.domain.itemized.epoch.seal_binding import ContextSealBinding
+from app.domain.itemized.epoch.tool_set import tool_set_manifest_compatibility_key
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
@@ -28,6 +30,7 @@ from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.assembly import (
     context_assembly_snapshot_from_dict,
 )
+from app.domain.itemized.serde.epoch import context_seal_binding_to_dict
 from app.domain.itemized.serialization import normalize_wire_request
 from app.domain.itemized.validation import _non_empty_string
 
@@ -62,6 +65,7 @@ class ContextAssemblySnapshot:
     projector_version: str = "v1"
     target_format: str = "unknown"
     request_hash_preimage: object | None = None
+    seal_binding: ContextSealBinding | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -298,7 +302,40 @@ class ContextAssemblySnapshot:
                             "omitted selection contribution manifest 不一致"
                         )
 
+        self._validate_seal_binding()
         validate_included_overlay_chain(self.selection, self.contributions)
+
+    def _validate_seal_binding(self) -> None:
+        """联校同一次 seal 的 epoch 与真正被选择的 ToolSet manifest。"""
+        if self.seal_binding is not None:
+            binding = self.seal_binding
+            if not isinstance(binding, ContextSealBinding):
+                raise ItemSchemaError("ContextAssemblySnapshot.seal_binding 类型非法")
+            if binding.prefix.assembly_id != self.assembly_id:
+                raise ItemSchemaError("sealed prefix 不属于当前 assembly")
+            selected = tuple(
+                ref for ref in self.tool_set_refs
+                if any(
+                    entry.included and entry.ref.ref_id == ref.ref_id
+                    and isinstance(entry.ref, ToolSetRef)
+                    for entry in self.selection
+                )
+            )
+            if len(selected) != 1 or (
+                selected[0].ref_id != binding.tool_set_snapshot_id
+                or selected[0].source_revision != binding.applied_toolset_revision
+            ):
+                raise ItemSchemaError("sealed ToolSet 与 applied binding 不一致")
+            tool_ref = selected[0]
+            expected_key = tool_set_manifest_compatibility_key(tool_ref)
+            if binding.prefix.state.tool_compatibility_key != expected_key:
+                raise ItemSchemaError(
+                    "sealed prefix compatibility key 与 ToolSet manifest/policy 不一致"
+                )
+            if binding.root is not None and binding.root.tool_compatibility_key != expected_key:
+                raise ItemSchemaError(
+                    "sealed root compatibility key 与 ToolSet manifest/policy 不一致"
+                )
 
     def seal(self) -> ContextAssemblySnapshot:
         if self.sealed:
@@ -332,6 +369,7 @@ class ContextAssemblySnapshot:
             projector_version=self.projector_version,
             target_format=self.target_format,
             request_hash_preimage=self.request_hash_preimage,
+            seal_binding=self.seal_binding,
         )
 
     def as_sealed_plan(self) -> ContextRequestPlan:
@@ -357,6 +395,7 @@ class ContextAssemblySnapshot:
 
     def validate_hashes(self) -> None:
         """重算 sealed plan/request fingerprint，拒绝篡改或半重写 snapshot。"""
+        self._validate_seal_binding()
         plan = self.as_sealed_plan()
         expected_plan_hash = plan.plan_hash()
         if self.plan_hash != expected_plan_hash:
@@ -436,6 +475,10 @@ class ContextAssemblySnapshot:
             "loss": list(self.loss),
             "sealed": self.sealed,
             "plan_state": self.plan_state,
+            "seal_binding": (
+                context_seal_binding_to_dict(self.seal_binding)
+                if self.seal_binding is not None else None
+            ),
         }
 
     @classmethod
