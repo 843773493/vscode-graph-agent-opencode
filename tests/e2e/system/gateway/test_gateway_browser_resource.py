@@ -793,6 +793,7 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as restarted_client:
+            await acquire_gateway_guest(restarted_client)
             restored_response = await restarted_client.get(
                 f"/api/v1/resources/{browser_id}",
                 headers={"X-BoxTeam-Workspace-Id": workspace_id}
