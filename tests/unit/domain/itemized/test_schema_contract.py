@@ -7,9 +7,9 @@ from dataclasses import asdict
 
 import pytest
 
-from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, validate_hash_token
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.runtime import ProvenanceEdge
 from app.domain.itemized.schema import (
@@ -253,6 +253,7 @@ def test_context_ref_and_tool_set_ref_are_disjoint_selection_union(
     tool_ref = ToolSetRef.from_tool_snapshot(
         snapshot_id="tools-1",
         session_id="session-1",
+        thread_id="thread-1",
         plan_id="plan-1",
         tools=[],
         source_revision="tools-rev-1",

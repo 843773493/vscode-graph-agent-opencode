@@ -9,7 +9,11 @@ from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import contribution_content_hash
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.domain.itemized.selection import ContextSelectionEntry
 
 
@@ -162,6 +166,13 @@ def overlay_chain() -> tuple[ContextRequestPlan, tuple[ContextSelectionEntry, ..
             content_hash=contribution_content_hash(kind, body),
             body=body,
             contribution_kind=kind,
+            source_binding=SourceBinding(
+                source_ref=f"overlay-policy:{role}",
+                overlay_id="overlay-policy",
+                overlay_ref=f"ref-{role}",
+                overlay_role=role,
+                source_overlay_epoch=1,
+            ),
             extensions={"boxteam.test.annotation": {"extension_version": "1", "protection": "public", "value": {
                 "overlay_id": "overlay-policy",
                 "overlay_ref": f"ref-{role}",
@@ -243,13 +254,15 @@ def test_included_chain_requires_same_overlay_revision_and_order(
     draft, entries = overlay_chain
     if mutation == "overlay_id":
         delta = draft.contributions[1]
+        binding = delta.source_binding
+        assert binding is not None
         draft = replace(
             draft,
             contributions=(
                 draft.contributions[0],
                 replace(
                     delta,
-                    metadata={**delta.metadata, "overlay_id": "unrelated-overlay"},
+                    source_binding=replace(binding, overlay_id="unrelated-overlay"),
                 ),
             ),
         )

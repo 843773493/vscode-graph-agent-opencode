@@ -72,6 +72,7 @@ def omitted_entry(
         ref = replace(
             ToolSetRef.from_tool_snapshot(
                 session_id="session-1",
+                thread_id="thread-1",
                 snapshot_id="tools-omitted",
                 plan_id="plan-omitted",
                 tools=[],
@@ -318,6 +319,7 @@ def test_request_only_ref_rejects_empty_source_and_unknown_payload_kind() -> Non
 def test_tool_set_snapshot_rejects_non_mapping_policy_or_tools() -> None:
     kwargs = {
         "session_id": "session-invalid",
+        "thread_id": "thread-invalid",
         "snapshot_id": "tool-set-invalid",
         "plan_id": "plan-invalid",
         "source_revision": "tools-revision-1",
@@ -360,6 +362,7 @@ def test_request_only_ref_requires_consistent_body_manifest() -> None:
 def test_tool_set_ref_has_stable_tool_order_and_manifest_hash() -> None:
     ref = ToolSetRef.from_tool_snapshot(
         session_id="session-1",
+        thread_id="thread-1",
         snapshot_id="tools-1",
         plan_id="plan-1",
         source_revision="tools-rev-1",
