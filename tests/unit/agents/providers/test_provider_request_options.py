@@ -178,6 +178,55 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_nonstream_call_keeps_nonstream_request_parameters(
+    monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    """共享参数转换不得把同步或异步的非流式调用改成流式请求。"""
+    captured: dict[str, object] = {}
+    response = {
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "完成"},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    def fake_completion_with_retry(
+        self: BoxteamLiteLLMChatModel, **kwargs: object,
+    ) -> dict[str, object]:
+        del self
+        captured.update(kwargs)
+        return response
+
+    async def fake_acompletion_with_retry(
+        self: BoxteamLiteLLMChatModel, **kwargs: object,
+    ) -> dict[str, object]:
+        return fake_completion_with_retry(self, **kwargs)
+
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel, "completion_with_retry", fake_completion_with_retry,
+    )
+    monkeypatch.setattr(
+        BoxteamLiteLLMChatModel, "acompletion_with_retry", fake_acompletion_with_retry,
+    )
+    model = BoxteamLiteLLMChatModel(
+        model="test-model", api_key="test-key", custom_llm_provider="openai",
+        streaming=False, max_retries=0,
+    )
+    messages = [HumanMessage(content="hi")]
+    if mode == "sync":
+        model._generate(messages, stream=False)
+    else:
+        await model._agenerate(messages, stream=False)
+
+    assert captured.get("stream", False) is False
+    assert "stream_options" not in captured
+    assert captured["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
 async def test_raw_semantic_delta_reaches_hook_before_langchain_yield(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

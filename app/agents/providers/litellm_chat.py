@@ -67,6 +67,11 @@ from app.agents.providers.provider_http_client import (
     build_no_proxy_openai_client,
 )
 from app.agents.providers.response_normalization import canonicalize_ai_message
+from app.agents.providers.wire_finalize import (
+    chat_send_params,
+    chat_wire_profile,
+    finalize_chat_messages,
+)
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
     record_upstream_request,
@@ -307,21 +312,31 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             "已经收到的半截 delta 不会静默重试，AgentLoop 必须将本次调用标记为失败。"
         )
 
+    def _convert_messages_to_dicts(
+        self, messages: list[BaseMessage | dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """历史消息回环的唯一入口：委托 finalize，不在 adapter 复制转换。"""
+        return finalize_chat_messages(messages, profile=chat_wire_profile(self))
+
     def _create_message_dicts(
         self,
         messages: list[BaseMessage],
         stop: list[str] | None,
+        *,
+        stream: bool = False,
+        **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        params = {
-            key: value
-            for key, value in self._client_params.items()
-            if value is not None
-        }
-        if stop is not None:
-            if "stop" in params:
-                raise ValueError("`stop` 同时出现在输入和默认参数中")
-            params["stop"] = stop
-        return self._convert_messages_to_dicts(messages), params
+        """Chat 真实消息与参数由唯一 finalize 实现产生；adapter 不再本地复制。
+
+        `stream` 必须与真实入口一致，非流式请求不得被共享转换改写成流式。
+        """
+        return (
+            finalize_chat_messages(messages, profile=chat_wire_profile(self)),
+            chat_send_params(
+                self, stop=stop, kwargs=kwargs,
+                stream=True if stream else None,
+            ),
+        )
 
     def _delta_reasoning(self, delta: Mapping[str, Any]) -> str:
         for key in ("reasoning_content", "reasoning"):
@@ -501,9 +516,9 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        message_dicts, params = self._create_message_dicts(messages, stop)
-        params = {**params, **kwargs, "stream": True}
-        params["stream_options"] = self.stream_options or {"include_usage": True}
+        message_dicts, params = self._create_message_dicts(
+            messages, stop, stream=True, **kwargs,
+        )
 
         delta_sink = get_current_model_delta_sink()
         attempts = self._stream_attempt_count()
@@ -575,9 +590,9 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        message_dicts, params = self._create_message_dicts(messages, stop)
-        params = {**params, **kwargs, "stream": True}
-        params["stream_options"] = self.stream_options or {"include_usage": True}
+        message_dicts, params = self._create_message_dicts(
+            messages, stop, stream=True, **kwargs,
+        )
 
         delta_sink = get_current_model_delta_sink()
         model_call_id = resolve_model_run_id(delta_sink, run_manager)
