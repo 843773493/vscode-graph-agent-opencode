@@ -26,7 +26,9 @@ Chat最终消息身份已以 **a4b19e0b** 集成六路径tree **6d2184cb**；两
 
 R epoch 本轮：两份旧 `SourceSealCase` fixture 补必填 `frozen_provider_wire`，固定tree `3ea767a3` 已以 **46f2485c** 集成；26pass actual0/22.118s，80原assert AST不变、唯二 `seal_sources` 改签名，生产未变。首次baseline31pass4fail为继承caller遗漏，原raw保留；机械2路径/7outside actual0/11.018s，guard/双祖先/共享index精确SHA不变。证据 `r-epoch-csm-focused-dispatch/fixture-caller-integration/receipt.json`，不重跑未变已验范围。
 
-Sol首段durable五生产路径已冻结为 **407bc9ce** 并严格重建，尚未集成或测试；Schema11、checkpoint完整control snapshot含空集合、view/tracking/pending同事务由P07窄审。prepare/seal及compaction仍在实现，不能据这段称完整epoch通过。原48现有路径与4个可新增文件的preimage/归属见 `r-epoch-csm-focused-dispatch/dispatch-preimage.json`；四个published snapshot/CAS必要caller一次扩范围，复用内存owner、不读盘。首冻因作者文件继续推进而SHA不符，guard拒绝、无生产/index改动；二次按实际稳定字节冻结，计主协调，不当Sol语义返工。P08真实rewind验收缺口报告SHA `c1433414` 保留。
+Sol首段durable五路径 **407bc9ce** 早审发现history_replay被错当rewind、倒改tracking并登记伪pending；同Sol两路径修正、补真实compaction checkpoint.put，严格重建为 **25a172ff**，P07报告SHA **577ff175** 确认静态闭合。首段含Schema11、checkpoint完整control snapshot及空集合、view/tracking/pending同事务；prepare/seal、真实失败重开及compiled行为仍未验，未集成生产。现50个精确现有路径及4个可新增文件的preimage/归属见 `r-epoch-csm-focused-dispatch/dispatch-preimage.json`；published snapshot/CAS及必要旧helper/schema caller由同作者迁，不读盘。首冻因live字节演进被hash guard拒绝、未改source/index，第二次固定稳定字节，计主协调。P08真实rewind验收缺口报告SHA `c1433414` 保留。
+
+本轮仅在入口CSM条款窄补“历史projection不得带执行rebuild副作用”，原407缺陷报告保留，25a静态修正已验、行为效果待真实integration。另按itemized spec:862/945与context:52/74/90/560确认允许既有unsealed plan/compact registry准备事实；原子seal必须提交选定恢复正文/binding、observed/applied CAS、prefix与transition消费。未selected准备行不可dispatch，无需泛造globalambienttx或重构全部registry。精确合同与通知见 `r-epoch-csm-focused-dispatch/draft-selection-contract-note.json`；author fixture、主机械/测试与协调成本分列，不报模型倍率。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
