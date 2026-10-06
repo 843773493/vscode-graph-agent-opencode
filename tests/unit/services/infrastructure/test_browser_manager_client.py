@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 import pytest
 
 from app.abstractions.browser_resources import BrowserRequestError
+from app.abstractions.workspace_resources import ResourceTransportGrantRejected
 from app.services.infrastructure.browser_manager_client import (
     BrowserManagerClient,
 )
@@ -167,3 +168,46 @@ async def test_async_transport_timeout_becomes_retryable_browser_error() -> None
     assert error.retryable is True
     assert error.recovery == "page_reset"
     assert error.timeout_ms == 30_000
+
+
+@pytest.fixture
+def grant_rejection_payload() -> dict[str, object]:
+    return {
+        "code": "browser_transport_grant_rejected", "operation_outcome": "rejected",
+        "error": "Browser 传输版本或运行状态冲突",
+        "browser": {
+            "browser_id": "browser_test", "page_id": "page_test", "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "status": "closed", "transport_owner_revision": 2, "reconciliation_status": "verified",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_valid_grant_rejection_has_explicit_transport_type(grant_rejection_payload) -> None:
+    body = json.dumps(grant_rejection_payload).encode()
+    failure = HTTPError("http://browser.test/api/browsers/browser_test/transport-grant", 409, "Conflict", {}, BytesIO(body))
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
+    with patch("app.services.infrastructure.browser_manager_client.urlopen", side_effect=failure), pytest.raises(ResourceTransportGrantRejected) as rejected:
+        await client.issue_transport_grant("browser_test", owner_revision=2, association=None)
+    assert rejected.value.snapshot == grant_rejection_payload["browser"]
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("browser_id", "browser_other"),
+    ("workspace_id", "00000000-0000-4000-8000-000000000002"),
+    ("reconciliation_status", "unknown"),
+    ("transport_owner_revision", 1),
+    ("transport_owner_revision", True),
+    ("status", "running"),
+    ("code", "another_conflict"),
+    ("operation_outcome", "unknown"),
+    ("error", ""),
+])
+@pytest.mark.asyncio
+async def test_untrusted_409_is_not_deterministic_grant_rejection(grant_rejection_payload, field, value) -> None:
+    target = grant_rejection_payload if field in {"code", "operation_outcome", "error"} else grant_rejection_payload["browser"]
+    target[field] = value
+    failure = HTTPError("http://browser.test/api/browsers/browser_test/transport-grant", 409, "Conflict", {}, BytesIO(json.dumps(grant_rejection_payload).encode()))
+    client = BrowserManagerClient(workspace_id="00000000-0000-4000-8000-000000000001", backend_url="http://browser.test")
+    with patch("app.services.infrastructure.browser_manager_client.urlopen", side_effect=failure), pytest.raises((BrowserRequestError, ValueError, TypeError)):
+        await client.issue_transport_grant("browser_test", owner_revision=2, association=None)

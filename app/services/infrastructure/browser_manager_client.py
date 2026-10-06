@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from app.abstractions.browser_resources import BrowserAction, BrowserRequestError
+from app.abstractions.workspace_resources import ResourceTransportGrantRejected
 from app.core.workspace_identity import validate_workspace_id
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
 from app.services.infrastructure.config_service import ConfigService
@@ -87,8 +88,38 @@ class BrowserManagerClient:
     async def issue_transport_grant(
         self, browser_id: str, *, owner_revision: int, association: str | None,
     ) -> dict[str, object]:
-        return await self._request_data("POST", f"/api/browsers/{browser_id}/transport-grant",
-                                        {"owner_revision": owner_revision, "association": association})
+        path = f"/api/browsers/{browser_id}/transport-grant"
+        try:
+            return await self._request_data(
+                "POST", path, {"owner_revision": owner_revision, "association": association},
+            )
+        except BrowserRequestError as error:
+            payload = error.payload
+            if (
+                error.method != "POST" or error.path != path or error.status != 409
+                or not isinstance(payload, dict)
+                or payload.get("code") != "browser_transport_grant_rejected"
+                or payload.get("operation_outcome") != "rejected"
+            ):
+                raise
+            message = payload.get("error")
+            browser = payload.get("browser")
+            if not isinstance(message, str) or not message.strip() or not isinstance(browser, dict):
+                raise
+            # 正式拒绝也必须携带可核身份、状态与非旧版本；普通 409 没有这项证明。
+            runtime = self._runtime(browser)
+            revision = runtime["transport_owner_revision"]
+            if (
+                runtime.get("browser_id") != browser_id
+                or runtime.get("workspace_id") != self._workspace_id
+                or runtime.get("reconciliation_status") != "verified"
+                or not isinstance(revision, int)
+                or isinstance(revision, bool)
+                or revision < owner_revision
+                or (runtime.get("status") == "running" and revision == owner_revision)
+            ):
+                raise
+            raise ResourceTransportGrantRejected(message, snapshot=runtime) from error
 
     @staticmethod
     def _runtime(data: dict[str, object]) -> dict[str, object]:

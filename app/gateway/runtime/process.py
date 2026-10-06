@@ -12,13 +12,18 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, TextIO
 from uuid import UUID
 
 import httpx
 
+from app.gateway.runtime.process_groups import (
+    _capture_posix_group_starttime,
+    _posix_group_is_alive,
+    _wait_until_closed,
+)
 from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
@@ -104,12 +109,19 @@ class ManagedProcessHandle(Protocol):
 class ManagedProcess:
     process: subprocess.Popen[str]
     log_file: object
+    close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
+    _leader_starttime: int | None = field(default=None, init=False, repr=False)
+    _group_closed: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if os.name == "posix":
+            self._leader_starttime = _capture_posix_group_starttime(self.process.pid)
 
     def is_alive(self) -> bool:
         return self.process.poll() is None
 
     def request_terminate(self) -> None:
-        if self.process.poll() is not None:
+        if not self._close_target_is_alive():
             return
         try:
             self._terminate_group()
@@ -117,18 +129,28 @@ class ManagedProcess:
             return
 
     def close(self, *, timeout_seconds: float = 8) -> None:
-        try:
-            if self.process.poll() is None:
-                self.request_terminate()
-                try:
-                    self.process.wait(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    self._kill_group()
-                    self.process.wait(timeout=timeout_seconds)
-        finally:
-            close = getattr(self.log_file, "close", None)
-            if callable(close):
-                close()
+        if self.close_failure is not None:
+            if self._close_target_is_alive():
+                self._kill_group()
+                self._wait_closed(timeout_seconds)
+            raise self.close_failure
+        if self._close_target_is_alive():
+            self.request_terminate()
+            try:
+                self._wait_closed(timeout_seconds)
+            except subprocess.TimeoutExpired as error:
+                self.close_failure = TimeoutError(
+                    "受管进程组未完成优雅关闭，已进入强制回收: "
+                    f"pid={self.process.pid}, timeout_seconds={timeout_seconds}"
+                )
+                self.close_failure.__cause__ = error
+                self._kill_group()
+                self._wait_closed(timeout_seconds)
+                raise self.close_failure from error
+        # 关闭失败仍由原 owner 持有进程与日志句柄，避免重试丢失诊断输出。
+        close = getattr(self.log_file, "close", None)
+        if callable(close):
+            close()
 
     def detach(self) -> None:
         """Gateway 重启时放弃进程所有权，不向独立进程组发送信号。"""
@@ -143,6 +165,8 @@ class ManagedProcess:
             _taskkill_process_tree(self.process.pid, force=False)
 
     def _kill_group(self) -> None:
+        if not self._close_target_is_alive():
+            return
         if os.name == "posix":
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
@@ -150,6 +174,21 @@ class ManagedProcess:
                 return
         else:
             _taskkill_process_tree(self.process.pid, force=True)
+
+    def _close_target_is_alive(self) -> bool:
+        root_alive = self.process.poll() is None
+        if os.name != "posix":
+            return root_alive
+        if not self._group_closed:
+            self._group_closed = not _posix_group_is_alive(self.process.pid, self._leader_starttime)
+        return not self._group_closed
+
+    def _wait_closed(self, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        self.process.wait(timeout=timeout_seconds)
+        # 根 wait 与剩余组成员共用原预算；根退出不能代表同组子进程已退出。
+        if os.name == "posix" and not _wait_until_closed(self._close_target_is_alive, deadline=deadline):
+            raise subprocess.TimeoutExpired(f"owned process group pid={self.process.pid}", timeout_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,16 +203,21 @@ class AdoptedManagedProcess:
     """新 Gateway 通过已验证的健康接口重新接管存活的辅助服务。"""
 
     pid: int
+    close_failure: TimeoutError | None = field(default=None, init=False, repr=False)
+    _leader_starttime: int | None = field(default=None, init=False, repr=False)
+    _group_closed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.pid <= 0:
             raise ValueError(f"接管进程 PID 必须为正整数: {self.pid}")
+        if os.name == "posix":
+            self._leader_starttime = _capture_posix_group_starttime(self.pid)
 
     def is_alive(self) -> bool:
         return self._is_alive()
 
     def request_terminate(self) -> None:
-        if not self._is_alive():
+        if not self._close_target_is_alive():
             return
         try:
             if os.name == "posix":
@@ -184,19 +228,28 @@ class AdoptedManagedProcess:
             return
 
     def close(self, *, timeout_seconds: float = 8) -> None:
-        self.request_terminate()
-        deadline = time.monotonic() + timeout_seconds
-        while self._is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not self._is_alive():
-            return
-        try:
-            if os.name == "posix":
-                os.killpg(self.pid, signal.SIGKILL)
-            else:
-                _taskkill_process_tree(self.pid, force=True)
-        except ProcessLookupError:
-            return
+        if self.close_failure is None:
+            self.request_terminate()
+            deadline = time.monotonic() + timeout_seconds
+            if _wait_until_closed(self._close_target_is_alive, deadline=deadline):
+                return
+            self.close_failure = TimeoutError(
+                "已接管进程组未完成优雅关闭，已进入强制回收: "
+                f"pid={self.pid}, timeout_seconds={timeout_seconds}"
+            )
+        if self._close_target_is_alive():
+            try:
+                if os.name == "posix":
+                    os.killpg(self.pid, signal.SIGKILL)
+                else:
+                    _taskkill_process_tree(self.pid, force=True)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + timeout_seconds
+            if not _wait_until_closed(self._close_target_is_alive, deadline=deadline):
+                raise RuntimeError(f"已接管进程组强制终止后仍未退出: pid={self.pid}") from self.close_failure
+        # 强制回收不能证明 unload 已完成，后续关闭也不得洗掉这一失败事实。
+        raise self.close_failure
 
     def detach(self) -> None:
         return
@@ -211,6 +264,13 @@ class AdoptedManagedProcess:
         except PermissionError as error:
             raise PermissionError(f"无权检查已接管辅助服务 PID: {self.pid}") from error
         return True
+
+    def _close_target_is_alive(self) -> bool:
+        if os.name != "posix":
+            return self._is_alive()
+        if not self._group_closed:
+            self._group_closed = not _posix_group_is_alive(self.pid, self._leader_starttime)
+        return not self._group_closed
 
 
 def _spawn_logged_process(

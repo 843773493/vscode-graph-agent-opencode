@@ -290,11 +290,12 @@ class RegistryRuntimeMixin:
         if target.system_default or not target.removable:
             raise PermissionError(f"默认工作区不能关闭: {target.name}")
         self._assert_route_references_drained(workspace_id)
-        runtime = self._runtimes.pop(workspace_id, None)
+        runtime = self._runtimes.get(workspace_id)
         if runtime is None:
             raise ValueError(f"工作区后端尚未启动: {target.name}")
         self.invalidate_route(workspace_id)
         runtime.close()
+        self._runtimes.pop(workspace_id)
         target.desired_running = False
         target.connection_error = None
         if self._active_workspace_id == workspace_id:
@@ -353,7 +354,12 @@ class RegistryRuntimeMixin:
                 runtime.wait_closed()
             except Exception as error:  # noqa: BLE001 — 回收全部已拥有运行时并聚合清理错误。
                 errors.append(f"{runtime_id}: {error}")
-        self._runtimes.clear()
-        self._remote_gateway_runtimes.clear()
+            else:
+                # 同名 active/retired 可能并存，只移除本次确实关闭成功的对象。
+                if self._runtimes.get(runtime_id) is runtime:
+                    self._runtimes.pop(runtime_id)
+                if self._remote_gateway_runtimes.get(runtime_id) is runtime:
+                    self._remote_gateway_runtimes.pop(runtime_id)
+                self._remove_retired_runtime_instances(((runtime_id, runtime),))
         if errors:
             raise RuntimeError("关闭 Gateway 托管进程失败: " + "; ".join(errors))

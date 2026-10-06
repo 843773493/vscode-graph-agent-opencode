@@ -5,7 +5,12 @@ import { stat } from "node:fs/promises";
 import { stripVTControlCharacters } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import { BrowserFrameFlow } from "./browserFrameFlow.js";
-import { BrowserManager, resolveRequiredWorkspaceRoot, validateWorkspaceId } from "./browserManager.js";
+import {
+  BrowserManager,
+  BrowserTransportGrantRejected,
+  resolveRequiredWorkspaceRoot,
+  validateWorkspaceId,
+} from "./browserManager.js";
 import { LatestPointerMoveDispatcher } from "./latestPointerMoveDispatcher.js";
 import { encodeServerMessage, parseClientMessage } from "./protocol.js";
 
@@ -510,6 +515,15 @@ async function main() {
 
       notFound(response);
     } catch (error) {
+      if (error instanceof BrowserTransportGrantRejected) {
+        sendJson(response, 409, {
+          error: error.message,
+          code: error.code,
+          operation_outcome: error.operationOutcome,
+          browser: error.browser,
+        });
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       const status = error?.statusCode || (message.startsWith("浏览器页面不存在")
         ? 404

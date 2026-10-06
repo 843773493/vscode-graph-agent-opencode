@@ -307,3 +307,55 @@ async def test_due_orphan_reclaim_waits_for_real_active_lease_then_converges(
     assert bundle.transport.deleted == [rid]
     assert bundle.transport.creates == 1
     assert bundle.leases.leases_for_resource(rid) == []
+
+
+@pytest.mark.asyncio
+async def test_verified_deleted_grant_rejects_before_network_and_keeps_terminal_fact(
+    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser = await bundle.create(scope="workspace")
+    rid = browser["resource_id"]
+    ref = ThreadRef(SESSION_A, THREAD_A)
+    detached = await bundle.command(rid, action="detach", expected_revision=1, thread=ref)
+    deleted = await bundle.command(rid, action="delete", expected_revision=detached["owner_revision"])
+    before = (bundle.root / ".boxteam/browser-resources.json").read_bytes()
+    calls: list[str] = []
+
+    async def forbidden(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append("network")
+        raise AssertionError("已核实 deleted 不得请求外部 grant")
+
+    monkeypatch.setattr(bundle.transport, "get_resource", forbidden)
+    monkeypatch.setattr(bundle.transport, "issue_transport_grant", forbidden)
+    with pytest.raises(ResourceConflict):
+        await bundle.owner.transport_grant(
+            rid, expected_revision=deleted["owner_revision"],
+            holder_id="request:late", operation_id="late",
+        )
+    assert calls == []
+    assert bundle.owner._require(rid).status == "deleted"
+    assert bundle.owner._require(rid).reconciliation_status == "verified"
+    assert (bundle.root / ".boxteam/browser-resources.json").read_bytes() == before
+    assert bundle.leases.leases_for_resource(rid) == []
+
+
+@pytest.mark.asyncio
+async def test_lost_grant_receipt_still_blocks_resource_as_unknown(
+    bundle: BrowserBundle, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser = await bundle.create(scope="workspace")
+    rid = browser["resource_id"]
+
+    async def lost(*args: object, **kwargs: object) -> dict[str, object]:
+        raise ConnectionError("grant 响应丢失")
+
+    monkeypatch.setattr(bundle.transport, "issue_transport_grant", lost)
+    with pytest.raises(ConnectionError, match="响应丢失"):
+        await bundle.owner.transport_grant(
+            rid, expected_revision=1, holder_id="request:lost-grant", operation_id="lost-grant",
+        )
+    assert bundle.owner._require(rid).reconciliation_status == "unknown"
+    with pytest.raises(ResourceConflict):
+        await bundle.owner.transport_grant(
+            rid, expected_revision=1, holder_id="request:retry-grant", operation_id="retry-grant",
+        )

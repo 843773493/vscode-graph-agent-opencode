@@ -14,6 +14,14 @@ ResourceKind = Literal["terminal", "browser"]
 ResourceSnapshot = dict[str, object]
 
 
+class ResourceTransportGrantRejected(RuntimeError):
+    """传输方已确认没有签发授权，并返回本次拒绝时的资源快照。"""
+
+    def __init__(self, message: str, *, snapshot: ResourceSnapshot) -> None:
+        self.snapshot = snapshot
+        super().__init__(message)
+
+
 class ResourceSessionReader(Protocol):
     @property
     def workspace_id(self) -> str: ...

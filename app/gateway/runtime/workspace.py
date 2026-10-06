@@ -55,16 +55,16 @@ class WorkspaceRuntime:
                 raise RuntimeError(f"运行时进程已退出: process={name}")
 
     def close_process(self, name: str, *, timeout_seconds: float = 8) -> None:
-        process = self.processes.pop(name, None)
-        self.adopted_process_names.discard(name)
+        process = self.processes.get(name)
         if process is not None:
             process.close(timeout_seconds=timeout_seconds)
+            self.remove_process(name)
 
     def detach_process(self, name: str) -> None:
-        process = self.processes.pop(name, None)
-        self.adopted_process_names.discard(name)
+        process = self.processes.get(name)
         if process is not None:
             process.detach()
+            self.remove_process(name)
 
     def detach_adopted_processes(self) -> None:
         """候选 Gateway 启动失败时放弃旧 generation 的进程句柄。"""
@@ -86,7 +86,9 @@ class WorkspaceRuntime:
 
     def request_terminate(self) -> None:
         errors: list[str] = []
-        for name in reversed(tuple(self.processes)):
+        # 后端 unload 仍依赖辅助服务；先只通知后端，等其关闭后再终止依赖。
+        names = ("workspace_api",) if "workspace_api" in self.processes else tuple(reversed(self.processes))
+        for name in names:
             try:
                 self.processes[name].request_terminate()
             except Exception as error:  # noqa: BLE001 - 排空所有 owned handle 后聚合并抛出错误
@@ -95,6 +97,8 @@ class WorkspaceRuntime:
             raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))
 
     def wait_closed(self) -> None:
+        # 后端失败时保留其句柄与全部依赖，重试仍从同一关闭边界开始。
+        self.close_process("workspace_api")
         errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:
@@ -102,7 +106,6 @@ class WorkspaceRuntime:
                 self.close_process(name, timeout_seconds=timeout_seconds)
             except Exception as error:  # noqa: BLE001 - 排空所有 owned handle 后聚合并抛出错误
                 errors.append(f"{name}: {error}")
-        self.processes.clear()
         if errors:
             raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))
 

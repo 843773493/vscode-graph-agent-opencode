@@ -16,6 +16,16 @@ import {
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const DEFAULT_MAX_LOGICAL_BROWSERS_PER_WORKSPACE = 500;
 
+export class BrowserTransportGrantRejected extends Error {
+  constructor(snapshot) {
+    super("Browser 传输版本或运行状态冲突");
+    this.name = "BrowserTransportGrantRejected";
+    this.code = "browser_transport_grant_rejected";
+    this.operationOutcome = "rejected";
+    this.browser = snapshot;
+  }
+}
+
 export function validateWorkspaceId(value) {
   if (typeof value !== "string" || !WORKSPACE_ID_PATTERN.test(value)) {
     throw new Error("BrowserManager 必须显式提供标准 UUID workspace_id");
@@ -271,7 +281,8 @@ export class BrowserManager {
     const browser = this.get(id);
     browser.assertReconciled();
     if (browser.transportOwnerRevision !== ownerRevision || browser.status !== "running") {
-      throw new Error("Browser 传输版本或运行状态冲突");
+      // 拒绝发生在生成 token 和修改 grant Map 前，快照就是本次无副作用拒绝的事实。
+      throw new BrowserTransportGrantRejected(browser.snapshot());
     }
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + 30_000;

@@ -28,7 +28,7 @@ class RegistryRemoteMixin:
             )
         self._remote_gateway_connections[connection.connection_id] = connection
         if runtime is not None:
-            previous = self._remote_gateway_runtimes.pop(connection.connection_id, None)
+            previous = self._remote_gateway_runtimes.get(connection.connection_id)
             if previous is not None:
                 if self._has_route_references_for_connection(connection.connection_id):
                     self._retired_remote_gateway_runtimes.setdefault(
@@ -38,7 +38,7 @@ class RegistryRemoteMixin:
                 else:
                     try:
                         previous.close()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - 发布新隧道前保留失败的旧运行时，沿用 retired 重试语义。
                         self._retired_remote_gateway_runtimes.setdefault(
                             connection.connection_id,
                             [],
@@ -85,9 +85,10 @@ class RegistryRemoteMixin:
             for target in self._targets.values()
         ):
             return
-        runtime = self._remote_gateway_runtimes.pop(connection_id, None)
+        runtime = self._remote_gateway_runtimes.get(connection_id)
         if runtime is not None:
             runtime.close()
+            self._remote_gateway_runtimes.pop(connection_id)
         self._remote_gateway_connections.pop(connection_id, None)
         FederationCredentialStore(
             storage_path=get_gateway_root() / "credentials" / "federation.json"
@@ -103,9 +104,10 @@ class RegistryRemoteMixin:
     def _close_retired_remote_gateway_runtimes(self, connection_id: str) -> None:
         if self._has_route_references_for_connection(connection_id):
             return
-        retired = self._retired_remote_gateway_runtimes.pop(connection_id, [])
+        retired = tuple(self._retired_remote_gateway_runtimes.get(connection_id, []))
         for runtime in retired:
             runtime.close()
+            self._remove_retired_runtime_instances(((connection_id, runtime),))
     def _remove_retired_runtime_instances(
         self,
         runtimes: tuple[tuple[str, WorkspaceRuntime], ...],

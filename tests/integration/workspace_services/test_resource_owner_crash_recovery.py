@@ -19,7 +19,10 @@ from typing import Literal
 import httpx
 import pytest
 
-from app.abstractions.workspace_resources import RetentionScope
+from app.abstractions.workspace_resources import (
+    ResourceTransportGrantRejected,
+    RetentionScope,
+)
 from app.container import WorkspaceContainerRegistry
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import catalog_provider_scope
@@ -422,6 +425,66 @@ def test_sigkill_restart_keeps_original_orphan_deadline_and_exact_reclaim_bounda
         assert receipt["pid"] != identity["pid"]
         assert receipt["restored"]["reclaim_at"] == identity["reclaim_at"]
         assert receipt["reclaimed_at_30_minutes"] == ([] if reattach else [identity["rid"]])
+
+
+@pytest.mark.parametrize("race", ["closed", "revision"])
+@pytest.mark.asyncio
+async def test_real_browser_target_rejection_keeps_owner_verified_and_grant_unissued(
+    resource_processes: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, race: str,
+) -> None:
+    workspace, runtime = resource_processes
+    async with workspace_tool_runtime(workspace) as (container, session_id, context):
+        owner = container.browser_resource_owner
+        browser = await owner.create_browser(
+            session_id=session_id, thread_id=context.thread_binding.thread_id,
+            holder_id="request:grant-race-create", operation_id="grant-race-create",
+            retention_scope="workspace",
+        )
+        rid = str(browser["resource_id"])
+        revision = int(browser["owner_revision"])
+        issue = owner._transport.issue_transport_grant
+        rejected: list[dict[str, object]] = []
+
+        async def competing_issue(
+            resource_id: str, *, owner_revision: int, association: str | None,
+        ) -> dict[str, object]:
+            # owner 已完成 get 预检；只在真实 grant HTTP 前改目标事实，不替代回执。
+            if race == "closed":
+                await owner._transport.stop_resource(resource_id)
+            else:
+                await owner._transport.sync_owner_revision(resource_id, owner_revision + 1)
+            try:
+                return await issue(resource_id, owner_revision=owner_revision, association=association)
+            except ResourceTransportGrantRejected as error:
+                rejected.append(error.snapshot)
+                raise
+
+        monkeypatch.setattr(owner._transport, "issue_transport_grant", competing_issue)
+        with pytest.raises(ResourceConflict):
+            await owner.transport_grant(
+                rid, expected_revision=revision,
+                holder_id="request:grant-race", operation_id="grant-race",
+            )
+        assert len(rejected) == 1
+        receipt = rejected[0]
+        assert receipt["browser_id"] == rid
+        assert receipt["workspace_id"] == container.workspace_id
+        assert receipt["reconciliation_status"] == "verified"
+        assert "grant_token" not in receipt
+        current = await owner.get_resource(rid)
+        assert current["status"] == ("closed" if race == "closed" else "running")
+        assert current["reconciliation_status"] == "verified"
+        assert current["owner_revision"] == revision + (race == "revision")
+        assert owner._leases.leases_for_resource(rid) == []
+        persisted = next(item for item in json.loads(
+            (workspace / ".boxteam/browser-resources.json").read_text(),
+        )["records"] if item["resource_id"] == rid)
+        assert persisted["reconciliation_status"] == "verified"
+        assert persisted["owner_revision"] == current["owner_revision"]
+        (runtime / "grant-rejection.json").write_text(json.dumps({
+            "race": race, "rejection": receipt, "owner": current,
+            "qualification": "real Node grant HTTP; only pre-request target race is injected",
+        }, indent=2))
 
 
 if __name__ == "__main__":

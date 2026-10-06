@@ -15,6 +15,7 @@ from app.abstractions.workspace_resources import (
     ResourceSnapshot,
     ResourceThreadResolver,
     ResourceTransport,
+    ResourceTransportGrantRejected,
     RetentionScope,
 )
 from app.core.identifier import create_uuid_hex
@@ -527,6 +528,11 @@ class WorkspaceResourceOwner:
         holder_id: str,
         operation_id: str,
     ) -> ResourceSnapshot:
+        # 已核实的非运行资源不再请求外部服务，终态也不因晚到授权变成 unknown。
+        async with self._lock:
+            record = self._require(resource_id)
+            if record.reconciliation_status == "verified" and record.status != "running":
+                raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
         await self.recover()
         if thread is not None:
             async with self.admit_thread(thread.session_id, thread.thread_id):
@@ -548,6 +554,8 @@ class WorkspaceResourceOwner:
         async with self._lock:
             record = self._require(resource_id)
             self._verified(record)
+            if record.status != "running":
+                raise ResourceConflict("外部资源 不在运行状态，不能签发传输授权")
             if record.owner_revision != revision:
                 raise ResourceConflict(
                     "外部资源 传输授权版本已过期，请刷新资源"
@@ -561,9 +569,13 @@ class WorkspaceResourceOwner:
             with self._management_lease(record, thread, holder_id, operation_id):
                 try:
                     runtime = await self._transport.get_resource(resource_id)
-                    observe_resource(record, runtime, self.kind)
-                    self._verified(record)
-                    self._store.persist()
+                    self._observe_grant_snapshot(record, runtime)
+                except BaseException as error:
+                    self._unknown(record, error)
+                    raise
+                if record.status != "running" or record.owner_revision != revision:
+                    raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源")
+                try:
                     grant = await self._transport.issue_transport_grant(
                         resource_id,
                         owner_revision=revision,
@@ -571,10 +583,39 @@ class WorkspaceResourceOwner:
                         if thread is None
                         else f"{thread.session_id}/{thread.thread_id}",
                     )
-                    return {**grant, "resource": resource_projection(record, runtime, self.kind)}
+                except ResourceTransportGrantRejected as rejection:
+                    try:
+                        snapshot = rejection.snapshot
+                        if snapshot.get("status") == "running" and snapshot.get("transport_owner_revision") == revision:
+                            raise ValueError("外部资源 传输拒绝快照没有状态或版本冲突")
+                        self._observe_grant_snapshot(record, snapshot)
+                    except BaseException as error:
+                        self._unknown(record, error)
+                        raise
+                    raise ResourceConflict("外部资源 运行状态或传输授权版本已改变，请刷新资源") from rejection
                 except BaseException as error:
                     self._unknown(record, error)
                     raise
+                return {**grant, "resource": resource_projection(record, runtime, self.kind)}
+
+    def _observe_grant_snapshot(
+        self, record: OwnedResourceRecord, runtime: ResourceSnapshot,
+    ) -> None:
+        revision = runtime.get("transport_owner_revision")
+        if (
+            runtime.get("reconciliation_status") != "verified"
+            or not isinstance(runtime.get("status"), str)
+            or not runtime["status"]
+            or not isinstance(revision, int)
+            or isinstance(revision, bool)
+            or revision < record.owner_revision
+        ):
+            raise ValueError("外部资源 传输授权快照未核实或版本已经过期")
+        # 先由同一事实边界核对资源与工作区身份，再接受当前版本；绝不回退 owner。
+        observe_resource(record, runtime, self.kind)
+        record.owner_revision = revision
+        self._store.persist()
+        self._sync_ledger(record)
 
     def _reconcile_stopped_record(
         self, record: OwnedResourceRecord, runtime: ResourceSnapshot | None,

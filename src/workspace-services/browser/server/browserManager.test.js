@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { BrowserManager } from "./browserManager.js";
+import { BrowserManager, BrowserTransportGrantRejected } from "./browserManager.js";
 import { BrowserSession } from "./browserSession.js";
 
 const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
@@ -170,6 +170,34 @@ describe("浏览器状态持久化", () => {
     expect(() => manager.issueTransportGrant(browser.id, arguments_)).toThrow("冲突");
     browser.record.reconciliation_status = "unknown";
     expect(() => manager.issueTransportGrant(browser.id, { ...arguments_, ownerRevision: 2 })).toThrow("尚未核实");
+  });
+
+  test("状态和版本竞争明确拒绝且不生成或改写 grant", () => {
+    const manager = managerWithWriter(async () => undefined);
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: "browser_rejected_grant", workspace_id: WORKSPACE_ID,
+      status: "running", transport_owner_revision: 2, reconciliation_status: "verified",
+    } });
+    manager.sessions.set(browser.id, browser);
+    const existing = { browserId: browser.id, revision: 2, expiresAt: 1, association: null };
+    manager.transportGrants.set("existing", existing);
+    for (const [status, revision] of [["running", 1], ["closed", 2], ["deleted", 2]]) {
+      browser.record.status = status;
+      let rejection;
+      try {
+        manager.issueTransportGrant(browser.id, { ownerRevision: revision, association: null });
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(BrowserTransportGrantRejected);
+      expect(rejection.code).toBe("browser_transport_grant_rejected");
+      expect(rejection.operationOutcome).toBe("rejected");
+      expect(rejection.browser.browser_id).toBe(browser.id);
+      expect(rejection.browser.status).toBe(status);
+      expect(rejection.browser.transport_owner_revision).toBe(2);
+      expect(manager.transportGrants.size).toBe(1);
+      expect(manager.transportGrants.get("existing")).toBe(existing);
+    }
   });
 
   test("短时间内的后台写入请求合并为一次", async () => {

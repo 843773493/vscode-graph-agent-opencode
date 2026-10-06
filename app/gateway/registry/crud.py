@@ -76,7 +76,7 @@ class RegistryCrudMixin:
         if runtime is not None:
             if target.connection_kind == "local" and target.managed:
                 target.desired_running = True
-            previous = self._runtimes.pop(target.workspace_id, None)
+            previous = self._runtimes.get(target.workspace_id)
             if previous is not None:
                 previous_browser_url = previous.service_urls.get("browser_manager")
                 replacement_browser_url = runtime.service_urls.get("browser_manager")
@@ -159,9 +159,10 @@ class RegistryCrudMixin:
         if target.connection_kind == "local":
             self._assert_route_references_drained(workspace_id)
         self.invalidate_route(workspace_id)
-        runtime = self._runtimes.pop(workspace_id, None)
+        runtime = self._runtimes.get(workspace_id)
         if runtime is not None:
             runtime.close()
+            self._runtimes.pop(workspace_id)
         for child in self._targets.values():
             if child.parent_workspace_id == workspace_id:
                 child.parent_workspace_id = None
@@ -190,9 +191,10 @@ class RegistryCrudMixin:
         for workspace_id, target in list(self._targets.items()):
             if workspace_id == keep_workspace_id or not target.system_default:
                 continue
-            runtime = self._runtimes.pop(workspace_id, None)
+            runtime = self._runtimes.get(workspace_id)
             if runtime is not None:
                 runtime.close()
+                self._runtimes.pop(workspace_id)
             self.invalidate_route(workspace_id)
             del self._targets[workspace_id]
             self._route_signatures.pop(workspace_id, None)
