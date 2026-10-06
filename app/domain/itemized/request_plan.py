@@ -22,6 +22,7 @@ from app.domain.itemized.hashing import (
 )
 from app.domain.itemized.identity.refs import (
     ContextRef,
+    ToolSetIdentityRef,
     ToolSetRef,
     selection_ref_identity,
     unique_ref_identities,
@@ -491,7 +492,8 @@ class ContextRequestPlan:
                 raise ItemSchemaError(f"ContextRequestPlan 重复 ToolSetRef: {ref.ref_id}")
             tool_ids.add(ref.ref_id)
             if not any(
-                not entry.included and entry.ref == ref for entry in self.selection
+                not entry.included and entry.ref == ref.identity_ref()
+                for entry in self.selection
             ):
                 ref.validate_manifest()
         contribution_ids = set(contribution_ids_list)
@@ -509,7 +511,7 @@ class ContextRequestPlan:
             if identity in selected_keys:
                 raise ItemSchemaError(f"selection 重复 ref: {identity}")
             selected_keys.add(identity)
-            if isinstance(ref, ToolSetRef):
+            if isinstance(ref, ToolSetIdentityRef):
                 registered_tool_ref = next(
                     (
                         candidate
@@ -518,14 +520,16 @@ class ContextRequestPlan:
                     ),
                     None,
                 )
-                if ref.plan_id != self.plan_id or ref.assembly_id != self.assembly_id:
+                if ref.thread_id != self.thread_id or ref.plan_id != self.plan_id or ref.assembly_id != self.assembly_id:
                     raise ItemSchemaError("selection ToolSetRef scope 不一致")
                 if registered_tool_ref is None and entry.included:
                     raise ItemSchemaError("selection ToolSetRef 不在 plan registry")
-                if registered_tool_ref is not None and registered_tool_ref != ref:
-                    raise ItemSchemaError(
-                        "plan-order-integrity: selection ToolSetRef manifest 不一致"
-                    )
+                if registered_tool_ref is not None:
+                    expected_ref = registered_tool_ref if entry.included else registered_tool_ref.identity_ref()
+                    if expected_ref != ref:
+                        raise ItemSchemaError(
+                            "plan-order-integrity: selection ToolSetRef manifest 不一致"
+                        )
                 if entry.contribution_id is not None or entry.detail_ref is not None:
                     raise ItemSchemaError(
                         "plan-order-integrity: tool_set selection 不得绑定 contribution/detail"

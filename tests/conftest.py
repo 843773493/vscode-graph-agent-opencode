@@ -34,6 +34,59 @@ def test_config_path() -> str:
     return TEST_CONFIG_PATH
 
 
+@pytest.fixture
+def frozen_provider_wire() -> Callable[[str, str], dict[str, object]]:
+    """为不发送 HTTP 的 Saver 用例显式提供冻结 profile 与语义参数。"""
+    from app.agents.providers.wire_finalize import (
+        ChatWireProfile,
+        ResponsesWireProfile,
+    )
+
+    def create(model: str, target_format: str) -> dict[str, object]:
+        params: dict[str, object] = {"model": model, "stream": True}
+        if target_format == "chat_completions":
+            profile = ChatWireProfile(None, "openai", model)
+            params["stream_options"] = {"include_usage": True}
+        elif target_format == "responses":
+            profile = ResponsesWireProfile(None, "openai", model)
+            params.update({"include": [], "store": False})
+        else:
+            raise ValueError("测试未定义 Provider 协议: " + target_format)
+        return {
+            "provider_version": profile.identity(),
+            "wire_profile": profile,
+            "wire_params": params,
+            "target_format": target_format,
+        }
+
+    return create
+
+
+@pytest.fixture
+def registered_tool_set_producer_factory(tmp_path):
+    """按测试运行目录建立真实 selection owner，schema 仍由正式 producer 冻结。"""
+    from app.agents.policy import ToolMetadata, ToolPolicyResolver
+    from app.agents.tool_identity import tool_definition_name
+    from app.agents.tool_set_producer import RegisteredToolSetProducer
+    from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+
+    store = ToolSelectionStore(boxteam_root=tmp_path / ".boxteam")
+
+    def create(tools=()):
+        return RegisteredToolSetProducer(
+            agent_id="dispatch-test", selection_reader=store,
+            policy_resolver=ToolPolicyResolver(
+                policy_defaults={}, policy_rules={}, restrictions={},
+            ),
+            tools=tools, metadata={tool_definition_name(tool): ToolMetadata(
+                tool_id=tool_definition_name(tool), origin="builtin", kind="default",
+                group_id="filesystem",
+            ) for tool in tools},
+        )
+
+    return create
+
+
 def use_config(name: str) -> str:
     return os.path.join(CONFIGS_DIR, "tests", "workspace", f"{name}.jsonc")
 

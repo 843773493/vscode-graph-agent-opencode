@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
-import time
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,6 @@ from app.tool_testing.model_invocation import (
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.store import ToolTestStore
 
-
 ModelBuilder = Callable[[dict[str, Any], dict[str, Any]], Any]
 
 
@@ -47,14 +47,17 @@ class ToolTestService:
         store: ToolTestStore,
         workspace_root: Path,
         asset_root: Path,
-        model_builder: ModelBuilder = build_model_from_provider,
+        model_builder: ModelBuilder | None = None,
     ) -> None:
         self._config_service = config_service
         self._registry = registry
         self._store = store
         self._workspace_root = workspace_root
         self._asset_root = asset_root
-        self._model_builder = model_builder
+        self._model_builder = (
+            partial(build_model_from_provider, invocation_purpose="tool_test")
+            if model_builder is None else model_builder
+        )
         self._tasks: set[asyncio.Task[None]] = set()
         self._active_tools: set[str] = set()
         self._provider_locks: dict[str, asyncio.Lock] = {}
@@ -310,7 +313,7 @@ class ToolTestService:
                 duration_ms=int((time.monotonic() - started) * 1000),
                 detail=evaluation.detail,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - 独立用例需把构建、调用与评估异常记录为失败产物
             if isinstance(error, ToolCallProbeInvocationError):
                 model_calls = error.model_calls
                 reasoning_only_calls = error.reasoning_only_calls

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.agent_factory import build_runtime_for_agent
+from app.agents.agent_factory import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 
 # 标记：真实 API 测试必须显式开启，避免本机残留凭据让单元测试访问网络。
@@ -47,21 +47,18 @@ def config_service():
 
 
 @pytest.fixture(scope="module")
-def test_runtime(config_service):
-    """通过 build_runtime_for_agent 获取运行时配置，包含 LiteLLM 模型实例。"""
-    return build_runtime_for_agent(agent_id="default", config_service=config_service)
+def test_model(config_service):
+    """真实 Provider 直连测试由构建入口显式标记用途，不伪造 Agent binding。"""
+    runtime_config = config_service.get_agent_runtime_config("default")
+    return build_model_from_provider(
+        runtime_config["providers"][0], runtime_config, invocation_purpose="tool_test",
+    )
 
 
 @pytest.fixture(scope="module")
-def test_model(test_runtime):
-    """返回 LiteLLM 模型实例。"""
-    return test_runtime["model"]
-
-
-@pytest.fixture(scope="module")
-def test_model_config(test_runtime):
+def test_model_config(test_model):
     """返回模型配置信息"""
-    model = test_runtime["model"]
+    model = test_model
     model_name = model.model
     if isinstance(model_name, str) and model_name.startswith("openai/"):
         model_name = model_name.removeprefix("openai/")

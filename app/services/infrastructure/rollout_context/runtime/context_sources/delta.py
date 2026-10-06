@@ -48,14 +48,16 @@ class SourceDeltaMixin:
                         tofile=f"{state.name}@{state.latest_revision}",
                     )
                 )
-                if not diff:
+                if not diff and state.latest_revision == state.latest_visible_committed_revision:
                     state.latest_revision = state.latest_visible_committed_revision
                     state.latest_content = state.latest_visible_committed_content
                     state.pending_kind = None
                     state.observed_revisions.clear()
                     self._pending.pop(state.source_id, None)
                     return
-                content = diff
+                # semantic revision 与正文 hash 独立；同正文的新 owner revision
+                # 仍需在下一次 seal 精确应用，不能回退到旧 revision。
+                content = diff or state.latest_content
                 kind = state.pending_kind or "delta"
             self._pending[state.source_id] = ContextSourceDelta(
                 source_id=state.source_id,

@@ -25,6 +25,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -32,6 +35,7 @@ from tests.harness.python.run_context import TestRunContext
 class ReaderCase:
     saver: RolloutCheckpointSaver
     session: str
+    thread: str
     accepted: dict[str, object]
     index: Path
     context: TestRunContext
@@ -56,7 +60,8 @@ def reader_case(
         payload="保留合法读连接",
     )
     return ReaderCase(
-        saver, session, accepted, saver._storage.index_path(session), context
+        saver, session, saver._storage.main_thread_id(session), accepted,
+        saver._storage.index_path(session), context
     )
 
 
@@ -66,7 +71,7 @@ def idle_reader(reader_case: ReaderCase) -> Iterator[sqlite3.Connection]:
     try:
         assert connection.execute(
             "SELECT schema_version FROM database_meta"
-        ).fetchone() == (4,)
+        ).fetchone() == (ROLLOUT_SCHEMA_VERSION,)
         assert not connection.in_transaction
         yield connection
     finally:
@@ -144,7 +149,7 @@ def test_opening_connection_preserves_idle_readers_kernel_lock(
     )
     assert idle_reader.execute(
         "SELECT schema_version FROM database_meta"
-    ).fetchone() == (4,)
+    ).fetchone() == (ROLLOUT_SCHEMA_VERSION,)
     assert not idle_reader.in_transaction
     assert after["db_locks"], f"{opener} 丢失另一合法连接的内核锁: {artifact}"
 
@@ -154,23 +159,27 @@ import os
 import sys
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from app.services.infrastructure.rollout_context.runtime.composer import ContextPlanComposer
-saver = RolloutCheckpointSaver(sys.argv[1])
-session = sys.argv[2]
-draft = saver.get_context_plan_registration(session, plan_id='reader-plan').draft
-snapshot = ContextPlanComposer().assembly(
-    plan=draft, assembly_id='reader-assembly', session_id=session,
-    turn_id=sys.argv[3], execution_id=sys.argv[4], provider_version='reader-contract',
-)
-commit = saver._storage._commit_connection
-def hard_exit(connection):
-    assert connection.execute('SELECT plan_state FROM context_plans').fetchone() == ('sealed',)
-    if sys.argv[5] == 'after_commit':
-        commit(connection)
-    os._exit(66)
-saver._storage._commit_connection = hard_exit
-saver._storage.seal_context_assembly(
-    snapshot, seal_idempotency_key='reader-seal', seal_input_hash=sys.argv[6],
-)
+from tests.support.session_catalog_owner import fixture_catalog_scope
+with fixture_catalog_scope():
+    saver = RolloutCheckpointSaver(sys.argv[1])
+    session = sys.argv[2]
+    thread = saver._storage.main_thread_id(session)
+    draft = saver.get_context_plan_registration(session, thread_id=thread, plan_id='reader-plan').draft
+    snapshot = ContextPlanComposer().assembly(
+        plan=draft, assembly_id='reader-assembly', session_id=session, thread_id=thread,
+        turn_id=sys.argv[3], execution_id=sys.argv[4], provider_version='reader-contract',
+    )
+    commit = saver._storage._commit_connection
+    def hard_exit(connection):
+        assert connection.execute('SELECT plan_state FROM context_plans').fetchone() == ('sealed',)
+        if sys.argv[5] == 'after_commit':
+            commit(connection)
+        os._exit(66)
+    saver._storage._commit_connection = hard_exit
+    saver._storage.seal_context_assembly(
+        session, thread, snapshot, seal_idempotency_key='reader-seal', seal_input_hash=sys.argv[6],
+    )
+
 """
 
 
@@ -186,12 +195,14 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
     case = reader_case
     plan = ContextRequestPlan(
         session_id=case.session,
+        thread_id=case.thread,
         plan_id="reader-plan",
         refs=(),
         plan_creation_idempotency_key="reader-create",
         tool_set_refs=(
             ToolSetRef.from_tool_snapshot(
                 session_id=case.session,
+                thread_id=case.thread,
                 plan_id="reader-plan",
                 snapshot_id="reader-tools",
                 source_revision="reader-v1",
@@ -217,7 +228,9 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         "omitted_ref_ids": (),
         "loss": (),
     }
-    input_hash = seal_input_hash(plan, "", assembly_options, None)
+    input_hash = seal_input_hash(
+        plan, "", assembly_options, None, wire_configuration=None,
+    )
     evidence["after_create"] = _evidence(case)
     if not keep_reader:
         idle_reader.close()
@@ -250,7 +263,7 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
         evidence["after_child"] = _evidence(case)
         restarted = RolloutCheckpointSaver(case.saver._storage.sessions_dir)
         registration = restarted.get_context_plan_registration(
-            case.session, plan_id=plan.plan_id
+            case.session, thread_id=case.thread, plan_id=plan.plan_id
         )
         evidence["restored_state"] = registration.plan_state
         evidence["after_restart"] = _evidence(case)
@@ -261,12 +274,13 @@ def test_crash_recovery_preserves_commit_with_independent_idle_reader(
             plan=plan,
             assembly_id="reader-assembly",
             session_id=case.session,
+            thread_id=case.thread,
             turn_id=str(case.accepted["turn_id"]),
             execution_id=str(case.accepted["initial_execution_id"]),
             provider_version="reader-contract",
         )
         restarted._storage.seal_context_assembly(
-            snapshot,
+            case.session, case.thread, snapshot,
             seal_idempotency_key="reader-seal",
             seal_input_hash=input_hash,
         )

@@ -100,6 +100,40 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
     )
 
 
+
+@pytest.mark.parametrize("protection", ["public", "redacted", "protected"])
+def test_normal_write_uses_current_typed_envelope(detail_sessions: Path, protection) -> None:
+    store = ContextPlanDetailStore(detail_sessions, protected_key=b"p" * 32)
+    body = {"text": "normal-new-write"}
+    record = store.write(
+        session_id=SESSION_ID,
+        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+        assembly_id="normal-assembly",
+        detail_kind="request_source",
+        retention_class="request_replay",
+        visibility="internal",
+        detail=body,
+        sensitive=protection != "public",
+        protection=protection,
+        source_revision="normal-producer",
+    )
+    payload = json.loads((_thread_node(detail_sessions, SESSION_ID) / record.relative_path).read_bytes())
+    assert payload["format_version"] == 2
+    assert payload["detail_ref"] == record.detail_ref.to_dict()
+    assert sha256_jcs(payload) == record.content_hash
+    if protection == "redacted":
+        with pytest.raises(DetailUnavailableError, match="没有 protected body"):
+            store.read(
+                session_id=SESSION_ID, thread_id=record.thread_id,
+                record=record, include_sensitive=True,
+            )
+    else:
+        assert store.read(
+            session_id=SESSION_ID, thread_id=record.thread_id,
+            record=record, include_sensitive=True,
+        )["detail"] == body
+
+
 def test_sensitive_detail_never_writes_plaintext_or_claims_protected_body(
     detail_sessions: Path,
 ) -> None:

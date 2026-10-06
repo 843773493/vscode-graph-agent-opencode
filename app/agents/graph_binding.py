@@ -337,32 +337,32 @@ def compute_capability_profile_hash(
 DEEP_AGENT_GRAPH_ID: Final[str] = "deep-agent"
 """deep agent graph family 的固定标识。"""
 
-DEEP_AGENT_GRAPH_REVISION: Final[int] = 2
+DEEP_AGENT_GRAPH_REVISION: Final[int] = 3
 """deep agent 当前代码的 graph revision；改动图骨架/能力面时必须 +1。"""
 
-# revision 2 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
+# revision 3 的 middleware 栈声明式骨架：与 build_deep_agent_middleware 的
 # 有序 slot 一一对应。条件 slot（按 denylist/配置/MCP 状态出现）也以固定 slot
 # 名进入声明；按 invocation 的实际出现不属于 selector 校验范围（见模块
 # docstring 的 TODO）。
 DEEP_AGENT_MIDDLEWARE_STACK: Final[tuple[str, ...]] = (
     "ToolInvocationContextMiddleware",
     "ToolOutputMiddleware",
-    "TodoListMiddleware",
+    "SourceOwnedTodoListMiddleware",
     "ContextSourceMiddlewares",
     "FilesystemMiddleware",
     "CachePreservingSummarizationMiddleware",
     "CachePreservingSummarizationToolMiddleware",
     "PatchToolCallsMiddleware",
     "StructuredToolCallMiddleware",
-    "ModelToolVisibilityMiddleware",
     "InjectedRuntimeMiddleware",
     "CapabilityRoutingMiddleware",
     "CustomToolConfirmationMiddleware",
     "HumanInTheLoopMiddleware",
     "StructuredPromptValidationMiddleware",
+    "SealedAssemblyDispatchBridge",
 )
 
-# revision 2 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
+# revision 3 的工具面声明式骨架：内置默认工具、custom specs、扩展工具统一
 # invoke_extension_tool 信封、skill_load 工具。
 DEEP_AGENT_TOOL_FACE: Final[tuple[str, ...]] = (
     "builtin-default-tools",
@@ -371,7 +371,7 @@ DEEP_AGENT_TOOL_FACE: Final[tuple[str, ...]] = (
     "skill-load-tool",
 )
 
-# revision 2 的能力 profile：main thread 产品合同（child profile
+# revision 3 的能力 profile：main thread 产品合同（child profile
 # goal_enabled=false 属于后续 ThreadRuntimePolicy 轮次）。
 DEEP_AGENT_CAPABILITY_PROFILE: Final[Mapping[str, object]] = MappingProxyType(
     {

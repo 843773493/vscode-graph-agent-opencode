@@ -327,7 +327,7 @@
       "extensions": {},
       "source_manifest": {
         "source_revision": "revision-golden",
-        "visibility": "public",
+        "visibility": "internal",
         "protection": "public"
       },
       "turn_id": "turn-golden",

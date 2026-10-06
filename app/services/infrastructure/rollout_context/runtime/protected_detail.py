@@ -67,24 +67,6 @@ class ProtectedDetailBackend:
             blob, magic=self._MAGIC, aad=canonical_json_bytes(protected_aad(record))
         )
 
-    def authenticate_schema2_blob(
-        self,
-        blob: bytes,
-        *,
-        aad: bytes,
-    ) -> Mapping[str, object]:
-        """仅供显式 schema2→3 artifact 升级：使用调用方给定的原始 AAD。
-
-        普通 decrypt 永远只接受 typed v2；此入口不访问旧路径、不生成旧格式。
-        v1 header/AAD 定义已由历史源码读取记录冻结，见 protected_upgrade 模块。
-        """
-        if not isinstance(aad, bytes):
-            raise ProtectedDetailError("schema-upgrade-aad 必须是 bytes")
-        return self._decrypt_authenticated(
-            blob,
-            magic=b"boxteam-context-detail-v1\x00",
-            aad=aad,
-        )
 
     def _decrypt_authenticated(
         self,

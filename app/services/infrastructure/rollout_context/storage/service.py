@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -133,10 +133,6 @@ from app.services.infrastructure.rollout_context.storage.queries import (
 )
 from app.services.infrastructure.rollout_context.storage.rollout_maintenance_owner import (
     RolloutMaintenanceOwner,
-)
-from app.services.infrastructure.rollout_context.storage.schema_upgrade import (
-    SchemaUpgradeArtifacts,
-    SchemaUpgradePlan,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     RolloutSerializationMixin,
@@ -625,11 +621,9 @@ class RolloutStorage(
     def migrate_schema(self, thread_id: str, *, session_id: str, to_version: int, migration_name: str, migration_sql: str, checkpoint_ns: str='') -> RolloutReadSnapshot:
         return self._maintenance_owner.migrate_schema(thread_id, session_id=session_id, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, checkpoint_ns=checkpoint_ns)
 
-    def _migrate_schema_locked(self, thread_id: str, *, session_id: str, checkpoint_ns: str, to_version: int, migration_name: str, migration_sql: str, validate_migrated: Callable[[sqlite3.Connection], None] | None=None, pending_artifact_audit: bool=False, allow_failed_retry: bool=False) -> None:
-        return self._maintenance_owner._migrate_schema_locked(thread_id, session_id=session_id, checkpoint_ns=checkpoint_ns, to_version=to_version, migration_name=migration_name, migration_sql=migration_sql, validate_migrated=validate_migrated, pending_artifact_audit=pending_artifact_audit, allow_failed_retry=allow_failed_retry)
 
-    def _manifest_from_connection(self, connection: sqlite3.Connection, checkpoint_ns: str, *, allow_migrating: bool=False) -> RolloutManifest:
-        return self._maintenance_owner._manifest_from_connection(connection, checkpoint_ns, allow_migrating=allow_migrating)
+    def _manifest_from_connection(self, connection: sqlite3.Connection, checkpoint_ns: str) -> RolloutManifest:
+        return self._maintenance_owner._manifest_from_connection(connection, checkpoint_ns)
 
     def _namespace_state(self, connection: sqlite3.Connection, checkpoint_ns: str) -> tuple[str, int]:
         return self._maintenance_owner._namespace_state(connection, checkpoint_ns)
@@ -643,8 +637,8 @@ class RolloutStorage(
     def _is_removed_rollout_layout(self, root: Path) -> bool:
         return self._maintenance_owner._is_removed_rollout_layout(root)
 
-    def _validate_schema_state(self, connection: sqlite3.Connection, *, allow_older_schema: bool=False, pending_retry: tuple[int, int, str, str | None] | None=None) -> None:
-        return self._maintenance_owner._validate_schema_state(connection, allow_older_schema=allow_older_schema, pending_retry=pending_retry)
+    def _validate_schema_state(self, connection: sqlite3.Connection) -> None:
+        return self._maintenance_owner._validate_schema_state(connection)
 
     def _validate_v2_commit_offsets(self, connection: sqlite3.Connection, jsonl_path: Path, *, validate_jsonl_items: bool=True) -> None:
         return self._maintenance_owner._validate_v2_commit_offsets(connection, jsonl_path, validate_jsonl_items=validate_jsonl_items)
@@ -680,8 +674,8 @@ class RolloutStorage(
     def _existing_index_connection(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> Iterator[sqlite3.Connection]:
         return self._maintenance_owner._existing_index_connection(thread_id, checkpoint_ns, session_id=session_id)
 
-    def initialize(self, session_id: str, checkpoint_ns: str='', *, thread_id: str | None=None, validate_jsonl_items: bool=True, _allow_schema_upgrade: bool=False) -> RolloutManifest:
-        return self._maintenance_owner.initialize(session_id, checkpoint_ns, thread_id=thread_id, validate_jsonl_items=validate_jsonl_items, _allow_schema_upgrade=_allow_schema_upgrade)
+    def initialize(self, session_id: str, checkpoint_ns: str='', *, thread_id: str | None=None, validate_jsonl_items: bool=True) -> RolloutManifest:
+        return self._maintenance_owner.initialize(session_id, checkpoint_ns, thread_id=thread_id, validate_jsonl_items=validate_jsonl_items)
 
     def _reject_unpublished_migration(self, thread_id: str, checkpoint_ns: str, *, session_id: str) -> None:
         return self._maintenance_owner._reject_unpublished_migration(thread_id, checkpoint_ns, session_id=session_id)
@@ -691,18 +685,3 @@ class RolloutStorage(
 
     def ensure_active_view_contains_turn_root(self, session_id: str, thread_id: str, *, turn_id: str, checkpoint_ns: str='') -> bool:
         return self._maintenance_owner.ensure_active_view_contains_turn_root(session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns)
-
-    def upgrade_v2_schema(
-        self, thread_id: str, *, session_id: str, checkpoint_ns: str = "",
-        prepare_artifact_upgrade: Callable[[sqlite3.Connection], SchemaUpgradeArtifacts] | None = None,
-        resume_artifact_upgrade: Callable[[sqlite3.Connection], bool] | None = None,
-        prepare_plan_upgrade: Callable[[sqlite3.Connection], SchemaUpgradePlan] | None = None,
-    ) -> RolloutReadSnapshot:
-        return self._maintenance_owner.upgrade_v2_schema(
-            thread_id,
-            session_id=session_id,
-            checkpoint_ns=checkpoint_ns,
-            prepare_artifact_upgrade=prepare_artifact_upgrade,
-            resume_artifact_upgrade=resume_artifact_upgrade,
-            prepare_plan_upgrade=prepare_plan_upgrade,
-        )

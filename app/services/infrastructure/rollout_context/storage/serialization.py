@@ -143,8 +143,6 @@ class RolloutSerializationMixin:
     def _require_v2_readable(
         cls,
         connection: sqlite3.Connection,
-        *,
-        allow_migrating: bool = False,
     ) -> None:
         """拒绝读取尚未完成 legacy staging 的 target。"""
         cls._require_v2_runtime(connection)
@@ -154,7 +152,7 @@ class RolloutSerializationMixin:
         if row is None:
             raise RuntimeError("rollout database_meta 缺失，无法判断读取状态")
         database_state = _strict_text(row[0], field="database_meta.database_state")
-        if database_state == "migrating" and not allow_migrating:
+        if database_state == "migrating":
             raise RuntimeError(
                 "legacy migration target 在安装完成前不可读取；"
                 "请等待 migration 完成后重新打开 rollout"

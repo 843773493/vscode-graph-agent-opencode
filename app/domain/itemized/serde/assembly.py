@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields
 from typing import TYPE_CHECKING
 
 from app.domain.itemized.errors import FormatDispatchError, ItemSchemaError
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetIdentityRef, ToolSetRef
 from app.domain.itemized.selection import ContextSelectionEntry
 from app.domain.itemized.serde.epoch import context_seal_binding_from_dict
 from app.domain.itemized.serde.registry import (
@@ -51,6 +52,7 @@ def context_assembly_snapshot_from_dict(
         "projector_version",
         "target_format",
         "request_hash_preimage",
+        "request_input_hash",
         "active_view_id",
         "selection_policy",
         "model_call_id",
@@ -146,17 +148,10 @@ def context_assembly_snapshot_from_dict(
         raw_ref = raw_entry["ref"]
         if raw_ref.get("ref_type") == "tool_set" and not raw_entry["included"]:
             # 此分支只解析 selection 自带的 identity，不能查工具 registry 或正文。
-            identity_fields = {
-                "session_id",
-                "thread_id",
-                "ref_type", "ref_id", "plan_id", "assembly_id", "source_revision",
-                "tool_set_schema", "tool_set_schema_version", "tool_policy_version",
-                "content_length", "content_hash", "redacted_stable_digest",
-                "protection", "availability",
-            }
+            identity_fields = {item.name for item in fields(ToolSetIdentityRef)}
             if set(raw_ref) != identity_fields:
                 raise ItemSchemaError("omitted ToolSetRef identity 字段不完整或包含正文")
-            selection_ref = ToolSetRef(
+            selection_ref = ToolSetIdentityRef(
                 **{key: raw_ref[key] for key in identity_fields}
             )
         else:
@@ -282,6 +277,12 @@ def context_assembly_snapshot_from_dict(
         ),
         target_format=_required_string(value["target_format"], "target_format"),
         request_hash_preimage=value["request_hash_preimage"],
+        # 业务语义可空，但键必须显式存在（required 集合保证缺键失败）；不回救旧 snapshot。
+        request_input_hash=(
+            None
+            if value["request_input_hash"] is None
+            else _required_string(value["request_input_hash"], "request_input_hash")
+        ),
         active_view_id=_optional_string(value, "active_view_id", "active_view_id"),
         selection_policy=_required_string(
             value["selection_policy"], "selection_policy"

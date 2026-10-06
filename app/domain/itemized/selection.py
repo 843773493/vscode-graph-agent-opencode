@@ -13,7 +13,7 @@ from app.domain.itemized.enums import (
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import validate_hash_token
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetIdentityRef, ToolSetRef
 from app.domain.itemized.schema import validate_selection_compatibility
 from app.domain.itemized.validation import _non_empty_string
 
@@ -24,7 +24,7 @@ class ContextSelectionEntry:
 
     assembly_id: str
     plan_ordinal: int
-    ref: ContextRef | ToolSetRef
+    ref: ContextRef | ToolSetIdentityRef
     selection_kind: str
     included: bool = True
     omission_reason: str | None = None
@@ -46,9 +46,9 @@ class ContextSelectionEntry:
     contribution_ordinal: int | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.ref, (ContextRef, ToolSetRef)):
+        if not isinstance(self.ref, (ContextRef, ToolSetIdentityRef)):
             raise ItemSchemaError(
-                "ContextSelectionEntry.ref 必须是 ContextRef 或 ToolSetRef"
+                "ContextSelectionEntry.ref 必须是 ContextRef 或 ToolSetIdentityRef"
             )
         _non_empty_string(self.assembly_id, "ContextSelectionEntry.assembly_id")
         if not isinstance(self.plan_ordinal, int) or isinstance(
@@ -57,6 +57,12 @@ class ContextSelectionEntry:
             raise ItemSchemaError("ContextSelectionEntry.plan_ordinal 必须是非负整数")
         if not isinstance(self.included, bool):
             raise ItemSchemaError("ContextSelectionEntry.included 必须是 boolean")
+        if isinstance(self.ref, ToolSetIdentityRef):
+            if self.included and not isinstance(self.ref, ToolSetRef):
+                raise ItemSchemaError("included tool_set selection 必须持有完整 ToolSetRef")
+            if not self.included and isinstance(self.ref, ToolSetRef):
+                # omission 从 seal 起只持有身份，不能先序列化正文再删字段。
+                object.__setattr__(self, "ref", self.ref.identity_ref())
         for name, value in (
             ("source_overlay_epoch", self.source_overlay_epoch),
             ("contribution_ordinal", self.contribution_ordinal),
@@ -173,8 +179,8 @@ class ContextSelectionEntry:
             self.base_delta_role,
         )
         if self.selection_kind == SelectionKind.TOOL_SET:
-            if not isinstance(self.ref, ToolSetRef):
-                raise ItemSchemaError("tool_set selection 必须绑定 ToolSetRef")
+            if not isinstance(self.ref, ToolSetIdentityRef):
+                raise ItemSchemaError("tool_set selection 必须绑定 ToolSetIdentityRef")
             if self.ref.assembly_id != self.assembly_id:
                 raise ItemSchemaError(
                     "tool_set selection 的 assembly_id 必须与 ToolSetRef 一致"
@@ -308,16 +314,11 @@ class ContextSelectionEntry:
                     )
 
     def to_dict(self) -> dict[str, object]:
-        ref_value = self.ref.to_dict()
-        if not self.included and isinstance(self.ref, ToolSetRef):
-            # omitted tool set 只保存已有 identity，不序列化工具定义和 policy 正文。
-            ref_value.pop("tools")
-            ref_value.pop("tool_policy")
         return {
             "format_version": 2,
             "assembly_id": self.assembly_id,
             "plan_ordinal": self.plan_ordinal,
-            "ref": ref_value,
+            "ref": self.ref.to_dict(),
             "selection_kind": self.selection_kind,
             "included": self.included,
             "omission_reason": self.omission_reason,

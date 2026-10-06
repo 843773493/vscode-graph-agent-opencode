@@ -18,6 +18,7 @@ from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
+from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_factory import (
     create_runtime_deep_agent_for_session,
     resolve_agent_id,
@@ -89,6 +90,7 @@ def build_session_agent_runtime(
     session_id: str,
     thread_id: str,
     agent_id: str,
+    tool_selection_reader: ToolSelectionReader,
     config_service: ConfigService,
     background_task_registry: BackgroundTaskRegistry,
     background_message_bus: BackgroundMessageBus,
@@ -118,6 +120,7 @@ def build_session_agent_runtime(
         session_id=session_id,
         thread_id=thread_id,
         agent_id=resolved_agent_id,
+        tool_selection_reader=tool_selection_reader,
         config_service=config_service,
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,

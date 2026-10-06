@@ -25,6 +25,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
+            tool_selection_reader=MagicMock(),
             workspace_root=Path("/workspace"),
             config_service=config_service,
             background_task_registry=MagicMock(),

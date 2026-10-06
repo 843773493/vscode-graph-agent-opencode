@@ -8,10 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id, uuid7_datetime_from_hex
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
@@ -22,6 +24,12 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 
 SESSION_ID = "ses_019c38b8b88476a58ce3735618d44bc8"
@@ -84,7 +92,7 @@ def test_producer_applies_and_increments_only_on_change(
 
 
 def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
-    saver: RolloutCheckpointSaver,
+    frozen_provider_wire, saver: RolloutCheckpointSaver,
 ) -> None:
     thread_id = _main_thread_id(saver)
     accepted = saver.accept_turn(
@@ -97,17 +105,22 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
         payload="切换工具集",
         payload_kind="text",
     )
+    tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
+    tools_b = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_B), tools=TOOLS_B)
     options = {
         "turn_id": accepted["turn_id"],
         "execution_id": accepted["initial_execution_id"],
-        "provider_version": "toolset-provider",
-        "target_format": "responses",
+        **frozen_provider_wire("toolset-provider", "responses"),
+        "context_source_manager": ContextSourceManager(
+            owner=ContextSourceOwnerKey(SESSION_ID, thread_id),
+            control_state_port=saver,
+        ),
+        "tool_set_supplier": lambda: tools_a,
         "plan_creation_idempotency_key": "toolset-create",
         "seal_idempotency_key": "toolset-seal",
     }
     admission = saver.execution_admission(
-        SESSION_ID,
-        thread_id=thread_id,
+        SESSION_ID, thread_id=thread_id,
         execution_id=accepted["initial_execution_id"],
     )
     owner = MutationIntentOwner(session_id=SESSION_ID, thread_id=thread_id)
@@ -115,36 +128,47 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
         session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        first = saver.prepare_context_for_provider(
-            SESSION_ID,
-            thread_id,
-            tool_snapshot=TOOLS_A,
-            **options,
+        first = saver.prepare_context_for_provider(SESSION_ID, thread_id, **options)
+        first_snapshot = saver._storage.get_context_assembly(
+            SESSION_ID, thread_id, assembly_id=first["assembly_id"],
         )
-        binding = _binding_state(saver)
-        assert binding.applied_toolset_revision == 1
-        assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
+        binding = first_snapshot.seal_binding
+        assert binding.applied_toolset_revision == tools_a.revision
+        assert binding.tool_set_snapshot_id == tools_a.snapshot_id
+        assert binding.prefix.state.epoch.ordinal == 1
 
-        # 模拟外部 desired 漂移：直连端口把 applied 推进到 B。
-        saver.consume_mutation_intent(
-            SwitchToolSetIntent(
-                owner=owner,
-                desired_revision=_desired_key(TOOLS_B),
-                tool_set_snapshot_id="tool-set:" + _desired_key(TOOLS_B),
-            ),
+        # 下一次真实 prepare/seal 才使 B 成为 applied，旧 A 请求仍归原 assembly。
+        second = saver.prepare_context_for_provider(
+            SESSION_ID, thread_id,
+            **{**options,
+               "tool_set_supplier": lambda: tools_b,
+               "plan_creation_idempotency_key": "toolset-create-b",
+               "seal_idempotency_key": "toolset-seal-b"},
         )
-        # 已 sealed 的在飞请求不做二次比较：同 creation key 重试复用 assembly，
-        # producer 不被再次触发，applied 不被拉回 A。
+        second_snapshot = saver._storage.get_context_assembly(
+            SESSION_ID, thread_id, assembly_id=second["assembly_id"],
+        )
+        assert second_snapshot.seal_binding.applied_toolset_revision == tools_b.revision
+        assert second_snapshot.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
+        assert second_snapshot.seal_binding.prefix.state.epoch.ordinal == 2
+        assert second_snapshot.seal_binding.previous_assembly_id == first["assembly_id"]
+
+        def refuse_supplier():
+            pytest.fail("已 sealed 的重试不得重读 ToolSet desired")
+
         retry = saver.prepare_context_for_provider(
-            SESSION_ID,
-            thread_id,
-            tool_snapshot=TOOLS_A,
-            **options,
+            SESSION_ID, thread_id,
+            **{**options, "tool_set_supplier": refuse_supplier},
         )
     assert retry["assembly_id"] == first["assembly_id"]
-    binding = _binding_state(saver)
-    assert binding.applied_toolset_revision == 2
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_B)
+    assert saver._storage.get_context_assembly(
+        SESSION_ID, thread_id, assembly_id=first["assembly_id"],
+    ) == first_snapshot
+    with saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
+        latest = saver._storage.latest_context_assembly(snapshot)
+    assert latest.assembly_id == second["assembly_id"]
+    assert latest.seal_binding.applied_toolset_revision == tools_b.revision
+    assert latest.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
 
 
 def test_unregistered_thread_cannot_receive_toolset_binding(
@@ -190,7 +214,12 @@ def test_producer_applies_toolset_to_explicit_child_thread(
             idempotency_key=f"toolset-child-{child_thread_id}",
             initial_state="idle",
             preimage_hash="b" * 64,
-            graph_binding=json.dumps({"graph_id": "toolset-child-test"}),
+            graph_binding=json.dumps({
+                "graph_id": DEEP_AGENT_GRAPH_BINDING.graph_id,
+                "graph_revision": DEEP_AGENT_GRAPH_BINDING.graph_revision,
+                "graph_schema_hash": DEEP_AGENT_GRAPH_BINDING.graph_schema_hash,
+                "capability_profile_hash": DEEP_AGENT_GRAPH_BINDING.capability_profile_hash,
+            }),
             capability_profile="{}",
             created_at=uuid7_datetime_from_hex(child_thread_id[4:]),
             thread_id=child_thread_id,

@@ -513,7 +513,7 @@ async def test_cache_preserving_middleware_forked_summary_hits_main_prompt_cache
     )
     provider = config_service.get_llm_provider("primary")
     assert "prompt_cache_key" not in provider["api_mode"].get("request_features", {})
-    model = build_model_from_provider(provider, {})
+    model = build_model_from_provider(provider, {}, invocation_purpose="tool_test")
     middleware = CachePreservingSummarizationMiddleware(
         model=model,
         backend=FilesystemBackend(
@@ -733,7 +733,7 @@ async def test_luna_image_reasoning_compaction_hits_prompt_cache(
     assert provider["api_mode"]["model_info"]["supports_vision"] is True
 
     cache_key = f"luna-image-compact-e2e-{uuid.uuid4().hex}"
-    model = build_model_from_provider(provider, {}, prompt_cache_key=cache_key)
+    model = build_model_from_provider(provider, {}, prompt_cache_key=cache_key, invocation_purpose="tool_test")
     middleware = CachePreservingSummarizationMiddleware(
         model=model,
         backend=FilesystemBackend(

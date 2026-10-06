@@ -48,6 +48,7 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
     ProtectedDetailBackend,
     ProtectedDetailError,
 )
+from tests.integration.backend.sessions.itemized_dispatch_helpers import EMPTY_TOOL_SET
 
 SOURCE_SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
 TARGET_SESSION_ID = "ses_019b9187b87f78c78ef242bbd6043bfc"
@@ -152,7 +153,7 @@ def protected_source(fork_workspace, session_bundle_factory, protected_key):
         plan = saver.compose_committed_context_plan(
             SOURCE_SESSION_ID,
             source_thread_id,
-            plan_id="source-plan",
+            plan_id="source-plan", tool_set=EMPTY_TOOL_SET,
         )
         plan = replace(
             plan, plan_creation_idempotency_key="protected-fork-source-create"
@@ -162,7 +163,7 @@ def protected_source(fork_workspace, session_bundle_factory, protected_key):
             SOURCE_SESSION_ID,
             source_thread_id,
             plan,
-            turn_id="source-turn",
+            wire_profile=None, wire_params=None, turn_id="source-turn",
             execution_id=saver.execution_for_turn(
                 SOURCE_SESSION_ID,
                 turn_id="source-turn",
@@ -375,11 +376,18 @@ async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_s
     original_body = (
         source_root.parent / protected_detail_relative_path(record.detail_ref)
     ).read_bytes()
+    fork_id = uuid4().hex
+    generation = saver.begin_pinned_fork_retention_claim(
+        fork_id=fork_id,
+        source_session_id=SOURCE_SESSION_ID,
+        target_session_id=TARGET_SESSION_ID,
+    )
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID,
         target_session_id=TARGET_SESSION_ID,
         mode="full_rollout_copy",
         relationship="pinned",
+        fork_id=fork_id,
     )
     with saver._storage._connect(
         source_thread_id,
@@ -391,6 +399,9 @@ async def test_pinned_protected_copy_retains_lineage_not_shared_body(protected_s
             "SELECT owner_session_id, status FROM retention_refs WHERE reference_kind='fork'"
         ).fetchall()
         assert rows == [(TARGET_SESSION_ID, "active")]
+    claim = saver._storage._catalog_store().get_fork_retention_claim(fork_id)
+    assert claim.state == "active"
+    assert claim.source_lifecycle_generation == generation
     assert (source_root / ".context-redaction-key").read_bytes() == original_key
     assert (
         source_root.parent / protected_detail_relative_path(record.detail_ref)

@@ -9,6 +9,7 @@ profile 身份和可哈希参数只在这里构造一次。它不读取 storage�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_openai.chat_models.base import _construct_responses_api_payload
 
 from app.agents.providers.litellm_stream_types import _openai_tool_call
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
@@ -29,6 +31,10 @@ from app.services.mapping.itemized.provider_request import (
     project_tool_message_content,
     project_user_message_content,
 )
+
+# 最终 wire 转换算法身份独立于 provider/model/capability profile。
+WIRE_PROJECTOR_ID = "itemized-context-provider"
+WIRE_PROJECTOR_VERSION = "v2"
 
 # 认证与本地传输只属于连接本身，不进入 request hash；其余真实语义参数
 # （含 model_kwargs 展开的 temperature/max_tokens/extra_body 等）必须参与。
@@ -258,10 +264,29 @@ def merge_system_messages_into_instructions(payload: Mapping[str, Any]) -> dict[
 def finalize_responses_body(
     payload: Mapping[str, Any],
     *,
+    messages: Sequence[BaseMessage] | None = None,
     merge_system_to_instructions: bool = False,
 ) -> dict[str, Any]:
-    """Responses 最终正文清洗：唯一纯转换，封存与发送共用。"""
-    body = strip_responses_reasoning_output(payload)
+    """Responses 最终正文：封存与发送共用 SDK 参数映射及正文清洗。
+
+    SDK 负责 response_format→text.format、tool_choice、reasoning、verbosity
+    与显式输出参数的映射；复制参数后调用，避免 SDK 原地修改冻结的输入。
+    sealed input/tools 已由 Saver 编码，必须逐字保留，不能用 SDK 反推；
+    非 Agent 调用显式传入历史消息，继续使用原 SDK 输入与工具构造。
+    """
+    params = deepcopy(dict(payload))
+    sealed_fields = (
+        {key: params.pop(key) for key in ("input", "tools") if key in params}
+        if messages is None
+        else {}
+    )
+    body = _construct_responses_api_payload(
+        messages if messages is not None else (), params
+    )
+    if messages is None:
+        body.pop("input")
+        body.update(sealed_fields)
+    body = strip_responses_reasoning_output(body)
     if merge_system_to_instructions:
         body = merge_system_messages_into_instructions(body)
     return body
@@ -279,7 +304,7 @@ def finalize_responses_wire(
 ) -> dict[str, Any]:
     """Responses 最终 wire：input/tools/include/store 与真实语义参数合并。
 
-    最终正文清洗只在这里实现一次：reasoning 输出态 content 与 chatgpt 的
+    SDK 参数映射、reasoning 输出态 content 清洗与 chatgpt 的
     system/developer→instructions 属于同一转换，adapter 不得再复制一份。
     """
     _reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
@@ -296,6 +321,43 @@ def finalize_responses_wire(
     return finalize_responses_body(
         payload,
         merge_system_to_instructions=merge_system_to_instructions,
+    )
+
+
+def finalize_provider_wire(
+    *,
+    messages: Sequence[BaseMessage],
+    tools: Sequence[Mapping[str, Any]],
+    native_request: Mapping[str, Any] | None,
+    profile: ChatWireProfile | ResponsesWireProfile,
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """消费 Saver 已解析的投影与纯值配置，生成完整实际 wire 正文。
+
+    ToolSetRef 编码由原 bridge 完成；这里不读取 plan/storage，也不接收模型实例。
+    None/空工具清单按真实 LangChain 调用行为省略，避免封存额外的 tools=[]。
+    """
+    if isinstance(profile, ChatWireProfile):
+        if native_request is not None:
+            raise ValueError("source-mismatch: Chat wire 不接受 Responses input")
+        return finalize_chat_wire(
+            messages=finalize_chat_messages(messages, profile=profile),
+            tools=tools or None,
+            params=params,
+        )
+    if not isinstance(profile, ResponsesWireProfile):
+        raise TypeError("source-mismatch: Provider wire 需要纯值 profile")
+    if not isinstance(native_request, Mapping):
+        raise TypeError("source-mismatch: Responses wire 缺少 sealed native request")
+    if "input" not in native_request or "tools" not in native_request:
+        raise TypeError("source-mismatch: native request 缺少 input/tools")
+    return finalize_responses_wire(
+        input_items=native_request["input"],
+        tools=native_request["tools"],
+        params={**params, "stream": True},
+        include=profile.include,
+        store=profile.store,
+        merge_system_to_instructions=profile.custom_llm_provider == "chatgpt",
     )
 
 
@@ -552,8 +614,15 @@ def responses_wire_params(
     kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Responses 封存参数视图：真实发送参数归一成 HTTP body 语义后再进 request hash。"""
+    profile = responses_wire_profile(model)
     params = wire_request_params(
-        model, responses_send_params(model, kwargs=kwargs)
+        model,
+        {
+            **responses_send_params(model, kwargs=kwargs),
+            "stream": True,
+            "include": list(profile.include),
+            "store": profile.store,
+        },
     )
     _reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
     return params
@@ -698,6 +767,8 @@ __all__ = [
     "CHAT_SEALED_KEYS",
     "RESPONSES_SEALED_KEYS",
     "WIRE_EXCLUDED_KEYS",
+    "WIRE_PROJECTOR_ID",
+    "WIRE_PROJECTOR_VERSION",
     "ChatWireProfile",
     "ResponsesWireProfile",
     "chat_send_params",
@@ -705,6 +776,7 @@ __all__ = [
     "chat_wire_profile",
     "finalize_chat_messages",
     "finalize_chat_wire",
+    "finalize_provider_wire",
     "finalize_responses_body",
     "finalize_responses_wire",
     "merge_system_messages_into_instructions",

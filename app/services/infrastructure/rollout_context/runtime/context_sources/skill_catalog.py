@@ -290,7 +290,9 @@ class SkillCatalogMixin:
                 raise TypeError(
                     "ContextSourceManager.activate_skill_content.content 必须是字符串"
                 )
-            effective_revision = revision or _revision(content)
+            if revision is not None and (not isinstance(revision, str) or not revision):
+                raise ValueError("activate_skill_content.revision 必须是非空字符串或 None")
+            effective_revision = _revision(content) if revision is None else revision
             if state.latest_revision is not None:
                 if (
                     state.latest_revision == effective_revision

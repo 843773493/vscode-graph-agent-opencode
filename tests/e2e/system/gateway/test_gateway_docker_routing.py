@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,12 +10,21 @@ import commentjson
 import httpx
 import pytest
 
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
+)
+from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
+    session_resource_identity,
+    session_resource_uri,
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
 )
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
@@ -43,11 +53,17 @@ from tests.support.gateway_processes import (
 from tests.support.ports import e2e_port_block_for_file
 
 
+@pytest.fixture
+def gateway_local_token_supplier() -> Callable[[], str]:
+    return lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"]
+
+
 @pytest.mark.asyncio
 async def test_gateway_federates_complete_remote_gateway_through_docker(
     request: pytest.FixtureRequest,
     e2e_workspace_root_path: str,
     docker_e2e_paths: GatewayTargetE2EPaths,
+    gateway_local_token_supplier: Callable[[], str],
 ):
     if os.getenv("BOXTEAM_RUN_DOCKER_GATEWAY_E2E") != "1":
         pytest.skip("设置 BOXTEAM_RUN_DOCKER_GATEWAY_E2E=1 后运行 Docker SSH 跨端 e2e")
@@ -66,6 +82,7 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
     gateway: GatewayProcess | None = None
     remote_gateway_pid: str | None = None
     docker_target: GatewaySshTarget | None = None
+    gateway_scope_token = None
 
     try:
         docker_target = ensure_gateway_ssh_container(
@@ -108,6 +125,10 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             timeout=60,
         ) as client:
             await acquire_gateway_guest(client)
+            health_response = await client.get("/api/gateway/health")
+            assert health_response.status_code == 200, health_response.text
+            gateway_id = health_response.json()["data"]["gateway_id"]
+            gateway_scope_token = set_current_gateway_id(gateway_id)
             list_response = await client.get("/api/gateway/workspaces")
             assert list_response.status_code == 200, list_response.text
             workspace_list = list_response.json()["data"]
@@ -155,6 +176,9 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
             )
             assert Path(workspace_root_from_response(remote_workspace_response)).as_posix() == remote_workspace_path
+            remote_backend_workspace_id = remote_workspace_response.json()["data"]["workspace_id"]
+            assert remote_backend_workspace_id == remote_workspace["backend_workspace_id"]
+            assert remote_backend_workspace_id != remote_workspace_id
 
             remote_tools_response = await client.get(
                 "/api/v1/tools",
@@ -194,14 +218,16 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             assert create_response.status_code == 200, create_response.text
             remote_session_id = create_response.json()["data"]["session_id"]
 
-            projected_sessions_resource = (
-                f"boxteam://workspace/{remote_workspace_id}/sessions"
-            )
+            inventory_ref = {
+                "resource_identity": str(workspace_session_inventory_identity(remote_backend_workspace_id)),
+                "uri": workspace_session_inventory_uri(remote_backend_workspace_id),
+                "scope": "workspace",
+            }
             context_search_response = await client.post(
                 "/api/v1/context/search",
                 headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
                 json={
-                    "resource": projected_sessions_resource,
+                    **inventory_ref,
                     "query": "Docker SSH Routed Session",
                     "sources": ["session_catalog"],
                 },
@@ -210,22 +236,26 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
                 context_search_response.text
             )
             context_matches = context_search_response.json()["data"]["matches"]
-            projected_locator = next(
-                item["locator"]
+            session_ref = {
+                "resource_identity": str(session_resource_identity(remote_backend_workspace_id, remote_session_id)),
+                "uri": session_resource_uri(remote_backend_workspace_id, remote_session_id),
+                "scope": "workspace",
+            }
+            session_match = next(
+                item
                 for item in context_matches
-                if remote_session_id in item["locator"]
+                if item["resource_identity"] == session_ref["resource_identity"]
             )
-            assert projected_locator.startswith(
-                f"boxteam://workspace/{remote_workspace_id}/session/"
-            )
+            assert {key: session_match[key] for key in session_ref} == session_ref
 
             context_read_response = await client.post(
                 "/api/v1/context/read",
                 headers={"X-BoxTeam-Workspace-Id": remote_workspace_id},
-                json={"resource": projected_locator},
+                json=session_ref,
             )
             assert context_read_response.status_code == 200, context_read_response.text
-            assert context_read_response.json()["data"]["resource"] == projected_locator
+            context_read_data = context_read_response.json()["data"]
+            assert {key: context_read_data[key] for key in session_ref} == session_ref
 
             sessions_response = await client.get(
                 "/api/v1/sessions",
@@ -271,6 +301,9 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             restored_response = await restarted_client.get("/api/gateway/workspaces")
             assert restored_response.status_code == 200, restored_response.text
             restored_list = restored_response.json()["data"]
+            restored_health = await restarted_client.get("/api/gateway/health")
+            assert restored_health.status_code == 200, restored_health.text
+            assert restored_health.json()["data"]["gateway_id"] == gateway_id
             restored_ssh = next(
                 item
                 for item in restored_list["items"]
@@ -282,17 +315,22 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
 
         context_service = GatewayContextQueryService(
             transport=GatewaySessionContextClient(
-                gateway_url=f"http://127.0.0.1:{gateway.port}"
+                gateway_url=f"http://127.0.0.1:{gateway.port}",
+                local_token_supplier=gateway_local_token_supplier,
             )
         )
         gateway_inventory = await context_service.read_gateway_context(
             SessionContextReadRequest(
-                resource="boxteam://gateway/workspaces",
+                resource_identity=gateway_session_inventory_identity(gateway_id),
+                uri=gateway_session_inventory_uri(gateway_id),
+                scope="gateway",
                 view="inventory",
             )
         )
         assert any(
-            item.locator == f"boxteam://workspace/{remote_workspace_id}"
+            item.resource_identity == workspace_session_inventory_identity(remote_backend_workspace_id)
+            and item.uri == workspace_session_inventory_uri(remote_backend_workspace_id)
+            and item.scope == "workspace"
             for item in gateway_inventory.items
         )
 
@@ -300,16 +338,20 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
         remote_gateway_pid = None
         offline_search = await context_service.search_gateway_context(
             SessionContextSearchRequest(
-                resource="boxteam://gateway",
+                resource_identity=gateway_session_inventory_identity(gateway_id),
+                uri=gateway_session_inventory_uri(gateway_id),
+                scope="gateway",
                 query="Docker SSH Routed Session",
                 sources=["session_catalog"],
             )
         )
         assert any(
-            error.resource == f"boxteam://workspace/{remote_workspace_id}"
+            error.resource_identity == workspace_session_inventory_identity(remote_backend_workspace_id)
             for error in offline_search.partial_errors
         )
     finally:
+        if gateway_scope_token is not None:
+            reset_current_gateway_id(gateway_scope_token)
         if gateway is not None:
             close_gateway_process(gateway)
         if remote_gateway_pid is not None and docker_target is not None:

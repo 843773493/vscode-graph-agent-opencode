@@ -16,17 +16,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer, build_app_container
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_prefixed_id
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationService
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.event import JobStartedEvent, JobStartedPayload
@@ -42,6 +45,12 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.session_title_service import SessionTitleService
@@ -324,7 +333,7 @@ def _admit(
     "status,outcome", [("cancelled", "cancelled"), ("timed_out", "interrupted")]
 )
 async def test_control_corrects_execution_lost_and_failed_preserves_recovery(
-    runner_case: RunnerCase,
+    frozen_provider_wire, runner_case: RunnerCase,
     origin: str,
     status: str,
     outcome: str,
@@ -332,14 +341,26 @@ async def test_control_corrects_execution_lost_and_failed_preserves_recovery(
     session_id, thread_id = await _session(runner_case)
     admission = _admit(runner_case, session_id, thread_id, origin)
     model_call_id = create_prefixed_id("mc")
-    assembly_id = runner_case.saver.seal_context_for_dispatch(
-        session_id,
-        thread_id,
-        turn_id=admission.turn_id,
-        execution_id=admission.execution_id,
-        model_call_id=model_call_id,
-        provider_version="runner-cancellation",
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(session_id, thread_id),
+        control_state_port=runner_case.saver,
     )
+    selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        prepared = runner_case.saver.prepare_context_for_provider(
+            session_id, thread_id,
+            turn_id=admission.turn_id, execution_id=admission.execution_id,
+            plan_creation_idempotency_key=f"cancellation-create:{model_call_id}",
+            seal_idempotency_key=f"cancellation-seal:{model_call_id}",
+            context_source_manager=manager, tool_set_supplier=lambda: selected,
+            **frozen_provider_wire("runner-cancellation", "chat_completions"),
+        )
+    assembly_id = str(prepared["assembly_id"])
     runner_case.saver.register_model_call(
         session_id,
         thread_id=thread_id,

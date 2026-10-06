@@ -1,4 +1,4 @@
-"""fresh schema4 的 full-copy registry、真实 draft 与显式 sealed import。"""
+"""当前 typed full-copy registry、真实 draft 与显式 sealed import。"""
 
 from __future__ import annotations
 
@@ -96,12 +96,22 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
     current = replace(initial, tool_set_refs=(), history_view_revision=2)
     saver.revise_context_plan(SOURCE_SESSION_ID, current, expected_revision=0)
     source = saver._storage.root(SOURCE_SESSION_ID)
+    with saver._storage._connect(
+        saver._storage.main_thread_id(SOURCE_SESSION_ID), "",
+        session_id=SOURCE_SESSION_ID, read_only=True,
+    ) as source_connection:
+        source_schema_version = source_connection.execute(
+            "SELECT schema_version FROM database_meta WHERE singleton_id=1"
+        ).fetchone()[0]
+        assert source_connection.execute(
+            "SELECT to_version FROM schema_migrations WHERE status='completed' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()[0] == source_schema_version
     before = _artifacts(source)
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     assert _artifacts(source) == before
-    with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_draft_id = _target_plan_id(connection, "real-draft")
         target_sealed_id = _target_plan_id(connection, sealed.plan_id)
         draft = read_registration(
@@ -123,7 +133,7 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
             "source_plan_id": sealed.plan_id,
             "source_assembly_id": sealed.assembly_id,
             "source_snapshot_hash": sha256_jcs(sealed.to_dict()),
-            "source_schema_version": 4,
+            "source_schema_version": source_schema_version,
             "audit_id": connection.execute(
                 "SELECT fork_id FROM fork_origins"
             ).fetchone()[0],
@@ -174,7 +184,7 @@ async def test_full_copy_same_tool_local_id_stays_scoped_to_each_draft(
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         targets = [
             read_registration(
                 connection,
@@ -206,7 +216,7 @@ async def test_source_registry_corruption_rejects_copy_before_publication(
 ):
     saver = protected_source[0]
     draft_factory("unsealed-with-tool")
-    with saver._storage._connect(SOURCE_SESSION_ID, "") as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(SOURCE_SESSION_ID), "", session_id=SOURCE_SESSION_ID) as connection:
         connection.execute(f"DELETE FROM {table}")
     source = saver._storage.root(SOURCE_SESSION_ID)
     before = _artifacts(source)
@@ -254,7 +264,7 @@ async def test_fork_source_fingerprint_is_verified_on_restore(
     await saver.afork(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
-    with saver._storage._connect(TARGET_SESSION_ID, "") as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID) as connection:
         target_plan = _target_plan_id(connection, sealed.plan_id)
         if mutation == "provenance":
             row = connection.execute(
@@ -303,7 +313,7 @@ async def test_draft_omission_stub_stays_target_local_without_body_or_contributi
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_id = _target_plan_id(connection, plan.plan_id)
         copied = read_registration(
             connection, TARGET_SESSION_ID, target_thread_id, target_id
@@ -359,7 +369,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         for source_id, text in (("source-draft-a", "a"), ("source-draft-b", "b")):
             target_id = _target_plan_id(connection, source_id)
             copied = read_registration(
@@ -417,7 +427,7 @@ async def test_tool_json_schema_property_names_are_not_identity_fields(
         source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID, mode="full_rollout_copy"
     )
     target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
-    with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with saver._storage._connect(saver._storage.main_thread_id(TARGET_SESSION_ID), "", session_id=TARGET_SESSION_ID, read_only=True) as connection:
         target_id = _target_plan_id(connection, "schema-draft")
         copied = read_registration(
             connection, TARGET_SESSION_ID, target_thread_id, target_id

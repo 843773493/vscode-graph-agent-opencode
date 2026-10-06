@@ -71,6 +71,13 @@ from app.agents.providers.wire_finalize import (
     chat_send_params,
     chat_wire_profile,
     finalize_chat_messages,
+    finalize_chat_wire,
+    wire_request_params,
+)
+from app.agents.sealed_assembly_dispatch import (
+    ProviderInvocationPurpose,
+    read_sealed_assembly_dispatch,
+    validate_sealed_assembly_dispatch,
 )
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
@@ -90,6 +97,7 @@ logger = logging.getLogger(__name__)
 class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
     """LiteLLM 模型包装层，统一输出 LangChain 标准 content blocks。"""
 
+    invocation_purpose: ProviderInvocationPurpose = "agent"
     provider_id: str | None = None
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
@@ -263,11 +271,32 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             raise error
         await run_manager.on_llm_end(LLMResult(generations=[[generation]]))
 
+    def _validate_completion_dispatch(self, payload: Mapping[str, Any]) -> None:
+        """校验最终调用参数；非 Agent 豁免只能来自构建时的显式用途。"""
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+        if binding is None:
+            return
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            raise TypeError("source-mismatch: Chat 发送缺少 finalized messages")
+        params = wire_request_params(
+            self, {key: value for key, value in payload.items() if key not in {"messages", "tools"}},
+        )
+        wire_request = finalize_chat_wire(
+            messages=messages, tools=payload.get("tools"), params=params,
+        )
+        validate_sealed_assembly_dispatch(
+            invocation_purpose=self.invocation_purpose,
+            profile=chat_wire_profile(self),
+            wire_request=wire_request,
+        )
+
     def completion_with_retry(
         self,
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
+        self._validate_completion_dispatch(kwargs)
         client = self._provider_http_client(is_async=False)
         if client is not None:
             kwargs.setdefault("client", client)
@@ -278,6 +307,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
+        self._validate_completion_dispatch(kwargs)
         client = self._provider_http_client(is_async=True)
         if client is not None:
             kwargs.setdefault("client", client)
@@ -975,6 +1005,7 @@ def build_litellm_chat_model(
     runtime_config: dict[str, Any],
     request_options: dict[str, Any],
     prompt_cache_key: str | None = None,
+    invocation_purpose: ProviderInvocationPurpose = "agent",
 ) -> BoxteamLiteLLMChatModel:
     model_name = provider["model"]
 
@@ -1002,6 +1033,7 @@ def build_litellm_chat_model(
         }
 
     kwargs: dict[str, Any] = {
+        "invocation_purpose": invocation_purpose,
         "model": model_name,
         "api_key": provider["api_key"],
         "custom_llm_provider": provider["custom_llm_provider"],

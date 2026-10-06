@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,20 +18,75 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.agents.policy import ToolPolicyResolver
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
+from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.job_context import reset_current_job_id, set_current_job_id
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+    ContextSourceManager,
+)
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
+
+EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
+@contextmanager
+def dispatch_execution_scope(
+    saver: RolloutCheckpointSaver, session_id: str, turn_id: str
+) -> Iterator[str]:
+    """真实测试 fixture 与 native dispatch 共用当前执行授权，不伪造 owner。"""
+    thread = saver._storage.main_thread_id(session_id)
+    admission = saver.execution_admission(
+        session_id,
+        thread_id=thread,
+        execution_id=saver.execution_for_turn(
+            session_id, thread_id=thread, turn_id=turn_id
+        ),
+    )
+    token = set_current_job_id(turn_id)
+    try:
+        with (
+            session_thread_owner_scope(
+                MutationIntentOwner(session_id, thread), langgraph_thread_id=thread
+            ),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            yield thread
+    finally:
+        reset_current_job_id(token)
 
 
 def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str:
     """正式 Saver ingress 创建 canonical history，不手工构造 sealed plan。"""
+    thread = saver._storage.main_thread_id(session_id)
+    saver.accept_turn(
+        session_id,
+        thread_id=thread,
+        accepted_ingress_id="http-user",
+        acceptance_idempotency_key="native-http-accept",
+        job_id="native-http-job",
+        admission_idempotency_key="native-http-admission",
+        payload="HTTP canonical user",
+        turn_id="http-turn",
+        root_item_id="item-http-user",
+    )
     checkpoint = empty_checkpoint()
     checkpoint["channel_values"] = {
         "messages": [
@@ -43,12 +99,13 @@ def seed_dispatch_history(saver: RolloutCheckpointSaver, session_id: str) -> str
         ]
     }
     checkpoint["channel_versions"] = {"messages": "1"}
-    saver.put(
-        build_checkpoint_config(session_id),
-        checkpoint,
-        {"source": "input", "step": 0, "parents": {}},
-        {"messages": "1"},
-    )
+    with dispatch_execution_scope(saver, session_id, "http-turn"):
+        saver.put(
+            build_checkpoint_config(thread),
+            checkpoint,
+            {"source": "input", "step": 0, "parents": {}},
+            {"messages": "1"},
+        )
     return "http-turn"
 
 
@@ -99,7 +156,8 @@ def dispatch_saver(native_dispatch_workspace, session_bundle_factory):
     with RolloutCheckpointSaver(sessions) as saver:
         turn_id = seed_dispatch_history(saver, session_id)
         seed_dispatch_overlay(saver, session_id)
-        yield saver, session_id, turn_id, sessions
+        with dispatch_execution_scope(saver, session_id, turn_id):
+            yield saver, session_id, turn_id, sessions
 
 
 @dataclass
@@ -109,6 +167,8 @@ class NativeHTTPState:
     lock: Lock = field(default_factory=Lock)
     api_key: str = "native-contract-key"
     call_tool: bool = False
+    response_text: str = "native-http-result"
+    output_tool_name: str | None = None
     request_ready: Event = field(default_factory=Event)
     release_response: Event = field(default_factory=Event)
 
@@ -125,9 +185,11 @@ class NativeHTTPState:
             return ordinal
 
 
-def _response_events(ordinal: int, *, call_tool: bool = False) -> bytes:
+def _response_events(
+    ordinal: int, *, call_tool: bool = False, text: str = "native-http-result",
+    tool_name: str = "inspect_file",
+) -> bytes:
     message_id = f"msg-native-{ordinal}"
-    text = "native-http-result"
     part = {"type": "output_text", "text": text, "annotations": []}
     item = {
         "type": "message",
@@ -187,12 +249,12 @@ def _response_events(ordinal: int, *, call_tool: bool = False) -> bytes:
         {"type": "response.completed", "response": response},
     ]
     if call_tool:
-        arguments = json.dumps({"path": "README.md"})
+        arguments = json.dumps({"path": "README.md"} if tool_name == "inspect_file" else {"answer": text})
         call = {
             "type": "function_call",
             "id": "fc-native",
             "call_id": "call-native",
-            "name": "inspect_file",
+            "name": tool_name,
             "arguments": arguments,
             "status": "completed",
         }
@@ -231,6 +293,35 @@ def _response_events(ordinal: int, *, call_tool: bool = False) -> bytes:
     ).encode("utf-8")
 
 
+def _chat_response_events(
+    ordinal: int, *, text: str = "native-http-result", tool_name: str | None = None,
+) -> bytes:
+    """真实 Chat Completions SSE 必须包含上游 stop 和 DONE。"""
+    common = {
+        "id": f"chat-contract-{ordinal}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "contract-model",
+    }
+    delta = {"role": "assistant", "content": text}
+    if tool_name is not None:
+        delta = {"role": "assistant", "tool_calls": [{
+            "index": 0, "id": "call-native", "type": "function",
+            "function": {"name": tool_name, "arguments": json.dumps({"answer": text})},
+        }]}
+    chunks = [
+        {**common, "choices": [{
+            "index": 0, "delta": delta,
+            "finish_reason": None,
+        }]},
+        {**common, "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if tool_name is not None else "stop"}]},
+    ]
+    return (
+        "".join("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n" for chunk in chunks)
+        + "data: [DONE]\n\n"
+    ).encode("utf-8")
+
+
 @pytest.fixture
 def native_http_server(
     request: pytest.FixtureRequest,
@@ -257,13 +348,18 @@ def native_http_server(
                 self.send_error(504, "native contract response gate timeout")
                 return
             if (
-                self.path != "/v1/responses"
+                self.path not in {"/v1/responses", "/v1/chat/completions"}
                 or self.headers.get("Authorization") != f"Bearer {state.api_key}"
             ):
                 self.send_error(400, "native contract endpoint/auth mismatch")
                 return
-            response = _response_events(
-                ordinal, call_tool=state.call_tool and ordinal == 1
+            response = (
+                _response_events(
+                    ordinal, call_tool=(state.call_tool or state.output_tool_name is not None) and ordinal == 1,
+                    text=state.response_text, tool_name=state.output_tool_name or "inspect_file",
+                )
+                if self.path == "/v1/responses"
+                else _chat_response_events(ordinal, text=state.response_text, tool_name=state.output_tool_name)
             )
             (state.artifacts / f"native-http-{ordinal}.response.sse").write_bytes(
                 response
@@ -286,15 +382,30 @@ def native_http_server(
         thread.join(timeout=5)
 
 
-async def invoke_native_dispatch(
+def create_dispatch_agent(model, *, middleware, **options):
+    """真实图创建后显式绑定每个 Bridge，不替换框架注册表或 binding。"""
+    agent = create_agent(model, middleware=middleware, **options)
+    for item in middleware:
+        if isinstance(item, SealedAssemblyDispatchBridge):
+            item.bind_graph(agent)
+    return agent
+
+
+async def invoke_provider_dispatch(
     saver: RolloutCheckpointSaver,
     session_id: str,
     turn_id: str,
     endpoint: str,
     api_key: str,
+    *,
+    target_format: str,
 ) -> dict[str, object]:
     """父进程和重启子进程调用同一真实 LangChain/Provider 入口。"""
-    model = BoxteamOpenAIResponsesModel(
+    model_type = {
+        "responses": BoxteamOpenAIResponsesModel,
+        "chat_completions": BoxteamLiteLLMChatModel,
+    }[target_format]
+    model = model_type(
         model="openai/gpt-4.1",
         api_key=api_key,
         api_base=endpoint,
@@ -302,16 +413,43 @@ async def invoke_native_dispatch(
         streaming=True,
         max_retries=0,
     )
-    agent = create_agent(
+    thread = saver._storage.main_thread_id(session_id)
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(session_id, thread),
+        control_state_port=saver,
+    )
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="instruction:native-http",
+            source_kind="agent_instructions",
+            name="HTTP instruction",
+            description="HTTP协议桩的已登记说明",
+            internal_locator="instruction-producer://native-http",
+            root_placement="root_eligible",
+        ),
+        tracking_status="tracked",
+    )
+    manager.observe(
+        "instruction:native-http", "HTTP restart prompt", revision="native-http:1"
+    )
+    producer = RegisteredToolSetProducer(
+        agent_id="native-http-test",
+        selection_reader=ToolSelectionStore(boxteam_root=saver._storage.sessions_dir.parent),
+        policy_resolver=ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={}),
+        tools=(), metadata={},
+    )
+    agent = create_dispatch_agent(
         model,
-        system_prompt="HTTP restart prompt",
-        middleware=[SealedAssemblyDispatchBridge(checkpointer=saver)],
+        middleware=[
+            SealedAssemblyDispatchBridge(
+                checkpointer=saver,
+                session_id=session_id,
+                thread_id=thread,
+                context_source_manager=manager,
+                tool_set_producer=producer,
+            )
+        ],
         checkpointer=saver,
     )
-    token = set_current_job_id(turn_id)
-    try:
-        return await agent.ainvoke(
-            {"messages": []}, build_checkpoint_config(session_id)
-        )
-    finally:
-        reset_current_job_id(token)
+    with dispatch_execution_scope(saver, session_id, turn_id):
+        return await agent.ainvoke({"messages": []}, build_checkpoint_config(thread))

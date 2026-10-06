@@ -46,6 +46,7 @@ class ToolSetSnapshot:
     selection_revision: str
     policy_keys: tuple[SourcePolicyKey, ...]
     policy_version: str
+    wire_tool_order: tuple[str, ...]
     _tools_json: bytes
 
     def __init__(
@@ -65,11 +66,13 @@ class ToolSetSnapshot:
             isinstance(tool, Mapping) for tool in tools
         ):
             raise ItemSchemaError("ToolSetSnapshot.tools 必须是 object 序列")
-        # 排序复用 ToolSetRef 的稳定 identity；没有临时 durable owner。
+        # 正文按稳定 identity 规范排序；真实 wire 顺序独立进入同一 manifest，
+        # 不由数组规范排序或实时 Provider binding 猜测。
         ordered = sorted(tools, key=_tool_identity)
         object.__setattr__(self, "selection_revision", selection_revision)
         object.__setattr__(self, "policy_keys", keys)
         object.__setattr__(self, "policy_version", policy_version)
+        object.__setattr__(self, "wire_tool_order", tuple(_tool_identity(tool) for tool in tools))
         object.__setattr__(self, "_tools_json", canonical_json_bytes(ordered))
         names = self.tool_names
         if len(names) != len(set(names)):
@@ -94,6 +97,7 @@ class ToolSetSnapshot:
             "tools": self.tools,
             "policy_keys": self.policy_keys,
             "policy_version": self.policy_version,
+            "wire_tool_order": self.wire_tool_order,
         })
 
     @property
@@ -109,7 +113,10 @@ class ToolSetSnapshot:
             plan_id=plan_id,
             source_revision=self.revision,
             tools=self.tools,
-            tool_policy={"enabled_policy_keys": list(self.policy_keys)},
+            tool_policy={
+                "enabled_policy_keys": list(self.policy_keys),
+                "wire_tool_order": list(self.wire_tool_order),
+            },
             tool_policy_version=self.policy_version,
         )
 
@@ -118,7 +125,10 @@ class ToolSetSnapshot:
         if (
             ref.ref_id != self.snapshot_id or ref.source_revision != self.revision
             or ref.tools != self.tools
-            or ref.tool_policy != {"enabled_policy_keys": list(self.policy_keys)}
+            or ref.tool_policy != {
+                "enabled_policy_keys": list(self.policy_keys),
+                "wire_tool_order": list(self.wire_tool_order),
+            }
             or ref.tool_policy_version != self.policy_version
         ):
             raise ItemSchemaError("ToolSetSnapshot 与 ToolSetRef manifest 不一致")

@@ -3,24 +3,32 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
+from inspect import getclosurevars
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT
-from langchain_core.messages import SystemMessage
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import BaseTool
-from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.graph.state import CompiledStateGraph
 
-from app.agents.sealed_assembly_dispatch import sealed_native_projection_scope
+from app.agents.providers.wire_finalize import (
+    chat_wire_params,
+    chat_wire_profile,
+    responses_wire_params,
+    responses_wire_profile,
+)
+from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
+from app.agents.tool_identity import tool_definition_name
+from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_delta_context import get_current_model_delta_sink
-from app.domain.itemized.hashing import (
-    canonical_json_bytes,
-    contribution_content_hash,
-    sha256_jcs,
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.hashing import sha256_jcs
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
-from app.domain.itemized.request_plan import ContextContribution
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +62,7 @@ def _request_idempotency_keys(
     turn_id: str | None,
     execution_id: str,
     checkpoint_ns: str,
+    provider_profile: str,
 ) -> tuple[str, str]:
     """以 LangGraph 的持久 task/attempt 身份区分调用，不从 prompt 或 UUID 猜测。"""
     runtime = request.runtime
@@ -80,38 +89,10 @@ def _request_idempotency_keys(
             "checkpoint_id": checkpoint_id,
             "task_id": task_id,
             "node_attempt": attempt,
+            "provider_profile": provider_profile,
         }
     )
     return f"provider-create:{identity}", f"provider-seal:{identity}"
-
-
-def _system_blocks(message: SystemMessage | None) -> list[dict[str, object]]:
-    if message is None:
-        return []
-    result: list[dict[str, object]] = []
-    for index, block in enumerate(message.content_blocks):
-        if not isinstance(block, Mapping):
-            raise TypeError(
-                "ModelRequest.system_message.content_blocks 中出现非法 block: "
-                f"index={index}"
-            )
-        result.append({str(key): value for key, value in block.items()})
-    return result
-
-
-def _tool_snapshot(
-    tools: Sequence[BaseTool | Mapping[str, object]],
-) -> tuple[dict[str, object], ...]:
-    result: list[dict[str, object]] = []
-    for index, tool in enumerate(tools):
-        if isinstance(tool, BaseTool):
-            result.append(convert_to_openai_tool(tool))
-            continue
-        if isinstance(tool, Mapping):
-            result.append({str(key): value for key, value in tool.items()})
-            continue
-        raise TypeError(f"ModelRequest.tools[{index}] 不是合法工具定义")
-    return tuple(result)
 
 
 def _target_format(model: object) -> str:
@@ -119,51 +100,54 @@ def _target_format(model: object) -> str:
     return "responses" if "responses" in name else "chat_completions"
 
 
-def _prompt_contributions(
-    message: SystemMessage | None,
-) -> tuple[ContextContribution, ...]:
-    blocks = _system_blocks(message)
-    if not blocks:
-        return ()
-    slot_hash = sha256_jcs({"source": "sealed_request", "slot": "system"})
-    return (
-        ContextContribution(
-            contribution_id=f"prompt-slot:{slot_hash}",
-            source_kind="sealed_request:system",
-            source_revision=sha256_jcs(blocks),
-            content_hash=contribution_content_hash("prompt", blocks),
-            request_only=True,
-            extensions={"boxteam.prompt.label": {
-                "extension_version": "1", "protection": "public",
-                "value": {"label": "assembled system prompt"},
-            }},
-            contribution_kind="prompt",
-            body=blocks,
-            content_length=len(canonical_json_bytes(blocks)),
-            # 这是唯一可原位更新 revision 的 replaceable source slot；
-            # 替换/安全判定由 typed replacement_policy 承载，metadata 中的
-            # 同名 key 已物理下线，不再拥有任何解释权。
-            replacement_policy="replaceable",
-            # assembled system prompt 是唯一 root producer slot；显式声明
-            # root_eligible，projector 按它编译唯一 system root。
-            root_placement="root_eligible",
-        ),
-    )
+def _request_wire_options(bound_model: object) -> dict[str, Any]:
+    """复用真实 model binding，提取已经过模型处理的请求参数，不持有 tools。"""
+    kwargs = getattr(bound_model, "kwargs", None)
+    if not isinstance(kwargs, Mapping):
+        raise TypeError("itemized context model binding 缺少有效 kwargs")
+    return {key: value for key, value in kwargs.items() if key != "tools"}
 
 
 class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
     """用构建时的 SessionThread owner 转发 Saver sealed selection。"""
 
     def __init__(
-        self, *, checkpointer: object, session_id: str, thread_id: str
+        self, *, checkpointer: object, session_id: str, thread_id: str,
+        context_source_manager: ContextSourceManager,
+        tool_set_producer: RegisteredToolSetProducer,
     ) -> None:
         if not session_id or not thread_id:
             raise ValueError("itemized context middleware 需要显式 SessionThread owner")
         self._checkpointer = checkpointer
         self._session_id = session_id
         self._thread_id = thread_id
+        self._context_source_manager = context_source_manager
+        self._tool_set_producer = tool_set_producer
+        self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[object, object]] | None = None
+
+    def bind_graph(self, graph: CompiledStateGraph) -> None:
+        """在 Agent 适配边界读取实际图注册表和绑定函数，不修改框架闭包。
+
+        LangChain 未公开该注册端口；访问集中在此处。图创建后工具已经注册，
+        这里冻结同一批 schema，再使用同一 _get_bound_model 决定请求策略。
+        """
+        if self._graph_model_binding is not None:
+            raise RuntimeError("itemized context bridge 已绑定 Agent 图")
+        model_node = graph.builder.nodes["model"].runnable.func
+        execute_model = getclosurevars(model_node).nonlocals["_execute_model_sync"]
+        bind_model = getclosurevars(execute_model).nonlocals["_get_bound_model"]
+        registry = getclosurevars(bind_model).nonlocals["structured_output_tools"]
+        if not isinstance(registry, Mapping) or not callable(bind_model):
+            raise TypeError("itemized context 缺少实际图结构化输出注册表/绑定端口")
+        tools = {name: binding.tool for name, binding in registry.items()}
+        if not all(isinstance(tool, BaseTool) for tool in tools.values()):
+            raise TypeError("itemized context 图结构化输出注册表包含非法工具")
+        self._tool_set_producer.freeze_structured_output_tools(tools)
+        self._graph_model_binding = bind_model
 
     def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+        if request.system_message is not None:
+            raise RuntimeError("instruction-producer-unregistered: 最终请求出现未登记 system prompt")
         session_id = self._session_id
         thread_id = _runtime_thread_id(request)
         if thread_id != self._thread_id:
@@ -189,17 +173,34 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             or (admission.execution_origin == "internal" and turn_id is not None)
         ):
             raise RuntimeError("itemized context Turn 与 execution admission origin 不一致")
+        target_format = _target_format(request.model)
+        if self._graph_model_binding is None:
+            raise RuntimeError("itemized context bridge 尚未绑定实际 Agent 图")
+        bound_model, response_format = self._graph_model_binding(request)
+        include_structured_output = isinstance(response_format, ToolStrategy)
+        options = _request_wire_options(bound_model)
+        stop = options.pop("stop", None)
+        if target_format == "responses":
+            if stop is not None:
+                raise ValueError("Responses API 不支持 stop 参数")
+            wire_profile = responses_wire_profile(request.model)
+            wire_params = responses_wire_params(request.model, kwargs=options)
+        else:
+            wire_profile = chat_wire_profile(request.model)
+            # Agent dispatch 的真实发送入口是异步流式；封存与发送必须同一形态。
+            wire_params = chat_wire_params(
+                request.model, stop=stop, kwargs=options, stream=True,
+            )
+        # provider_version 只承载实际 wire profile 身份，不用 model name 冒充。
+        provider_version = wire_profile.identity()
         creation_key, seal_key = _request_idempotency_keys(
             request,
             session_id=session_id,
             turn_id=turn_id,
             checkpoint_ns=checkpoint_ns,
             execution_id=admission.execution_id,
+            provider_profile=f"{target_format}:{provider_version}",
         )
-        model_name = getattr(request.model, "model_name", None) or getattr(
-            request.model, "model", None
-        )
-        provider_version = str(model_name or type(request.model).__name__)
         logger.warning(
             "[itemized-context] provider prepare entered: session_id=%s turn_id=%s checkpoint_ns=%s",
             session_id,
@@ -224,12 +225,40 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             plan_creation_idempotency_key=creation_key,
             seal_idempotency_key=seal_key,
             request_messages=request.messages,
-            prompt_contributions=_prompt_contributions(request.system_message),
-            tool_snapshot=_tool_snapshot(request.tools or ()),
+            context_source_manager=self._context_source_manager,
+            tool_set_supplier=lambda: self._tool_set_producer.snapshot(include_structured_output),
             provider_version=provider_version,
-            target_format=_target_format(request.model),
+            wire_profile=wire_profile,
+            wire_params=wire_params,
+            target_format=target_format,
             checkpoint_ns=checkpoint_ns,
         )
+        prepared["include_structured_output"] = include_structured_output
+        get_assembly = getattr(self._checkpointer, "get_context_assembly", None)
+        if not callable(get_assembly):
+            raise TypeError("source-mismatch: Saver 缺少已提交 assembly 读取端口")
+        try:
+            snapshot = get_assembly(
+                session_id, thread_id, assembly_id=prepared["assembly_id"],
+                checkpoint_ns=checkpoint_ns,
+            )
+        except KeyError as error:
+            raise ValueError(
+                "source-mismatch: Saver 刚提交的 assembly 在当前 checkpoint namespace 中缺失: "
+                f"assembly_id={prepared['assembly_id']!r}, checkpoint_ns={checkpoint_ns!r}"
+            ) from error
+        if not isinstance(snapshot, ContextAssemblySnapshot):
+            raise TypeError("source-mismatch: Saver 未返回已提交 ContextAssemblySnapshot")
+        if (
+            snapshot.session_id != session_id
+            or snapshot.thread_id != thread_id
+            or snapshot.execution_id != admission.execution_id
+            or snapshot.turn_id != turn_id
+            or snapshot.assembly_id != prepared["assembly_id"]
+            or snapshot.as_sealed_plan() != prepared["plan"]
+        ):
+            raise ValueError("source-mismatch: Saver assembly 与当前 prepared owner/plan 不一致")
+        prepared["snapshot"] = snapshot
         if _target_format(request.model) == "responses":
             project_native = getattr(
                 self._checkpointer, "project_context_plan_to_native", None
@@ -262,6 +291,14 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         tools = prepared.get("tools")
         if not isinstance(messages, list) or not isinstance(tools, list):
             raise TypeError("itemized provider projection 返回结构非法")
+        if prepared["include_structured_output"]:
+            # Saver 封存完整 ToolSet；框架会追加原注册的 structured tools，
+            # handler 的普通 tools 因此只保留非结构化条目，避免发送两份 schema。
+            structured_tool_names = frozenset(self._tool_set_producer.structured_tool_names)
+            tools = [
+                tool for tool in tools
+                if tool_definition_name(tool) not in structured_tool_names
+            ]
         logger.warning(
             "[itemized-context] provider projection result: message_types=%s message_ids=%s",
             [type(message).__name__ for message in messages],
@@ -289,7 +326,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         # 消费 on_chat_model_start。prepared handle 必须保留到该事件由
         # RolloutCheckpointSaver 绑定真实 model_call_id 后再移除，不能在
         # middleware 的 handler 返回路径提前清理。
-        with sealed_native_projection_scope(prepared.get("native_projection")):
+        with sealed_assembly_dispatch_scope(
+            prepared["snapshot"], native_projection=prepared.get("native_projection"),
+        ):
             return handler(
                 request.override(
                     messages=messages,
@@ -311,7 +350,9 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         prepared, messages, tools = self._prepare_projection(request)
         # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
-        with sealed_native_projection_scope(prepared.get("native_projection")):
+        with sealed_assembly_dispatch_scope(
+            prepared["snapshot"], native_projection=prepared.get("native_projection"),
+        ):
             return await handler(
                 request.override(
                     messages=messages,

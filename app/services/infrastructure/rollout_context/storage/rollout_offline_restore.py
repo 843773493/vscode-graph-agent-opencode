@@ -63,6 +63,7 @@ class RolloutOfflineRestoreMixin:
         source_path: Path,
         candidate_path: Path,
         *,
+        session_id: str,
         thread_id: str,
         checkpoint_ns: str,
     ) -> str:
@@ -100,6 +101,7 @@ class RolloutOfflineRestoreMixin:
         ) as candidate:
             self._validate_offline_restore_candidate(
                 candidate,
+                session_id=session_id,
                 thread_id=thread_id,
                 checkpoint_ns=checkpoint_ns,
             )

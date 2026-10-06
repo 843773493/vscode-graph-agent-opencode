@@ -1,74 +1,24 @@
-"""B4 第二阶段最小合同：commit_model_call_pending 的原子提交行为。"""
+"""CSM 只读准备、真实 assembly seal 与 receipt 确认的原子合同。"""
 
 from __future__ import annotations
 
-import dataclasses
+import sqlite3
+from contextlib import closing
+from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
-from app.services.infrastructure.events.channel_events import ContextSourceEvent
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    ContextSourceControlState,
-    ContextSourceOwnerKey,
-)
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     CommittedContextSourceBatch,
     ContextSourceDescriptor,
     ContextSourceManager,
 )
 
-OWNER = ContextSourceOwnerKey(
-    session_id="ses_b4csm", thread_id="thr_018f1234567870008000000000000001"
-)
 
-
-class _FakeControlStatePort:
-    """实现现有 ContextSourceControlStatePort 协议的内存桩（CAS 语义）。"""
-
-    def __init__(self) -> None:
-        self._states: dict[tuple[str, str, str], ContextSourceControlState] = {}
-        self.save_count = 0
-        self.fail_on_save_number: int | None = None
-
-    def load_context_source_control_states(
-        self, owner: ContextSourceOwnerKey
-    ) -> tuple[ContextSourceControlState, ...]:
-        return tuple(
-            state
-            for key, state in self._states.items()
-            if key[:2] == (owner.session_id, owner.thread_id)
-        )
-
-    def save_context_source_control_state(
-        self, snapshot: ContextSourceControlState
-    ) -> ContextSourceControlState:
-        self.save_count += 1
-        if (
-            self.fail_on_save_number is not None
-            and self.save_count >= self.fail_on_save_number
-        ):
-            raise RuntimeError("control state storage unavailable")
-        key = (
-            snapshot.owner.session_id,
-            snapshot.owner.thread_id,
-            snapshot.source_id,
-        )
-        existing = self._states.get(key)
-        if existing is not None and existing.durable_fields() == snapshot.durable_fields():
-            return existing
-        if existing is not None and snapshot.state_revision != existing.state_revision:
-            raise RuntimeError("测试端口拒绝过期控制状态")
-        stored = dataclasses.replace(
-            snapshot,
-            state_revision=1 if existing is None else existing.state_revision + 1,
-        )
-        self._states[key] = stored
-        return stored
-
-
-class _RecordingMutationIntentPort:
-    """记录 CSM 提交的 source lifecycle intent。"""
+class RecordingMutationIntentPort:
+    """确认 CSM acknowledgment 不再消费第二条 source lifecycle 写入链。"""
 
     def __init__(self) -> None:
         self.intents: list[object] = []
@@ -79,143 +29,129 @@ class _RecordingMutationIntentPort:
 
 def _descriptor(source_id: str, name: str) -> ContextSourceDescriptor:
     return ContextSourceDescriptor(
-        source_id=source_id,
-        source_kind="skill",
-        name=name,
+        source_id=source_id, source_kind="skill", name=name,
         description=name + " 工作流",
         internal_locator="/.boxteam/skills/" + name + "/SKILL.md",
     )
 
 
-def _activate(
-    manager: ContextSourceManager,
-    source_id: str,
-    name: str,
-    content: str,
-) -> None:
+def _activate(manager: ContextSourceManager, source_id: str, name: str, content: str) -> None:
     manager.register(_descriptor(source_id, name))
     manager.activate_skill_content(name, content)
 
 
-def test_prepare_pending_is_readonly_and_commit_is_idempotent() -> None:
-    """prepare 不推进 applied；重复提交同一批次复用同一结果且不再发事件。"""
-    events: list[ContextSourceEvent] = []
-    manager = ContextSourceManager(lifecycle_event_sink=events.append)
+def test_prepare_pending_is_readonly_and_sealed_receipt_is_idempotent(source_seal_case):
+    events = []
+    manager = source_seal_case.manager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
     batch = manager.prepare_pending()
     assert batch is not None
-    again = manager.prepare_pending()
-    assert again is not None and again.deltas == batch.deltas
+    assert manager.prepare_pending() == batch
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    assert before[0].latest_visible_committed_revision is None
+    assert events == []
 
-    receipt = manager.commit_model_call_pending(batch)
+    receipt, binding = source_seal_case.seal(manager)
     assert isinstance(receipt, CommittedContextSourceBatch)
     assert receipt.deltas == batch.deltas
+    assert receipt.assembly_id == binding.prefix.assembly_id
     assert [event.kind for event in events] == ["committed"]
     assert manager.prepare_pending() is None
-
-    replay = manager.commit_model_call_pending(batch)
-    assert replay == receipt
+    assert manager.acknowledge_sealed_pending(batch, binding) == receipt
     assert [event.kind for event in events] == ["committed"]
 
 
-def test_commit_persists_before_memory_advance_and_events() -> None:
-    """durable 持久化成功后才推进内存 applied 并发布事件；失败零内存变化。"""
-    port = _FakeControlStatePort()
-    events: list[ContextSourceEvent] = []
-    manager = ContextSourceManager(
-        owner=OWNER,
-        control_state_port=port,
-        lifecycle_event_sink=events.append,
-    )
+def test_failed_real_seal_never_advances_memory_applied_or_events(source_seal_case):
+    events = []
+    manager = source_seal_case.manager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
-    assert batch is not None
+    owner, saver = source_seal_case.owner, source_seal_case.saver
+    before = saver.load_context_source_control_states(owner)
+    with closing(saver._storage._connect(owner.thread_id, session_id=owner.session_id)) as connection:
+        connection.execute(
+            "CREATE TRIGGER refuse_source_seal BEFORE INSERT ON context_assemblies "
+            "BEGIN SELECT RAISE(ABORT, 'injected assembly failure'); END"
+        )
+        connection.commit()
+        with pytest.raises(sqlite3.IntegrityError, match="injected assembly failure"):
+            source_seal_case.seal(manager)
+        assert events == []
+        assert manager.prepare_pending() == batch
+        assert saver.load_context_source_control_states(owner) == before
+        assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
+        connection.execute("DROP TRIGGER refuse_source_seal")
+        connection.commit()
 
-    port.fail_on_save_number = port.save_count + 1
-    with pytest.raises(RuntimeError, match="control state storage unavailable"):
-        manager.commit_model_call_pending(batch)
-    assert events == []
-    (stored,) = port.load_context_source_control_states(OWNER)
-    assert stored.latest_visible_committed_revision is None
-
-    port.fail_on_save_number = None
-    receipt = manager.commit_model_call_pending(batch)
+    receipt, _ = source_seal_case.seal(manager)
     assert receipt.deltas == batch.deltas
     assert [event.kind for event in events] == ["committed"]
-    (stored,) = port.load_context_source_control_states(OWNER)
+    (stored,) = saver.load_context_source_control_states(owner)
     assert stored.latest_visible_committed_revision == stored.latest_revision
 
 
-def test_activation_delta_maps_to_base_source_lifecycle_intent() -> None:
-    """首次 activation 保留内存 delta 合同，但 intent 使用合法 base 语义。"""
-    mutation_port = _RecordingMutationIntentPort()
-    manager = ContextSourceManager(
-        owner=OWNER,
-        control_state_port=_FakeControlStatePort(),
-        mutation_intent_port=mutation_port,
-    )
+def test_activation_is_applied_by_one_seal_without_source_mutation_intent(source_seal_case):
+    mutation_port = RecordingMutationIntentPort()
+    manager = source_seal_case.manager(mutation_intent_port=mutation_port)
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
-    assert batch is not None
     assert batch.deltas[0].kind == "activation"
-
-    manager.commit_model_call_pending(batch)
-
-    assert len(mutation_port.intents) == 1
-    intent = mutation_port.intents[0]
-    assert isinstance(intent, ApplySourceLifecycleDecision)
-    assert intent.decision_kind == "base"
-    assert intent.from_revision is None
+    _, binding = source_seal_case.seal(manager)
+    (applied,) = binding.source_revisions
+    assert applied.source_id == "src_a"
+    assert applied.revision == batch.deltas[0].revision
+    assert applied.previous_revision is None
+    assert mutation_port.intents == []
 
 
 @pytest.mark.parametrize(
-    ("root_placement", "policy_key"),
+    "root_placement,policy_key",
     [("root_eligible", "filesystem_rules"), ("tail_only", None)],
 )
-def test_real_lifecycle_preserves_descriptor_root_policy(root_placement, policy_key):
-    mutation_port = _RecordingMutationIntentPort()
-    manager = ContextSourceManager(
-        owner=OWNER, control_state_port=_FakeControlStatePort(),
-        mutation_intent_port=mutation_port,
-    )
+def test_real_lifecycle_preserves_descriptor_root_policy(source_seal_case, root_placement, policy_key):
+    manager = source_seal_case.manager()
     manager.register(
         ContextSourceDescriptor(
             source_id="instruction:R06", source_kind="filesystem_rules",
             name="Filesystem 规则", description="文件访问规则",
             internal_locator="instruction-producer://R06",
             root_placement=root_placement, policy_key=policy_key,
-        ),
-        tracking_status="tracked",
+        ), tracking_status="tracked",
     )
     manager.observe("instruction:R06", "遵守工作区路径规则")
-    batch = manager.prepare_pending()
-    manager.commit_model_call_pending(batch)
-    (intent,) = mutation_port.intents
-    assert intent.root_placement == root_placement
-    assert intent.policy_key == policy_key
-
-
-def test_first_observation_keeps_exact_owner_revision_through_prepare_and_intent():
-    mutation_port = _RecordingMutationIntentPort()
-    control_port = _FakeControlStatePort()
-    manager = ContextSourceManager(
-        owner=OWNER, control_state_port=control_port, mutation_intent_port=mutation_port,
+    selected = ToolSetSnapshot(
+        selection_revision=sha256_jcs({"read_file": True}),
+        tools=({"name": "read_file", "parameters": {"type": "object"}},),
+        policy_keys=("filesystem_rules",),
     )
-    manager.register(ContextSourceDescriptor(
-        source_id="instruction:R01", source_kind="agent_instructions", name="Agent 说明",
-        description="Agent 说明", internal_locator="instruction-producer://R01",
-        root_placement="root_eligible",
-    ), tracking_status="tracked")
+    _, binding = source_seal_case.seal(manager, tool_set=selected)
+    if root_placement == "root_eligible":
+        assert binding.root is not None
+        assert [source.source_identity for source in binding.root.sources] == ["instruction:R06"]
+    else:
+        assert any(frame.item_ref.source_identity == "instruction:R06" for frame in binding.prefix.state.frames)
+
+
+def test_first_observation_preserves_semantic_revision_through_prepare_and_seal(source_seal_case):
+    manager = source_seal_case.manager()
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="instruction:R01", source_kind="agent_instructions", name="Agent 说明",
+            description="Agent 说明", internal_locator="instruction-producer://R01",
+            root_placement="root_eligible",
+        ), tracking_status="tracked",
+    )
     assert manager.observe("instruction:R01", "第一版说明", revision="agent-config-revision:7")
     batch = manager.prepare_pending()
     assert batch.deltas[0].revision == "agent-config-revision:7"
     assert batch.deltas[0].content_hash != batch.deltas[0].revision
     assert batch.deltas[0].observation_provenance == ("agent-config-revision:7",)
-    (stored,) = control_port.load_context_source_control_states(OWNER)
+    (stored,) = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
     assert stored.latest_revision == "agent-config-revision:7"
     assert stored.latest_visible_committed_revision is None
-    manager.commit_model_call_pending(batch)
-    assert mutation_port.intents[0].revision == "agent-config-revision:7"
+    _, binding = source_seal_case.seal(manager)
+    assert binding.source_revisions[0].revision == "agent-config-revision:7"
     assert manager.observe("instruction:R01", "第二版说明", revision="agent-config-revision:8")
     second = manager.prepare_pending().deltas[0]
     assert second.revision == "agent-config-revision:8"
@@ -224,84 +160,96 @@ def test_first_observation_keeps_exact_owner_revision_through_prepare_and_intent
 
 
 @pytest.mark.parametrize("revision", ["", 7])
-def test_explicit_invalid_observation_revision_is_rejected_without_content_hash_fallback(revision):
+def test_invalid_observation_revision_is_rejected_without_hash_fallback(revision):
     manager = ContextSourceManager()
     manager.register(_descriptor("src_a", "a"), tracking_status="tracked")
     with pytest.raises(ValueError, match="revision 必须是非空字符串"):
         manager.observe("src_a", "beta", revision=revision)
 
 
-def test_commit_rejects_pending_drift_fail_closed() -> None:
-    """提交前 pending 变化时 fail closed：零持久化推进、零事件、可重试。"""
-    port = _FakeControlStatePort()
-    events: list[ContextSourceEvent] = []
-    manager = ContextSourceManager(
-        owner=OWNER,
-        control_state_port=port,
-        lifecycle_event_sink=events.append,
-    )
+def test_frozen_batch_keeps_source_arriving_after_seal_pending(source_seal_case, monkeypatch):
+    events = []
+    manager = source_seal_case.manager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
-    batch = manager.prepare_pending()
-    assert batch is not None
+    original_batch = manager.prepare_pending()
+    original = source_seal_case.saver.seal_context_plan
 
-    _activate(manager, "src_b", "b", "beta")
-    with pytest.raises(RuntimeError, match="提交前发生变化"):
-        manager.commit_model_call_pending(batch)
-    assert events == []
-    stored = {
-        state.source_id: state
-        for state in port.load_context_source_control_states(OWNER)
-    }
-    assert stored["src_a"].latest_visible_committed_revision is None
+    def seal_then_activate(*args, **kwargs):
+        snapshot = original(*args, **kwargs)
+        _activate(manager, "src_b", "b", "beta")
+        return snapshot
+
+    monkeypatch.setattr(source_seal_case.saver, "seal_context_plan", seal_then_activate)
+    receipt, _ = source_seal_case.seal(manager)
+    assert receipt.deltas == original_batch.deltas
+    assert [event.source_id for event in events] == ["src_a"]
+    pending = manager.prepare_pending()
+    assert [delta.source_id for delta in pending.deltas] == ["src_b"]
+    stored = {state.source_id: state for state in source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)}
+    assert stored["src_a"].latest_visible_committed_revision == stored["src_a"].latest_revision
     assert stored["src_b"].latest_visible_committed_revision is None
 
-    fresh = manager.prepare_pending()
-    assert fresh is not None and len(fresh.deltas) == 2
-    manager.commit_model_call_pending(fresh)
-    assert [event.kind for event in events] == ["committed", "committed"]
+    monkeypatch.setattr(source_seal_case.saver, "seal_context_plan", original)
+    source_seal_case.seal(manager)
+    assert [event.source_id for event in events] == ["src_a", "src_b"]
+    assert manager.prepare_pending() is None
 
 
-def test_commit_rejects_drifted_batch_fail_closed() -> None:
-    """batch 漂移（revision 被篡改）时 fail closed：零事件、pending 保持可重试。"""
-    events: list[ContextSourceEvent] = []
-    manager = ContextSourceManager(lifecycle_event_sink=events.append)
+def test_acknowledgment_rejects_drifted_batch_without_memory_or_event_advance(source_seal_case):
+    events = []
+    manager = source_seal_case.manager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
-    assert batch is not None
-    drifted = dataclasses.replace(batch.deltas[0], revision="sha256:drifted")
-    with pytest.raises(RuntimeError):
-        manager.commit_model_call_pending(
-            type(batch)(deltas=(drifted,))
-        )
+    # 另一真实 CSM 使用同一 durable desired 封存，当前待确认 CSM 尚未推进内存。
+    sealing_manager = source_seal_case.manager()
+    _activate(sealing_manager, "src_a", "a", "alpha")
+    _, binding = source_seal_case.seal(sealing_manager)
     assert events == []
-    # 内存真值未被推进：原始批次仍可原样重试提交。
-    receipt = manager.commit_model_call_pending(batch)
+    changed = replace(batch.deltas[0], revision="semantic-revision:drifted")
+    with pytest.raises(ValueError, match="冻结 delta 与完整 source snapshot 不一致"):
+        replace(batch, deltas=(changed,))
+    drifted = replace(
+        batch, deltas=(changed,),
+        sources=(replace(batch.sources[0], revision=changed.revision),),
+    )
+    with pytest.raises(RuntimeError, match="seal-receipt-conflict"):
+        manager.acknowledge_sealed_pending(drifted, binding)
+    assert events == []
+    assert manager.prepare_pending() == batch
+    receipt = manager.acknowledge_sealed_pending(batch, binding)
     assert receipt.deltas == batch.deltas
     assert [event.kind for event in events] == ["committed"]
 
 
-def test_commit_pure_memory_receipt_reuse() -> None:
-    """纯内存 CSM：提交后 receipt 复用且 pending 清空。"""
-    events: list[ContextSourceEvent] = []
+def test_pure_memory_acknowledgment_reuses_real_seal_receipt(source_seal_case):
+    events = []
     manager = ContextSourceManager(lifecycle_event_sink=events.append)
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
-    assert batch is not None
-    first = manager.commit_model_call_pending(batch)
-    second = manager.commit_model_call_pending(batch)
-    assert second == first
+    sealing_manager = source_seal_case.manager()
+    _activate(sealing_manager, "src_a", "a", "alpha")
+    _, binding = source_seal_case.seal(sealing_manager)
+    first = manager.acknowledge_sealed_pending(batch, binding)
+    assert manager.acknowledge_sealed_pending(batch, binding) == first
+    assert manager.prepare_pending() is None
     assert len(events) == 1
 
 
-def test_commit_reuses_existing_port_contract() -> None:
-    """复用现有 durable 端口：提交走既有 save 协议且 CAS 防过期写入。"""
-    port = _FakeControlStatePort()
-    manager = ContextSourceManager(owner=OWNER, control_state_port=port)
+def test_acknowledgment_reads_real_port_without_writing_or_consuming_intent(source_seal_case, monkeypatch):
+    mutation_port = RecordingMutationIntentPort()
+    manager = source_seal_case.manager(mutation_intent_port=mutation_port)
     _activate(manager, "src_a", "a", "alpha")
     batch = manager.prepare_pending()
-    assert batch is not None
-    saves_before = port.save_count
-    manager.commit_model_call_pending(batch)
-    assert port.save_count == saves_before + 1
-    (stored,) = port.load_context_source_control_states(OWNER)
-    assert stored.latest_visible_committed_revision == stored.latest_revision
+    sealing_manager = source_seal_case.manager()
+    _activate(sealing_manager, "src_a", "a", "alpha")
+    _, binding = source_seal_case.seal(sealing_manager)
+    before = source_seal_case.saver.load_context_source_control_states(source_seal_case.owner)
+
+    def refuse_write(*args, **kwargs):
+        raise AssertionError("receipt 确认不得调用 source control writer")
+
+    monkeypatch.setattr(source_seal_case.saver, "save_context_source_control_state", refuse_write)
+    receipt = manager.acknowledge_sealed_pending(batch, binding)
+    assert receipt.deltas == batch.deltas
+    assert source_seal_case.saver.load_context_source_control_states(source_seal_case.owner) == before
+    assert mutation_port.intents == []

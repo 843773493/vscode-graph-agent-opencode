@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,8 @@ from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
+    ModelRequest,
+    ModelResponse,
     TodoListMiddleware,
 )
 from langchain.agents.middleware.types import AgentMiddleware
@@ -24,6 +26,10 @@ from app.agents.cache_preserving_summarization import (
 from app.agents.custom_tool_confirmation_middleware import (
     CustomToolConfirmationMiddleware,
 )
+from app.agents.instruction_producers import (
+    InstructionProducerSpec,
+    register_instruction_producer,
+)
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
@@ -32,7 +38,6 @@ from app.agents.middleware_prompts import (
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
 )
-from app.agents.model_tool_visibility import ModelToolVisibilityMiddleware
 from app.agents.skill_runtime import (
     PublishedSkillCatalog,
     append_skill_middlewares,
@@ -45,6 +50,7 @@ from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
@@ -60,6 +66,22 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 
 ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
+
+
+class SourceOwnedTodoListMiddleware(TodoListMiddleware):
+    """保留第三方 Todo 工具/状态合同，说明只由 R04 source 进入 assembly。"""
+
+    def wrap_model_call(
+        self, request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return handler(request)
+
+    async def awrap_model_call(
+        self, request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        return await handler(request)
 
 
 def filter_tools_by_name(
@@ -100,7 +122,7 @@ def _build_summarization_middleware(
 
     tool_middleware = CachePreservingSummarizationToolMiddleware(
         summarization,
-        system_prompt=COMPACT_CONVERSATION_SYSTEM_PROMPT,
+        system_prompt=None,
     )
     return [
         summarization,
@@ -126,7 +148,6 @@ def build_deep_agent_middleware(
     tool_invocation_context_middleware: ToolInvocationContextMiddleware,
     tool_output_middleware: ToolOutputMiddleware,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
-    model_hidden_tool_names: frozenset[str] = frozenset(),
 ) -> list[AgentMiddleware]:
     deepagent_middleware: list[AgentMiddleware] = [
         tool_invocation_context_middleware,
@@ -134,8 +155,8 @@ def build_deep_agent_middleware(
     ]
     if "write_todos" not in resolved_tool_denylist:
         deepagent_middleware.append(
-            TodoListMiddleware(
-                system_prompt=TODO_SYSTEM_PROMPT,
+            SourceOwnedTodoListMiddleware(
+                system_prompt="",
                 tool_description=TODO_TOOL_DESCRIPTION,
             )
         )
@@ -151,7 +172,7 @@ def build_deep_agent_middleware(
     )
     filesystem_middleware = FilesystemMiddleware(
         backend=backend,
-        system_prompt=FILESYSTEM_SYSTEM_PROMPT,
+        system_prompt="",
         custom_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
         _permissions=permissions,
         tool_token_limit_before_evict=None,
@@ -183,11 +204,6 @@ def build_deep_agent_middleware(
     # D3-B 起 AGENTS 来源注册由 WorkspaceSkillsMiddleware 的唯一 CSM 链承载，
     # 不再有独立的 AGENTS 注入 middleware 槽位。
 
-    if model_hidden_tool_names:
-        deepagent_middleware.append(
-            ModelToolVisibilityMiddleware(model_hidden_tool_names)
-        )
-
     if runtime_middleware:
         deepagent_middleware.extend(runtime_middleware)
     if model_routing_middleware is not None:
@@ -202,6 +218,20 @@ def build_deep_agent_middleware(
         )
     if interrupt_on:
         deepagent_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+
+    if context_source_manager is not None:
+        for producer_id, source_name, content, policy_key, present in (
+            ("R04", "todo-list", TODO_SYSTEM_PROMPT, "todo_list", "write_todos" not in resolved_tool_denylist),
+            ("R06", "filesystem-rules", FILESYSTEM_SYSTEM_PROMPT, "filesystem_rules", bool(filesystem_middleware.tools)),
+            ("R07", "compact-tool-usage", COMPACT_CONVERSATION_SYSTEM_PROMPT, "compact_conversation", "compact_conversation" not in resolved_tool_denylist),
+        ):
+            if present:
+                register_instruction_producer(context_source_manager, InstructionProducerSpec(
+                    producer_id=producer_id, source_id=f"instruction:{source_name}",
+                    source_kind=source_name, name=source_name, content=content,
+                    revision=sha256_jcs({"content": content}),
+                    root_placement="root_eligible", policy_key=policy_key,
+                ))
 
     # 放在所有会改写模型请求的 middleware 之后，确保派生的压缩请求也会被验证。
     deepagent_middleware.append(StructuredPromptValidationMiddleware())

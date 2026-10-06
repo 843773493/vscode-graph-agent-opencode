@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
+from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
         ContextSourceTrackingStatus,
@@ -14,12 +13,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.delta i
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
         CommittedContextSourceBatch,
+        ContextSourceSnapshot,
         PendingContextSourceBatch,
         PendingSourceObservation,
-)
-from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
-        SourceObservation,
-        build_source_lifecycle_decision,
 )
 
 
@@ -163,138 +159,101 @@ class SourceLifecycleMixin:
             self._queue_delta(state)
             return True
 
-        def prepare_pending(self) -> PendingContextSourceBatch | None:
-            pending = tuple(self._pending.values())
-            if not pending:
-                return None
-            return PendingContextSourceBatch(deltas=pending)
+        def prepare_sources(self) -> PendingContextSourceBatch:
+            """冻结完整有效来源与最终 delta；不写 applied 或消费任何 intent。"""
+            sources = []
+            for state in self._sources.values():
+                if state.latest_revision is None or state.latest_content is None:
+                    continue
+                if state.descriptor is None:
+                    raise RuntimeError(
+                        "冻结 source 缺少 owner 重新绑定的 descriptor: " + state.source_id
+                    )
+                sources.append(ContextSourceSnapshot(
+                    descriptor=state.descriptor,
+                    revision=state.latest_revision,
+                    content=state.latest_content,
+                    applied_revision=state.latest_visible_committed_revision,
+                    tracked=state.tracked,
+                ))
+            return PendingContextSourceBatch(
+                deltas=tuple(self._pending.values()), sources=tuple(sources),
+            )
 
-        def commit_model_call_pending(
+        def prepare_pending(self) -> PendingContextSourceBatch | None:
+            if not self._pending:
+                return None
+            return self.prepare_sources()
+
+        def acknowledge_sealed_pending(
             self,
             batch: PendingContextSourceBatch,
+            binding: ContextSealBinding,
         ) -> CommittedContextSourceBatch:
-            """原子提交 model_call 边界的 pending 批次（复用唯一 durable 端口）。
+            """只确认真实 seal receipt；来源 applied 的唯一 writer 是 assembly 事务。
 
-            - 重复提交同一批次复用同一次提交结果：不重复持久化、不重复推进
-              applied、不重复发布事件。
-            - 批次与当前 pending 不一致（提交前出现新变化）时 fail closed，
-              不推进任何 applied revision。
-            - 每条 delta 与内存 registration 的身份/revision/diff 基准校验；
-              任何漂移都让整批失败，不产生半提交。
-            - 控制状态先经唯一 durable 端口逐条持久化（每条一个 owner 事务，CAS
-              防并发推进）；全部成功后才推进内存 applied、清空 pending 并发布
-              事件。持久化失败时内存零变化，批次保持可重试。
-            - 事件只在 durable truth 成功后发布；纯内存 CSM（无 owner）在内存
-              真值推进后发布。
-
-            有 Saver owner 时，delta 会先映射为
-            ``ApplySourceLifecycleDecision``，再由 owner 在 source item/control state
-            的同一事务中提交；无 owner 的纯内存测试仍只验证 CSM 控制状态顺序。
+            receipt 对应冻结 revision 和完整正文，晚到 desired 保持 pending。
+            确认不写控制状态，不消费 source intent，不清空其它批次。
             """
+            if not isinstance(binding, ContextSealBinding):
+                raise TypeError("CSM 确认需要 ContextSealBinding")
             last = self._last_model_call_receipt
-            if last is not None and last.deltas == batch.deltas:
+            if last is not None and (
+                last.assembly_id == binding.prefix.assembly_id
+                and last.deltas == batch.deltas
+            ):
                 return last
-            if tuple(self._pending.values()) != batch.deltas:
-                raise RuntimeError(
-                    "Context source pending 在提交前发生变化，拒绝推进 applied revision"
-                )
+            applied = {source.source_id: source for source in binding.source_revisions}
+            frozen = {source.descriptor.source_id: source for source in batch.sources}
             for delta in batch.deltas:
+                sealed = applied.get(delta.source_id)
                 state = self._sources.get(delta.source_id)
                 if state is None:
-                    raise KeyError(f"Context source 不存在: source_id={delta.source_id}")
-                if (
-                    delta.source_kind != state.source_kind
-                    or delta.source_name != state.name
-                    or delta.revision != state.latest_revision
-                    or delta.previous_revision != state.latest_visible_committed_revision
+                    raise KeyError("Context source 不存在: " + delta.source_id)
+                if sealed is None or (
+                    sealed.revision != delta.revision
+                    or sealed.previous_revision != delta.previous_revision
+                    or state.latest_visible_committed_revision != delta.previous_revision
                 ):
                     raise RuntimeError(
-                        "Context source pending 与 registration 状态不一致"
-                        f"（fence drift），拒绝提交: source_id={delta.source_id}"
+                        "context-source-seal-receipt-conflict: receipt 与冻结 source 不一致: "
+                        + delta.source_id
                     )
-            # 先经唯一 owner intent 端口提交全部 source item/control state；任何
-            # 失败都让内存 applied/diff 基准保持不变。纯内存/旧测试装配没有
-            # mutation_intent_port 时仍使用注入的控制状态替身，不触碰生产 Saver。
-            mutation_consume = (
-                getattr(self._mutation_intent_port, "consume_mutation_intent", None)
-                if self._mutation_intent_port is not None
-                else None
-            )
-            if mutation_consume is not None:
-                if self._owner is None:
-                    raise RuntimeError(
-                        "ContextSourceManager source intent 提交缺少 owner"
-                    )
-                decisions = []
+            port, owner = self._control_state_port, self._owner
+            if port is not None and owner is not None:
+                persisted = {
+                    state.source_id: state
+                    for state in port.load_context_source_control_states(owner)
+                }
                 for delta in batch.deltas:
-                    state = self._sources[delta.source_id]
-                    descriptor = state.descriptor
-                    if descriptor is None:
+                    stored = persisted.get(delta.source_id)
+                    if stored is None or stored.owner != owner or (
+                        stored.latest_visible_committed_revision != delta.revision
+                    ):
                         raise RuntimeError(
-                            "source lifecycle 决策缺少 owner 重新绑定的 descriptor: "
-                            f"source_id={delta.source_id}"
+                            "context-source-seal-receipt-conflict: durable owner 尚未 applied: "
+                            + delta.source_id
                         )
-                    # 内存 delta 保留 activation 作为首次注入的外部合同；
-                    # mutation intent 的 source lifecycle 语义将首次激活表达为 base。
-                    decision_kind = "base" if delta.kind == "activation" else delta.kind
-                    observation = SourceObservation(
-                        owner=self._owner,
-                        source_id=delta.source_id,
-                        source_kind=delta.source_kind,
-                        name=delta.source_name,
-                        revision=delta.revision,
-                        tracking_mode=("tracked" if state.tracked else "untrack"),
-                        from_revision=(
-                            delta.previous_revision
-                            if decision_kind == "delta"
-                            else None
-                        ),
-                        content=delta.content,
-                        root_placement=descriptor.root_placement,
-                        policy_key=descriptor.policy_key,
-                    )
-                    decision = build_source_lifecycle_decision(
-                        observation,
-                        decision_kind=decision_kind,
-                    )
-                    decisions.append(
-                        replace(
-                            decision,
-                            item_id=(
-                                f"item-context-source:{delta.source_id}:"
-                                f"{delta.revision}:{delta.kind}"
-                            ),
-                        )
-                    )
-                for decision in decisions:
-                    mutation_consume(decision)
-                # 端口消费在唯一 owner 事务里推进了持久化 state_revision；
-                # 重新对齐内存 CAS 基准，否则后续关键写（untrack/rebind）会以
-                # 陈旧 state_revision 触发 context-source-control-state-conflict。
-                self._sync_persisted_control_states(
-                    {delta.source_id for delta in batch.deltas}
-                )
-            else:
-                # 已持久化的 source 在重试时按 durable fields 幂等跳过。
-                for delta in batch.deltas:
-                    state = self._sources[delta.source_id]
-                    self._persist_control_state(
-                        state,
-                        applied_revision=state.latest_revision,
-                    )
-            # durable truth 成功后才推进内存真值并清空 pending。
+                self._sync_persisted_control_states(set(applied))
             for delta in batch.deltas:
                 state = self._sources[delta.source_id]
-                state.latest_visible_committed_revision = state.latest_revision
-                state.latest_visible_committed_content = state.latest_content
-                state.pending_kind = None
-                # provenance 随本次提交闭合：已合并的 observed revisions 不再保留。
-                state.observed_revisions.clear()
-            self._pending.clear()
-            receipt = CommittedContextSourceBatch(deltas=batch.deltas)
+                state.latest_visible_committed_revision = delta.revision
+                state.latest_visible_committed_content = frozen[delta.source_id].content
+                self._pending.pop(delta.source_id, None)
+                state.observed_revisions = [
+                    revision for revision in state.observed_revisions
+                    if revision not in delta.observation_provenance
+                ]
+                if state.latest_revision == delta.revision:
+                    state.pending_kind = None
+                    state.observed_revisions.clear()
+                else:
+                    state.pending_kind = "delta"
+                    self._queue_delta(state)
+            receipt = CommittedContextSourceBatch(
+                deltas=batch.deltas, assembly_id=binding.prefix.assembly_id,
+            )
             self._last_model_call_receipt = receipt
-            # OpenSpec 3.8-C：commit 成功边界发布轻量事件（每个来源一条），
-            # 发布发生在 durable truth 成功之后，失败路径不发布。
             for delta in batch.deltas:
                 self._publish_lifecycle_event(
                     source_id=delta.source_id,

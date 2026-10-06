@@ -464,6 +464,8 @@ def owned_included_snapshot(
         source_revision=ref.source_revision,
         content_length=ref.content_length,
         content_hash=ref.content_hash,
+        visibility=ref.visibility if isinstance(ref, ContextRef) else "internal",
+        protection=ref.protection, availability=ref.availability,
         detail_ref=DetailRef(
             snapshot.session_id,
             snapshot.thread_id,

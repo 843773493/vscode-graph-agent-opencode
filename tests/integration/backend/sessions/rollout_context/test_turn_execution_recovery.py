@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,13 +14,16 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
@@ -29,6 +34,7 @@ from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ItemSourceManifest,
 )
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.parts import ContentPart, ContentPartAnchor
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -36,10 +42,40 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
+EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
+@pytest.fixture
+def execution_scope():
+    """dispatch 用例显式注入真实准入上下文；不封存、不补造业务结果。"""
+    @contextmanager
+    def activate(saver: RolloutCheckpointSaver, accepted: dict[str, object]):
+        thread = saver._storage.main_thread_id(SESSION_ID)
+        admission = saver.execution_admission(
+            SESSION_ID, thread_id=thread,
+            execution_id=str(accepted["initial_execution_id"]),
+        )
+        with (
+            session_thread_owner_scope(
+                MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread,
+            ),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            yield thread, ContextSourceManager(
+                owner=ContextSourceOwnerKey(SESSION_ID, thread), control_state_port=saver,
+            )
+
+    return activate
 
 
 def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:
@@ -248,8 +284,9 @@ def _source_overlay_for_test(*, thread_id: str, **overrides: object) -> SimpleNa
 
 
 def test_acceptance_and_provider_retry_keep_one_real_user_root(
-    tmp_path: Path,
+    frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -261,14 +298,16 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
     assert accepted["initial_execution_id"] == "execution-user-1"
     assert accepted["idempotent"] is False
     execution_id = str(accepted["initial_execution_id"])
-    assembly_1 = saver.seal_context_for_dispatch(
-        SESSION_ID,
-        turn_id="turn-user-1",
-        execution_id=execution_id,
-        model_call_id="model-call-attempt-1",
-        provider_version="test-provider-v1",
-        target_format="chat_completions",
-    )
+    with execution_scope(saver, accepted) as (thread, manager):
+        prepared = saver.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id=str(accepted["turn_id"]),
+            execution_id=execution_id,
+            plan_creation_idempotency_key="acceptance-retry:create",
+            seal_idempotency_key="acceptance-retry:seal",
+            context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **frozen_provider_wire("test-provider-v1", "chat_completions"),
+        )
+    assembly_1 = str(prepared["assembly_id"])
     saver.register_model_call(
         SESSION_ID,
         execution_id=execution_id,
@@ -1098,11 +1137,7 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
         connection.commit()
 
     def ref_ids(checkpoint_saver: RolloutCheckpointSaver) -> list[str]:
-        plan = checkpoint_saver.compose_committed_context_plan(
-            SESSION_ID,
-            thread_id=thread_id,
-            plan_id="plan-overlay-order",
-        )
+        plan = checkpoint_saver.compose_committed_context_plan(SESSION_ID, thread_id=thread_id, plan_id='plan-overlay-order', tool_set=EMPTY_TOOL_SET)
         return [ref.ref_id for ref in plan.refs]
 
     expected = [
@@ -1789,14 +1824,15 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
 
 
 def test_sealed_selection_drives_langchain_and_provider_projection_after_restart(
-    tmp_path: Path,
+    frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    tool_snapshot = [
+    tool_definitions = [
         {
             "type": "function",
             "function": {
@@ -1806,41 +1842,33 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
             },
         }
     ]
-    assembly_id = saver.seal_context_for_dispatch(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        execution_id=str(accepted["initial_execution_id"]),
-        model_call_id="model-call-projection-1",
-        provider_version="provider-v2",
-        tool_snapshot=tool_snapshot,
-        target_format="chat_completions",
+    selected = ToolSetSnapshot(
+        selection_revision=sha256_jcs(tool_definitions), tools=tool_definitions,
     )
-    snapshot = saver.get_context_assembly(
-        SESSION_ID,
-        assembly_id=assembly_id,
-    )
+    with execution_scope(saver, accepted) as (thread, manager):
+        prepared = saver.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id=str(accepted["turn_id"]),
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="projection:create",
+            seal_idempotency_key="projection:seal",
+            context_source_manager=manager,
+            tool_set_supplier=lambda: selected,
+            **frozen_provider_wire("provider-v2", "chat_completions"),
+        )
+    assembly_id = str(prepared["assembly_id"])
+    snapshot = saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     plan = snapshot.as_sealed_plan()
-    first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(
-        SESSION_ID,
-        plan,
-        target_format="chat_completions",
-    )
+    first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan, target_format='chat_completions')
     assert [entry.plan_ordinal for entry in plan.selection] == list(
         range(len(plan.selection))
     )
     assert [message.content for message in first_messages] == ["请检查当前状态"]
     assert [tool["function"]["name"] for tool in first_tools] == ["read_file"]
     assert first_losses == ()
-    history_messages = saver.project_context_plan_to_messages(
-        SESSION_ID,
-        plan,
-    )
-    history_projection = saver.project_context_plan_to_history(
-        SESSION_ID,
-        plan,
-    )
+    history_messages = saver.project_context_plan_to_messages(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
+    history_projection = saver.project_context_plan_to_history(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
     diagnostic_messages, diagnostic_losses = (
-        saver.project_context_plan_with_diagnostics(SESSION_ID, plan)
+        saver.project_context_plan_with_diagnostics(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), plan)
     )
     assert [message.content for message in history_messages] == [
         message.content for message in first_messages
@@ -1860,16 +1888,9 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
     assert diagnostic_losses == first_losses
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    restored_snapshot = restarted.get_context_assembly(
-        SESSION_ID,
-        assembly_id=assembly_id,
-    )
+    restored_snapshot = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     second_messages, second_tools, second_losses = (
-        restarted.project_context_plan_to_provider(
-            SESSION_ID,
-            restored_snapshot.as_sealed_plan(),
-            target_format="chat_completions",
-        )
+        restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_snapshot.as_sealed_plan(), target_format='chat_completions')
     )
     assert restored_snapshot.selection == snapshot.selection
     assert [message.content for message in second_messages] == [
@@ -1887,6 +1908,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
     body = {"policy": "只在需要时注入", "scope": "optional"}
     contribution = ContextContribution(
         contribution_id="optional-policy-1",
@@ -1896,24 +1918,21 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
         body=body,
         source_ordinal=0,
     )
-    saver.register_context_contribution(
-        SESSION_ID,
-        contribution,
-        request_content=body,
-    )
+    saver.register_context_contribution(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), contribution, request_content=body)
 
-    assembly_id = saver.seal_context_for_dispatch(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        execution_id=str(accepted["initial_execution_id"]),
-        model_call_id="model-call-optional-omission",
-        provider_version="provider-v2",
-        target_format="chat_completions",
-        omitted_ref_ids=(contribution.contribution_id,),
+    draft = saver.compose_committed_context_plan(
+        SESSION_ID, thread, plan_id="optional-omission", tool_set=EMPTY_TOOL_SET,
     )
-    snapshot = saver.get_context_assembly(
-        SESSION_ID,
-        assembly_id=assembly_id,
+    draft = saver.create_context_plan(
+        SESSION_ID, replace(draft, plan_creation_idempotency_key="optional-omission:create"),
+    ).draft
+    snapshot = saver.seal_context_plan(
+        SESSION_ID, thread, draft,
+        wire_profile=None, wire_params=None, turn_id=str(accepted["turn_id"]),
+        execution_id=str(accepted["initial_execution_id"]),
+        provider_version="provider-v2", target_format="chat_completions",
+        seal_idempotency_key="optional-omission:seal",
+        omitted_ref_ids=(contribution.contribution_id,),
     )
     omitted = next(
         entry
@@ -1926,11 +1945,7 @@ def test_optional_omitted_selection_skips_detail_body_and_provider_tools(
     assert omitted.content_length == contribution.content_length
     assert omitted.loss == ("selection_omitted",)
 
-    messages, tools, losses = saver.project_context_plan_to_provider(
-        SESSION_ID,
-        snapshot.as_sealed_plan(),
-        target_format="chat_completions",
-    )
+    messages, tools, losses = saver.project_context_plan_to_provider(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), snapshot.as_sealed_plan(), target_format='chat_completions')
     assert [message.content for message in messages] == ["请检查当前状态"]
     assert tools == []
     assert losses == ("selection_omitted",)
@@ -1951,6 +1966,7 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
     body = {"policy": "先读取工作区配置", "scope": "request"}
     contribution = ContextContribution(
         contribution_id="policy-contribution-1",
@@ -1962,18 +1978,24 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
         source_ordinal=0,
     )
 
-    prepared = saver.prepare_context_for_provider(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        prompt_contributions=(contribution,),
-        tool_snapshot=({"type": "function", "function": {"name": "read_file"}},),
-        provider_version="provider-v2",
-        target_format="chat_completions",
-        plan_creation_idempotency_key="test_turn_execution_recovery:1282:create",
-        seal_idempotency_key="test_turn_execution_recovery:1282:seal",
+    saver.register_context_contribution(
+        SESSION_ID, thread, contribution, request_content=body,
     )
-    assembly_id = str(prepared["assembly_id"])
-    plan = prepared["plan"]
+    draft = saver.compose_committed_context_plan(
+        SESSION_ID, thread, plan_id="request-detail", tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({'read_file': True}), tools=({'type': 'function', 'function': {'name': 'read_file'}},)),
+    )
+    draft = saver.create_context_plan(
+        SESSION_ID, replace(draft, plan_creation_idempotency_key="request-detail:create"),
+    ).draft
+    snapshot = saver.seal_context_plan(
+        SESSION_ID, thread, draft,
+        wire_profile=None, wire_params=None, turn_id=str(accepted["turn_id"]),
+        execution_id=str(accepted["initial_execution_id"]),
+        provider_version="provider-v2", target_format="chat_completions",
+        seal_idempotency_key="request-detail:seal",
+    )
+    assembly_id = snapshot.assembly_id
+    plan = snapshot.as_sealed_plan()
     assert isinstance(plan, ContextRequestPlan)
     assert plan.plan_state == "sealed"
     assert [entry.plan_ordinal for entry in plan.selection] == list(
@@ -1986,8 +2008,10 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
         and entry.contribution_id == contribution.contribution_id
         for entry in plan.selection
     )
-    first_messages = prepared["messages"]
-    first_tools = prepared["tools"]
+    first_messages, first_tools, first_losses = saver.project_context_plan_to_provider(
+        SESSION_ID, thread, plan, target_format="chat_completions",
+    )
+    assert first_losses == ()
     assert [message.content for message in first_messages] == [
         [{"policy": "先读取工作区配置", "scope": "request"}],
         "请检查当前状态",
@@ -1995,26 +2019,16 @@ def test_request_only_detail_and_selection_restore_without_memory_body(
     assert first_tools == [{"type": "function", "function": {"name": "read_file"}}]
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    restored = restarted.get_context_assembly(
-        SESSION_ID,
-        assembly_id=assembly_id,
-    )
+    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
     restored_plan = restored.as_sealed_plan()
-    messages, tools, losses = restarted.project_context_plan_to_provider(
-        SESSION_ID,
-        restored_plan,
-        target_format="chat_completions",
-    )
+    messages, tools, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
     assert restored_plan.selection == plan.selection
     assert [message.content for message in messages] == [
         message.content for message in first_messages
     ]
     assert tools == first_tools
     assert losses == ()
-    history_messages = restarted.project_context_plan_to_history(
-        SESSION_ID,
-        restored_plan,
-    )
+    history_messages = restarted.project_context_plan_to_history(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan)
     assert [message.content for message in history_messages] == ["请检查当前状态"]
     assert all(
         message.id != contribution.contribution_id for message in history_messages
@@ -2033,6 +2047,7 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         protected_detail_key=key,
     )
     accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
     body = {"secret_policy": "只允许 provider 使用"}
     contribution = ContextContribution(
         contribution_id="protected-policy-1",
@@ -2046,16 +2061,23 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         source_ordinal=0,
     )
 
-    prepared = saver.prepare_context_for_provider(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        prompt_contributions=(contribution,),
-        provider_version="provider-v2",
-        target_format="chat_completions",
-        plan_creation_idempotency_key="test_turn_execution_recovery:1364:create",
-        seal_idempotency_key="test_turn_execution_recovery:1364:seal",
+    saver.register_context_contribution(
+        SESSION_ID, thread, contribution, request_content=body,
     )
-    plan = prepared["plan"]
+    draft = saver.compose_committed_context_plan(
+        SESSION_ID, thread, plan_id="protected-detail", tool_set=EMPTY_TOOL_SET,
+    )
+    draft = saver.create_context_plan(
+        SESSION_ID, replace(draft, plan_creation_idempotency_key="protected-detail:create"),
+    ).draft
+    snapshot = saver.seal_context_plan(
+        SESSION_ID, thread, draft,
+        wire_profile=None, wire_params=None, turn_id=str(accepted["turn_id"]),
+        execution_id=str(accepted["initial_execution_id"]),
+        provider_version="provider-v2", target_format="chat_completions",
+        seal_idempotency_key="protected-detail:seal",
+    )
+    plan = snapshot.as_sealed_plan()
     assert isinstance(plan, ContextRequestPlan)
     protected_entries = [
         entry
@@ -2070,27 +2092,16 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         sessions_dir,
         protected_detail_key=key,
     )
-    restored = restarted.get_context_assembly(
-        SESSION_ID,
-        assembly_id=str(prepared["assembly_id"]),
-    )
+    restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=snapshot.assembly_id)
     restored_plan = restored.as_sealed_plan()
-    messages, _, losses = restarted.project_context_plan_to_provider(
-        SESSION_ID,
-        restored_plan,
-        target_format="chat_completions",
-    )
+    messages, _, losses = restarted.project_context_plan_to_provider(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), restored_plan, target_format='chat_completions')
     assert losses == ()
     assert [message.content for message in messages] == [
         [body],
         "请检查当前状态",
     ]
     assert (
-        restarted.read_context_plan_detail(
-            SESSION_ID,
-            detail_ref=protected_entries[0].detail_ref,
-            include_sensitive=True,
-        )["detail"]
+        restarted.read_context_plan_detail(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), detail_ref=protected_entries[0].detail_ref, include_sensitive=True)["detail"]
         == body
     )
 
@@ -2104,8 +2115,9 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
     ],
 )
 def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
-    tmp_path: Path,
+    frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
     table: str,
     column: str,
     value: object,
@@ -2114,14 +2126,17 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
-    assembly_id = saver.seal_context_for_dispatch(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        execution_id=str(accepted["initial_execution_id"]),
-        model_call_id="model-call-corrupt-manifest",
-        provider_version="provider-v2",
-        target_format="chat_completions",
-    )
+    with execution_scope(saver, accepted) as (thread, manager):
+        prepared = saver.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id=str(accepted["turn_id"]),
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="corrupt-manifest:create",
+            seal_idempotency_key="corrupt-manifest:seal",
+            context_source_manager=manager,
+            tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **frozen_provider_wire("provider-v2", "chat_completions"),
+        )
+    assembly_id = str(prepared["assembly_id"])
     where = "assembly_id = ?"
     parameters: tuple[object, ...] = (value, assembly_id)
     if table == "assembly_item_refs":
@@ -2134,7 +2149,7 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
         connection.commit()
 
     with pytest.raises((RuntimeError, TypeError), match="assembly manifest|manifest"):
-        saver.get_context_assembly(SESSION_ID, assembly_id=assembly_id)
+        saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
 
 
 def test_sealed_assembly_restore_rejects_missing_detail_manifest(
@@ -2145,6 +2160,7 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
     body = {"policy": "只能在本次请求使用"}
     contribution = ContextContribution(
         contribution_id="restore-detail-missing",
@@ -2155,24 +2171,28 @@ def test_sealed_assembly_restore_rejects_missing_detail_manifest(
         content_length=len(canonical_json_bytes(body)),
         source_ordinal=0,
     )
-    prepared = saver.prepare_context_for_provider(
-        SESSION_ID,
-        turn_id=str(accepted["turn_id"]),
-        prompt_contributions=(contribution,),
-        provider_version="provider-v2",
-        target_format="chat_completions",
-        plan_creation_idempotency_key="test_turn_execution_recovery:1471:create",
-        seal_idempotency_key="test_turn_execution_recovery:1471:seal",
+    saver.register_context_contribution(
+        SESSION_ID, thread, contribution, request_content=body,
+    )
+    draft = saver.compose_committed_context_plan(
+        SESSION_ID, thread, plan_id="missing-detail", tool_set=EMPTY_TOOL_SET,
+    )
+    draft = saver.create_context_plan(
+        SESSION_ID, replace(draft, plan_creation_idempotency_key="missing-detail:create"),
+    ).draft
+    snapshot = saver.seal_context_plan(
+        SESSION_ID, thread, draft,
+        wire_profile=None, wire_params=None, turn_id=str(accepted["turn_id"]),
+        execution_id=str(accepted["initial_execution_id"]),
+        provider_version="provider-v2", target_format="chat_completions",
+        seal_idempotency_key="missing-detail:seal",
     )
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         connection.execute(
             "DELETE FROM context_plan_details WHERE assembly_id = ?",
-            (prepared["assembly_id"],),
+            (snapshot.assembly_id,),
         )
         connection.commit()
 
     with pytest.raises(RuntimeError, match="detail-unavailable"):
-        saver.get_context_assembly(
-            SESSION_ID,
-            assembly_id=str(prepared["assembly_id"]),
-        )
+        saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=str(snapshot.assembly_id))

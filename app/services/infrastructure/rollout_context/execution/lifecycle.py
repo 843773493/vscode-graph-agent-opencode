@@ -399,13 +399,29 @@ class RolloutTurnLifecycleMixin:
         checkpoint_ns: str = "",
     ) -> bool:
         """独立 Turn 控制也通过真实 execution 委派唯一 convergence 事务。"""
-        try:
-            execution_id = self.execution_for_turn(
-                session_id, thread_id=thread_id, turn_id=turn_id,
-                checkpoint_ns=checkpoint_ns,
-            )
-        except KeyError:
+        session_id = strict_text(session_id, field="session_id")
+        thread_id = self._resolve_thread_identity(session_id, thread_id)
+        turn_id = strict_text(turn_id, field="turn_id")
+        checkpoint_ns = strict_text(
+            checkpoint_ns, field="checkpoint_ns", allow_empty=True,
+        )
+        self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
+        with self._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True,
+        ) as connection:
+            self._require_v2_runtime(connection)
+            execution = connection.execute(
+                "SELECT COALESCE(last_execution_id, initial_execution_id) "
+                "FROM turn_records WHERE session_id = ? AND thread_id = ? "
+                "AND turn_id = ?",
+                (session_id, thread_id, turn_id),
+            ).fetchone()
+        if execution is None:
             return False
+        # 终态吸收也须读取同一已提交执行；dispatch 的运行态 guard 不用于收敛。
+        execution_id = strict_text(
+            execution[0], field="turn_records.current_execution_id",
+        )
         admission = self.execution_admission(
             session_id, thread_id=thread_id, execution_id=execution_id,
             checkpoint_ns=checkpoint_ns,

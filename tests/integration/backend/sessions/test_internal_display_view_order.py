@@ -46,7 +46,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    validate_item_storage_metadata,
+    validate_item_storage_projection,
 )
 from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
@@ -220,7 +220,11 @@ def _seed_rollout(
                     status=CanonicalItemStatus.COMPLETED,
                     producer_ref={"producer_kind": "provider", "producer_id": execution_id},
                     payload=f"内部执行回复 {sequence}",
-                    projection_identity=ItemProjectionIdentity(block_id=f"block-internal-{sequence}", block_index=sequence - 1),
+                    projection_identity=ItemProjectionIdentity(
+                        model_call_id=f"model-call-internal-{execution_id}",
+                        block_id=f"block-internal-{sequence}",
+                        block_index=sequence - 1,
+                    ),
                     wire_role="assistant",
                     created_at=_CREATED_AT,
                 )
@@ -264,7 +268,7 @@ def _seed_rollout(
         )
         item_offset = 0
         for (item, execution_id), line in zip(items, item_lines, strict=True):
-            source_revision, _part_ordinal = validate_item_storage_metadata(item)
+            source_revision, _part_ordinal = validate_item_storage_projection(item)
             connection.execute(
                 "INSERT INTO item_catalog "
                 "(item_sequence, item_id, semantic_kind, payload_kind, status, turn_id, "
@@ -1053,14 +1057,16 @@ def test_internal_history_rejects_snapshot_from_another_owner(
                 )
             },
         )
+        # session/thread 错配都必须在同一 database_meta owner 上拒绝，
+        # 且 empty-bound 不得绕过该守卫。
         with pytest.raises(RuntimeError, match="owner|session|thread|不匹配"):
             environment.context_reader.read_internal_execution_history_page(
                 wrong_owner,
                 chain,
                 direction="after",
-            anchor_logical_item_ordinal=None,
-            lower_logical_item_ordinal=None,
-            upper_logical_item_ordinal=upper_logical_item_ordinal,
+                anchor_logical_item_ordinal=None,
+                lower_logical_item_ordinal=None,
+                upper_logical_item_ordinal=upper_logical_item_ordinal,
                 limit=1,
             )
 

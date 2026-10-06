@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 
+from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -35,6 +36,8 @@ class ContextDetailOwnerMixin:
         turn_id: str | None,
         execution_id: str,
         provider_version: str,
+        wire_profile: ChatWireProfile | ResponsesWireProfile | None,
+        wire_params: Mapping[str, object] | None,
         seal_idempotency_key: str,
         model_call_id: str | None = None,
         target_format: str = "responses",
@@ -71,6 +74,8 @@ class ContextDetailOwnerMixin:
             },
             request_only_content=request_only_content,
             request_input_hash=request_input_hash,
+            wire_profile=wire_profile,
+            wire_params=wire_params,
             activation_snapshot=activation_snapshot,
             context_preparation=context_preparation,
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 
-from app.domain.itemized.identity.refs import ToolSetRef
+from app.domain.itemized.identity.refs import ToolSetRef, _tool_identity
 
 
 def project_tool_set_ref(
@@ -29,8 +29,10 @@ def project_tool_set_ref(
             "detail-unavailable: protected/redacted ToolSetRef 没有可发送的 manifest: "
             f"{tool_set_ref.ref_id}"
         )
+    by_identity = {_tool_identity(tool): tool for tool in tool_set_ref.tools}
     projected: list[dict[str, object]] = []
-    for tool in tool_set_ref.tools:
+    for identity in tool_set_ref.tool_policy["wire_tool_order"]:
+        tool = by_identity[identity]
         if tool.get("type") == "function" and isinstance(tool.get("function"), Mapping):
             function = copy.deepcopy(dict(tool["function"]))
             projected.append(

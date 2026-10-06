@@ -84,12 +84,13 @@ class ContextProjectionOwnerMixin:
         )
 
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        committed = self._committed_context_plan(
+        committed_snapshot = self._committed_context_snapshot(
             session_id,
             thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
         )
+        committed = committed_snapshot.as_sealed_plan()
         item_ids = tuple(
             entry.ref.ref_id
             for entry in committed.selection
@@ -103,6 +104,7 @@ class ContextProjectionOwnerMixin:
             self._request_content_for_plan(
                 session_id, thread_id, checkpoint_ns, committed, None
             ),
+            seal_binding=committed_snapshot.seal_binding,
         )
 
     def project_context_plan_to_history_with_diagnostics(
@@ -394,6 +396,90 @@ class ContextProjectionOwnerMixin:
             f"detail-unavailable: no committed request-only source: {ref.ref_id}"
         )
 
+    def _draft_request_body(
+        self,
+        session_id: str,
+        thread_id: str,
+        checkpoint_ns: str,
+        plan: ContextRequestPlan,
+        ref: ContextRef,
+        *,
+        request_only_content: Mapping[str, object] | None = None,
+    ) -> object:
+        """编译与 detail binding 共用正向 draft 正文解析和 manifest 校验。"""
+        if ref.availability != "available":
+            raise DetailUnavailableError(
+                f"detail-unavailable: request-only source unavailable: {ref.ref_id}"
+            )
+        if ref.protection == "redacted" or (
+            ref.protection == "protected"
+            and not self._detail_store.supports_protected_details
+        ):
+            raise DetailUnavailableError(
+                "detail-unavailable: non-public request-only source cannot be"
+                f" dispatched without a protected detail backend: {ref.ref_id}"
+            )
+        contribution = resolve_contribution_for_ref(
+            ref,
+            plan.contributions,
+        )
+        content_key = (
+            contribution.contribution_id if contribution is not None else ref.ref_id
+        )
+        body = (
+            contribution.body
+            if contribution is not None and contribution.body is not None
+            else self._plan_request_content.get(
+                (
+                    session_id,
+                    thread_id,
+                    checkpoint_ns,
+                    plan.plan_id,
+                    content_key,
+                ),
+                self._request_only_content.get(
+                    (session_id, thread_id, checkpoint_ns, content_key)
+                ),
+            )
+        )
+        if request_only_content is not None:
+            body = request_only_content.get(content_key, body)
+        if body is None:
+            body = self._recover_request_source(
+                session_id,
+                thread_id,
+                checkpoint_ns,
+                ref,
+                contribution.contribution_id if contribution is not None else None,
+            )
+        # 在创建 detail manifest 之前完成 source identity 校验。否则一个
+        # 错误正文会先被写入并参与 seal，错误只会在后续 dispatch projection
+        # 才暴露，留下一个看似 sealed 但不可重放的 assembly。
+        body_length = payload_content_length(
+            ref.payload_kind or "structured_content",
+            body,
+        )
+        if body_length != ref.content_length:
+            raise ValueError(
+                f"source-mismatch: request-only content_length: {ref.ref_id}"
+            )
+        if contribution is not None:
+            if contribution.source_revision != ref.source_revision:
+                raise ValueError(
+                    f"source-mismatch: request-only contribution source_revision: {ref.ref_id}"
+                )
+            body_hash = contribution_content_hash(
+                contribution.contribution_kind,
+                body,
+            )
+        else:
+            body_hash = sha256_jcs(body)
+        if ref.content_hash is not None and body_hash != ref.content_hash:
+            raise ValueError(
+                f"source-mismatch: request-only content_hash: {ref.ref_id}"
+            )
+        return body
+
     def _bind_request_detail_refs(
         self,
         session_id: str,
@@ -432,73 +518,10 @@ class ContextProjectionOwnerMixin:
                 # optional omission 由 sealed selection 表达，不分配 detail
                 # binding，也不触发正文读取或生成替代详情。
                 continue
-            if ref.protection == "redacted" or (
-                ref.protection == "protected"
-                and not self._detail_store.supports_protected_details
-            ):
-                raise DetailUnavailableError(
-                    "detail-unavailable: non-public request-only source cannot be"
-                    f" dispatched without a protected detail backend: {ref.ref_id}"
-                )
-            contribution = resolve_contribution_for_ref(
-                ref,
-                plan.contributions,
+            body = self._draft_request_body(
+                session_id, thread_id, checkpoint_ns, plan, ref,
+                request_only_content=request_only_content,
             )
-            content_key = (
-                contribution.contribution_id if contribution is not None else ref.ref_id
-            )
-            body = (
-                contribution.body
-                if contribution is not None and contribution.body is not None
-                else self._plan_request_content.get(
-                    (
-                        session_id,
-                        thread_id,
-                        checkpoint_ns,
-                        plan.plan_id,
-                        content_key,
-                    ),
-                    self._request_only_content.get(
-                        (session_id, thread_id, checkpoint_ns, content_key)
-                    ),
-                )
-            )
-            if request_only_content is not None:
-                body = request_only_content.get(content_key, body)
-            if body is None:
-                body = self._recover_request_source(
-                    session_id,
-                    thread_id,
-                    checkpoint_ns,
-                    ref,
-                    contribution.contribution_id if contribution is not None else None,
-                )
-            # 在创建 detail manifest 之前完成 source identity 校验。否则一个
-            # 错误正文会先被写入并参与 seal，错误只会在后续 dispatch projection
-            # 才暴露，留下一个看似 sealed 但不可重放的 assembly。
-            body_length = payload_content_length(
-                ref.payload_kind or "structured_content",
-                body,
-            )
-            if body_length != ref.content_length:
-                raise ValueError(
-                    f"source-mismatch: request-only content_length: {ref.ref_id}"
-                )
-            if contribution is not None:
-                if contribution.source_revision != ref.source_revision:
-                    raise ValueError(
-                        f"source-mismatch: request-only contribution source_revision: {ref.ref_id}"
-                    )
-                body_hash = contribution_content_hash(
-                    contribution.contribution_kind,
-                    body,
-                )
-            else:
-                body_hash = sha256_jcs(body)
-            if ref.content_hash is not None and body_hash != ref.content_hash:
-                raise ValueError(
-                    f"source-mismatch: request-only content_hash: {ref.ref_id}"
-                )
             pending.append((ref, body))
         registered: list[DetailRef] = []
         detail_by_ref: dict[str, DetailRef] = {}

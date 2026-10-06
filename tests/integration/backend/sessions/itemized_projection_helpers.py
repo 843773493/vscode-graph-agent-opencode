@@ -14,9 +14,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.request_plan import (
     ContextContribution,
     ContextRequestPlan,
@@ -46,8 +50,16 @@ def projection_saver(
 ) -> Iterator[tuple[RolloutCheckpointSaver, str, Path]]:
     sessions = projection_workspace / ".boxteam/sessions"
     session_id = f"ses_{create_uuid_hex()}"
-    session = session_bundle_factory(sessions, session_id)
+    session_bundle_factory(sessions, session_id)
     with RolloutCheckpointSaver(sessions) as saver:
+        thread = saver._storage.main_thread_id(session_id)
+        owner_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
+        accepted = saver.accept_turn(
+            session_id, thread_id=thread,
+            accepted_ingress_id="user-1", acceptance_idempotency_key="projection-accept",
+            job_id="projection-job", admission_idempotency_key="projection-admission",
+            payload="第一条用户输入", turn_id="turn-1", root_item_id="item-user-1",
+        )
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "cp-initial"
         checkpoint["channel_values"] = {
@@ -61,18 +73,29 @@ def projection_saver(
             ]
         }
         checkpoint["channel_versions"] = {"messages": "1"}
-        saver.put(
-            build_checkpoint_config(session_id),
-            checkpoint,
-            {"source": "projection-contract"},
-            {"messages": "1"},
+        admission = saver.execution_admission(
+            session_id, thread_id=thread,
+            execution_id=str(accepted["initial_execution_id"]),
         )
-        yield saver, session_id, session
+        with (
+            session_thread_owner_scope(
+                MutationIntentOwner(session_id, thread), langgraph_thread_id=thread,
+            ),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            saver.put(
+                build_checkpoint_config(thread),
+                checkpoint,
+                {"source": "projection-contract"},
+                {"messages": "1"},
+            )
+            yield saver, session_id, owner_root
 
 
 @pytest.fixture
 def projection_draft(projection_saver):
     saver, session_id, _ = projection_saver
+    thread = saver._storage.main_thread_id(session_id)
     body = [{"type": "text", "text": "贡献正文，必须按 contribution identity 恢复"}]
     contribution = ContextContribution(
         contribution_id="contribution-z",
@@ -82,11 +105,11 @@ def projection_draft(projection_saver):
         content_hash=contribution_content_hash("prompt", body),
         extensions={} , source_binding=SourceBinding(source_ref='contribution-z'),
     )
-    saver.register_context_contribution(session_id, contribution, request_content=body)
+    saver.register_context_contribution(session_id, thread, contribution, request_content=body)
     plan = saver.compose_committed_context_plan(
-        session_id,
+        session_id, thread,
         plan_id=f"plan-{uuid4().hex}",
-        tool_snapshot=(
+        tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({"read_file": True}), tools=(
             {
                 "tool_id": "read_file",
                 "name": "read_file",
@@ -95,7 +118,7 @@ def projection_draft(projection_saver):
                     "properties": {"path": {"type": "string"}},
                 },
             },
-        ),
+        )),
     )
     contribution_ref = next(ref for ref in plan.refs if ref.ref_type == "request_only")
     # 只调整 Saver 返回的 draft；正式 selection/ordinal/detail 全由 Saver seal 分配。
@@ -105,7 +128,7 @@ def projection_draft(projection_saver):
     ]
     plain = ContextRef.request_only_ref(
         "plain-ref",
-        session_id=session_id, thread_id="thread-1",
+        session_id=session_id, thread_id=thread,
         plan_id=plan.plan_id,
         source_revision="plain-v1",
         content=plain_body,
@@ -123,9 +146,9 @@ def projection_plan(projection_saver, projection_draft):
     plan, bodies = projection_draft
     plan = register_projection_draft(saver, session_id, plan)
     return saver.seal_context_plan(
-        session_id,
+        session_id, plan.thread_id,
         plan,
-        seal_idempotency_key=f"seal:{plan.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
         provider_version="contract-provider",
@@ -145,14 +168,15 @@ def register_projection_draft(
 
 
 def _project(saver: RolloutCheckpointSaver, session_id: str, assembly_id: str) -> dict:
-    snapshot = saver.get_context_assembly(session_id, assembly_id=assembly_id)
+    thread = saver._storage.main_thread_id(session_id)
+    snapshot = saver.get_context_assembly(session_id, thread, assembly_id=assembly_id)
     plan = snapshot.as_sealed_plan()
-    messages, losses = saver.project_context_plan_with_diagnostics(session_id, plan)
+    messages, losses = saver.project_context_plan_with_diagnostics(session_id, thread, plan)
     history, history_losses = saver.project_context_plan_to_history_with_diagnostics(
-        session_id,
+        session_id, thread,
         plan,
     )
-    native = saver.project_context_plan_to_native(session_id, plan)
+    native = saver.project_context_plan_to_native(session_id, thread, plan)
     return {
         "selection": [entry.to_dict() for entry in plan.selection],
         "plan_hash": plan.plan_hash(),

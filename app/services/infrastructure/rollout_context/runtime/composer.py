@@ -15,7 +15,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
 )
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.request_plan import (
@@ -49,7 +49,7 @@ class ContextPlanComposer:
         thread_id: str,
         plan_id: str,
         refs: Sequence[ContextRef],
-        tool_snapshot: Sequence[Mapping[str, object]] = (),
+        tool_set: ToolSetSnapshot,
         history_view_revision: int = 0,
         source_overlay_epoch: int = 0,
         compiler_version: str = "itemized-context-v1",
@@ -101,33 +101,18 @@ class ContextPlanComposer:
             [ref for ref in contribution_refs if (ref.ref_type, ref.ref_id) not in known]
             + list(refs)
         )
-        source_revision = sha256_jcs(
-            {
-                "tools": [dict(item) for item in tool_snapshot],
-                "plan_id": plan_id,
-            }
-        )
-        tool_set_refs = (
-            (
-                ToolSetRef.from_tool_snapshot(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    snapshot_id=f"tool-set:{source_revision}",
-                    plan_id=plan_id,
-                    tools=tool_snapshot,
-                    source_revision=source_revision,
-                ),
-            )
-            if tool_snapshot
-            else ()
-        )
+        if not isinstance(tool_set, ToolSetSnapshot):
+            raise TypeError("ContextPlanComposer.compose 需要正向 ToolSetSnapshot")
+        tool_set_refs = (tool_set.bind(
+            session_id=session_id, thread_id=thread_id, plan_id=plan_id,
+        ),)
         return ContextRequestPlan(
             session_id=session_id,
             thread_id=thread_id,
             plan_id=plan_id,
             refs=normalized_refs,
             contributions=self.ledger.snapshot_contributions(),
-            tool_snapshot=tuple(dict(item) for item in tool_snapshot),
+            tool_snapshot=tool_set.tools,
             history_view_revision=history_view_revision,
             source_overlay_epoch=source_overlay_epoch,
             compiler_version=compiler_version,
@@ -171,6 +156,7 @@ class ContextPlanComposer:
         projector_version: str = "v1",
         target_format: str = "unknown",
         wire_request: object | None = None,
+        request_input_hash: str | None = None,
         omitted_ref_ids: Iterable[str] = (),
         request_detail_refs: Mapping[str, DetailRef] | None = None,
         seal_binding: ContextSealBinding | None = None,
@@ -436,6 +422,7 @@ class ContextPlanComposer:
                 if wire_request is not None
                 else None
             ),
+            request_input_hash=request_input_hash,
             seal_binding=seal_binding,
         )
 

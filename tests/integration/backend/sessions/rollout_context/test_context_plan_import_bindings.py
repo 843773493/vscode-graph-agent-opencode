@@ -6,91 +6,41 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.hash.request_hash import context_request_hash
-from app.domain.itemized.request_plan import ContextRequestPlan
-from app.services.infrastructure.rollout_context.assembly.plans.imported import (
-    write_imported_registration,
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    fork_case as fork_case,  # noqa: PLC0414 - 共享真实 fork fixture 依赖
 )
-from app.services.infrastructure.rollout_context.assembly.plans.imported_sources import (
-    build_source_manifest,
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    import_snapshot as import_snapshot,  # noqa: PLC0414 - 唯一 import port
 )
-from app.services.infrastructure.rollout_context.runtime.composer import (
-    ContextPlanComposer,
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    provenance as provenance,  # noqa: PLC0414 - 共享真实 fork fixture 依赖
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    _insert_snapshot,
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    registry_db as registry_db,  # noqa: PLC0414 - 真实 fork 及当前测试路径隔离
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 按当前测试路径独立 fixture
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    snapshot as snapshot,  # noqa: PLC0414 - 真正 target-local sealed snapshot
+)
+from tests.integration.backend.sessions.rollout_context.test_context_plan_imported import (
+    source_manifest as source_manifest,  # noqa: PLC0414 - 共享真实 fork fixture 依赖
 )
 
 
 @pytest.fixture
-def omitted_draft(registry_db):
-    _saver, session, _connection, _accepted = registry_db
-    return ContextRequestPlan(
-        session_id=session,
-        plan_id="omitted-import-plan",
-        refs=(
-            ContextRef.request_only_ref(
-                "omitted-ref",
-                session_id=session, thread_id="thread-1",
-                plan_id="omitted-import-plan",
-                source_revision="known-revision",
-                availability="unavailable",
-            ),
-        ),
-        plan_creation_idempotency_key="source-only-creation",
-    )
+def fork_plan_kind():
+    return "unbound_omitted"
 
 
 @pytest.fixture
-def omitted_manifest(omitted_draft):
-    return build_source_manifest(
-        session_id=omitted_draft.session_id, plan_id=omitted_draft.plan_id,
-        refs=omitted_draft.refs, contributions=omitted_draft.contributions,
-    )
+def omitted_snapshot(snapshot):
+    return snapshot
 
 
 @pytest.fixture
-def omitted_snapshot(registry_db, omitted_draft):
-    _saver, session, _connection, accepted = registry_db
-    return ContextPlanComposer().assembly(
-        plan=omitted_draft,
-        assembly_id="omitted-import-assembly",
-        session_id=session,
-        turn_id=accepted["turn_id"],
-        execution_id=accepted["initial_execution_id"],
-        provider_version="binding-regression",
-    )
-
-
-@pytest.fixture
-def write_omitted_import(registry_db, omitted_manifest):
-    connection = registry_db[2]
-
+def write_omitted_import(import_snapshot):
     def write(snapshot):
-        with connection:
-            connection.execute("BEGIN IMMEDIATE")
-            _insert_snapshot(connection, snapshot)
-            write_imported_registration(
-                connection,
-                snapshot,
-                detail_key=None,
-                origin="schema3_import",
-                source_manifest=omitted_manifest,
-                source_provenance={
-                    "source_session_id": snapshot.session_id,
-                    "source_plan_id": snapshot.plan_id,
-                    "source_assembly_id": snapshot.assembly_id,
-                    "source_snapshot_hash": sha256_jcs(snapshot.to_dict()),
-                    "source_schema_version": 3,
-                    "audit_id": "binding-audit",
-                },
-                seal_idempotency_key="binding-import",
-            )
+        import_snapshot(value=snapshot)
 
     return write
 

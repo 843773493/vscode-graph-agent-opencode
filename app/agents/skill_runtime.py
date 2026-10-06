@@ -4,20 +4,22 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NotRequired
 
-from deepagents.middleware._utils import append_to_system_message
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import (
     AgentState,
-    ExtendedModelResponse,
     PrivateStateAttr,
 )
-from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
 
+from app.agents.instruction_producers import (
+    InstructionProducerSpec,
+    register_instruction_producer,
+)
 from app.agents.middleware_prompts import SKILLS_SYSTEM_PROMPT
 from app.agents.skill_frontmatter import parse_skill_frontmatter
 from app.core.distribution_identity import load_distribution_id
@@ -49,7 +51,6 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     require_scope_binding,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
-    ContextSourceDelta,
     ContextSourceDescriptor,
     ContextSourceManager,
     SkillCatalogActivationSnapshot,
@@ -67,11 +68,6 @@ def workspace_agents_uri(workspace_id: str) -> str:
 
 BUNDLED_SKILL_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
-# 唯一 CSM 消费链只接受已知来源语义的 delta；未知 kind 直接失败，
-# 不回退到通用措辞。正文已由 ApplySourceLifecycleDecision 封存，这里只做准入。
-_KNOWN_SOURCE_KINDS: frozenset[str] = frozenset({"skill", "workspace_agents"})
-
-
 class WorkspaceSkillsState(AgentState):
     """Skill metadata 的私有请求状态;模型可见内容只有 name/description。"""
 
@@ -86,7 +82,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
     Skill metadata 来自 ResourceRegistry 发布的 immutable catalog revision;
     AGENTS.md 由 ``_register_agents_source`` 登记为 tracked 文件来源。两者的
     首帧/delta 都只经 reactor typed observation 进入 CSM pending，再由唯一
-    ``before_model`` 消费链提交；请求路径不读磁盘，也不维护任何 AGENTS
+    Saver prepare/seal 消费链提交；请求路径不读磁盘，也不维护任何 AGENTS
     快照、diff reminder 或 compaction marker 状态。
     """
 
@@ -165,9 +161,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 binding_revision=self._catalog.catalog_revision,
             )
         normalized = dict(update)
-        normalized["skills_metadata"] = [
-            dict(item) for item in self._context_source_manager.metadata()
-        ]
+        normalized["skills_metadata"] = [dict(item) for item in raw_skills]
         return normalized
 
     def _install_activation_snapshot(self) -> None:
@@ -176,7 +170,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         snapshot/tracked 的 skill_load 只从这个 exact binding 解析；
         catalog 后续新 revision 不改变已冻结调用。
         """
-        if self._context_source_manager is None:
+        if self._context_source_manager is None or self._catalog is None:
             return
         bindings = {
             entry.name: SkillCatalogBinding(
@@ -196,7 +190,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             )
         )
 
-    def before_agent(self, state: Any, runtime: Any, config: Any) -> dict[str, Any] | None:
+    def before_agent(self, state: Any, runtime: Any, config: RunnableConfig) -> dict[str, Any] | None:
         del state, runtime, config
         return self._register_workspace_context_sources()
 
@@ -204,7 +198,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         state: Any,
         runtime: Any,
-        config: Any | None = None,
+        config: RunnableConfig | None = None,
     ) -> dict[str, Any] | None:
         del state, runtime, config
         return self._register_workspace_context_sources()
@@ -225,13 +219,14 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         self._register_agents_source()
         self._sync_source_bindings()
         self._install_activation_snapshot()
+        self._register_catalog_instructions()
         return update
 
     def _register_agents_source(self) -> None:
         """把工作区 AGENTS.md 登记为唯一 CSM tracked 文件来源。
         D3-B 起本中间件不维护任何 AGENTS 快照、diff reminder 或 compaction
         marker 状态：首帧与后续 delta 全部经 reactor typed observation 进入
-        CSM pending，由唯一 before_model 消费链提交。
+        CSM pending，由唯一 Saver prepare/seal 消费链提交。
         """
         if self._source_registry is None:
             return
@@ -250,32 +245,31 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 description="当前工作区根目录 AGENTS.md 指令来源",
                 internal_locator=agents_uri,
                 resource_uri=agents_uri,
+                root_placement="root_eligible",
             ),
             tracking_status="tracked",
         )
 
-    def _build_source_delta_message(self, delta: ContextSourceDelta) -> HumanMessage:
-        if delta.source_kind not in _KNOWN_SOURCE_KINDS:
-            raise RuntimeError(
-                "未知 context source kind，拒绝构造注入消息: "
-                f"source_id={delta.source_id} kind={delta.source_kind}"
-            )
-        return HumanMessage(
-            # source 正文已经由 ApplySourceLifecycleDecision 封存；这里仅为
-            # LangGraph state 提供同一正文的临时 projection，不再承担写入。
-            content=delta.content,
-            id=(
-                f"context-source:{delta.source_id}:"
-                f"{delta.revision}:{delta.kind}"
+    def _register_catalog_instructions(self) -> None:
+        """R05 只发布 catalog 正文与权威语义 revision，不编辑模型请求。"""
+        if (
+            self._context_source_manager is None or self._catalog is None
+            or not self._catalog.entries or self.system_prompt_template is None
+        ):
+            return
+        content = self.system_prompt_template.format(
+            skills_list=self._format_skills_list([
+                entry.metadata_view() for entry in self._catalog.entries
+            ]),
+        )
+        register_instruction_producer(
+            self._context_source_manager,
+            InstructionProducerSpec(
+                producer_id="R05", source_id="instruction:skill-catalog",
+                source_kind="skill_catalog_metadata", name="Skill catalog",
+                root_placement="root_eligible", content=content,
+                revision=self._catalog.catalog_revision,
             ),
-            response_metadata={
-                "context_source_kind": delta.source_kind,
-                "context_source_id": delta.source_id,
-                "context_source_name": delta.source_name,
-                "context_wire_role": delta.wire_role,
-                "context_revision": delta.revision,
-                "internal": True,
-            },
         )
 
     def _sync_source_bindings(self) -> None:
@@ -325,49 +319,8 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         self._sync_source_bindings()
         if self._context_source_reactor is not None:
             self._observe_pending_sources()
-        batch = self._context_source_manager.prepare_pending()
-        if batch is None:
-            return None
-        messages = [
-            self._build_source_delta_message(delta) for delta in batch.deltas
-        ]
-        # 这里是 LangGraph middleware 的 state-update 边界：消息已经完整构造，
-        # 再确认 CSM 的 pending 基准，避免“先 drain、后构造失败”吞掉变化。
-        self._context_source_manager.commit_model_call_pending(batch)
-        return {"messages": messages}
-
-    def modify_request(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        """把 catalog metadata 注入 system prompt;模板关闭时不改动请求。"""
-        if self.system_prompt_template is None:
-            return request
-        skills_metadata = request.state.get("skills_metadata", [])
-        if not isinstance(skills_metadata, list):
-            raise TypeError("skills_metadata 状态必须是列表")
-        if not skills_metadata:
-            return request
-        skills_section = self.system_prompt_template.format(
-            skills_list=self._format_skills_list(skills_metadata),
-        )
-        return request.override(
-            system_message=append_to_system_message(
-                request.system_message,
-                skills_section,
-            )
-        )
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
-        return handler(self.modify_request(request))
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
-        return await handler(self.modify_request(request))
+        # before_model 只观察 desired；唯一 Saver seal 成功后才确认 applied。
+        return None
 
 
 def resolve_bundled_skill_groups(

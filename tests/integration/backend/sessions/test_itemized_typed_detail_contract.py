@@ -8,13 +8,23 @@ from dataclasses import replace
 
 import pytest
 
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.request_plan import ContextContribution
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     detail_ref_key,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+    ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
@@ -47,15 +57,7 @@ def test_plain_request_recovery_requires_explicit_source_identity(
     draft, bodies = projection_draft
     draft = replace(draft, tool_set_refs=())
     draft = register_projection_draft(saver, session_id, draft)
-    first = saver.seal_context_plan(
-        session_id,
-        draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
-        turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
-        provider_version="contract-provider",
-        request_only_content=bodies,
-    )
+    first = saver.seal_context_plan(session_id, saver._storage.main_thread_id(session_id), draft, wire_profile=None, wire_params=None, seal_idempotency_key=f'seal:{draft.plan_id}', turn_id='turn-1', execution_id=saver.execution_for_turn(session_id, turn_id='turn-1'), provider_version='contract-provider', request_only_content=bodies)
     # 新 plan 的 source locator 指向旧 selection，最终 detail 则必须重新分配。
     source = (
         DetailRef(
@@ -93,9 +95,9 @@ def test_plain_request_recovery_requires_explicit_source_identity(
             with pytest.raises(
                 DetailUnavailableError, match="detail-unavailable.*new-plain-ref"
             ):
-                restarted.seal_context_plan(session_id, next_draft, **arguments)
+                restarted.seal_context_plan(session_id, restarted._storage.main_thread_id(session_id), next_draft, wire_profile=None, wire_params=None, **arguments)
             return
-        second = restarted.seal_context_plan(session_id, next_draft, **arguments)
+        second = restarted.seal_context_plan(session_id, restarted._storage.main_thread_id(session_id), next_draft, wire_profile=None, wire_params=None, **arguments)
         entry = second.selection[2]
         assert entry.ref.source_ref == first.selection[2].detail_ref
         assert entry.detail_ref != entry.ref.source_ref
@@ -143,7 +145,7 @@ def test_sealed_detail_shape_is_typed_and_not_part_of_context_ref(
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["detail_ref"] == ref.to_dict()
         assert not {"gc_after", "content_length"} & payload.keys()
-        record = saver._storage.get_context_plan_detail(session_id, detail_ref=ref)
+        record = saver._storage.get_context_plan_detail(session_id, saver._storage.main_thread_id(session_id), detail_ref=ref)
         assert record["detail_kind"] == "request_source"
         assert record["retention_class"] == "request_replay"
         assert record["visibility"] == entry.visibility
@@ -176,7 +178,7 @@ def test_detail_read_rejects_wrong_owner_or_untyped_input_before_storage(
     with monkeypatch.context() as patch:
         patch.setattr(saver._storage, "get_context_plan_detail", reject_lookup)
         with pytest.raises((TypeError, ValueError), match="source-mismatch"):
-            saver.read_context_plan_detail(session_id, detail_ref=invalid)
+            saver.read_context_plan_detail(session_id, saver._storage.main_thread_id(session_id), detail_ref=invalid)
     assert calls == []
 
 
@@ -202,16 +204,15 @@ def test_corrupt_typed_selection_binding_is_rejected_after_restart(
             with pytest.raises(
                 (RuntimeError, ValueError), match="mismatch|不一致|detail"
             ):
-                projector(session_id, projection_plan.as_sealed_plan())
+                projector(session_id, projection_plan.thread_id, projection_plan.as_sealed_plan())
 
 
-@pytest.mark.parametrize("port", ["seal", "dispatch", "prepare"])
+@pytest.mark.parametrize("port", ["seal", "prepare"])
 def test_seal_failure_tombstones_source_details_before_removing_files(
-    projection_saver, monkeypatch, port
+    frozen_provider_wire, projection_saver, monkeypatch, port
 ) -> None:
     saver, session_id, session = projection_saver
-    from app.domain.itemized.hashing import contribution_content_hash
-    from app.domain.itemized.request_plan import ContextContribution
+    thread = saver._storage.main_thread_id(session_id)
 
     body = [{"type": "text", "text": "typed cleanup source"}]
     contribution = ContextContribution(
@@ -221,14 +222,24 @@ def test_seal_failure_tombstones_source_details_before_removing_files(
         content_hash=contribution_content_hash("prompt", body),
         body=body,
     )
-    saver.register_context_contribution(session_id, contribution, request_content=body)
+    saver.register_context_contribution(session_id, thread, contribution, request_content=body)
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(session_id, thread), control_state_port=saver,
+    )
+    manager.register(ContextSourceDescriptor(
+        source_id="agents:cleanup-source", source_kind="workspace_agents",
+        name="cleanup source", description="详情清理来源",
+        internal_locator="boxteam://workspace/agents",
+    ), tracking_status="tracked")
+    manager.observe("agents:cleanup-source", json.dumps(body), revision="source-v1")
+    selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
     removed = []
     original_remove = saver._detail_store.remove
 
     def fail_seal(*args, **kwargs):
         raise RuntimeError("injected assembly commit failure")
 
-    def check_tombstone(*, session_id, record):
+    def check_tombstone(*, session_id, thread_id, record):
         with sqlite3.connect(session / "rollout/index.sqlite") as connection:
             row = connection.execute(
                 "SELECT status, availability FROM context_plan_details WHERE detail_ref = ?",
@@ -236,7 +247,7 @@ def test_seal_failure_tombstones_source_details_before_removing_files(
             ).fetchone()
         assert row == ("unavailable", "unavailable")
         removed.append(record.detail_ref)
-        return original_remove(session_id=session_id, record=record)
+        return original_remove(session_id=session_id, thread_id=thread_id, record=record)
 
     with monkeypatch.context() as patch:
         patch.setattr(saver._storage, "seal_context_assembly", fail_seal)
@@ -249,29 +260,26 @@ def test_seal_failure_tombstones_source_details_before_removing_files(
         with pytest.raises(RuntimeError, match="injected assembly commit failure"):
             if port == "seal":
                 draft = saver.compose_committed_context_plan(
-                    session_id, plan_id="cleanup-plan"
+                    session_id, thread, plan_id="cleanup-plan", tool_set=selected,
                 )
                 draft = register_projection_draft(saver, session_id, draft)
                 saver.seal_context_plan(
-                    session_id,
+                    session_id, thread,
                     draft,
-                    seal_idempotency_key=f"seal:{draft.plan_id}",
+                    wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
                     **arguments,
-                )
-            elif port == "dispatch":
-                saver.seal_context_for_dispatch(
-                    session_id, model_call_id="cleanup-call", **arguments
                 )
             else:
                 saver.prepare_context_for_provider(
-                    session_id,
+                    session_id, thread,
                     plan_creation_idempotency_key="create:cleanup-prepare",
                     seal_idempotency_key="seal:cleanup-prepare",
                     turn_id="turn-1",
-                    provider_version="typed-contract",
-                    target_format="responses",
-                    prompt_contributions=(contribution,),
+                    execution_id=str(arguments["execution_id"]),
+                    context_source_manager=manager, tool_set_supplier=lambda: selected,
+                    **frozen_provider_wire("typed-contract", "responses"),
+
                 )
     assert len(removed) == 1
     assert not (session / detail_relative_path(removed[0])).exists()
-    assert saver.list_context_assemblies(session_id) == ()
+    assert saver.list_context_assemblies(session_id, saver._storage.main_thread_id(session_id)) == ()

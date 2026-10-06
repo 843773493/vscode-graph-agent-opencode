@@ -127,7 +127,7 @@ def _seal(registry_db, inputs, *, saver=None):
     owner, session, _connection, accepted = registry_db
     plan, preparation = inputs
     return (saver or owner).seal_context_plan(
-        session, plan.thread_id, plan, turn_id=accepted["turn_id"],
+        session, plan.thread_id, plan, wire_profile=None, wire_params=None, turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"], provider_version="epoch-provider",
         seal_idempotency_key="seal:" + plan.plan_id, target_format="chat_completions",
         context_preparation=preparation,

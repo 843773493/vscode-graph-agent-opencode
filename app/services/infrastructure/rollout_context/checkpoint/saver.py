@@ -290,61 +290,6 @@ class RolloutCheckpointSaver(
         self._append_intent_batches: dict[MutationIntentOwner, _AppendIntentBatch] = {}
         self._lock = threading.RLock()
 
-    def upgrade_rollout_schema(
-        self,
-        session_id: str,
-        *,
-        checkpoint_ns: str = "",
-    ) -> None:
-        """显式升级当前会话索引；普通启动、读取和请求路径不得自动调用。"""
-        # 只有显式升级加载旧 artifact parser；正常 Saver 构造和读取路径不加载它。
-        from app.services.infrastructure.rollout_context.migration.schema_v3 import (
-            prepare_schema_v3_upgrade,
-            resume_schema_v3_upgrade_audits,
-        )
-        from app.services.infrastructure.rollout_context.migration.schema_v4 import (
-            prepare_schema_v4_upgrade,
-        )
-
-        def prepare_artifacts(connection):
-            thread_id = self._storage.main_thread_id(session_id)
-            return prepare_schema_v3_upgrade(
-                connection,
-                rollout_root=self._storage.root(
-                    session_id, checkpoint_ns, thread_id=thread_id
-                ),
-                session_id=session_id,
-                thread_id=thread_id,
-                checkpoint_ns=checkpoint_ns,
-                detail_capability=self._detail_store.schema_v3_detail_capability(),
-            )
-
-        def resume_artifacts(connection):
-            return resume_schema_v3_upgrade_audits(
-                connection,
-                rollout_root=self._storage.root(
-                    session_id,
-                    checkpoint_ns,
-                    thread_id=self._storage.main_thread_id(session_id),
-                ),
-                checkpoint_ns=checkpoint_ns,
-            )
-
-        def prepare_plans(connection):
-            return prepare_schema_v4_upgrade(
-                connection,
-                session_id=session_id,
-                checkpoint_ns=checkpoint_ns,
-            )
-
-        with self._storage.upgrade_v2_schema(
-            session_id,
-            checkpoint_ns=checkpoint_ns,
-            prepare_artifact_upgrade=prepare_artifacts,
-            resume_artifact_upgrade=resume_artifacts,
-            prepare_plan_upgrade=prepare_plans,
-        ):
-            pass
 
     def accept_turn(
         self,
@@ -645,12 +590,14 @@ class RolloutCheckpointSaver(
         thread_id: str,
         *,
         assembly_id: str,
+        checkpoint_ns: str = "",
     ) -> ContextAssemblySnapshot:
         """由 Saver 提供已提交 assembly，屏蔽底层 SQLite 读取。"""
         return self._storage.get_context_assembly(
             session_id,
             thread_id,
             assembly_id=assembly_id,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
 
     def list_context_assemblies(

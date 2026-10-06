@@ -8,10 +8,8 @@ from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
-from app.services.mapping.itemized.langchain import (
-    project_canonical_items,
-    project_context_plan,
-)
+from app.services.mapping.itemized.canonical_langchain import project_canonical_items
+from app.services.mapping.itemized.langchain import project_context_plan
 
 
 def project_history_items(

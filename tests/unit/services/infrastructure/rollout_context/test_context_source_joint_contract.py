@@ -1288,7 +1288,7 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
     registered = saver.create_context_plan(MAIN_SESSION_ID, replace(draft, plan_creation_idempotency_key="real-sealed-cas:create"))
     snapshot = saver.seal_context_plan(
         MAIN_SESSION_ID, thread_id, registered.draft,
-        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
+        wire_profile=None, wire_params=None, turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
         provider_version="cas-contract", seal_idempotency_key="real-sealed-cas:seal",
         request_only_content={original.contribution_id: original.body},
     )

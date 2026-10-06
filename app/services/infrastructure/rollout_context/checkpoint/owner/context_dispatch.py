@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from langchain_core.messages import BaseMessage
 
-from app.domain.itemized.request_plan import (
-    ContextContribution,
-)
+from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
     prepare_registered_context,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 
 
@@ -27,13 +29,19 @@ class ContextDispatchOwnerMixin:
         plan_creation_idempotency_key: str,
         seal_idempotency_key: str,
         request_messages: Sequence[BaseMessage] = (),
-        prompt_contributions: Sequence[ContextContribution] = (),
-        tool_snapshot: Sequence[Mapping[str, object]] = (),
+        context_source_manager: ContextSourceManager,
+        tool_set_supplier: Callable[[], ToolSetSnapshot],
         provider_version: str,
+        wire_profile: ChatWireProfile | ResponsesWireProfile,
+        wire_params: Mapping[str, object],
         target_format: str,
         checkpoint_ns: str = "",
     ) -> dict[str, object]:
-        """最终过滤后显式注册；稳定请求 key 必须由 middleware/runtime owner 提供。"""
+        """最终过滤后显式注册；稳定请求 key 必须由 middleware/runtime owner 提供。
+
+        ``wire_params`` 是 Bridge 从实际模型/请求提取的纯数据有效参数
+        （wire_finalize 提取器输出），Saver 只透传，不持有模型实例。
+        """
         return prepare_registered_context(
             self,
             session_id,
@@ -43,9 +51,11 @@ class ContextDispatchOwnerMixin:
             plan_creation_idempotency_key=plan_creation_idempotency_key,
             seal_idempotency_key=seal_idempotency_key,
             request_messages=request_messages,
-            prompt_contributions=prompt_contributions,
-            tool_snapshot=tool_snapshot,
+            context_source_manager=context_source_manager,
+            tool_set_supplier=tool_set_supplier,
             provider_version=provider_version,
+            wire_profile=wire_profile,
+            wire_params=wire_params,
             target_format=target_format,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )

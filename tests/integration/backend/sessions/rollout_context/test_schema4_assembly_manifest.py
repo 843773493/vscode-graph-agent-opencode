@@ -1,4 +1,4 @@
-"""fresh schema4 的真实 assembly seal/registry/重启读取合同。
+"""当前 schema 的真实 assembly seal/registry/重启读取合同。
 
 写入调用 assembly storage 的事务 port，读取经过重启 Saver；不替代
 checkpoint 的公开 seal 调用链验收，也不安装测试 DDL 或回填旧 registry。
@@ -41,6 +41,9 @@ from app.services.infrastructure.rollout_context.runtime.composer import (
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -49,6 +52,7 @@ class AssemblyCase:
     saver: RolloutCheckpointSaver
     sessions: Path
     session_id: str
+    thread_id: str
     turn_id: str
     execution_id: str
     connection: sqlite3.Connection
@@ -86,11 +90,12 @@ def assembly_case(
     try:
         assert connection.execute(
             "SELECT schema_version FROM database_meta WHERE singleton_id = 1"
-        ).fetchone() == (4,)
+        ).fetchone() == (ROLLOUT_SCHEMA_VERSION,)
         yield AssemblyCase(
             saver,
             sessions,
             session_id,
+            saver._storage.main_thread_id(session_id),
             str(accepted["turn_id"]),
             str(accepted["initial_execution_id"]),
             connection,
@@ -118,13 +123,14 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
     )
     plan = ContextRequestPlan(
         session_id=case.session_id,
+        thread_id=case.thread_id,
         plan_id=plan_id,
         plan_creation_idempotency_key=f"create-{plan_id}",
         refs=tuple(
             ContextRef.request_only_ref(
                 f"{item.contribution_id}-ref",
                 session_id=case.session_id,
-                thread_id="thread-1",
+                thread_id=case.thread_id,
                 plan_id=plan_id,
                 source_revision=item.source_revision,
                 source_ref=item.contribution_id,
@@ -137,6 +143,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         tool_set_refs=tuple(
             ToolSetRef.from_tool_snapshot(
                 session_id=case.session_id,
+                thread_id=case.thread_id,
                 plan_id=plan_id,
                 snapshot_id=name,
                 source_revision=f"{plan_id}-tools",
@@ -150,6 +157,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
     assembly_id = f"assembly-{plan_id}"
     detail = ContextPlanDetailStore(case.sessions).write(
         session_id=case.session_id,
+        thread_id=case.thread_id,
         assembly_id=assembly_id,
         detail_kind="request_source",
         retention_class="request_replay",
@@ -162,6 +170,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
         plan=registered.draft,
         assembly_id=assembly_id,
         session_id=case.session_id,
+        thread_id=case.thread_id,
         turn_id=case.turn_id,
         execution_id=case.execution_id,
         provider_version="schema4-manifest-contract",
@@ -173,7 +182,7 @@ def _candidate(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
 def _seal(case: AssemblyCase, plan_id: str) -> ContextAssemblySnapshot:
     snapshot = _candidate(case, plan_id)
     case.saver._storage.seal_context_assembly(
-        snapshot,
+        case.session_id, case.thread_id, snapshot,
         seal_idempotency_key=f"seal-{plan_id}",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
@@ -200,7 +209,7 @@ def _assert_recovery_rejected(
     restarted = RolloutCheckpointSaver(case.sessions)
     with pytest.raises((KeyError, RuntimeError, ValueError), match=match):
         restarted.get_context_assembly(
-            case.session_id, assembly_id=snapshot.assembly_id
+            case.session_id, case.thread_id, assembly_id=snapshot.assembly_id
         )
     assert _state(case) == before
 
@@ -232,7 +241,7 @@ def test_plan_scoped_sources_restore_without_session_registry(assembly_case):
     restarted = RolloutCheckpointSaver(case.sessions)
     for snapshot in snapshots:
         restored = restarted.get_context_assembly(
-            case.session_id,
+            case.session_id, case.thread_id,
             assembly_id=snapshot.assembly_id,
         )
         assert restored.to_dict() == snapshot.to_dict()
@@ -247,7 +256,7 @@ def test_plan_scoped_sources_restore_without_session_registry(assembly_case):
         assert included.contribution_id == "included-source"
         assert included.contribution_ordinal == 0 and included.detail_ref is not None
         assert restarted.read_context_plan_detail(
-            case.session_id,
+            case.session_id, case.thread_id,
             detail_ref=included.detail_ref,
         )["detail"] == {
             "instructions": f"{snapshot.plan_id}/included-source 的独立正文"
@@ -304,12 +313,13 @@ def test_registration_cannot_authorize_another_assembly(assembly_case):
     snapshot = _seal(case, "bound")
     # 用真实 domain composer 生成同 plan 的另一份合法 candidate，不伪造对象字段。
     registered = case.saver.get_context_plan_registration(
-        case.session_id, plan_id="bound"
+        case.session_id, thread_id=case.thread_id, plan_id="bound"
     )
     other = ContextPlanComposer().assembly(
         plan=registered.draft,
         assembly_id="wrong-assembly",
         session_id=case.session_id,
+        thread_id=case.thread_id,
         turn_id=case.turn_id,
         execution_id=case.execution_id,
         provider_version="schema4-manifest-contract",
@@ -372,7 +382,7 @@ def test_registry_hash_and_metadata_are_exact_without_legacy_tolerance(
         ("assembly_item_refs", "contribution_id", "changed"),
         ("context_assembly_contributions", "contribution_ordinal", 9),
         ("context_assembly_contributions", "content_length", 999),
-        ("context_assembly_contributions", "metadata_json", '{"forged":true}'),
+        ("context_assembly_contributions", "binding_manifest_json", '{"extensions":{},"source_binding":null,"root_placement":"root_eligible"}'),
         ("context_assembly_selections", "plan_ordinal", 9),
         ("context_assembly_selections", "content_hash", "changed"),
         ("context_assembly_selections", "detail_ref", "changed"),
@@ -448,7 +458,7 @@ def test_domain_enum_snapshot_uses_canonical_json_boundary(assembly_case):
     snapshot.validate_hashes()
     before_jsonl = case.jsonl_path.read_bytes()
     case.saver._storage.seal_context_assembly(
-        snapshot,
+        case.session_id, case.thread_id, snapshot,
         seal_idempotency_key="seal-enum-boundary",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
@@ -459,7 +469,7 @@ def test_domain_enum_snapshot_uses_canonical_json_boundary(assembly_case):
     assert rows == [("public",)] * 4
     assert all(type(row[0]) is str for row in rows)
     restored = RolloutCheckpointSaver(case.sessions).get_context_assembly(
-        case.session_id,
+        case.session_id, case.thread_id,
         assembly_id=snapshot.assembly_id,
     )
     assert restored.to_dict() == snapshot.to_dict()
@@ -477,6 +487,7 @@ def test_omitted_existing_contribution_binding_uses_plan_owner(
     snapshot = _candidate(case, "omitted-binding")
     draft = case.saver.get_context_plan_registration(
         case.session_id,
+        thread_id=case.thread_id,
         plan_id=snapshot.plan_id,
     ).draft
     selection = tuple(
@@ -509,19 +520,19 @@ def test_omitted_existing_contribution_binding_uses_plan_owner(
     if contribution_id != "omitted-source":
         with pytest.raises(ValueError, match="plan-order-integrity|source-mismatch"):
             case.saver._storage.seal_context_assembly(
-                snapshot,
+                case.session_id, case.thread_id, snapshot,
                 seal_idempotency_key="seal-omitted-binding",
                 seal_input_hash=sha256_jcs("storage-seal-test-input"),
             )
         assert _state(case) == before
         return
     case.saver._storage.seal_context_assembly(
-        snapshot,
+        case.session_id, case.thread_id, snapshot,
         seal_idempotency_key="seal-omitted-binding",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
     restored = RolloutCheckpointSaver(case.sessions).get_context_assembly(
-        case.session_id,
+        case.session_id, case.thread_id,
         assembly_id=snapshot.assembly_id,
     )
     entry = restored.selection[1]

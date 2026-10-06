@@ -9,10 +9,9 @@ intent union，也不在这里实现持久化事务。
 
 append 分支已由 RolloutCheckpointSaver.append_items 生产接线（intent 构造 →
 facade 消费 → owner 单事务提交整批）；source 分支由
-ContextSourceManager.commit_model_call_pending 与 runtime reminder producer
-提交 ApplySourceLifecycleDecision，Saver 将 source item/control state 放入同一
-owner transaction；toolset 分支由 model-call 安全边界的 desired/applied 比较
-（prepare_registered_context）生产接线。epoch 分支仍保持显式拒绝。
+runtime reminder producer 提交 ApplySourceLifecycleDecision；CSM 来源的
+applied 只由真实 assembly seal 事务推进，CSM 在封存后确认批次。ToolSet
+applied 以同一 assembly binding 为唯一事实。epoch intent 分支仍显式拒绝。
 """
 
 from __future__ import annotations

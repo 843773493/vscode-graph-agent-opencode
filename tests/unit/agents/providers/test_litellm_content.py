@@ -559,6 +559,7 @@ def test_streaming_invoke_canonicalizes_langchain_cache_merge(monkeypatch):
         api_base="https://example.com/v1",
         provider_id="backup_1",
         streaming=True,
+        invocation_purpose="tool_test",
     )
 
     def fake_stream(self, messages, stop=None, run_manager=None, **kwargs):

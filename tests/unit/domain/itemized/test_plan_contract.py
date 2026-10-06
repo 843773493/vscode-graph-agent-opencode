@@ -504,6 +504,7 @@ def test_assembly_restore_preserves_omitted_selection_without_ref_hash_fallback(
         "projector_version",
         "target_format",
         "request_hash_preimage",
+        "request_input_hash",
         "active_view_id",
         "selection_policy",
         "model_call_id",

@@ -37,10 +37,11 @@ def seal_input_hash(
     request_input_hash: str | None,
     activation_bindings_hash: str | None = None,
     *,
+    wire_configuration: Mapping[str, object] | None,
     context_preparation_hash: str | None = None,
 ) -> str:
     preimage = {
-        "schema": "saver-context-seal-input:v1",
+        "schema": "saver-context-seal-input:v2",
         "session_id": draft.session_id,
         "checkpoint_ns": checkpoint_ns,
         "draft_manifest": draft_manifest(draft),
@@ -50,13 +51,10 @@ def seal_input_hash(
             "loss": list(assembly_options["loss"]),
         },
         "request_input_hash": request_input_hash,
+        "activation_bindings_hash": activation_bindings_hash,
+        "context_preparation_hash": context_preparation_hash,
+        "wire_configuration": wire_configuration,
     }
-    # 未接入 activation 的调用方保持 preimage 逐字节不变（升级前已提交 seal
-    # 的 input hash 仍需可幂等复用）；只有携带 activation binding 时才扩键。
-    if activation_bindings_hash is not None:
-        preimage["activation_bindings_hash"] = activation_bindings_hash
-    if context_preparation_hash is not None:
-        preimage["context_preparation_hash"] = context_preparation_hash
     return sha256_jcs(preimage)
 
 
@@ -117,6 +115,9 @@ def committed_retry(
         if entry.included and entry.ref.ref_type == "request_only"
     }
     try:
+        retry_options = dict(assembly_options)
+        # 重试只读取已提交 wire 事实，不以当前参数或能力重新猜封存正文。
+        retry_options["wire_request"] = committed.request_hash_preimage
         candidate = owner._composer_for(
             session_id, thread_id, checkpoint_ns
         ).assembly(
@@ -126,7 +127,8 @@ def committed_retry(
             thread_id=draft.thread_id,
             request_detail_refs=detail_refs,
             seal_binding=committed.seal_binding,
-            **assembly_options,
+            request_input_hash=committed.request_input_hash,
+            **retry_options,
         )
     except (ValueError, TypeError) as error:
         raise ValueError(

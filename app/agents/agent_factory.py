@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from deepagents.middleware.permissions import FilesystemPermission
-from deepagents.middleware.skills import append_to_system_message
 from langchain.agents import create_agent
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware
-from langchain.messages import SystemMessage
+from langchain.agents.structured_output import ResponseFormat
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -25,6 +24,7 @@ from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
+from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_tools import build_default_tools
 from app.agents.cache_preserving_summarization import (
     NoDurableOwnerCompactionPreflight,
@@ -39,6 +39,11 @@ from app.agents.graph_binding import (
     GraphBindingOwnerKey,
     GraphBindingStorePort,
     resolve_graph_binding,
+)
+from app.agents.instruction_producers import (
+    InstructionProducerSpec,
+    register_instruction_producer,
+    runtime_instruction_producers,
 )
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
@@ -56,18 +61,21 @@ from app.agents.policy import (
     validate_tool_dependencies,
 )
 from app.agents.provider_api_mode import parse_provider_api_mode
+from app.agents.sealed_assembly_dispatch import ProviderInvocationPurpose
 from app.agents.skill_runtime import (
     PublishedSkillCatalog,
     append_skill_middlewares,
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
 )
+from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
 from app.agents.tool_output_middleware import ToolOutputMiddleware
+from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
@@ -78,6 +86,7 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.hashing import sha256_jcs
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -171,67 +180,14 @@ def _resolve_tool_policy(
     )
 
 
-def _team_aware_system_prompt(
-    system_prompt: str | SystemMessage,
-    *,
-    enabled: bool,
-) -> str | SystemMessage:
-    if not enabled:
-        return system_prompt
-    base_message = (
-        system_prompt
-        if isinstance(system_prompt, SystemMessage)
-        else SystemMessage(content=system_prompt)
-    )
-    return append_to_system_message(base_message, TEAM_COORDINATION_SYSTEM_PROMPT)
-
-
-def _runtime_identity_system_prompt(
-    system_prompt: str | SystemMessage,
-    *,
-    workspace_root: Path | None,
-    provider_candidates: Sequence[tuple[str, str]],
-) -> SystemMessage:
-    """向模型注入不可由工作区文件推断的运行时身份和路径边界。"""
-    if not provider_candidates:
-        raise ValueError("运行时身份至少需要一个 provider/model 候选")
-
-    primary_provider_id, primary_model_id = provider_candidates[0]
-    fallback_text = ", ".join(
-        f"{provider_id}/{model_id}"
-        for provider_id, model_id in provider_candidates[1:]
-    )
-    workspace_text = (
-        str(workspace_root.resolve())
-        if workspace_root is not None
-        else "由当前 Agent runtime 显式提供"
-    )
-    identity_prompt = (
-        "## 当前运行时身份与路径边界（系统权威元数据）\n"
-        f"- workspace 根目录（exec_command 未提供 workdir 时的 cwd）：`{workspace_text}`\n"
-        f"- 当前首选 provider id：`{primary_provider_id}`\n"
-        f"- 当前首选 model id：`{primary_model_id}`\n"
-        f"- 已配置 fallback provider/model（按顺序）：`{fallback_text or '无'}`\n"
-        "这些字段来自当前运行时配置，不是从 project.godot 或其他工作区文件推断的。\n"
-        "回答 provider/model 身份时必须使用上述元数据；project.godot 的 `config/name` 只是项目显示名，绝不是模型名或 provider 名。\n"
-        "文件工具优先使用相对于 workspace 根目录的相对路径；上面列出的绝对根目录只用于 exec_command 的 cwd，不要把它当作文件工具的 path。项目位于子目录时必须保留该前缀：例如 `parry_arena/project.godot` 和 `parry_arena/godot_export/parry_arena.html`。只有在 exec_command 的 cwd 明确为 `parry_arena` 时，`godot_export/parry_arena.html` 才是同一文件的项目相对路径；不能因为 workspace 根下没有不带前缀的路径就报告文件不存在。工作区内的绝对路径会被自动归一化为相对路径，但你应直接给出相对路径。\n"
-        "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次；不要在命令中再次 cd 到同一个 workdir。工具结果中的 cwd_relative 是实际执行目录相对 workspace 根目录的路径（`.` 表示根），应以它解释相对路径。"
-    )
-    base_message = (
-        system_prompt
-        if isinstance(system_prompt, SystemMessage)
-        else SystemMessage(content=system_prompt)
-    )
-    return append_to_system_message(base_message, identity_prompt)
-
-
 def build_model_from_provider(
     provider: dict[str, Any],
     runtime_config: dict[str, Any],
     *,
     prompt_cache_key: str | None = None,
+    invocation_purpose: ProviderInvocationPurpose = "agent",
 ) -> Any:
-    """从单个 provider 配置构建模型实例。"""
+    """从 provider 构建模型；直连用途由实际调用方显式给出，默认必须封存。"""
     api_mode = parse_provider_api_mode(provider)
     custom_llm_provider = provider.get("custom_llm_provider")
     if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
@@ -270,6 +226,7 @@ def build_model_from_provider(
             runtime_config=runtime_config,
             request_options=request_options,
             prompt_cache_key=prompt_cache_key,
+            invocation_purpose=invocation_purpose,
         )
     if api_mode.protocol == "anthropic_messages" and custom_llm_provider != "anthropic":
         raise ValueError(
@@ -286,6 +243,7 @@ def build_model_from_provider(
         runtime_config=runtime_config,
         request_options=request_options,
         prompt_cache_key=prompt_cache_key,
+        invocation_purpose=invocation_purpose,
     )
 
 
@@ -373,9 +331,10 @@ def build_runtime_for_agent(
     return {
         "model": candidates[0].model,
         "model_routing": CapabilityRoutingMiddleware(candidates),
-        "system_prompt": _runtime_identity_system_prompt(
-            runtime_config["system_prompt"],
-            workspace_root=workspace_root,
+        "instruction_producers": runtime_instruction_producers(
+            agent_id=agent_id, content=runtime_config["system_prompt"],
+            config_revision=service.get_revision(),
+            workspace_root=str(workspace_root.resolve()) if workspace_root is not None else None,
             provider_candidates=[
                 (candidate.provider_id, candidate.model_id)
                 for candidate in candidates
@@ -396,7 +355,8 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
 def create_my_deep_agent(
     *,
     model: BaseChatModel,
-    system_prompt: str | SystemMessage,
+    instruction_producers: Sequence[InstructionProducerSpec],
+    tool_selection_reader: ToolSelectionReader,
     checkpointer: BaseCheckpointSaver | None = None,
     session_id: str,
     thread_id: str,
@@ -409,6 +369,7 @@ def create_my_deep_agent(
     custom_tool_specs: Sequence[object] | None = None,
     tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
+    response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
     skill_catalog: PublishedSkillCatalog | None = None,
     permissions: list[FilesystemPermission] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -536,8 +497,7 @@ def create_my_deep_agent(
     # 内存事件。CSM 边界拿不到 workspace_id，channel 参数使用最近稳定 identity
     # session_id（与 CSM owner 一致）；事件服务复用文件来源 registry 的进程级
     # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
-    # OpenSpec 2.4-B4：commit 事件发布已随 commit_model_call_pending 落在
-    # durable 成功之后；channel 参数沿用最近稳定 identity session_id。
+    # 来源确认事件只在真实 Saver seal 成功后发布。
     context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
     if workspace_file_resource_registry is not None:
         context_source_event_sink = ContextSourceEventPublisher(
@@ -570,7 +530,6 @@ def create_my_deep_agent(
             lifetime_scope=reactor_lifetime_scope,
             reactor_id=f"agent:{agent_id}:session:{session_id}",
         )
-    hidden_direct_tool_names: set[str] = set()
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, object] = {}
@@ -593,8 +552,6 @@ def create_my_deep_agent(
         if not policy.execution_enabled:
             return
         resolved_tools.append(tool)
-        if not policy.model_visible:
-            hidden_direct_tool_names.add(tool.name)
         if policy.confirmation_required:
             direct_confirmation_names.add(tool.name)
 
@@ -714,7 +671,6 @@ def create_my_deep_agent(
             *mcp_tools_for_agent,
         ]
         resolved_tools = []
-        hidden_direct_tool_names: set[str] = set()
         for tool in visible_tools:
             if tool.name in resolved_tool_denylist:
                 continue
@@ -760,22 +716,20 @@ def create_my_deep_agent(
         resolved_tool_names,
         context=f"agent {agent_id} 的运行时工具策略",
     )
-    resolved_system_prompt = _team_aware_system_prompt(
-        system_prompt,
-        enabled="create_team" in resolved_tool_names,
-    )
+    for producer in instruction_producers:
+        register_instruction_producer(context_source_manager, producer)
+    register_instruction_producer(context_source_manager, InstructionProducerSpec(
+        producer_id="R03", source_id="instruction:team-coordination-policy",
+        source_kind="team_coordination_policy", name="团队协作规则",
+        root_placement="root_eligible", content=TEAM_COORDINATION_SYSTEM_PROMPT,
+        revision=sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT}),
+        policy_key="team_coordination",
+    ))
 
     runtime_middleware: list[AgentMiddleware] = []
     append_skill_middlewares(
         runtime_middleware,
         catalog=None,
-    )
-    runtime_middleware.append(
-        SealedAssemblyDispatchBridge(
-            checkpointer=checkpointer,
-            session_id=session_id,
-            thread_id=thread_id,
-        )
     )
     runtime_middleware.extend(
         list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
@@ -812,15 +766,38 @@ def create_my_deep_agent(
         custom_tool_confirmation_names=frozenset(
             set(custom_tool_confirmation_names) | extension_confirmation_names
         ),
-        model_hidden_tool_names=frozenset(hidden_direct_tool_names),
     )
+
+    registered_tools = [
+        *resolved_tools,
+        *(tool for item in deepagent_middleware for tool in getattr(item, "tools", ())),
+    ]
+    tool_set_producer = RegisteredToolSetProducer(
+        agent_id=agent_id, selection_reader=tool_selection_reader,
+        policy_resolver=policy_resolver, tools=registered_tools,
+        metadata={
+            tool_definition_name(tool): ToolMetadata(
+                tool_id=tool_definition_name(tool), origin="builtin",
+                kind=catalog_group_for_tool(tool_definition_name(tool)).kind,
+                group_id=catalog_group_for_tool(tool_definition_name(tool)).group_id,
+            ) for tool in registered_tools
+        },
+    )
+    # 唯一 Bridge 固定放在 routing 和所有 request producer 之后；每个真实
+    # provider candidate 都走自己的 Saver prepare/seal，而非反捕最终请求。
+    sealed_dispatch_bridge = SealedAssemblyDispatchBridge(
+        checkpointer=checkpointer, session_id=session_id, thread_id=thread_id,
+        context_source_manager=context_source_manager,
+        tool_set_producer=tool_set_producer,
+    )
+    deepagent_middleware.append(sealed_dispatch_bridge)
 
     agent = create_agent(
         model,
-        system_prompt=resolved_system_prompt,
+        system_prompt=None,
         tools=list(resolved_tools) if resolved_tools else None,
         middleware=deepagent_middleware,
-        response_format=None,
+        response_format=response_format,
         context_schema=None,
         checkpointer=checkpointer,
         store=None,
@@ -828,6 +805,7 @@ def create_my_deep_agent(
         name=name,
         cache=None,
     )
+    sealed_dispatch_bridge.bind_graph(agent)
 
     if hasattr(agent, "with_config"):
         return agent.with_config(
@@ -856,6 +834,7 @@ def create_runtime_deep_agent_for_session(
     session_id: str,
     thread_id: str,
     agent_id: str,
+    tool_selection_reader: ToolSelectionReader,
     config_service: ConfigService | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
     background_message_bus: BackgroundMessageBus | None = None,
@@ -885,6 +864,7 @@ def create_runtime_deep_agent_for_session(
     mcp_tools: Sequence[BaseTool] | None = None,
     name: str | None = None,
     override_model: Any = None,
+    response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
     model_routing_enabled: bool = True,
     preferred_provider_id: str | None = None,
     tool_timeout_seconds: float | None = None,
@@ -944,7 +924,9 @@ def create_runtime_deep_agent_for_session(
     builder = GRAPH_FACTORY_REGISTRY.resolve(binding)
     return builder(
         model=model,
-        system_prompt=runtime["system_prompt"],
+        response_format=response_format,
+        instruction_producers=runtime["instruction_producers"],
+        tool_selection_reader=tool_selection_reader,
         checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,

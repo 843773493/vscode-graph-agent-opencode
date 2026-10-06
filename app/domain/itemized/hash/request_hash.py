@@ -10,6 +10,7 @@ from app.domain.itemized.serialization import (
     _contribution_order_key,
     _hash_safe_value,
     normalize_wire_request,
+    project_declared_tools,
 )
 
 
@@ -163,7 +164,9 @@ def context_request_hash(
             ],
             "selection": normalized_selection,
             "tool_snapshot": (
-                _hash_safe_value(list(plan.tool_snapshot))
+                # tool_snapshot 是 typed ToolSet 声明入口；只有这里允许把
+                # parameters/input_schema 当声明子树，普通正文不获得豁免。
+                project_declared_tools(list(plan.tool_snapshot))
                 if plan.plan_state != "sealed"
                 else []
             ),

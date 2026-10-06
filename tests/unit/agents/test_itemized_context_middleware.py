@@ -1,75 +1,56 @@
 from __future__ import annotations
 
-from typing import Any
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.agents import itemized_context_middleware
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
-
-
-def _bridge() -> SealedAssemblyDispatchBridge:
-    return SealedAssemblyDispatchBridge(checkpointer=object())
-
-
-@pytest.mark.parametrize(
-    "prepared",
-    [
-        {"messages": "not-a-list", "tools": []},
-        {"messages": [], "tools": "not-a-list"},
-    ],
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
-def test_prepare_projection_rejects_illegal_structure(prepared: dict[str, object]) -> None:
-    """projection 返回的 messages/tools 非 list 时必须原样抛 TypeError。"""
-    bridge = _bridge()
-    bridge._prepare = MagicMock(return_value=prepared)  # type: ignore[method-assign]
+
+
+@pytest.fixture
+def bridge(registered_tool_set_producer_factory):
+    return SealedAssemblyDispatchBridge(
+        checkpointer=object(), session_id="session-unit", thread_id="thread-unit",
+        context_source_manager=ContextSourceManager(),
+        tool_set_producer=registered_tool_set_producer_factory(),
+    )
+
+
+@pytest.mark.parametrize("prepared", [
+    {"messages": "not-a-list", "tools": []},
+    {"messages": [], "tools": "not-a-list"},
+])
+def test_prepare_projection_rejects_illegal_structure(bridge, prepared):
+    bridge._prepare = MagicMock(return_value=prepared)
     with pytest.raises(TypeError, match="itemized provider projection 返回结构非法"):
         bridge._prepare_projection(object())
 
 
-def test_prepare_projection_records_capability_loss(monkeypatch: pytest.MonkeyPatch) -> None:
-    """projection 报告 capability losses 时必须带 session/turn/losses 记录日志。"""
-    bridge = _bridge()
-    prepared: dict[str, Any] = {"messages": [], "tools": [], "losses": ["image"]}
-    bridge._prepare = MagicMock(return_value=prepared)  # type: ignore[method-assign]
-    monkeypatch.setattr(itemized_context_middleware, "_runtime_session_id", lambda request: "ses_x")
-    monkeypatch.setattr(itemized_context_middleware, "_request_turn_id", lambda request: "turn_y")
+def test_prepare_projection_records_capability_loss(bridge, monkeypatch):
+    bridge._prepare = MagicMock(return_value={"messages": [], "tools": [], "losses": ["image"], "include_structured_output": False})
+    monkeypatch.setattr(itemized_context_middleware, "_runtime_thread_id", lambda request: "thread-unit")
+    monkeypatch.setattr(itemized_context_middleware, "require_current_execution_admission", lambda **_: SimpleNamespace(job_id="job-unit"))
     warning = MagicMock()
     monkeypatch.setattr(itemized_context_middleware.logger, "warning", warning)
-
     bridge._prepare_projection(object())
-
-    loss_calls = [
-        call
-        for call in warning.call_args_list
-        if call.args[0].startswith("itemized provider projection capability loss")
-    ]
+    loss_calls = [call for call in warning.call_args_list if call.args[0].startswith("itemized provider projection capability loss")]
     assert len(loss_calls) == 1
-    assert loss_calls[0].args[1:] == ("ses_x", "turn_y", ["image"])
+    assert loss_calls[0].args[1:] == ("session-unit", "job-unit", ["image"])
 
 
-def test_prepare_projection_without_losses_skips_loss_log(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """losses 为空时必须短路，不得解析 session/turn，也不得记录 loss 日志。"""
-    bridge = _bridge()
-    bridge._prepare = MagicMock(  # type: ignore[method-assign]
-        return_value={"messages": [], "tools": [], "losses": ()}
-    )
+def test_prepare_projection_without_losses_skips_loss_identity(bridge, monkeypatch):
+    bridge._prepare = MagicMock(return_value={"messages": [], "tools": [], "losses": (), "include_structured_output": False})
 
-    def _fail(request: object) -> str:
+    def fail(**kwargs):
         raise AssertionError("losses 为空时不得解析 capability loss identity")
 
-    monkeypatch.setattr(itemized_context_middleware, "_runtime_session_id", _fail)
-    monkeypatch.setattr(itemized_context_middleware, "_request_turn_id", _fail)
+    monkeypatch.setattr(itemized_context_middleware, "require_current_execution_admission", fail)
     warning = MagicMock()
     monkeypatch.setattr(itemized_context_middleware.logger, "warning", warning)
-
     bridge._prepare_projection(object())
-
-    assert not [
-        call
-        for call in warning.call_args_list
-        if call.args[0].startswith("itemized provider projection capability loss")
-    ]
+    assert not [call for call in warning.call_args_list if call.args[0].startswith("itemized provider projection capability loss")]

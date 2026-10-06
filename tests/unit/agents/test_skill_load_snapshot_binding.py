@@ -12,6 +12,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
+from tests.unit.services.infrastructure.rollout_context.conftest import (
+    source_seal_case as source_seal_case,  # noqa: PLC0414 - 当前测试文件独立正式产物
+)
 
 
 def _revision(content: str) -> str:
@@ -19,12 +22,13 @@ def _revision(content: str) -> str:
 
 
 def _manager_with_binding(
+    source_seal_case=None,
     *,
     name: str = "shared",
     body: str = "gateway body\n",
     display_uri: str = "boxteam://gateway/local/resources/skills/shared/SKILL.md",
 ) -> tuple[ContextSourceManager, SkillCatalogBinding]:
-    manager = ContextSourceManager()
+    manager = source_seal_case.manager() if source_seal_case is not None else ContextSourceManager()
     manager.register(
         ContextSourceDescriptor(
             source_id=f"skill:{name}",
@@ -151,15 +155,15 @@ def test_unknown_name_returns_skill_not_found():
     assert result["error"]["code"] == "skill-not-found"
 
 
-def test_untrack_freezes_original_registration_not_current_catalog():
-    manager, binding = _manager_with_binding()
+def test_untrack_freezes_original_registration_not_current_catalog(source_seal_case):
+    manager, binding = _manager_with_binding(source_seal_case)
     skill_load = create_skill_load_tool(manager)
     assert json.loads(skill_load.invoke({"name": "shared", "mode": "tracked"}))[
         "tracked"
     ] is True
     tracked_batch = manager.prepare_pending()
     assert tracked_batch is not None
-    manager.commit_model_call_pending(tracked_batch)
+    source_seal_case.seal(manager)
 
     # 同名高优先级覆盖:当前 catalog 已指向 workspace entry,untrack 仍冻结原 gateway binding。
     rebound = SkillCatalogBinding(

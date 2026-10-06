@@ -54,8 +54,6 @@ class RolloutSchemaIntrospectionMixin:
         self,
         connection: sqlite3.Connection,
         checkpoint_ns: str,
-        *,
-        allow_migrating: bool = False,
     ) -> RolloutManifest:
         meta_columns = {
             str(row[1])
@@ -84,9 +82,7 @@ class RolloutSchemaIntrospectionMixin:
             row[4], field="database_meta.last_commit_id"
         )
         database_state = strict_text(row[5], field="database_meta.database_state")
-        if database_state != "active" and not (
-            allow_migrating and database_state == "migrating"
-        ):
+        if database_state != "active":
             raise RuntimeError(f"rollout SQLite 状态不可读取: {database_state}")
         if active_branch_id is None:
             raise RuntimeError("database_meta.active_branch_id 缺失")
@@ -224,9 +220,25 @@ class RolloutSchemaIntrospectionMixin:
 
     @staticmethod
     def _validate_schema_state(
-        connection: sqlite3.Connection, *, allow_older_schema: bool = False,
-        pending_retry: tuple[int, int, str, str | None] | None = None,
+        connection: sqlite3.Connection,
     ) -> None:
+        for table in ("item_catalog", "context_contributions", "context_assembly_contributions"):
+            columns = {
+                str(row[1])
+                for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            if "metadata_json" in columns:
+                raise RuntimeError(
+                    "schema-incompatible: 检测到旧实验 v2 metadata 字段形态；"
+                    f"table={table}。原始 JSONL/SQLite 保留，请重建对应 rollout/。"
+                )
+        owner_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(database_meta)")
+        }
+        if "thread_id" not in owner_columns:
+            raise RuntimeError(
+                "schema-incompatible: rollout SQLite 缺少真实 Thread owner；原始 JSONL/SQLite 保留"
+            )
         removed_journal = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'compaction_runs'"
         ).fetchone()
@@ -253,7 +265,7 @@ class RolloutSchemaIntrospectionMixin:
                 "rollout SQLite schema 版本高于当前程序支持范围: "
                 f"database={row[0]}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
             )
-        if schema_version < storage_version.ROLLOUT_SCHEMA_VERSION and not allow_older_schema:
+        if schema_version < storage_version.ROLLOUT_SCHEMA_VERSION:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
                 "旧实验 v2 不支持自动兼容或就地转换，原始 JSONL/SQLite 保留；"
@@ -264,9 +276,7 @@ class RolloutSchemaIntrospectionMixin:
                 "rollout JSONL message format 版本不受支持: "
                 f"database={row[1]}, supported={storage_version.MESSAGE_FORMAT_VERSION}"
             )
-        if pending_retry is not None and not allow_older_schema:
-            raise RuntimeError("schema-upgrade-retry-conflict: 普通 runtime 不允许失败迁移重试")
-        validate_schema_journal(connection, schema_version, pending_retry=pending_retry)
+        validate_schema_journal(connection, schema_version)
 
     @staticmethod
     def _validate_v2_commit_offsets(

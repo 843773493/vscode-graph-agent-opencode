@@ -16,6 +16,8 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
@@ -24,12 +26,15 @@ from app.domain.itemized.records import (
     CanonicalItemRecord,
     TurnScope,
 )
+from app.services.business.session_context_resource import context_assembly_identity
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
-    invoke_native_dispatch,
+    EMPTY_TOOL_SET,
+    dispatch_execution_scope,
+    invoke_provider_dispatch,
     native_http_server,
     seed_dispatch_history,
     seed_dispatch_overlay,
@@ -123,10 +128,14 @@ def browser_runtime(
 def _projection_evidence(saver, session_id, snapshot):
     plan = snapshot.as_sealed_plan()
     history, history_loss = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, plan
+        session_id, saver._storage.main_thread_id(session_id), plan
     )
-    _, langchain_loss = saver.project_context_plan_with_diagnostics(session_id, plan)
-    native = saver.project_context_plan_to_native(session_id, plan)
+    _, langchain_loss = saver.project_context_plan_with_diagnostics(
+        session_id, saver._storage.main_thread_id(session_id), plan
+    )
+    native = saver.project_context_plan_to_native(
+        session_id, saver._storage.main_thread_id(session_id), plan
+    )
     selection = [entry.to_dict() for entry in snapshot.selection]
     assert native["selection"] == selection
     assert tuple(native["losses"]) == langchain_loss == history_loss
@@ -161,136 +170,174 @@ async def browser_source(browser_runtime, native_http_server):
             "/api/v1/sessions", headers=headers, json={"title": "冻结上下文浏览器合同"}
         )
         assert created.status_code == 200, created.text
-        session_id = created.json()["data"]["session_id"]
+        session = created.json()["data"]
+        session_id = session["session_id"]
         other = await client.post(
             "/api/v1/sessions", headers=headers, json={"title": "空会话隔离对照"}
         )
         assert other.status_code == 200, other.text
-        other_id = other.json()["data"]["session_id"]
+        other_session = other.json()["data"]
+        other_id = other_session["session_id"]
     with RolloutCheckpointSaver(context.workspace_root / ".boxteam/sessions") as saver:
         turn_id = seed_dispatch_history(saver, session_id)
         seed_dispatch_overlay(saver, session_id)
-        await invoke_native_dispatch(
-            saver, session_id, turn_id, endpoint, state.api_key
-        )
-        (first,) = saver.list_context_assemblies(session_id)
-        first_evidence = _projection_evidence(saver, session_id, first)
-        assert (
-            state.requests[0]["body"]["input"]
-            == first_evidence["native_request"]["input"]
-        )
-        source_items = saver.read_canonical_items(session_id)
-        final_item = next(
-            item
-            for item in reversed(source_items)
-            if item.semantic_kind == "assistant_output"
-        )
-        saver.append_items(
-            session_id,
-            (
-                CanonicalItemRecord.create(
-                    item_id="browser-opaque",
-                    item_sequence=max(item.item_sequence for item in source_items) + 1,
-                    semantic_kind="reasoning",
-                    payload_kind="opaque",
-                    status="completed",
-                    producer_ref={
-                        "producer_kind": "provider",
-                        "producer_id": "browser-contract",
-                    },
-                    payload={
-                        "encoding": "base64",
-                        "wire_type": "encrypted_reasoning",
-                        "schema_version": "v1",
-                        "value": "c2VjcmV0",
-                        "protection": {"encrypted": True},
-                    },
-                    turn_id=turn_id,
-                    turn_scope="turn_member",
+        await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
+        with dispatch_execution_scope(saver, session_id, turn_id):
+            (first,) = saver.list_context_assemblies(
+                session_id, saver._storage.main_thread_id(session_id)
+            )
+            first_evidence = _projection_evidence(saver, session_id, first)
+            assert (
+                state.requests[0]["body"]["input"]
+                == first_evidence["native_request"]["input"]
+            )
+            source_items = saver.read_canonical_items(session_id)
+            final_item = next(
+                item
+                for item in reversed(source_items)
+                if item.semantic_kind == "assistant_output"
+            )
+            saver.append_items(
+                session_id,
+                (
+                    CanonicalItemRecord.create(
+                        item_id="browser-opaque",
+                        item_sequence=max(item.item_sequence for item in source_items)
+                        + 1,
+                        semantic_kind="reasoning",
+                        payload_kind="opaque",
+                        status="completed",
+                        producer_ref={
+                            "producer_kind": "provider",
+                            "producer_id": "browser-contract",
+                        },
+                        payload={
+                            "encoding": "base64",
+                            "wire_type": "encrypted_reasoning",
+                            "schema_version": "v1",
+                            "value": "c2VjcmV0",
+                            "protection": {"encrypted": True},
+                        },
+                        turn_id=turn_id,
+                        turn_scope="turn_member",
+                    ),
                 ),
-            ),
-        )
-        draft = saver.compose_committed_context_plan(
-            session_id,
-            plan_id=f"browser-{uuid4().hex}",
-            tool_snapshot=(
-                {
-                    "tool_id": "inspect_file",
-                    "name": "inspect_file",
-                    "parameters": {"type": "object", "properties": {}},
+                thread_id=saver._storage.main_thread_id(session_id),
+            )
+            draft = saver.compose_committed_context_plan(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                plan_id=f"browser-{uuid4().hex}",
+                tool_set=ToolSetSnapshot(
+                    selection_revision=sha256_jcs({"inspect_file": True}),
+                    tools=(
+                        {
+                            "tool_id": "inspect_file",
+                            "name": "inspect_file",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    ),
+                ),
+            )
+            canonical = tuple(
+                ref for ref in draft.refs if ref.ref_type == "canonical_item"
+            )
+            requests = tuple(
+                ref for ref in draft.refs if ref.ref_type == "request_only"
+            )
+            plain_body = [{"type": "text", "text": "BROWSER_PRIVATE_REQUEST_BODY"}]
+            plain = ContextRef.request_only_ref(
+                "browser-plain",
+                session_id=session_id,
+                thread_id=draft.thread_id,
+                plan_id=draft.plan_id,
+                content=plain_body,
+                payload_kind="structured_content",
+                source_revision="browser-v1",
+                source_ref="browser-plain-source",
+            )
+            draft = replace(draft, refs=(*reversed(canonical), *requests, plain))
+            draft = register_projection_draft(saver, session_id, draft)
+            execution_id = saver.execution_for_turn(
+                session_id,
+                turn_id=turn_id,
+                thread_id=saver._storage.main_thread_id(session_id),
+            )
+            rich = saver.seal_context_plan(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                draft,
+                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+                turn_id=turn_id,
+                execution_id=execution_id,
+                provider_version="browser-contract",
+                omitted_ref_ids=(canonical[1].ref_id, "a-delta"),
+                request_only_content={plain.ref_id: plain_body},
+            )
+            # 第三个真实封存快照用于通过 UI 翻页找到最早请求。
+            third_plan = saver.compose_committed_context_plan(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                plan_id=f"browser-{uuid4().hex}",
+                tool_set=EMPTY_TOOL_SET,
+            )
+            third_plan = register_projection_draft(saver, session_id, third_plan)
+            saver.seal_context_plan(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                third_plan,
+                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{third_plan.plan_id}",
+                turn_id=turn_id,
+                execution_id=execution_id,
+                provider_version="browser-contract",
+            )
+            rich_evidence = _projection_evidence(saver, session_id, rich)
+            # da9291b 起 completed terminal convergence 要求 final item 与终态指针
+            # 在同一 item-bearing 提交内落地；checkpoint 投影已提交的 canonical item
+            # 不能直接作为 final 指针（其 message identity 属于既有提交）。这里以
+            # 同一正文、全新 identity 新建 final item 收敛。
+            turn_final = CanonicalItemRecord.create(
+                item_id="browser-turn-final",
+                item_sequence=max(item.item_sequence for item in source_items) + 2,
+                semantic_kind=final_item.semantic_kind,
+                payload_kind=final_item.payload_kind,
+                status=final_item.status,
+                producer_ref={
+                    "producer_kind": "provider",
+                    "producer_id": "browser-contract",
                 },
-            ),
-        )
-        canonical = tuple(ref for ref in draft.refs if ref.ref_type == "canonical_item")
-        requests = tuple(ref for ref in draft.refs if ref.ref_type == "request_only")
-        plain_body = [{"type": "text", "text": "BROWSER_PRIVATE_REQUEST_BODY"}]
-        plain = ContextRef.request_only_ref(
-            "browser-plain",
-            session_id=session_id, thread_id="thread-1",
-            plan_id=draft.plan_id,
-            content=plain_body,
-            payload_kind="structured_content",
-            source_revision="browser-v1",
-            source_ref="browser-plain-source",
-        )
-        draft = replace(draft, refs=(*reversed(canonical), *requests, plain))
-        draft = register_projection_draft(saver, session_id, draft)
-        execution_id = saver.execution_for_turn(session_id, turn_id=turn_id)
-        rich = saver.seal_context_plan(
-            session_id,
-            draft,
-            seal_idempotency_key=f"seal:{draft.plan_id}",
-            turn_id=turn_id,
-            execution_id=execution_id,
-            provider_version="browser-contract",
-            omitted_ref_ids=(canonical[1].ref_id, "a-delta"),
-            request_only_content={plain.ref_id: plain_body},
-        )
-        # 第三个真实封存快照用于通过 UI 翻页找到最早请求。
-        third_plan = saver.compose_committed_context_plan(
-            session_id, plan_id=f"browser-{uuid4().hex}"
-        )
-        third_plan = register_projection_draft(saver, session_id, third_plan)
-        saver.seal_context_plan(
-            session_id,
-            third_plan,
-            seal_idempotency_key=f"seal:{third_plan.plan_id}",
-            turn_id=turn_id,
-            execution_id=execution_id,
-            provider_version="browser-contract",
-        )
-        rich_evidence = _projection_evidence(saver, session_id, rich)
-        # da9291b 起 completed terminal convergence 要求 final item 与终态指针
-        # 在同一 item-bearing 提交内落地；checkpoint 投影已提交的 canonical item
-        # 不能直接作为 final 指针（其 message identity 属于既有提交）。这里以
-        # 同一正文、全新 identity 新建 final item 收敛。
-        turn_final = CanonicalItemRecord.create(
-            item_id="browser-turn-final",
-            item_sequence=max(item.item_sequence for item in source_items) + 2,
-            semantic_kind=final_item.semantic_kind,
-            payload_kind=final_item.payload_kind,
-            status=final_item.status,
-            producer_ref={
-                "producer_kind": "provider",
-                "producer_id": "browser-contract",
-            },
-            payload=final_item.payload,
-            projection_identity=ItemProjectionIdentity(projection_message_id="browser-turn-final-message"),
-            turn_id=turn_id,
-            turn_scope=TurnScope.TURN_MEMBER,
-            message_group_id=f"message-{turn_id}-final",
-            wire_role=final_item.wire_role,
-        )
-        saver.converge_execution(
-            session_id,
-            turn_id=turn_id,
-            execution_id=execution_id,
-            outcome="completed",
-            turn_status="completed",
-            items=(turn_final,),
-            final_item_id=turn_final.item_id,
-        )
+                payload=final_item.payload,
+                projection_identity=ItemProjectionIdentity(
+                    projection_message_id="browser-turn-final-message"
+                ),
+                turn_id=turn_id,
+                turn_scope=TurnScope.TURN_MEMBER,
+                message_group_id=f"message-{turn_id}-final",
+                wire_role=final_item.wire_role,
+            )
+            saver.converge_execution(
+                session_id,
+                turn_id=turn_id,
+                execution_id=execution_id,
+                outcome="completed",
+                turn_status="completed",
+                items=(turn_final,),
+                final_item_id=turn_final.item_id,
+                thread_id=saver._storage.main_thread_id(session_id),
+            )
+    first_evidence["assembly_ref"] = context_assembly_identity(
+        session["resource_identity"], first_evidence["assembly_id"]
+    )
+    rich_evidence["assembly_ref"] = context_assembly_identity(
+        session["resource_identity"], rich_evidence["assembly_id"]
+    )
     fixture = {
+        "session_resource": {
+            key: session[key] for key in ("resource_identity", "uri", "scope")
+        },
+        "other_session_resource": {
+            key: other_session[key] for key in ("resource_identity", "uri", "scope")
+        },
         "workspace_id": workspace_id,
         "session_id": session_id,
         "other_session_id": other_id,

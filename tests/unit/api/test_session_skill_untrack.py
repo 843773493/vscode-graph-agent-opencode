@@ -34,8 +34,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
-from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
+from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
 SKILL_NAME = "debugging"
@@ -67,10 +68,7 @@ def session_service(sessions_root: Path, workspace) -> SessionService:
 
 @pytest.fixture()
 def saver(sessions_root: Path) -> RolloutCheckpointSaver:
-    return RolloutCheckpointSaver(
-        sessions_root,
-        storage=RolloutStorage(sessions_root),
-    )
+    return RolloutCheckpointSaver(sessions_root)
 
 
 @pytest.fixture()
@@ -129,7 +127,15 @@ async def _seed_session_with_tracked_skill(
     manager.load_skill(SKILL_NAME, mode="tracked")
     batch = manager.prepare_pending()
     assert batch is not None
-    manager.commit_model_call_pending(batch)
+    accepted = saver.accept_turn(
+        owner.session_id, thread_id=owner.thread_id,
+        accepted_ingress_id="skill-api-ingress",
+        acceptance_idempotency_key="skill-api-accept",
+        job_id="skill-api-job",
+        admission_idempotency_key="skill-api-admission",
+        payload="API untrack 前真实 seal",
+    )
+    SourceSealCase(saver, owner, accepted).seal(manager)
     return session.session_id, owner
 
 
@@ -245,4 +251,3 @@ def test_untrack_api_http_envelope_auth_and_success(
     assert data["error"] is None
     (after,) = saver.load_context_source_control_states(owner)
     assert after.tracking_status == "untracked"
-from tests.unit.core.catalog_workspace_helper import build_catalog_workspace

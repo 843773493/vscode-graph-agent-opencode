@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -12,7 +13,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import ContextContribution, SourceBinding
@@ -34,6 +40,10 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     detail_relative_path,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
+from tests.integration.backend.sessions.itemized_dispatch_helpers import (
+    EMPTY_TOOL_SET,
+    dispatch_execution_scope,
+)
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
 )
@@ -60,14 +70,9 @@ def _manual_fork_journal_fields(
         "checkpoint_ns": "",
         "source_thread_id": storage.main_thread_id(source_session_id),
         "target_thread_id": storage.main_thread_id(target_session_id),
-        "source_snapshot_sha256": sha256_jcs(
-            {
-                "schema": "fork-source-snapshot:test",
-                "source_session_id": source_session_id,
-                "target_session_id": target_session_id,
-                "source_view_id": source_view_id,
-            }
-        ),
+        "source_snapshot_sha256": hashlib.sha256(
+            canonical_json_bytes(artifact_manifest(storage.root(source_session_id)))
+        ).hexdigest(),
     }
 
 
@@ -77,6 +82,14 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
     for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
     with RolloutCheckpointSaver(sessions) as saver:
+        thread = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+        accepted = saver.accept_turn(
+            SOURCE_SESSION_ID, thread_id=thread, accepted_ingress_id="source-user",
+            acceptance_idempotency_key="source-plan-accept", job_id="source-plan-job",
+            admission_idempotency_key="source-plan-admission",
+            payload="source 输入不能文本替换", turn_id="source-turn",
+            root_item_id="item-source-user",
+        )
         checkpoint = empty_checkpoint()
         checkpoint["id"] = "source-checkpoint"
         checkpoint["channel_values"] = {
@@ -90,15 +103,14 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
             ]
         }
         checkpoint["channel_versions"] = {"messages": "1"}
-        saver.put(
-            build_checkpoint_config(SOURCE_SESSION_ID),
-            checkpoint,
-            {"source": "integration"},
-            {"messages": "1"},
-        )
+        with dispatch_execution_scope(saver, SOURCE_SESSION_ID, "source-turn"):
+            saver.put(
+                build_checkpoint_config(thread), checkpoint,
+                {"source": "integration"}, {"messages": "1"},
+            )
         body = [{"type": "text", "text": "source plan 明文不是 identity，必须保持"}]
         saver.register_context_contribution(
-            SOURCE_SESSION_ID,
+            SOURCE_SESSION_ID, thread,
             ContextContribution(
                 contribution_id="source-contribution",
                 source_kind="environment",
@@ -109,19 +121,15 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
             ),
             request_content=body,
         )
+        tools = ({
+            "tool_id": "echo", "name": "echo",
+            "parameters": {
+                "type": "object", "properties": {"source": {"type": "string"}},
+            },
+        },)
         plan = saver.compose_committed_context_plan(
-            SOURCE_SESSION_ID,
-            plan_id="source-plan",
-            tool_snapshot=(
-                {
-                    "tool_id": "echo",
-                    "name": "echo",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"source": {"type": "string"}},
-                    },
-                },
-            ),
+            SOURCE_SESSION_ID, thread, plan_id="source-plan",
+            tool_set=ToolSetSnapshot(selection_revision=sha256_jcs(tools), tools=tools),
         )
         plan = replace(
             plan,
@@ -129,10 +137,10 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
         )
         saver.create_context_plan(SOURCE_SESSION_ID, plan)
         sealed = saver.seal_context_plan(
-            SOURCE_SESSION_ID,
+            SOURCE_SESSION_ID, thread,
             plan,
-            turn_id="source-turn",
-            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, turn_id="source-turn"),
+            wire_profile=None, wire_params=None, turn_id="source-turn",
+            execution_id=accepted["initial_execution_id"],
             provider_version="integration-provider",
             seal_idempotency_key="test_rollout_fork_plans:source-plan:seal",
         )
@@ -145,7 +153,8 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
     source_view = storage.clone_rollout(
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
     )
     fields = _manual_fork_journal_fields(
         storage,
@@ -156,7 +165,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     materialization, fork_id = storage.begin_fork_materialization(**fields)
     storage.commit_fork_materialization(materialization, **fields)
     assert artifact_manifest(source_root) == before
-    with storage._connect(TARGET_SESSION_ID, "", read_only=True) as connection:
+    with storage._connect(storage.main_thread_id(TARGET_SESSION_ID), "", read_only=True, session_id=TARGET_SESSION_ID) as connection:
         target_assembly = connection.execute(
             "SELECT target_local_id FROM fork_identity_mappings WHERE fork_id=? AND entity_type='assembly' AND source_local_id=?",
             (fork_id, sealed.assembly_id),
@@ -167,7 +176,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
         ).fetchone()[0]
     source_root.rename(source_root.with_name("rollout-archived"))
     with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        snapshot = restarted.get_context_assembly(TARGET_SESSION_ID, assembly_id=target_assembly)
+        snapshot = restarted.get_context_assembly(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
         assert snapshot.session_id == TARGET_SESSION_ID
         target_plan = snapshot.as_sealed_plan()
         assert target_plan.plan_id == target_plan_id != sealed.plan_id
@@ -200,7 +209,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
                     f"rollout/context-plan-details/{target_assembly}/{entry.detail_ref.detail_id}"
                 )
         projected, losses = restarted.project_context_plan_with_diagnostics(
-            TARGET_SESSION_ID, target_plan
+            TARGET_SESSION_ID, target_plan.thread_id, target_plan
         )
         assert losses == () or losses == []
         rendered = json.dumps(
@@ -216,7 +225,7 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
         assert {ref.ref_id for ref in target_plan.tool_set_refs}.isdisjoint(
             ref.ref_id for ref in sealed.tool_set_refs
         )
-        native = restarted.project_context_plan_to_native(TARGET_SESSION_ID, target_plan)
+        native = restarted.project_context_plan_to_native(TARGET_SESSION_ID, target_plan.thread_id, target_plan)
         assert native is not None
 
 
@@ -279,8 +288,9 @@ def test_full_copy_rejects_invalid_source_without_rebuilding_it(
     before = artifact_manifest(source_root)
     with pytest.raises((RuntimeError, ValueError)) as error:
         storage.clone_rollout(
-            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
             source_checkpoint_id=None,
         )
     if corruption == "source_schema":
@@ -303,8 +313,9 @@ def test_full_copy_preflight_observes_wal_without_modifying_source(plan_source) 
         before = artifact_manifest(source)
         with pytest.raises(RuntimeError, match="schema-upgrade-required"):
             storage.clone_rollout(
-                source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-                target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+                source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+                target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
                 source_checkpoint_id=None,
             )
         assert artifact_manifest(source) == before
@@ -321,7 +332,8 @@ def test_failed_full_copy_restores_jsonl_and_detail_bytes(
     storage = saver._storage
     source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
     source_view = storage.clone_rollout(
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
     )
     fields = _manual_fork_journal_fields(
         storage,
@@ -355,7 +367,6 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
     with RolloutCheckpointSaver(sessions) as saver:
         storage = saver._storage
         storage.initialize(SOURCE_SESSION_ID)
-        storage.initialize(TARGET_SESSION_ID)
         refs = tuple(
             DetailRef(SOURCE_SESSION_ID, storage.main_thread_id(SOURCE_SESSION_ID), assembly, leaf)
             for assembly, leaf in (
@@ -388,7 +399,17 @@ def typed_detail_mapping_state(request: pytest.FixtureRequest, session_bundle_fa
                     availability="unavailable",
                 )
             )
-        with storage._connect(SOURCE_SESSION_ID, "", read_only=True) as connection:
+        storage.clone_rollout(
+            source_session_id=SOURCE_SESSION_ID,
+            source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
+            target_session_id=TARGET_SESSION_ID,
+            target_thread_id=storage.main_thread_id(TARGET_SESSION_ID),
+            source_checkpoint_id=None,
+        )
+        with storage._connect(
+            storage.main_thread_id(TARGET_SESSION_ID), "",
+            read_only=True, session_id=TARGET_SESSION_ID,
+        ) as connection:
             state = prepare_full_copy_remap(
                 storage,
                 connection,
@@ -484,8 +505,9 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
     session_bundle_factory(storage.sessions_dir, COPY_TARGET_SESSION_ID)
     source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
     source_view = storage.clone_rollout(
+        source_session_id=SOURCE_SESSION_ID,
         source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID),
-        target_thread_id=storage.main_thread_id(COPY_TARGET_SESSION_ID),
+        target_session_id=COPY_TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(COPY_TARGET_SESSION_ID),
         source_checkpoint_id=None,
     )
     fields = _manual_fork_journal_fields(
@@ -532,7 +554,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
         ref_id, plan_id = f"source-extra-ref-{ordinal}", f"source-extra-plan-{ordinal}"
         ref = ContextRef.request_only_ref(
             ref_id,
-            session_id=SOURCE_SESSION_ID, thread_id="thread-1",
+            session_id=SOURCE_SESSION_ID, thread_id=initial.thread_id,
             plan_id=plan_id,
             source_revision="existing-source-revision",
             content=body,
@@ -542,8 +564,8 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             visibility="internal",
         )
         plan = saver.compose_context_plan(
-            session_id=SOURCE_SESSION_ID,
-            plan_id=plan_id,
+            session_id=SOURCE_SESSION_ID, thread_id=initial.thread_id,
+            plan_id=plan_id, tool_set=EMPTY_TOOL_SET,
             refs=(ref,),
             history_view_revision=initial.history_view_revision,
         )
@@ -553,10 +575,10 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
         )
         saver.create_context_plan(SOURCE_SESSION_ID, plan)
         sealed = saver.seal_context_plan(
-            SOURCE_SESSION_ID,
+            SOURCE_SESSION_ID, initial.thread_id,
             plan,
-            turn_id="source-turn",
-            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, turn_id="source-turn"),
+            wire_profile=None, wire_params=None, turn_id="source-turn",
+            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, thread_id=initial.thread_id, turn_id="source-turn"),
             provider_version="integration-provider",
             seal_idempotency_key=f"test_rollout_fork_plans:{plan_id}:seal",
             request_only_content={ref_id: body} if ordinal == 1 else None,
@@ -570,7 +592,8 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
     source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
     source_view = storage.clone_rollout(
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
+        source_session_id=SOURCE_SESSION_ID,
+        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
     )
     fields = _manual_fork_journal_fields(
         storage,
@@ -590,7 +613,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
     assert artifact_manifest(source_root) == before
     source_root.rename(source_root.with_name("rollout-archived"))
     with RolloutCheckpointSaver(storage.sessions_dir) as restarted:
-        target = restarted.get_context_assembly(TARGET_SESSION_ID, assembly_id=target_assembly)
+        target = restarted.get_context_assembly(TARGET_SESSION_ID, storage.main_thread_id(TARGET_SESSION_ID), assembly_id=target_assembly)
         entry = next(
             entry
             for entry in target.selection
@@ -611,7 +634,7 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             == body
         )
         projected, losses = restarted.project_context_plan_with_diagnostics(
-            TARGET_SESSION_ID, target.as_sealed_plan()
+            TARGET_SESSION_ID, target.thread_id, target.as_sealed_plan()
         )
         assert not losses
         assert body[0]["text"] in json.dumps(

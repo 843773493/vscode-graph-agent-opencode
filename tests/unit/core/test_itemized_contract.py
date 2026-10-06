@@ -45,11 +45,9 @@ from app.services.infrastructure.rollout_context.provider.native_request import 
 from app.services.infrastructure.rollout_context.storage.transaction import (
     default_idempotency_key,
 )
+from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.history import project_history_plan
-from app.services.mapping.itemized.langchain import (
-    project_canonical_items,
-    project_context_plan,
-)
+from app.services.mapping.itemized.langchain import project_context_plan
 
 
 def _assistant_tool_item(

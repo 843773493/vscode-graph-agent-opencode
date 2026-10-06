@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.services.infrastructure.rollout_context.storage.catalog.turn_projections import (
     VISIBLE_NORMAL_TURN_PREDICATE,
+    require_context_view_order_integrity,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     ContextTurnItemWindow,
@@ -39,16 +40,7 @@ class InternalExecutionHistoryMixin:
             is None
         ):
             raise KeyError(f"context view 不存在: {view_id}")
-        unknown_membership = connection.execute(
-            "SELECT source_kind FROM context_view_items WHERE view_id = ? "
-            "AND source_kind NOT IN ('canonical', 'display_only') LIMIT 1",
-            (view_id,),
-        ).fetchone()
-        if unknown_membership is not None:
-            raise RuntimeError(
-                "context view item source_kind 未注册: "
-                f"{strict_text(unknown_membership[0], field='context_view_items.source_kind')}"
-            )
+        require_context_view_order_integrity(connection, view_id)
         turn_row = connection.execute(
             "SELECT MAX(cvt.logical_turn_ordinal) "
             "FROM context_view_turns AS cvt "
@@ -285,6 +277,19 @@ class InternalExecutionHistoryMixin:
         ).fetchone()
         if view is None:
             raise KeyError(f"context view 不存在: {view_id}")
+        owner = connection.execute(
+            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
+        ).fetchone()
+        if owner is None:
+            raise RuntimeError("database_meta 缺少 rollout owner")
+        session_id = strict_text(owner[0], field="database_meta.session_id")
+        thread_id = strict_text(owner[1], field="database_meta.thread_id")
+        if session_id != snapshot.session_id or thread_id != snapshot.thread_id:
+            raise RuntimeError(
+                "internal history snapshot owner 不匹配: "
+                f"snapshot=({snapshot.session_id}, {snapshot.thread_id}), "
+                f"database=({session_id}, {thread_id})"
+            )
         if (
             lower_logical_item_ordinal is not None
             and upper_logical_item_ordinal is not None
@@ -293,18 +298,6 @@ class InternalExecutionHistoryMixin:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
         if upper_logical_item_ordinal is None:
             return InternalExecutionHistoryPage(entries=(), has_more=False)
-        owner = connection.execute(
-            "SELECT session_id, thread_id FROM database_meta WHERE singleton_id = 1"
-        ).fetchone()
-        if owner is None:
-            raise RuntimeError("database_meta 缺少 rollout owner")
-        session_id = strict_text(owner[0], field="database_meta.session_id")
-        thread_id = strict_text(owner[1], field="database_meta.thread_id")
-        if thread_id != snapshot.thread_id:
-            raise RuntimeError(
-                "internal history snapshot thread owner 不匹配: "
-                f"snapshot={snapshot.thread_id}, database={thread_id}"
-            )
 
         predicates = [
             "membership.view_id = ?",

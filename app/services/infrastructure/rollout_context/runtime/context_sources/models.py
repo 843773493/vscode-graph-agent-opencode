@@ -219,16 +219,61 @@ class SkillCatalogActivationSnapshot:
                     f"{name!r} != {binding.name!r}"
                 )
 @dataclass(frozen=True, slots=True)
+class ContextSourceSnapshot:
+    """模型调用边界冻结的完整正文；确认时不能读取更新后的 desired。"""
+
+    descriptor: ContextSourceDescriptor
+    revision: str
+    content: str
+    applied_revision: str | None
+    tracked: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, ContextSourceDescriptor):
+            raise TypeError("ContextSourceSnapshot.descriptor 必须是 typed descriptor")
+        if not isinstance(self.revision, str) or not self.revision:
+            raise ValueError("ContextSourceSnapshot.revision 必须是非空字符串")
+        if not isinstance(self.content, str):
+            raise TypeError("ContextSourceSnapshot.content 必须是字符串")
+        if self.applied_revision is not None and (
+            not isinstance(self.applied_revision, str) or not self.applied_revision
+        ):
+            raise ValueError("ContextSourceSnapshot.applied_revision 必须是非空字符串或 None")
+        if not isinstance(self.tracked, bool):
+            raise TypeError("ContextSourceSnapshot.tracked 必须是 boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class PendingContextSourceBatch:
     """一次待提交的来源变更准备结果。
 
     prepare_pending 只读：不推进 applied revision，不改变任何持久状态。
-    原子提交走 commit_model_call_pending：先经唯一 durable 端口逐条持久化
-    提交后控制状态，全部成功后才推进内存 applied、清空 pending 并发布事件；
-    重复提交同一批次复用同一结果。
+    完整正文与 delta 一起冻结；只有 assembly seal 成功后才能确认 applied。
+    sources 还携带已应用来源的完整正文，供真正的新 epoch 编译 root。
     """
 
     deltas: tuple[ContextSourceDelta, ...]
+    sources: tuple[ContextSourceSnapshot, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sources, tuple) or not all(
+            isinstance(source, ContextSourceSnapshot) for source in self.sources
+        ):
+            raise TypeError("PendingContextSourceBatch.sources 必须是 typed tuple")
+        by_id = {source.descriptor.source_id: source for source in self.sources}
+        if len(by_id) != len(self.sources):
+            raise ValueError("冻结 source snapshot 的 source_id 必须唯一")
+        seen: set[str] = set()
+        for delta in self.deltas:
+            source = by_id.get(delta.source_id)
+            if source is None or delta.source_id in seen or (
+                delta.revision != source.revision
+                or delta.previous_revision != source.applied_revision
+                or delta.source_kind != source.descriptor.source_kind
+                or delta.source_name != source.descriptor.name
+            ):
+                raise ValueError("冻结 delta 与完整 source snapshot 不一致")
+            seen.add(delta.source_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,9 +281,10 @@ class CommittedContextSourceBatch:
     """一次 model_call pending 提交的结果；重复提交复用同一结果对象。"""
 
     deltas: tuple[ContextSourceDelta, ...]
+    assembly_id: str
 
 __all__ = [
-    "CommittedContextSourceBatch", "ContextSourceDelta", "ContextSourceDescriptor",
+    "CommittedContextSourceBatch", "ContextSourceDelta", "ContextSourceDescriptor", "ContextSourceSnapshot",
     "ContextSourceTrackingStateConflict", "PendingContextSourceBatch",
     "PendingSourceObservation", "SkillCatalogActivationSnapshot",
     "SkillCatalogBinding", "SkillCatalogSnapshotConflict",

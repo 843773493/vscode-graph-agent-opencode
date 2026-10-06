@@ -11,9 +11,15 @@ from uuid import uuid4
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
+from app.services.business.session_context_resource import (
+    context_assembly_identity,
+    session_resource_uri,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -22,7 +28,9 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     detail_relative_path,
 )
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
-    invoke_native_dispatch,
+    EMPTY_TOOL_SET,
+    dispatch_execution_scope,
+    invoke_provider_dispatch,
     native_http_server,
     seed_dispatch_history,
     seed_dispatch_overlay,
@@ -30,6 +38,7 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
 from tests.integration.backend.sessions.itemized_projection_helpers import (
     register_projection_draft,
 )
+from tests.support.process_scope import unregister_test_process
 from tests.support.processes import close_backend_process, start_backend_process
 
 __all__ = ["native_http_server"]
@@ -67,16 +76,23 @@ async def context_source(integration_client, integration_workspace_root_path):
         "/api/v1/sessions", json={"title": "assembly inspection contract"}
     )
     assert response.status_code == 200, response.text
-    session_id = response.json()["data"]["session_id"]
+    session = response.json()["data"]
+    session_id = session["session_id"]
     sessions = Path(integration_workspace_root_path) / ".boxteam/sessions"
     with RolloutCheckpointSaver(sessions) as saver:
         turn_id = seed_dispatch_history(saver, session_id)
         seed_dispatch_overlay(saver, session_id)
-        yield saver, session_id, turn_id
+        with dispatch_execution_scope(saver, session_id, turn_id):
+            yield saver, session, turn_id
 
 
-def _resource(session_id, snapshot):
-    return f"boxteam://session/{session_id}#assembly={snapshot.assembly_id}"
+def _resource(session, snapshot=None):
+    resource = {key: session[key] for key in ("resource_identity", "uri", "scope")}
+    if snapshot is not None:
+        resource["assembly_ref"] = context_assembly_identity(
+            session["resource_identity"], snapshot.assembly_id
+        )
+    return resource
 
 
 async def _read_pages(client, resource, artifacts, *, max_chars=12000, limit=2):
@@ -89,7 +105,7 @@ async def _read_pages(client, resource, artifacts, *, max_chars=12000, limit=2):
         response = await client.post(
             "/api/v1/context/read",
             json={
-                "resource": resource,
+                **resource,
                 "view": "assembly",
                 "limit": limit,
                 "max_chars": max_chars,
@@ -101,6 +117,7 @@ async def _read_pages(client, resource, artifacts, *, max_chars=12000, limit=2):
         envelope = response.json()
         assert envelope["request_id"] == response.headers["X-Request-ID"]
         page = envelope["data"]
+        assert {key: page[key] for key in resource} == resource
         assert page["returned_chars"] <= max_chars
         assert (
             len(SessionContextReadResultDTO.model_validate(page).model_dump_json())
@@ -139,7 +156,7 @@ def _assert_snapshot(items, snapshot, saver, session_id):
     assert selection == [entry.to_dict() for entry in snapshot.selection]
     assert [entry["plan_ordinal"] for entry in selection] == list(range(len(selection)))
     history, loss = saver.project_context_plan_to_history_with_diagnostics(
-        session_id, snapshot.as_sealed_plan()
+        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
     messages = [item for item in items if item["kind"] == "message"]
     assert [item["data"]["message_id"] for item in messages] == [
@@ -170,16 +187,21 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     native_http_server,
     context_backend,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, endpoint = native_http_server
-    await invoke_native_dispatch(saver, session_id, turn_id, endpoint, state.api_key)
-    (snapshot,) = saver.list_context_assemblies(session_id)
-    resource = _resource(session_id, snapshot)
+    await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
+    (snapshot,) = saver.list_context_assemblies(
+        session_id, saver._storage.main_thread_id(session_id)
+    )
+    resource = _resource(session, snapshot)
     items, pages = await _read_pages(integration_client, resource, state.artifacts)
     messages = _assert_snapshot(items, snapshot, saver, session_id)
     assert len(pages) > 1
     assert "native-http-result" not in json.dumps(messages)
-    native = saver.project_context_plan_to_native(session_id, snapshot.as_sealed_plan())
+    native = saver.project_context_plan_to_native(
+        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+    )
     assert state.requests[0]["body"]["input"] == native["request"]["input"]
     assert native["selection"] == [entry.to_dict() for entry in snapshot.selection]
     assert state.requests[0]["authorization"] == f"Bearer {state.api_key}"
@@ -189,7 +211,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     for path, payload in (
         (
             "/api/v1/context/read",
-            {"resource": f"boxteam://session/{session_id}", "view": "messages"},
+            {**_resource(session), "view": "messages"},
         ),
         (
             f"/api/v1/sessions/{session_id}/history",
@@ -210,6 +232,8 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
         port=previous_handle.port,
         log_name="itemized-context-api-restarted",
     )
+    # 新进程归模块fixture持有；不能让首个用例的function scope提前回收它。
+    unregister_test_process(context_backend[0])
     assert context_backend[0].process.pid != previous_pid
     (state.artifacts / "backend-restart.json").write_text(
         json.dumps(
@@ -218,7 +242,7 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
                 "after_pid": context_backend[0].process.pid,
                 "port": previous_handle.port,
                 "workspace": previous_handle.workspace_root,
-                "resource": resource,
+                **resource,
             },
             ensure_ascii=False,
             indent=2,
@@ -232,29 +256,31 @@ async def test_frozen_selection_http_and_active_history_survive_backend_restart(
     assert restored_pages[0]["revision"] == pages[0]["revision"]
 
     # 新 request 使 history revision 前进，旧 assembly 的分页游标仍绑定旧快照。
-    await invoke_native_dispatch(saver, session_id, turn_id, endpoint, state.api_key)
+    await invoke_provider_dispatch(saver, session_id, turn_id, endpoint, state.api_key, target_format="responses")
     second = next(
         value
-        for value in saver.list_context_assemblies(session_id)
+        for value in saver.list_context_assemblies(
+            session_id, saver._storage.main_thread_id(session_id)
+        )
         if value.assembly_id != snapshot.assembly_id
     )
     assert second.history_view_revision > snapshot.history_view_revision
     response = await integration_client.post(
         "/api/v1/context/read",
         json={
-            "resource": resource,
+            **resource,
             "view": "assembly",
             "limit": 2,
             "include": ["visible_text", "tool_summary"],
             "max_chars": 12000,
             "cursor": pages[0]["next_cursor"],
-            "expected_revision": pages[0]["revision"],
+            "revision": pages[0]["revision"],
         },
     )
     assert response.status_code == 200, response.text
     assert response.json()["data"] == pages[1]
     current, _ = await _read_pages(
-        integration_client, _resource(session_id, second), state.artifacts
+        integration_client, _resource(session, second), state.artifacts
     )
     _assert_snapshot(current, second, saver, session_id)
     assert "native-http-result" in json.dumps(current)
@@ -270,17 +296,22 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     native_http_server,
     omission,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, _ = native_http_server
     draft = saver.compose_committed_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan_id=f"api-plan-{uuid4().hex}",
-        tool_snapshot=(
-            {
-                "tool_id": "inspect_file",
-                "name": "inspect_file",
-                "parameters": {"type": "object", "properties": {}},
-            },
+        tool_set=ToolSetSnapshot(
+            selection_revision=sha256_jcs({"inspect_file": True}),
+            tools=(
+                {
+                    "tool_id": "inspect_file",
+                    "name": "inspect_file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ),
         ),
     )
     canonical = [ref for ref in draft.refs if ref.ref_type == "canonical_item"]
@@ -288,7 +319,8 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     plain_body = [{"type": "text", "text": "private request-only API body"}]
     plain = ContextRef.request_only_ref(
         "plain-api",
-        session_id=session_id, thread_id="thread-1",
+        session_id=session_id,
+        thread_id=draft.thread_id,
         plan_id=draft.plan_id,
         source_revision="api-v1",
         source_ref="source:plain-api",
@@ -304,16 +336,21 @@ async def test_http_selection_preserves_order_omission_toolset_and_typed_details
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="api-contract",
         omitted_ref_ids=omitted,
         request_only_content={"plain-api": plain_body},
     )
     items, _ = await _read_pages(
-        integration_client, _resource(session_id, snapshot), state.artifacts
+        integration_client, _resource(session, snapshot), state.artifacts
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     assert [
@@ -348,55 +385,61 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
     integration_client,
     native_http_server,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, _ = native_http_server
     snapshots = []
     for _ in range(2):
         plan = saver.compose_committed_context_plan(
-            session_id, plan_id=f"api-{uuid4().hex}"
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            plan_id=f"api-{uuid4().hex}",
+            tool_set=EMPTY_TOOL_SET,
         )
         plan = register_projection_draft(saver, session_id, plan)
         snapshots.append(
             saver.seal_context_plan(
                 session_id,
+                saver._storage.main_thread_id(session_id),
                 plan,
-                seal_idempotency_key=f"seal:{plan.plan_id}",
+                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
                 turn_id=turn_id,
-                execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+                execution_id=saver.execution_for_turn(
+                    session_id,
+                    turn_id=turn_id,
+                    thread_id=saver._storage.main_thread_id(session_id),
+                ),
                 provider_version="api-contract",
             )
         )
-    resource = _resource(session_id, snapshots[0])
+    resource = _resource(session, snapshots[0])
     _, pages = await _read_pages(integration_client, resource, state.artifacts)
     other = await integration_client.post(
         "/api/v1/sessions", json={"title": "other owner"}
     )
     assert other.status_code == 200, other.text
     other_id = other.json()["data"]["session_id"]
-    base = {"resource": resource, "view": "assembly"}
+    base = {**resource, "view": "assembly"}
     cases = [
         ({"view": "messages"}, 400),
-        ({"resource": f"boxteam://session/{session_id}"}, 400),
-        ({"resource": f"boxteam://session/{session_id}#assembly="}, 400),
-        ({"resource": f"boxteam://session/{session_id}#assembly=bad/path"}, 400),
-        ({"resource": f"boxteam://session/{session_id}#assembly=missing"}, 404),
-        ({"resource": _resource(other_id, snapshots[0])}, 404),
+        ({"assembly_ref": None}, 400),
+        ({"assembly_ref": ""}, 422),
+        ({"assembly_ref": "bad/path"}, 422),
         (
             {
-                "resource": f"boxteam://workspace/wrong/session/{session_id}#assembly={snapshots[0].assembly_id}"
+                "assembly_ref": context_assembly_identity(
+                    session["resource_identity"], "missing"
+                )
             },
-            400,
+            404,
         ),
-        ({"expected_revision": "stale"}, 409),
+        (_resource(other.json()["data"], snapshots[0]), 404),
+        ({"uri": session_resource_uri("wrong", session_id)}, 400),
+        ({"uri": session["uri"] + "#assembly=private-selector"}, 400),
+        ({"revision": "stale"}, 409),
         ({"cursor": "invalid-base64"}, 400),
         ({"cursor": pages[0]["next_cursor"], "include": ["reasoning"]}, 409),
-        (
-            {
-                "cursor": pages[0]["next_cursor"],
-                "resource": _resource(session_id, snapshots[1]),
-            },
-            409,
-        ),
+        ({"cursor": pages[0]["next_cursor"], **_resource(session, snapshots[1])}, 409),
     ]
     errors = []
     for overrides, status in cases:
@@ -415,8 +458,13 @@ async def test_context_http_rejects_invalid_selectors_and_cross_owner_cursors(
     (state.artifacts / "context-errors.json").write_text(
         json.dumps(errors, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    assert saver.list_context_assemblies(session_id) == tuple(snapshots)
-    assert saver.list_context_assemblies(other_id) == ()
+    assert saver.list_context_assemblies(
+        session_id, saver._storage.main_thread_id(session_id)
+    ) == tuple(snapshots)
+    assert (
+        saver.list_context_assemblies(other_id, saver._storage.main_thread_id(other_id))
+        == ()
+    )
 
 
 @pytest.mark.asyncio
@@ -425,23 +473,32 @@ async def test_context_http_selection_chunks_are_bounded_and_lossless(
     integration_client,
     native_http_server,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
-        session_id, plan_id=f"api-{uuid4().hex}"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id=f"api-{uuid4().hex}",
+        tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan,
-        seal_idempotency_key=f"seal:{plan.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="api-contract",
     )
     items, pages = await _read_pages(
         integration_client,
-        _resource(session_id, snapshot),
+        _resource(session, snapshot),
         state.artifacts,
         max_chars=2400,
         limit=1,
@@ -458,7 +515,8 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
     integration_client,
     native_http_server,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, _ = native_http_server
     opaque = CanonicalItemRecord.create(
         item_id="api-opaque",
@@ -477,27 +535,39 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
         turn_id=turn_id,
         turn_scope="turn_member",
     )
-    saver.append_items(session_id, (opaque,))
+    saver.append_items(
+        session_id, (opaque,), thread_id=saver._storage.main_thread_id(session_id)
+    )
     plan = saver.compose_committed_context_plan(
-        session_id, plan_id=f"api-{uuid4().hex}"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id=f"api-{uuid4().hex}",
+        tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan,
-        seal_idempotency_key=f"seal:{plan.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="api-contract",
     )
     items, _ = await _read_pages(
-        integration_client, _resource(session_id, snapshot), state.artifacts
+        integration_client, _resource(session, snapshot), state.artifacts
     )
     _assert_snapshot(items, snapshot, saver, session_id)
     _, langchain_losses = saver.project_context_plan_with_diagnostics(
-        session_id, snapshot.as_sealed_plan()
+        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
     )
-    native = saver.project_context_plan_to_native(session_id, snapshot.as_sealed_plan())
+    native = saver.project_context_plan_to_native(
+        session_id, saver._storage.main_thread_id(session_id), snapshot.as_sealed_plan()
+    )
     losses = [
         item["data"]["loss"]
         for item in items
@@ -514,7 +584,7 @@ async def test_context_http_reports_protected_reasoning_capability_loss(
     response = await integration_client.post(
         "/api/v1/context/read",
         json={
-            "resource": _resource(session_id, snapshot),
+            **_resource(session, snapshot),
             "view": "assembly",
             "include": ["visible_text", "reasoning", "raw_record"],
             "limit": 200,
@@ -531,35 +601,50 @@ async def test_context_http_reads_selection_without_request_source_body(
     integration_workspace_root_path,
     native_http_server,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     state, _ = native_http_server
     plan = saver.compose_committed_context_plan(
-        session_id, plan_id=f"api-{uuid4().hex}"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id=f"api-{uuid4().hex}",
+        tool_set=EMPTY_TOOL_SET,
     )
     plan = register_projection_draft(saver, session_id, plan)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan,
-        seal_idempotency_key=f"seal:{plan.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="api-contract",
     )
     source = next(
         entry for entry in snapshot.selection if entry.base_delta_role == "base"
     )
     sessions = Path(integration_workspace_root_path) / ".boxteam/sessions"
-    session = get_session_path_resolver(sessions).resolve_session_node(session_id)
-    path = session / detail_relative_path(source.detail_ref)
+    thread_root = get_session_path_resolver(sessions).resolve_thread_node(
+        session_id, source.detail_ref.thread_id
+    )
+    path = thread_root / detail_relative_path(source.detail_ref)
     retained = state.artifacts / f"retained-{source.detail_ref.detail_id}"
     path.rename(retained)
     try:
         items, _ = await _read_pages(
-            integration_client, _resource(session_id, snapshot), state.artifacts
+            integration_client, _resource(session, snapshot), state.artifacts
         )
         _assert_snapshot(items, snapshot, saver, session_id)
         with pytest.raises(DetailUnavailableError) as failure:
-            saver.project_context_plan_to_native(session_id, snapshot.as_sealed_plan())
+            saver.project_context_plan_to_native(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                snapshot.as_sealed_plan(),
+            )
         assert isinstance(failure.value.__cause__, FileNotFoundError)
     finally:
         retained.rename(path)
@@ -570,30 +655,42 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
     context_source,
     integration_client,
 ):
-    saver, session_id, turn_id = context_source
+    saver, session, turn_id = context_source
+    session_id = session["session_id"]
     snapshots = []
     for _ in range(3):
         plan = saver.compose_committed_context_plan(
-            session_id, plan_id=f"list-{uuid4().hex}"
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            plan_id=f"list-{uuid4().hex}",
+            tool_set=EMPTY_TOOL_SET,
         )
         plan = register_projection_draft(saver, session_id, plan)
         snapshots.append(
             saver.seal_context_plan(
                 session_id,
+                saver._storage.main_thread_id(session_id),
                 plan,
-                seal_idempotency_key=f"seal:{plan.plan_id}",
+                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{plan.plan_id}",
                 turn_id=turn_id,
-                execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+                execution_id=saver.execution_for_turn(
+                    session_id,
+                    turn_id=turn_id,
+                    thread_id=saver._storage.main_thread_id(session_id),
+                ),
                 provider_version="api-list-contract",
             )
         )
     # 未封存 draft 不能进入 UI 的请求列表。
     draft = saver.compose_committed_context_plan(
-        session_id, plan_id=f"draft-{uuid4().hex}"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id=f"draft-{uuid4().hex}",
+        tool_set=EMPTY_TOOL_SET,
     )
     draft = register_projection_draft(saver, session_id, draft)
     request = {
-        "resource": f"boxteam://session/{session_id}",
+        **_resource(session),
         "view": "assemblies",
         "limit": 2,
     }
@@ -617,10 +714,15 @@ async def test_context_http_discovers_only_sealed_assemblies_and_binds_list_curs
     assert draft.plan_id not in json.dumps([first, last])
     saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id=turn_id,
-        execution_id=saver.execution_for_turn(session_id, turn_id=turn_id),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id=turn_id,
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="api-list-contract",
     )
     changed = await integration_client.post(

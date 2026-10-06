@@ -1,4 +1,4 @@
-"""正式 fresh schema4 的 Saver seal 生命周期；不安装手工 DDL、不伪造 draft。"""
+"""正式 fresh schema10 的 Saver seal 生命周期；不安装手工 DDL、不伪造 draft。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,15 @@ from dataclasses import replace
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
     sha256_jcs,
 )
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan, SourceBinding
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -20,8 +24,15 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+    ContextSourceManager,
+)
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
-    invoke_native_dispatch,
+    invoke_provider_dispatch,
     native_http_server,
     seed_dispatch_overlay,
 )
@@ -33,6 +44,35 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - fixture 按 request.node.path 隔离
 )
+
+EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
+@pytest.fixture(autouse=True)
+def execution_scope(registry_db):
+    saver, session, _connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    admission = saver.execution_admission(
+        session,
+        thread_id=thread,
+        execution_id=accepted["initial_execution_id"],
+    )
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session, thread), langgraph_thread_id=thread
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        yield
+
+
+@pytest.fixture
+def source_manager(registry_db):
+    saver, session, _connection, _accepted = registry_db
+    return ContextSourceManager(
+        owner=ContextSourceOwnerKey(session, saver._storage.main_thread_id(session)),
+        control_state_port=saver,
+    )
 
 
 def _state(saver, session, connection):
@@ -50,7 +90,9 @@ def _seal(saver, session, plan, accepted, **changes):
         "seal_idempotency_key": "schema4-seal",
     }
     options.update(changes)
-    return saver.seal_context_plan(session, plan, **options)
+    return saver.seal_context_plan(
+        session, saver._storage.main_thread_id(session), plan, wire_profile=None, wire_params=None, **options
+    )
 
 
 def _no_allocation(*_args, **_kwargs):
@@ -78,7 +120,9 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
         draft.contributions[0],
         contribution_id="overlay:logical-overlay:base",
         contribution_kind="overlay_base",
-        content_hash=contribution_content_hash("overlay_base", draft.contributions[0].body),
+        content_hash=contribution_content_hash(
+            "overlay_base", draft.contributions[0].body
+        ),
         source_binding=SourceBinding(
             source_ref="source-A",
             overlay_ref="selection-overlay-base",
@@ -107,6 +151,7 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
             plan_id=draft.plan_id,
             refs=(ref,),
             source_overlay_epoch=1,
+            tool_set=EMPTY_TOOL_SET,
         ),
         plan_creation_idempotency_key="overlay-source-create",
     )
@@ -144,7 +189,7 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
         session,
         plan.thread_id,
         registered.draft,
-        turn_id=accepted["turn_id"],
+        wire_profile=None, wire_params=None, turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         provider_version="source-binding-provider",
         seal_idempotency_key="overlay-source-seal",
@@ -152,10 +197,15 @@ def test_overlay_source_binding_matches_before_real_plan_seal_writes(
     assert snapshot.selection[0].ref.ref_id == "selection-overlay-base"
     assert snapshot.selection[0].ref.source_ref == "source-A"
     assert snapshot.contributions[0].source_binding == contribution.source_binding
-    assert connection.execute("SELECT COUNT(*) FROM context_assemblies").fetchone() == (1,)
-    assert saver.get_context_plan_registration(
-        session, thread_id=plan.thread_id, plan_id=plan.plan_id
-    ).plan_state == "sealed"
+    assert connection.execute("SELECT COUNT(*) FROM context_assemblies").fetchone() == (
+        1,
+    )
+    assert (
+        saver.get_context_plan_registration(
+            session, thread_id=plan.thread_id, plan_id=plan.plan_id
+        ).plan_state
+        == "sealed"
+    )
     assert saver._storage.jsonl_path(session).read_bytes() == before[0]
 
 
@@ -168,7 +218,9 @@ def test_seal_restart_and_retry_reuse_committed_identity(
     snapshot = _seal(
         saver, session, registered.draft, accepted, omitted_ref_ids=omitted
     )
-    sealed = saver.get_context_plan_registration(session, plan_id=draft.plan_id)
+    sealed = saver.get_context_plan_registration(
+        session, plan_id=draft.plan_id, thread_id=saver._storage.main_thread_id(session)
+    )
     assert sealed.plan_state == "sealed" and sealed.seal_input_hash
     assert sealed.registration_origin == "runtime"
     assert snapshot.plan_id == draft.plan_id
@@ -180,7 +232,9 @@ def test_seal_restart_and_retry_reuse_committed_identity(
             _no_allocation,
         )
         restored = restarted.get_context_plan_registration(
-            session, plan_id=draft.plan_id
+            session,
+            plan_id=draft.plan_id,
+            thread_id=restarted._storage.main_thread_id(session),
         )
         retry = _seal(
             restarted, session, restored.draft, accepted, omitted_ref_ids=omitted
@@ -204,7 +258,7 @@ def test_seal_restart_and_retry_reuse_committed_identity(
     ],
 )
 def test_retry_input_conflict_precedes_random_allocation(
-    registry_db, draft, monkeypatch, change
+    registry_db, draft, monkeypatch, change, source_manager
 ):
     saver, session, connection, accepted = registry_db
     plan = saver.create_context_plan(session, draft).draft
@@ -234,7 +288,9 @@ def test_failure_records_control_and_keeps_draft_correctable(
     monkeypatch.setattr(saver._storage, "seal_context_assembly", reject)
     with pytest.raises(RuntimeError, match="injected before commit"):
         _seal(saver, session, plan, accepted)
-    registration = saver.get_context_plan_registration(session, plan_id=plan.plan_id)
+    registration = saver.get_context_plan_registration(
+        session, plan_id=plan.plan_id, thread_id=saver._storage.main_thread_id(session)
+    )
     assert (
         registration.plan_state == "unsealed" and registration.seal_input_hash is None
     )
@@ -268,15 +324,23 @@ def test_lost_response_never_removes_committed_source_detail(
     )
     with pytest.raises(RuntimeError, match="injected lost response"):
         _seal(saver, session, plan, accepted)
-    registration = saver.get_context_plan_registration(session, plan_id=plan.plan_id)
+    registration = saver.get_context_plan_registration(
+        session, plan_id=plan.plan_id, thread_id=saver._storage.main_thread_id(session)
+    )
     assert registration.plan_state == "sealed"
     assert connection.execute(
         "SELECT count(*) FROM context_plan_seal_failures"
     ).fetchone() == (0,)
-    snapshot = saver.get_context_assembly(session, assembly_id=registration.assembly_id)
+    snapshot = saver.get_context_assembly(
+        session,
+        saver._storage.main_thread_id(session),
+        assembly_id=registration.assembly_id,
+    )
     detail = next(entry.detail_ref for entry in snapshot.selection if entry.detail_ref)
     assert (
-        saver.read_context_plan_detail(session, detail_ref=detail)["detail"]
+        saver.read_context_plan_detail(
+            session, saver._storage.main_thread_id(session), detail_ref=detail
+        )["detail"]
         == draft.contributions[0].body
     )
     before = _state(saver, session, connection)
@@ -286,23 +350,33 @@ def test_lost_response_never_removes_committed_source_detail(
 
 
 def test_prepare_registers_final_filter_and_restarts_without_recompose(
-    registry_db, draft, monkeypatch
+    frozen_provider_wire, registry_db, draft, monkeypatch, source_manager
 ):
     saver, session, connection, accepted = registry_db
     saver.register_context_contribution(
-        session, draft.contributions[0], request_content=draft.contributions[0].body
+        session,
+        saver._storage.main_thread_id(session),
+        draft.contributions[0],
+        request_content=draft.contributions[0].body,
     )
     seed_dispatch_overlay(saver, session)
     options = {
         "turn_id": accepted["turn_id"],
-        "provider_version": "prepare-provider",
-        "target_format": "responses",
+        "execution_id": accepted["initial_execution_id"],
+        "context_source_manager": source_manager,
+        "tool_set_supplier": lambda: EMPTY_TOOL_SET,
+        **frozen_provider_wire("prepare-provider", "responses"),
+
         "plan_creation_idempotency_key": "prepare-create",
         "seal_idempotency_key": "prepare-seal",
     }
-    first = saver.prepare_context_for_provider(session, **options)
+    first = saver.prepare_context_for_provider(
+        session, saver._storage.main_thread_id(session), **options
+    )
     plan = first["plan"]
-    registered = saver.get_context_plan_registration(session, plan_id=plan.plan_id)
+    registered = saver.get_context_plan_registration(
+        session, plan_id=plan.plan_id, thread_id=saver._storage.main_thread_id(session)
+    )
     assert {item.contribution_kind for item in registered.draft.contributions} == {
         "overlay_base",
         "overlay_delta",
@@ -326,35 +400,49 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(
                 turn_scope="turn_member",
             ),
         ),
+        thread_id=saver._storage.main_thread_id(session),
     )
     before = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
         monkeypatch.setattr(restarted, "compose_committed_context_plan", _no_allocation)
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
-        retry = restarted.prepare_context_for_provider(session, **options)
+        retry = restarted.prepare_context_for_provider(
+            session, restarted._storage.main_thread_id(session), **options
+        )
         assert retry["assembly_id"] == first["assembly_id"]
         assert retry["plan"].selection == plan.selection
     assert _state(saver, session, connection) == before
 
 
-def test_dispatch_model_call_identity_reuses_registered_source(
-    registry_db, monkeypatch
+def test_dispatch_attempt_identity_reuses_registered_source(
+    frozen_provider_wire, registry_db,
+    monkeypatch,
+    source_manager,
 ):
     saver, session, connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
     options = {
         "turn_id": accepted["turn_id"],
         "execution_id": accepted["initial_execution_id"],
-        "model_call_id": "schema4-call",
-        "provider_version": "schema4-provider",
+        **frozen_provider_wire("schema4-provider", "responses"),
+
+        "context_source_manager": source_manager,
+        "tool_set_supplier": lambda: EMPTY_TOOL_SET,
+        "plan_creation_idempotency_key": "schema4-call:create",
+        "seal_idempotency_key": "schema4-call:seal",
     }
-    first = saver.seal_context_for_dispatch(session, **options)
+    first = saver.prepare_context_for_provider(session, thread, **options)
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver, "compose_committed_context_plan", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
-    assert saver.seal_context_for_dispatch(session, **options) == first
+    retry = saver.prepare_context_for_provider(session, thread, **options)
+    assert retry["assembly_id"] == first["assembly_id"]
+    assert retry["plan"].selection == first["plan"].selection
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
-        saver.seal_context_for_dispatch(
-            session, **{**options, "provider_version": "changed"}
+        saver.prepare_context_for_provider(
+            session,
+            thread,
+            **{**options, **frozen_provider_wire("changed", "responses")},
         )
     assert _state(saver, session, connection) == before
 
@@ -366,6 +454,7 @@ def test_low_level_header_detail_retry_does_not_allocate(registry_db, monkeypatc
         plan_id="header-plan",
         refs=(),
         plan_creation_idempotency_key="header-create",
+        thread_id=saver._storage.main_thread_id(session),
     )
     plan = saver.create_context_plan(session, plan).draft
     snapshot = ContextPlanComposer().assembly(
@@ -375,6 +464,7 @@ def test_low_level_header_detail_retry_does_not_allocate(registry_db, monkeypatc
         turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         provider_version="header-provider",
+        thread_id=saver._storage.main_thread_id(session),
     )
     options = {
         "seal_idempotency_key": "header-seal",
@@ -382,13 +472,23 @@ def test_low_level_header_detail_retry_does_not_allocate(registry_db, monkeypatc
         "detail": {"audit": "body"},
         "required_detail": True,
     }
-    commit = saver.seal_context_assembly(snapshot, **options)
+    commit = saver.seal_context_assembly(
+        session, saver._storage.main_thread_id(session), snapshot, **options
+    )
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
-    assert saver.seal_context_assembly(snapshot, **options) == commit
+    assert (
+        saver.seal_context_assembly(
+            session, saver._storage.main_thread_id(session), snapshot, **options
+        )
+        == commit
+    )
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
         saver.seal_context_assembly(
-            snapshot, **{**options, "detail": {"audit": "changed"}}
+            session,
+            saver._storage.main_thread_id(session),
+            snapshot,
+            **{**options, "detail": {"audit": "changed"}},
         )
     assert _state(saver, session, connection) == before
 
@@ -407,52 +507,126 @@ def test_changed_registered_manifest_cannot_reuse_seal(registry_db, draft):
 
 
 @pytest.mark.parametrize(
-    "change", ["messages", "prompt", "tools", "provider", "target"]
+    "change", ["messages", "turn", "execution", "provider", "target"]
 )
 def test_prepare_rejects_different_input_without_source_side_effects(
-    registry_db, draft, monkeypatch, change
+    frozen_provider_wire, registry_db, draft, monkeypatch, change, source_manager
 ):
     saver, session, connection, accepted = registry_db
     options = {
         "turn_id": accepted["turn_id"],
-        "provider_version": "prepare-provider",
-        "target_format": "responses",
+        "execution_id": accepted["initial_execution_id"],
+        "context_source_manager": source_manager,
+        "tool_set_supplier": lambda: EMPTY_TOOL_SET,
+        **frozen_provider_wire("prepare-provider", "responses"),
+
         "plan_creation_idempotency_key": "prepare-input",
         "seal_idempotency_key": "prepare-input-seal",
     }
-    saver.prepare_context_for_provider(session, **options)
+    saver.prepare_context_for_provider(
+        session, saver._storage.main_thread_id(session), **options
+    )
     if change == "messages":
         options["request_messages"] = (HumanMessage(content="changed", id="changed"),)
-    elif change == "prompt":
-        options["prompt_contributions"] = draft.contributions
-    elif change == "tools":
-        options["tool_snapshot"] = draft.tool_set_refs[0].tools
+    elif change == "turn":
+        options["turn_id"] = "different-turn"
+    elif change == "execution":
+        options["execution_id"] = "different-execution"
     elif change == "provider":
-        options["provider_version"] = "changed"
+        options.update(frozen_provider_wire("changed", "responses"))
     else:
-        options["target_format"] = "chat_completions"
+        options.update(frozen_provider_wire("prepare-provider", "chat_completions"))
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver, "compose_committed_context_plan", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
-    with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
-        saver.prepare_context_for_provider(session, **options)
+    with pytest.raises(
+        (RuntimeError, ValueError), match="admission|assembly-idempotency-conflict"
+    ):
+        saver.prepare_context_for_provider(
+            session, saver._storage.main_thread_id(session), **options
+        )
+    assert _state(saver, session, connection) == before
+
+
+@pytest.mark.parametrize("change", ["source", "tools"])
+def test_sealed_prepare_retry_keeps_binding_and_pending_desired(
+    frozen_provider_wire, registry_db,
+    source_manager,
+    monkeypatch,
+    change,
+):
+    saver, session, connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    source_manager.register(
+        ContextSourceDescriptor(
+            source_id="instructions:retry",
+            source_kind="agent_instructions",
+            name="retry instruction",
+            description="封存后desired变化",
+            internal_locator="instruction-producer://schema-retry",
+            root_placement="root_eligible",
+        ),
+        tracking_status="tracked",
+    )
+    source_manager.observe(
+        "instructions:retry", "已发送说明", revision="instructions:1"
+    )
+    desired_tools = EMPTY_TOOL_SET
+    reads = []
+
+    def tool_set():
+        reads.append(desired_tools)
+        return desired_tools
+
+    options = {
+        "turn_id": accepted["turn_id"],
+        "execution_id": accepted["initial_execution_id"],
+        **frozen_provider_wire("prepare-provider", "responses"),
+
+        "plan_creation_idempotency_key": "desired:create",
+        "seal_idempotency_key": "desired:seal",
+        "context_source_manager": source_manager,
+        "tool_set_supplier": tool_set,
+    }
+    first = saver.prepare_context_for_provider(session, thread, **options)
+    if change == "source":
+        source_manager.observe(
+            "instructions:retry", "尚未发送说明", revision="instructions:2"
+        )
+    else:
+        desired_tools = ToolSetSnapshot(
+            selection_revision=sha256_jcs({"read_file": True}),
+            tools=({"name": "read_file", "parameters": {"type": "object"}},),
+        )
+    pending = source_manager.prepare_pending()
+    before = _state(saver, session, connection)
+    with monkeypatch.context() as retry_patch:
+        retry_patch.setattr(source_manager, "prepare_sources", _no_allocation)
+        retry = saver.prepare_context_for_provider(session, thread, **options)
+    assert retry["assembly_id"] == first["assembly_id"]
+    assert retry["plan"].selection == first["plan"].selection
+    assert retry["messages"] == first["messages"] and retry["tools"] == first["tools"]
+    assert reads == [EMPTY_TOOL_SET]
+    assert source_manager.prepare_pending() == pending
     assert _state(saver, session, connection) == before
 
 
 @pytest.mark.asyncio
-async def test_real_middleware_registers_fresh4_before_native_http(
+async def test_real_middleware_registers_current_schema_before_native_http(
     registry_db, native_http_server
 ):
     saver, session, connection, accepted = registry_db
     state, endpoint = native_http_server
     seed_dispatch_overlay(saver, session)
-    await invoke_native_dispatch(
-        saver, session, accepted["turn_id"], endpoint, state.api_key
-    )
+    await invoke_provider_dispatch(saver, session, accepted["turn_id"], endpoint, state.api_key, target_format="responses")
     assert len(state.requests) == 1
-    (snapshot,) = saver.list_context_assemblies(session)
+    (snapshot,) = saver.list_context_assemblies(
+        session, saver._storage.main_thread_id(session)
+    )
     registration = saver.get_context_plan_registration(
-        session, plan_id=snapshot.plan_id
+        session,
+        plan_id=snapshot.plan_id,
+        thread_id=saver._storage.main_thread_id(session),
     )
     assert registration.registration_origin == "runtime"
     assert registration.draft.plan_creation_idempotency_key.startswith(
@@ -462,6 +636,8 @@ async def test_real_middleware_registers_fresh4_before_native_http(
     assert registration.seal_input_hash.startswith("sha256:jcs:v1:")
     assert connection.execute(
         "SELECT schema_version FROM database_meta"
-    ).fetchone() == (4,)
-    native = saver.project_context_plan_to_native(session, snapshot.as_sealed_plan())
+    ).fetchone() == (10,)
+    native = saver.project_context_plan_to_native(
+        session, snapshot.thread_id, snapshot.as_sealed_plan()
+    )
     assert state.requests[0]["body"]["input"] == native["request"]["input"]

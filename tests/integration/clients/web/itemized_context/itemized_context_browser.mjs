@@ -99,14 +99,14 @@ async function waitProjection(inspector, id) {
 }
 
 async function inspectAssembly(inspector, expected, label) {
-  await inspector.getByLabel("选择冻结 assembly").selectOption(expected.assembly_id);
+  await inspector.getByLabel("选择冻结 assembly").selectOption(expected.assembly_ref);
   const projection = await waitProjection(inspector, expected.assembly_id);
   let pages = 1;
   while (await projection.getByRole("button", { name: "加载下一页上下文", exact: true }).count()) {
     const responsePromise = page.waitForResponse((response) => {
       if (new URL(response.url()).pathname !== "/api/v1/context/read") return false;
       const body = response.request().postDataJSON();
-      return body?.resource.endsWith(`#assembly=${expected.assembly_id}`) && body?.cursor;
+      return body?.assembly_ref === expected.assembly_ref && body?.cursor;
     });
     await projection.getByRole("button", { name: "加载下一页上下文", exact: true }).click();
     const response = await responsePromise;
@@ -195,7 +195,16 @@ try {
     assert.equal(entry.status, 200);
     assert.ok(entry.request_id);
     assert.equal(entry.request_id, entry.response.request_id);
-    assert.ok([fixture.session_id, fixture.other_session_id].some((id) => entry.request.resource.startsWith(`boxteam://session/${id}`)));
+    const resource = [fixture.session_resource, fixture.other_session_resource].find(
+      (candidate) => candidate.resource_identity === entry.request.resource_identity,
+    );
+    assert.ok(resource, "请求必须使用 Session API 返回的资源身份");
+    assert.equal(entry.request.uri, resource.uri);
+    assert.equal(entry.request.scope, resource.scope);
+    for (const key of ["resource_identity", "uri", "scope"]) {
+      assert.equal(entry.response.data[key], resource[key]);
+    }
+    assert.equal(entry.response.data.assembly_ref ?? null, entry.request.assembly_ref ?? null);
   }
   assert.deepEqual(pageErrors, []);
   result = { classification: "Integration", selection_order_equal: true, loss_equal: true,

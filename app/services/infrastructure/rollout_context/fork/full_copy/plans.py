@@ -1,4 +1,4 @@
-"""schema4 full-copy 的真实 draft 保留与 sealed import 事务接线。"""
+"""当前 full-copy 的真实 draft 保留与 sealed import 事务接线。"""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ class CopiedPlanSource:
     revision: int
     assembly_id: str | None
     snapshot_hash: str | None
+    source_schema_version: int
     created_at: str
     updated_at: str
     source_manifest: Mapping[str, object]
@@ -123,6 +124,9 @@ def collect_plan_identities(
 def detach_copied_plan_registry(state) -> None:
     """仅清理私有 target 副本；全部来源已在 clone 的 source owner 下验证。"""
     connection = state.connection
+    source_schema_version = connection.execute(
+        "SELECT schema_version FROM database_meta WHERE singleton_id=1"
+    ).fetchone()[0]
     sources = []
     for row in connection.execute(
         "SELECT session_id, thread_id, plan_id, plan_state, creation_json, draft_json, revision, "
@@ -171,6 +175,7 @@ def detach_copied_plan_registry(state) -> None:
                 revision=row[6],
                 assembly_id=row[7],
                 snapshot_hash=sha256_jcs(json.loads(snapshot[0])) if snapshot else None,
+                source_schema_version=source_schema_version,
                 created_at=row[8],
                 updated_at=row[9],
                 source_manifest=source_manifest,
@@ -248,7 +253,7 @@ def write_copied_plan_registry(state) -> None:
                 "source_plan_id": source.plan_id,
                 "source_assembly_id": source.assembly_id,
                 "source_snapshot_hash": source.snapshot_hash,
-                "source_schema_version": 4,
+                "source_schema_version": source.source_schema_version,
                 "audit_id": state.fork_id,
             }
             _record_source_plan(state, source, provenance)

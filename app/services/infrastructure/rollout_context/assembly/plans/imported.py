@@ -1,4 +1,4 @@
-"""仅供显式 migration/fork 事务使用的 sealed registration port。"""
+"""仅供真实 fork 事务使用的 sealed registration port。"""
 
 from __future__ import annotations
 
@@ -35,6 +35,9 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
+from app.services.infrastructure.rollout_context.storage import (
+    schema as storage_version,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
 )
@@ -52,7 +55,7 @@ _PROVENANCE_FIELDS = frozenset(
 
 
 def _provenance(origin: str, value: Mapping[str, object]) -> dict[str, object]:
-    if origin not in {"schema3_import", "fork_import"}:
+    if origin != "fork_import":
         raise ValueError("source-mismatch: imported registration origin 非法")
     if not isinstance(value, Mapping) or set(value) != _PROVENANCE_FIELDS:
         raise ValueError("source-mismatch: import provenance 字段不完整或未知")
@@ -63,7 +66,7 @@ def _provenance(origin: str, value: Mapping[str, object]) -> dict[str, object]:
     ):
         raise ValueError("source-mismatch: import provenance identity 必须非空")
     version = result["source_schema_version"]
-    if type(version) is not int or version != (3 if origin == "schema3_import" else 4):
+    if type(version) is not int or version != storage_version.ROLLOUT_SCHEMA_VERSION:
         raise ValueError("source-mismatch: import provenance schema version 非法")
     if not re.fullmatch(r"sha256:jcs:v1:[0-9a-f]{64}", result["source_snapshot_hash"]):
         raise ValueError("source-mismatch: import provenance snapshot hash 非法")
@@ -108,25 +111,7 @@ def imported_registration_hash(
         plan_id=snapshot.plan_id,
     )
     validate_source_bindings(snapshot, sources)
-    if origin == "schema3_import" and (
-        tuple(
-            provenance[key]
-            for key in (
-                "source_session_id",
-                "source_plan_id",
-                "source_assembly_id",
-                "source_snapshot_hash",
-            )
-        )
-        != (
-            snapshot.session_id,
-            snapshot.plan_id,
-            snapshot.assembly_id,
-            sha256_jcs(snapshot.to_dict()),
-        )
-    ):
-        raise ValueError("source-mismatch: schema3 provenance 必须匹配原同一 snapshot")
-    if origin == "fork_import" and (
+    if (
         provenance["source_session_id"] == snapshot.session_id
         or provenance["source_plan_id"] == snapshot.plan_id
         or provenance["source_assembly_id"] == snapshot.assembly_id
@@ -146,11 +131,8 @@ def imported_registration_hash(
 def _validate_fork_evidence(
     connection: sqlite3.Connection,
     snapshot: ContextAssemblySnapshot,
-    origin: str,
     provenance: Mapping[str, object],
 ) -> None:
-    if origin != "fork_import":
-        return
     row = connection.execute(
         "SELECT lineage_json FROM fork_identity_mappings WHERE fork_id = ? "
         "AND entity_type = 'assembly' AND source_session_id = ? AND source_local_id = ? "
@@ -260,7 +242,7 @@ def write_imported_registration(
         checked, detail_key=detail_key, origin=origin, source_provenance=provenance,
         source_manifest=sources.manifest,
     )
-    _validate_fork_evidence(connection, checked, origin, provenance)
+    _validate_fork_evidence(connection, checked, provenance)
     identity = (checked.session_id, checked.thread_id, checked.plan_id)
     if connection.execute(
         "SELECT 1 FROM context_plans WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
@@ -317,7 +299,7 @@ def read_imported_registration(
     if row is None:
         raise KeyError("imported context plan 不存在")
     if (
-        row[0] not in {"schema3_import", "fork_import"}
+        row[0] != "fork_import"
         or type(row[2]) is not int
         or row[2] != 0
         or row[3] != "sealed"
@@ -339,7 +321,7 @@ def read_imported_registration(
         source_manifest=sources.manifest,
     ):
         raise ValueError("source-mismatch: imported seal hash 与 assembly 不一致")
-    _validate_fork_evidence(connection, snapshot, row[0], provenance)
+    _validate_fork_evidence(connection, snapshot, provenance)
     validate_imported_rows(connection, snapshot, sources=sources)
     return ContextPlanRegistration(
         session_id=session,

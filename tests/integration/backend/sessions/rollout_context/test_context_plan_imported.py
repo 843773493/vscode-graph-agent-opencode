@@ -1,14 +1,30 @@
-"""真实 schema4 SQLite 与 domain sealed import port；不模拟旧 schema。"""
+"""真实 accept/seal/fork 后的 immutable import 与防篡改合同。"""
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import replace
+import sqlite3
+from dataclasses import dataclass, replace
 
 import pytest
 
-from app.domain.itemized.hashing import sha256_jcs
+from app.core.identifier import create_uuid_hex
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_key,
 )
@@ -18,7 +34,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported import 
     write_imported_registration,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.imported_sources import (
-    build_source_manifest,
+    parse_source_manifest,
 )
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     sealed_hash,
@@ -29,8 +45,17 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from app.services.infrastructure.rollout_context.assembly.plans.sealing import (
     preflight_seal,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.migration.artifacts import (
+    artifact_manifest,
+)
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.storage import (
+    schema as storage_version,
 )
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as json_text,
@@ -38,56 +63,193 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     _insert_snapshot,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    draft as draft,  # noqa: PLC0414 - 显式注入，输出按当前 request.node.path 隔离
+from tests.integration.backend.sessions.rollout_test_workspace import (
+    prepare_rollout_workspace,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 不运行被导入文件的测试
-)
+
+
+@dataclass
+class ForkImportCase:
+    saver: RolloutCheckpointSaver
+    session_id: str
+    connection: sqlite3.Connection
+    snapshot: ContextAssemblySnapshot
+    draft: ContextRequestPlan
+    provenance: dict[str, object]
+    source_manifest: dict[str, object]
 
 
 @pytest.fixture
-def snapshot(registry_db, draft):
-    saver, session, _connection, accepted = registry_db
-    result = ContextPlanComposer().assembly(
-        plan=draft,
-        assembly_id="imported-assembly",
-        session_id=session,
-        thread_id=saver._storage.main_thread_id(session),
-        turn_id=accepted["turn_id"],
-        execution_id=accepted["initial_execution_id"],
-        provider_version="imported-fixture",
-        request_detail_refs={
-            draft.refs[0].ref_id: DetailRef(
-                session, draft.thread_id, "imported-assembly", "source"
+def fork_plan_kind(request):
+    return getattr(request, "param", "included")
+
+
+@pytest.fixture
+def fork_case(request, session_bundle_factory, fork_plan_kind):
+    sessions = prepare_rollout_workspace(request) / ".boxteam" / "sessions"
+    source, target = (f"ses_{create_uuid_hex()}" for _ in range(2))
+    for session in (source, target):
+        session_bundle_factory(sessions, session)
+    body = [{"type": "text", "text": "草稿正文不能复制进 SQLite"}]
+    with RolloutCheckpointSaver(sessions) as saver:
+        storage = saver._storage
+        source_thread, target_thread = (storage.main_thread_id(session) for session in (source, target))
+        accepted = saver.accept_turn(
+            source, thread_id=source_thread, accepted_ingress_id="source-ingress",
+            acceptance_idempotency_key="source-accept", job_id="source-job",
+            admission_idempotency_key="source-admission", payload="真实 fork 来源",
+        )
+        contribution = ContextContribution(
+            contribution_id="source-contribution", source_kind="workspace_instructions",
+            source_revision="source-revision", body=body,
+            content_hash=contribution_content_hash("prompt", body),
+            source_binding=SourceBinding(source_ref="source-contribution"),
+        )
+        if fork_plan_kind != "unbound_omitted":
+            saver.register_context_contribution(source, source_thread, contribution, request_content=body)
+        tools = ({"name": "read_file", "parameters": {"type": "object"}},)
+        plan = saver.compose_committed_context_plan(
+            source, source_thread, plan_id="source-plan",
+            tool_set=ToolSetSnapshot(selection_revision=sha256_jcs(tools), tools=tools),
+        )
+        plan = replace(
+            plan, refs=tuple(ref for ref in plan.refs if ref.ref_type == "request_only"),
+            plan_creation_idempotency_key="source-plan-create",
+        )
+        if fork_plan_kind == "known_omitted":
+            plan = replace(
+                plan, refs=tuple(replace(ref, availability="unavailable") for ref in plan.refs),
+                tool_set_refs=(),
             )
-        },
-    )
-    return replace(
-        result,
-        contributions=tuple(replace(item, body=None) for item in result.contributions),
-    )
+        elif fork_plan_kind == "unbound_omitted":
+            plan = replace(
+                plan, refs=(ContextRef.request_only_ref(
+                    "omitted-ref", session_id=source, thread_id=source_thread,
+                    plan_id=plan.plan_id, source_revision="known-revision",
+                    availability="unavailable",
+                ),), contributions=(), tool_set_refs=(),
+            )
+        saver.create_context_plan(source, plan)
+        if fork_plan_kind == "known_omitted":
+            # 已知 omitted 映射来自真实 draft；通过当前低层 seal owner 封存。
+            original = ContextPlanComposer().assembly(
+                plan=plan, session_id=source, thread_id=source_thread,
+                assembly_id="source-omitted-assembly", turn_id=accepted["turn_id"],
+                execution_id=accepted["initial_execution_id"], provider_version="import-fixture",
+            )
+            original = replace(
+                original, selection=(replace(
+                    original.selection[0], contribution_id=contribution.contribution_id,
+                ),),
+            )
+            sealed_plan = original.as_sealed_plan()
+            original = replace(
+                original, plan_hash=sealed_plan.plan_hash(),
+                request_hash=context_request_hash(
+                    sealed_plan, original.provider_version, projector_id=original.projector_id,
+                    projector_version=original.projector_version, target_format=original.target_format,
+                    wire_request=original.request_hash_preimage,
+                ),
+            )
+            saver.seal_context_assembly(
+                source, source_thread, original, seal_idempotency_key="source-plan-seal",
+                seal_input_hash=sha256_jcs({"fixture": "known-omitted-source"}),
+            )
+            original = saver.get_context_assembly(source, source_thread, assembly_id=original.assembly_id)
+        else:
+            original = saver.seal_context_plan(
+                source, source_thread, plan, wire_profile=None, wire_params=None, turn_id=accepted["turn_id"],
+                execution_id=accepted["initial_execution_id"], provider_version="import-fixture",
+                seal_idempotency_key="source-plan-seal",
+            )
+        source_view = storage.clone_rollout(
+            source_session_id=source, source_thread_id=source_thread,
+            target_session_id=target, target_thread_id=target_thread, source_checkpoint_id=None,
+        )
+        fields = {
+            "source_session_id": source, "target_session_id": target,
+            "source_checkpoint_id": None, "source_view_id": source_view,
+            "fork_mode": "full_rollout_copy", "relationship": "detached", "checkpoint_ns": "",
+            "source_thread_id": source_thread, "target_thread_id": target_thread,
+            "source_snapshot_sha256": hashlib.sha256(
+                canonical_json_bytes(artifact_manifest(storage.root(source)))
+            ).hexdigest(),
+        }
+        materialization, fork_id = storage.begin_fork_materialization(**fields)
+        storage.commit_fork_materialization(materialization, **fields)
+        with storage._connect(target_thread, "", read_only=True, session_id=target) as owner_connection:
+            database_path = owner_connection.execute("PRAGMA database_list").fetchone()[2]
+            target_assembly = owner_connection.execute(
+                "SELECT target_local_id FROM fork_identity_mappings WHERE fork_id=? "
+                "AND entity_type='assembly' AND source_local_id=?",
+                (fork_id, original.assembly_id),
+            ).fetchone()[0]
+        current = saver.get_context_assembly(target, target_thread, assembly_id=target_assembly)
+        connection = sqlite3.connect(database_path)
+        connection.execute("PRAGMA foreign_keys=ON")
+        registration = read_imported_registration(connection, target, target_thread, current.plan_id)
+        provenance = registration.source_provenance
+        with storage._connect(source_thread, "", read_only=True, session_id=source) as source_connection:
+            source_version = source_connection.execute(
+                "SELECT schema_version FROM database_meta WHERE singleton_id=1"
+            ).fetchone()[0]
+            journal_version = source_connection.execute(
+                "SELECT to_version FROM schema_migrations WHERE status='completed' ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()[0]
+        assert provenance["source_schema_version"] == source_version == journal_version == storage_version.ROLLOUT_SCHEMA_VERSION
+        assert provenance["source_snapshot_hash"] == sha256_jcs(original.to_dict())
+        assert provenance["audit_id"] == fork_id
+        sources = registration.source_manifest
+        parsed = parse_source_manifest(
+            sources, session_id=target, thread_id=target_thread, plan_id=current.plan_id,
+        )
+        target_draft = ContextRequestPlan(
+            session_id=target, thread_id=target_thread, plan_id=current.plan_id,
+            refs=parsed.refs,
+            contributions=tuple(replace(item, body=body) for item in parsed.contributions),
+            tool_set_refs=tuple(replace(ref, assembly_id=None) for ref in current.tool_set_refs),
+            plan_creation_idempotency_key="port-fixture-create",
+        )
+        # 隔离 port 的重写区；来源、snapshot、manifest 和 audit 均取自上面的真实 fork。
+        # 不创建来源映射，不把损坏目标交给正常 storage 恢复或做回填。
+        with connection:
+            for table in (
+                "context_plan_refs", "context_plan_contributions", "tool_set_snapshots",
+                "context_plan_seal_failures", "context_plans", "context_assemblies",
+            ):
+                connection.execute(f"DELETE FROM {table}")
+        try:
+            yield ForkImportCase(saver, target, connection, current, target_draft, provenance, sources)
+        finally:
+            connection.close()
 
 
 @pytest.fixture
-def source_manifest(draft):
-    return build_source_manifest(
-        session_id=draft.session_id, thread_id=draft.thread_id,
-        plan_id=draft.plan_id, refs=draft.refs,
-        contributions=tuple(replace(item, body=None) for item in draft.contributions),
-    )
-
-
-@pytest.fixture
-def provenance(snapshot):
-    return {
-        "source_session_id": snapshot.session_id,
-        "source_plan_id": snapshot.plan_id,
-        "source_assembly_id": snapshot.assembly_id,
-        "source_snapshot_hash": sha256_jcs(snapshot.to_dict()),
-        "source_schema_version": 3,
-        "audit_id": "explicit-upgrade-audit",
+def registry_db(fork_case):
+    value = fork_case.snapshot
+    return fork_case.saver, fork_case.session_id, fork_case.connection, {
+        "turn_id": value.turn_id, "initial_execution_id": value.execution_id,
     }
+
+
+@pytest.fixture
+def draft(fork_case):
+    return fork_case.draft
+
+
+@pytest.fixture
+def snapshot(fork_case):
+    return fork_case.snapshot
+
+
+@pytest.fixture
+def source_manifest(fork_case):
+    return fork_case.source_manifest
+
+
+@pytest.fixture
+def provenance(fork_case):
+    return fork_case.provenance
 
 
 @pytest.fixture
@@ -95,7 +257,7 @@ def import_snapshot(registry_db, snapshot, provenance, source_manifest):
     _saver, _session, connection, _accepted = registry_db
 
     def write(
-        *, value=snapshot, source=provenance, origin="schema3_import", detail=None,
+        *, value=snapshot, source=provenance, origin="fork_import", detail=None,
         sources=source_manifest,
     ):
         with connection:
@@ -118,31 +280,12 @@ def import_snapshot(registry_db, snapshot, provenance, source_manifest):
     return write
 
 
-@pytest.mark.parametrize("origin", ["schema3_import", "fork_import"])
 def test_import_roundtrip_is_sealed_without_fabricated_draft(
-    registry_db, snapshot, provenance, import_snapshot, origin, source_manifest
+    registry_db, snapshot, provenance, import_snapshot, source_manifest
 ):
     _saver, session, connection, _accepted = registry_db
     source = dict(provenance)
-    if origin == "fork_import":
-        source.update(
-            source_session_id="source",
-            source_plan_id="source-plan",
-            source_assembly_id="source-assembly",
-            source_schema_version=4,
-        )
-        with connection:
-            connection.execute(
-                "INSERT INTO fork_identity_mappings(mapping_id, fork_id, source_session_id, "
-                "target_session_id, entity_type, source_local_id, target_local_id, lineage_json, created_at) "
-                "VALUES ('fixture-source-audit', ?, 'source', ?, 'assembly', 'source-assembly', ?, ?, 'fixture')",
-                (
-                    source["audit_id"],
-                    session,
-                    snapshot.assembly_id,
-                    json_text({"source_snapshot": source}),
-                ),
-            )
+    origin = "fork_import"
     import_snapshot(source=source, origin=origin)
     registered = read_registration(
         connection, session, snapshot.thread_id, snapshot.plan_id
@@ -190,7 +333,7 @@ def test_import_requires_transaction_and_existing_same_assembly(
     _saver, _session, connection, _accepted = registry_db
     arguments = {
         "detail_key": None,
-        "origin": "schema3_import",
+        "origin": "fork_import",
         "source_provenance": provenance,
         "source_manifest": source_manifest,
         "seal_idempotency_key": "import-seal",
@@ -233,16 +376,18 @@ def test_import_provenance_rejects_missing_or_invalid_fields(
     ).fetchone() == (0,)
 
 
-@pytest.mark.parametrize("mutation", ["extra", "bad_hash", "future", "unknown_origin"])
+@pytest.mark.parametrize("mutation", ["extra", "bad_hash", "future", "old_version", "unknown_origin"])
 def test_import_provenance_is_closed(provenance, import_snapshot, mutation):
     source = dict(provenance)
-    origin = "schema3_import"
+    origin = "fork_import"
     if mutation == "extra":
         source["source_body"] = "must not persist"
     elif mutation == "bad_hash":
         source["source_snapshot_hash"] = "sha256:jcs:v1:" + "A" * 64
     elif mutation == "future":
-        source["source_schema_version"] = 5
+        source["source_schema_version"] = storage_version.ROLLOUT_SCHEMA_VERSION + 1
+    elif mutation == "old_version":
+        source["source_schema_version"] = 4
     else:
         origin = "unknown"
     with pytest.raises(ValueError, match="source-mismatch"):
@@ -333,7 +478,7 @@ def test_import_retry_is_exact_and_does_not_create_second_plan(
             connection,
             snapshot,
             detail_key=None,
-            origin="schema3_import",
+            origin="fork_import",
             source_provenance=provenance,
             source_manifest=source_manifest,
             seal_idempotency_key="import-seal",
@@ -345,10 +490,10 @@ def test_import_retry_is_exact_and_does_not_create_second_plan(
             connection,
             snapshot,
             detail_key=None,
-            origin="schema3_import",
-            source_provenance={**provenance, "audit_id": "other"},
+            origin="fork_import",
+            source_provenance=provenance,
             source_manifest=source_manifest,
-            seal_idempotency_key="import-seal",
+            seal_idempotency_key="other-seal",
         )
     assert tuple(connection.iterdump()) == before
 
@@ -390,7 +535,7 @@ def test_import_one_plan_cannot_name_multiple_assemblies(
             connection,
             snapshot,
             detail_key=None,
-            origin="schema3_import",
+            origin="fork_import",
             source_provenance=provenance,
             source_manifest=source_manifest,
             seal_idempotency_key="import-seal",
@@ -415,15 +560,10 @@ def test_import_hash_binds_each_source_field(
     import_snapshot()
     _saver, session, connection, _accepted = registry_db
     source = dict(provenance)
-    origin = "schema3_import"
+    origin = "fork_import"
     if field == "origin":
-        origin = "fork_import"
-        source.update(
-            source_schema_version=4,
-            source_session_id="other-session",
-            source_plan_id="other-plan",
-            source_assembly_id="other-assembly",
-        )
+        origin = "runtime"
+        connection.execute("PRAGMA ignore_check_constraints=ON")
     else:
         source[field] = (
             sha256_jcs("other") if field == "source_snapshot_hash" else "other"
@@ -433,38 +573,19 @@ def test_import_hash_binds_each_source_field(
             "UPDATE context_plans SET registration_origin=?, source_provenance_json=?",
             (origin, json_text(source)),
         )
+    connection.execute("PRAGMA ignore_check_constraints=OFF")
     with pytest.raises(ValueError, match="source-mismatch"):
         read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        "source_session_id",
-        "source_plan_id",
-        "source_assembly_id",
-        "source_snapshot_hash",
-    ],
-)
-def test_schema3_import_requires_same_source_snapshot(
-    import_snapshot, provenance, field
-):
-    source = {
-        **provenance,
-        field: sha256_jcs("other") if field == "source_snapshot_hash" else "other",
-    }
-    with pytest.raises(ValueError, match="原同一 snapshot"):
-        import_snapshot(source=source)
-
-
 def test_import_hash_namespace_is_independent(snapshot, provenance, source_manifest):
     assert imported_registration_hash(
-        snapshot, detail_key=None, origin="schema3_import", source_provenance=provenance,
+        snapshot, detail_key=None, origin="fork_import", source_provenance=provenance,
         source_manifest=source_manifest,
     ) == sha256_jcs(
         {
             "schema": "context-plan-import:v2",
-            "registration_origin": "schema3_import",
+            "registration_origin": "fork_import",
             "source_provenance": provenance,
             "source_manifest": source_manifest,
             "sealed_hash": sealed_hash(snapshot, None),
@@ -527,15 +648,12 @@ def test_import_rejects_runtime_input_hash_even_when_sql_check_is_bypassed(
 
 
 def test_fork_import_requires_source_audit(registry_db, provenance, import_snapshot):
-    source = {
-        **provenance,
-        "source_schema_version": 4,
-        "source_session_id": "source",
-        "source_plan_id": "source-plan",
-        "source_assembly_id": "source-assembly",
-    }
+    connection = registry_db[2]
+    with connection:
+        connection.execute(
+            "DELETE FROM fork_identity_mappings WHERE fork_id=? AND entity_type='assembly'",
+            (provenance["audit_id"],),
+        )
     with pytest.raises(ValueError, match="source snapshot 证据"):
-        import_snapshot(source=source, origin="fork_import")
-    assert registry_db[2].execute("SELECT count(*) FROM context_plans").fetchone() == (
-        0,
-    )
+        import_snapshot()
+    assert connection.execute("SELECT count(*) FROM context_plans").fetchone() == (0,)

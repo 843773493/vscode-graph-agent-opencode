@@ -41,15 +41,9 @@ from app.services.infrastructure.rollout_context.runtime.protected_detail import
 )
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.rollout_context.migration.schema_v3.model import (
-        SchemaV3DetailCapability,
-    )
     from app.services.infrastructure.rollout_context.runtime.detail_fork import (
         ForkDetailCapability,
         ForkDetailSourceSnapshot,
-    )
-    from app.services.infrastructure.rollout_context.runtime.protected_upgrade import (
-        ProtectedDetailUpgrade,
     )
 
 
@@ -88,52 +82,7 @@ class ContextPlanDetailStore:
             source_snapshots=source_snapshots,
         )
 
-    def schema_v3_detail_capability(self) -> SchemaV3DetailCapability:
-        """仅由 Saver 的显式 upgrade 注入 storage；不加载 migration parser。"""
-        from app.services.infrastructure.rollout_context.runtime.protected_upgrade.capability import (
-            RuntimeSchemaV3DetailCapability,
-        )
 
-        return RuntimeSchemaV3DetailCapability(
-            backend=self._protected_backend,
-            key_store=self._detail_key_store,
-        )
-
-    def prepare_protected_detail_upgrade(
-        self,
-        *,
-        legacy_blob: bytes,
-        legacy_aad: bytes,
-        expected_digest: str,
-        target_ref: DetailRef,
-        detail_kind: str,
-        retention_class: str,
-        visibility: str,
-        required: bool,
-        created_at: str,
-        expires_at: str | None,
-        checkpoint_ns: str,
-    ) -> ProtectedDetailUpgrade:
-        """仅供显式 artifact migration；不读取旧 locator，不发布任何文件。"""
-        from app.services.infrastructure.rollout_context.runtime.protected_upgrade import (
-            prepare_protected_detail_upgrade,
-        )
-
-        return prepare_protected_detail_upgrade(
-            backend=self._protected_backend,
-            key_store=self._detail_key_store,
-            legacy_blob=legacy_blob,
-            legacy_aad=legacy_aad,
-            expected_digest=expected_digest,
-            target_ref=target_ref,
-            detail_kind=detail_kind,
-            retention_class=retention_class,
-            visibility=visibility,
-            required=required,
-            created_at=created_at,
-            expires_at=expires_at,
-            checkpoint_ns=checkpoint_ns,
-        )
 
     def write(
         self,

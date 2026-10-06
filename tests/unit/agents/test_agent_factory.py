@@ -4,11 +4,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.agents import agent_factory
+from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.policy import ToolPolicyResolver
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+)
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
 def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
@@ -27,7 +32,11 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
 
     required = {
         "model": MagicMock(),
-        "system_prompt": "测试提示词",
+        "instruction_producers": runtime_instruction_producers(
+            agent_id="default", content="测试提示词", config_revision="config:1",
+            workspace_root=str(tmp_path), provider_candidates=(("fixture", "model"),),
+        ),
+        "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         "checkpointer": MagicMock(),
         "session_id": "ses_empty_extension_catalog",
         "thread_id": "thr_00000000400070008000000000000002",
@@ -52,7 +61,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
     }
 
     with (
-        patch.object(agent_factory, "ContextSourceManager", return_value=None),
+        patch.object(agent_factory, "ContextSourceManager", return_value=ContextSourceManager()),
         patch.object(agent_factory, "build_workspace_backend"),
         patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(agent_factory, "build_deep_agent_middleware", return_value=[]),
@@ -95,7 +104,11 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
 
     required = {
         "model": MagicMock(),
-        "system_prompt": "测试提示词",
+        "instruction_producers": runtime_instruction_producers(
+            agent_id="default", content="测试提示词", config_revision="config:1",
+            workspace_root=str(tmp_path), provider_candidates=(("fixture", "model"),),
+        ),
+        "tool_selection_reader": ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         "checkpointer": checkpointer,
         "session_id": "tools_inspection_session",
         "owns_thread": False,
@@ -126,7 +139,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
             "context_source_control_owner_available",
             return_value=False,
         ),
-        patch.object(agent_factory, "ContextSourceManager") as context_manager,
+        patch.object(agent_factory, "ContextSourceManager", wraps=ContextSourceManager) as context_manager,
         patch.object(agent_factory, "build_workspace_backend"),
         patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(agent_factory, "build_deep_agent_middleware", return_value=[]),

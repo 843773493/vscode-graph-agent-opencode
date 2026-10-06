@@ -7,12 +7,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Mapping
 
 from langchain_core.messages import BaseMessage
 
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
@@ -30,10 +29,6 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_projec
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.resource_activation import (
     ResourceActivationOwnerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
-    require_key,
-    runtime_draft,
 )
 from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
     project_tool_set_ref,
@@ -53,70 +48,6 @@ class ContextOwnerMixin(
     ContextProjectionOwnerMixin,
     ResourceActivationOwnerMixin,
 ):
-    def seal_context_for_dispatch(
-        self,
-        session_id: str,
-        thread_id: str,
-        *,
-        turn_id: str | None,
-        execution_id: str,
-        model_call_id: str,
-        provider_version: str,
-        tool_snapshot: Sequence[Mapping[str, object]] = (),
-        loss: Iterable[str] = (),
-        target_format: str = "chat_completions",
-        checkpoint_ns: str = "",
-        omitted_ref_ids: Iterable[str] = (),
-    ) -> str:
-        """在 provider dispatch 前封存 Saver-owned assembly，返回 assembly_id。"""
-        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        require_key(model_call_id, field="model_call_id")
-        creation_key = "dispatch-create:" + sha256_jcs(
-            {
-                "session_id": session_id,
-                "checkpoint_ns": checkpoint_ns,
-                "turn_id": turn_id,
-                "execution_id": execution_id,
-                "model_call_id": model_call_id,
-            }
-        )
-        seal_key = "dispatch-seal:" + creation_key
-        plan_id = f"plan-{model_call_id}"
-        registered = self._find_runtime_context_plan(
-            session_id, thread_id, plan_id, checkpoint_ns
-        )
-        if registered is None or registered.plan_state == "unsealed":
-            plan = self.compose_committed_context_plan(
-                session_id,
-                thread_id,
-                plan_id=plan_id,
-                tool_snapshot=tool_snapshot,
-                checkpoint_ns=checkpoint_ns,
-            )
-            registered = self.create_context_plan(
-                session_id,
-                replace(plan, plan_creation_idempotency_key=creation_key),
-                checkpoint_ns=checkpoint_ns,
-            )
-        snapshot = self.seal_context_plan(
-            session_id,
-            thread_id,
-            runtime_draft(registered),
-            seal_idempotency_key=seal_key,
-            turn_id=turn_id,
-            execution_id=execution_id,
-            model_call_id=model_call_id,
-            provider_version=provider_version,
-            target_format=target_format,
-            loss=tuple(loss),
-            omitted_ref_ids=frozenset(omitted_ref_ids),
-            request_input_hash=sha256_jcs(
-                {"tool_snapshot": [dict(tool) for tool in tool_snapshot]}
-            ),
-            checkpoint_ns=checkpoint_ns,
-        )
-        return snapshot.assembly_id
-
     def project_context_plan_to_messages(
         self,
         session_id: str,
@@ -241,12 +172,12 @@ class ContextOwnerMixin(
             collect_capability_losses=True,
         )
         evidence = build_projection_evidence(
-            self._committed_context_plan(
+            self._committed_context_snapshot(
                 session_id,
                 thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
-            ),
+            ).as_sealed_plan(),
             projection="langchain",
             losses=losses,
         )
@@ -275,12 +206,12 @@ class ContextOwnerMixin(
             collect_capability_losses=True,
         )
         evidence = build_projection_evidence(
-            self._committed_context_plan(
+            self._committed_context_snapshot(
                 session_id,
                 thread_id,
                 plan,
                 checkpoint_ns=normalized_ns,
-            ),
+            ).as_sealed_plan(),
             projection="web_history",
             losses=losses,
         )
@@ -302,12 +233,12 @@ class ContextOwnerMixin(
             checkpoint_ns=checkpoint_ns,
         )
         evidence = build_projection_evidence(
-            self._committed_context_plan(
+            self._committed_context_snapshot(
                 session_id,
                 thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
-            ),
+            ).as_sealed_plan(),
             projection="native",
             losses=native.get("losses", ()),
         )
@@ -341,12 +272,12 @@ class ContextOwnerMixin(
             request_only_content=request_only_content,
         )
         evidence = build_projection_evidence(
-            self._committed_context_plan(
+            self._committed_context_snapshot(
                 session_id,
                 thread_id,
                 plan,
                 checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
-            ),
+            ).as_sealed_plan(),
             projection="provider",
             losses=losses,
         )
@@ -373,12 +304,13 @@ class ContextOwnerMixin(
         canonical item 读取、request-only source 恢复以及 ToolSetRef 投影，
         让不同调用方不能各自重新选择 history 或工具。
         """
-        committed_plan = self._committed_context_plan(
+        committed_snapshot = self._committed_context_snapshot(
             session_id,
             thread_id,
             plan,
             checkpoint_ns=checkpoint_ns,
         )
+        committed_plan = committed_snapshot.as_sealed_plan()
         item_ids = [
             entry.ref.ref_id
             for entry in committed_plan.selection
@@ -413,6 +345,7 @@ class ContextOwnerMixin(
                 request_only_content=resolved_request_content,
                 capability_losses=losses if collect_capability_losses else None,
                 include_request_only=True,
+                seal_binding=committed_snapshot.seal_binding,
             )
         else:
             messages = project_history_plan(
@@ -445,14 +378,14 @@ class ContextOwnerMixin(
             checkpoint_ns=checkpoint_ns,
         )
 
-    def _committed_context_plan(
+    def _committed_context_snapshot(
         self,
         session_id: str,
         thread_id: str,
         plan: ContextRequestPlan,
         *,
         checkpoint_ns: str,
-    ) -> ContextRequestPlan:
+    ) -> ContextAssemblySnapshot:
         """只允许投影 Saver 已提交的 assembly plan。
 
         ``ContextRequestPlan`` 是不可变值对象，但调用方仍可能自行构造一个
@@ -489,7 +422,7 @@ class ContextOwnerMixin(
             request_hash=persisted.request_hash,
             checkpoint_ns=checkpoint_ns,
         )
-        return persisted_plan
+        return persisted
 
     def get_canonical_item(
         self,

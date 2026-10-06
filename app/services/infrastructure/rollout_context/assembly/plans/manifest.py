@@ -7,7 +7,11 @@ from dataclasses import fields, replace
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.identity.refs import ToolSetRef, selection_ref_identity
+from app.domain.itemized.identity.refs import (
+    ToolSetIdentityRef,
+    ToolSetRef,
+    selection_ref_identity,
+)
 from app.domain.itemized.request_plan import (
     ContextRequestPlan,
     resolve_contribution_for_ref,
@@ -79,12 +83,21 @@ def validate_sealed_plan(
         actual,
         contributions=tuple(replace(item, body=None) for item in actual.contributions),
     )
-    if canonical_json_bytes(expected.to_dict()) != canonical_json_bytes(
-        actual.to_dict()
-    ):
-        raise ValueError(
-            "plan-order-integrity: sealed snapshot 与当前 draft registry 不一致"
-        )
+    # 两侧共享 snapshot 的同一份 selection，其身份和哈希已在上方验证。
+    # 比较其余 manifest 字段，避免为 omitted 工具读取正文或伪造 public ref；
+    # tool_snapshot 与领域 to_dict 一致，不属于此 plan manifest。
+    for field in fields(ContextRequestPlan):
+        if field.name in {"selection", "tool_snapshot"}:
+            continue
+        expected_value = getattr(expected, field.name)
+        actual_value = getattr(actual, field.name)
+        if field.name in {"refs", "tool_set_refs", "contributions"}:
+            expected_value = [item.to_dict() for item in expected_value]
+            actual_value = [item.to_dict() for item in actual_value]
+        if canonical_json_bytes(expected_value) != canonical_json_bytes(actual_value):
+            raise ValueError(
+                "plan-order-integrity: sealed snapshot 与当前 draft registry 不一致"
+            )
 
 
 def _validate_contribution_bindings(
@@ -107,14 +120,10 @@ def _validate_contribution_bindings(
                 raise ValueError("source-mismatch: contribution binding manifest 不一致")
 
 
-def _tool_identity(ref: ToolSetRef, assembly_id: str) -> dict[str, object]:
+def _tool_identity(ref: ToolSetIdentityRef, assembly_id: str) -> dict[str, object]:
     # 不经 to_dict 再删正文：omitted tools/policy 可能已经不可读取。
     return {
-        **{
-            field.name: getattr(ref, field.name)
-            for field in fields(ToolSetRef)
-            if field.name not in {"tools", "tool_policy", "assembly_id"}
-        },
+        **ToolSetIdentityRef.to_dict(ref),
         "assembly_id": assembly_id,
     }
 
@@ -128,7 +137,7 @@ def _tool_comparison_view(
         *(
             entry.ref
             for entry in snapshot.selection
-            if isinstance(entry.ref, ToolSetRef)
+            if isinstance(entry.ref, ToolSetIdentityRef)
         ),
     ):
         source = sources.get((ref.ref_type, ref.ref_id))
@@ -143,15 +152,6 @@ def _tool_comparison_view(
         for entry in snapshot.selection
         if entry.included and isinstance(entry.ref, ToolSetRef)
     }
-    selection = tuple(
-        replace(
-            entry,
-            ref=ToolSetRef(**_tool_identity(entry.ref, snapshot.assembly_id)),
-        )
-        if isinstance(entry.ref, ToolSetRef) and not entry.included
-        else entry
-        for entry in snapshot.selection
-    )
     # 不改动持久 draft，也不从 snapshot 反向补造 source；included 正文仍由
     # 原始 draft 参与 domain manifest 校验与逐字段比较，selection 原序不变。
     return (
@@ -168,7 +168,6 @@ def _tool_comparison_view(
                     key=lambda ref: (ref.ref_type, ref.ref_id),
                 )
             ),
-            selection=selection,
         ),
     )
 

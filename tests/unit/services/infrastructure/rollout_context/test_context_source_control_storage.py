@@ -9,12 +9,16 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import threading
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
     ContextSourceControlOwnerMixin,
     ContextSourceControlStorageMixin,
@@ -35,6 +39,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 
 SESSION_ID = "ses_019c3dbcb2f6749b85bed7b51dfe889d"
 CHILD_SESSION_ID = "ses_019c52c6b01c7733850a1aaf64ac579e"
@@ -73,13 +78,13 @@ def _new_manager(
     return manager
 
 
-def _track_skill(manager: ContextSourceManager, content: str = "v1\n") -> None:
+def _track_skill(manager: ContextSourceManager, seal_sources: Callable, content: str = "v1\n") -> None:
     manager.activate_skill_content("debugging", content)
     _install_debugging_snapshot(manager, content)
     manager.load_skill("debugging", mode="tracked")
     batch = manager.prepare_pending()
     assert batch is not None
-    manager.commit_model_call_pending(batch)
+    seal_sources(manager)
 
 
 def _install_debugging_snapshot(
@@ -120,7 +125,7 @@ def sessions_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def rollout_storage(sessions_root: Path) -> RolloutStorage:
-    return RolloutStorage(sessions_root)
+    return RolloutStorage(sessions_root, message_codec=LangChainMessageCodec())
 
 
 @pytest.fixture
@@ -130,6 +135,28 @@ def control_state_port(
 ) -> RolloutCheckpointSaver:
     """唯一 owner 端口：生产 CSM 只会拿到这个 Saver 实例。"""
     return RolloutCheckpointSaver(sessions_root, storage=rollout_storage)
+
+
+@pytest.fixture
+def seal_sources(control_state_port: RolloutCheckpointSaver) -> Callable:
+    cases: dict[ContextSourceOwnerKey, SourceSealCase] = {}
+
+    def seal(manager: ContextSourceManager):
+        owner = manager._owner
+        assert owner is not None
+        if owner not in cases:
+            accepted = control_state_port.accept_turn(
+                owner.session_id, thread_id=owner.thread_id,
+                accepted_ingress_id="control-ingress:" + owner.thread_id,
+                acceptance_idempotency_key="control-accept:" + owner.thread_id,
+                job_id="control-job:" + owner.thread_id,
+                admission_idempotency_key="control-admission:" + owner.thread_id,
+                payload="控制状态真实 seal 合同",
+            )
+            cases[owner] = SourceSealCase(control_state_port, owner, accepted)
+        return cases[owner].seal(manager)
+
+    return seal
 
 
 @pytest.fixture
@@ -152,9 +179,10 @@ def test_storage_and_saver_mixins_are_wired_into_unique_owners(
 def test_control_state_round_trip_persists_through_owner(
     control_state_port: RolloutCheckpointSaver,
     owner: ContextSourceOwnerKey,
+    seal_sources,
 ) -> None:
     manager = _new_manager(owner, control_state_port)
-    _track_skill(manager)
+    _track_skill(manager, seal_sources)
 
     (stored,) = control_state_port.load_context_source_control_states(owner)
 
@@ -172,8 +200,9 @@ def test_restart_recovery_does_not_reinject_tracked_source(
     rollout_storage: RolloutStorage,
     control_state_port: RolloutCheckpointSaver,
     owner: ContextSourceOwnerKey,
+    seal_sources,
 ) -> None:
-    _track_skill(_new_manager(owner, control_state_port))
+    _track_skill(_new_manager(owner, control_state_port), seal_sources)
 
     # 重启后的新 CSM 只依赖 owner 端口恢复，不看进程内 cache。
     rebuilt = _new_manager(owner, control_state_port)
@@ -194,9 +223,10 @@ def test_restart_recovery_does_not_reinject_tracked_source(
 def test_restart_recovery_keeps_untrack_state(
     control_state_port: RolloutCheckpointSaver,
     owner: ContextSourceOwnerKey,
+    seal_sources,
 ) -> None:
     manager = _new_manager(owner, control_state_port)
-    _track_skill(manager)
+    _track_skill(manager, seal_sources)
     manager.load_skill("debugging", mode="untrack")
 
     rebuilt = _new_manager(owner, control_state_port)
@@ -212,6 +242,7 @@ def test_restart_recovery_keeps_untrack_state(
 def test_restart_recovery_keeps_threads_isolated(
     rollout_storage: RolloutStorage,
     control_state_port: RolloutCheckpointSaver,
+    seal_sources,
 ) -> None:
     main_owner = ContextSourceOwnerKey(
         session_id=SESSION_ID,
@@ -222,14 +253,14 @@ def test_restart_recovery_keeps_threads_isolated(
         thread_id=rollout_storage.main_thread_id(CHILD_SESSION_ID),
     )
     main = _new_manager(main_owner, control_state_port)
-    _track_skill(main)
+    _track_skill(main, seal_sources)
 
     child = ContextSourceManager(
         owner=child_owner, control_state_port=control_state_port
     )
     assert child.metadata() == ()
     child.register(_descriptor())
-    _track_skill(child, "child\n")
+    _track_skill(child, seal_sources, "child\n")
 
     (main_state,) = control_state_port.load_context_source_control_states(main_owner)
     (child_state,) = control_state_port.load_context_source_control_states(child_owner)

@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import contribution_content_hash, sha256_jcs
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -30,6 +31,8 @@ from tests.integration.backend.sessions.rollout_context.test_schema4_checkpoint_
     registry_db as registry_db,  # noqa: PLC0414 - 不运行被导入文件的用例
 )
 
+EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
 
 def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(registry_db):
     saver, session, connection, accepted = registry_db
@@ -44,11 +47,21 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
         # 不再参与替换判定（旧路径已物理下线）。
         replacement_policy="replaceable",
     )
-    saver.register_context_contribution(session, original, request_content=old_body)
+    saver.register_context_contribution(
+        session,
+        saver._storage.main_thread_id(session),
+        original,
+        request_content=old_body,
+    )
     plan = register_projection_draft(
         saver,
         session,
-        saver.compose_committed_context_plan(session, plan_id="frozen-source"),
+        saver.compose_committed_context_plan(
+            session,
+            saver._storage.main_thread_id(session),
+            plan_id="frozen-source",
+            tool_set=EMPTY_TOOL_SET,
+        ),
     )
     snapshot = _seal(saver, session, plan, accepted)
     before = _project(saver, session, snapshot.assembly_id)
@@ -60,16 +73,75 @@ def test_session_source_revision_cannot_rewrite_frozen_plan_after_restart(regist
         content_length=None,
         content_hash=contribution_content_hash("prompt", new_body),
     )
-    saver.register_context_contribution(session, revised, request_content=new_body)
+    frozen_state = _state(saver, session, connection)
+    with pytest.raises(ValueError, match="已封存，禁止更新原 registry slot"):
+        saver.register_context_contribution(
+            session,
+            plan.thread_id,
+            revised,
+            request_content=new_body,
+            expected_source_revision="source-v1",
+        )
+    assert _state(saver, session, connection) == frozen_state
+    # 已封存revision身份不可复写；后续请求显式登记新revision identity。
+    revised = replace(
+        revised,
+        contribution_id="replaceable-prompt:source-v2",
+        replacement_policy="immutable",
+    )
+    saver.register_context_contribution(
+        session,
+        plan.thread_id,
+        revised,
+        request_content=new_body,
+    )
     assert connection.execute(
         "SELECT source_revision FROM context_contributions WHERE contribution_id = ?",
         (original.contribution_id,),
+    ).fetchone() == ("source-v1",)
+    assert connection.execute(
+        "SELECT source_revision FROM context_contributions WHERE contribution_id = ?",
+        (revised.contribution_id,),
     ).fetchone() == ("source-v2",)
+    following = saver.compose_committed_context_plan(
+        session,
+        plan.thread_id,
+        plan_id="following-source",
+        tool_set=EMPTY_TOOL_SET,
+    )
+    following = register_projection_draft(
+        saver,
+        session,
+        replace(
+            following,
+            refs=tuple(
+                ref for ref in following.refs if ref.ref_id != original.contribution_id
+            ),
+            contributions=tuple(
+                contribution
+                for contribution in following.contributions
+                if contribution.contribution_id == revised.contribution_id
+            ),
+        ),
+    )
+    newer = _seal(
+        saver,
+        session,
+        following,
+        accepted,
+        seal_idempotency_key="following-source-seal",
+    )
+    assert newer.contributions[0].source_revision == "source-v2"
+    assert "新来源只影响之后的请求" in str(
+        _project(saver, session, newer.assembly_id)["messages"]
+    )
     state = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
         assert _project(restarted, session, snapshot.assembly_id) == before
         registered = restarted.get_context_plan_registration(
-            session, plan_id=plan.plan_id
+            session,
+            plan_id=plan.plan_id,
+            thread_id=restarted._storage.main_thread_id(session),
         )
         assert registered.draft.contributions[0].source_revision == "source-v1"
         assert _seal(restarted, session, registered.draft, accepted) == snapshot
@@ -108,6 +180,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         plan_id="header-lost",
         refs=(),
         plan_creation_idempotency_key="header-lost-create",
+        thread_id=saver._storage.main_thread_id(session),
     )
     plan = saver.create_context_plan(session, draft).draft
     snapshot = ContextPlanComposer().assembly(
@@ -117,6 +190,7 @@ def test_header_detail_survives_committed_response_loss_and_restart(
         turn_id=accepted["turn_id"],
         execution_id=accepted["initial_execution_id"],
         provider_version="header-provider",
+        thread_id=saver._storage.main_thread_id(session),
     )
     options = {
         "seal_idempotency_key": "header-lost-seal",
@@ -133,12 +207,18 @@ def test_header_detail_survives_committed_response_loss_and_restart(
 
     monkeypatch.setattr(saver._storage, "seal_context_assembly", lose_response)
     with pytest.raises(RuntimeError, match="injected committed header response loss"):
-        saver.seal_context_assembly(snapshot, **options)
+        saver.seal_context_assembly(
+            session, saver._storage.main_thread_id(session), snapshot, **options
+        )
     detail = saver._storage.get_context_assembly_detail_ref(
-        session, assembly_id=snapshot.assembly_id
+        session,
+        saver._storage.main_thread_id(session),
+        assembly_id=snapshot.assembly_id,
     )
     assert (
-        saver.read_context_plan_detail(session, detail_ref=detail)["detail"]
+        saver.read_context_plan_detail(
+            session, saver._storage.main_thread_id(session), detail_ref=detail
+        )["detail"]
         == options["detail"]
     )
     assert connection.execute(
@@ -147,5 +227,10 @@ def test_header_detail_survives_committed_response_loss_and_restart(
     before = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
-        assert restarted.seal_context_assembly(snapshot, **options) == commits[0]
+        assert (
+            restarted.seal_context_assembly(
+                session, saver._storage.main_thread_id(session), snapshot, **options
+            )
+            == commits[0]
+        )
     assert _state(saver, session, connection) == before

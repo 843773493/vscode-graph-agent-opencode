@@ -14,9 +14,11 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import (
     _ensure_json_value,
+    validate_hash_token,
 )
 from app.domain.itemized.identity.refs import (
     ContextRef,
+    ToolSetIdentityRef,
     ToolSetRef,
     selection_ref_identity,
 )
@@ -65,6 +67,8 @@ class ContextAssemblySnapshot:
     projector_version: str = "v1"
     target_format: str = "unknown"
     request_hash_preimage: object | None = None
+    # prepare 冻结输入身份：只属于 seal 提交记录，不参与 request_hash。
+    request_input_hash: str | None = None
     seal_binding: ContextSealBinding | None = None
 
     def __post_init__(self) -> None:
@@ -106,6 +110,11 @@ class ContextAssemblySnapshot:
                     "ContextAssemblySnapshot.request_hash_preimage 必须已规范化，"
                     "不得包含认证、传输或易变字段"
                 )
+        if self.request_input_hash is not None:
+            validate_hash_token(
+                self.request_input_hash,
+                "ContextAssemblySnapshot.request_input_hash",
+            )
         if self.model_call_id is not None:
             _non_empty_string(
                 self.model_call_id, "ContextAssemblySnapshot.model_call_id"
@@ -187,7 +196,8 @@ class ContextAssemblySnapshot:
             ):
                 raise ItemSchemaError("ToolSetRef 与 assembly/plan 不一致")
             if not any(
-                not entry.included and entry.ref == tool_ref for entry in self.selection
+                not entry.included and entry.ref == tool_ref.identity_ref()
+                for entry in self.selection
             ):
                 tool_ref.validate_manifest()
         for entry in self.selection:
@@ -212,7 +222,7 @@ class ContextAssemblySnapshot:
         if len(tool_registry) != len(self.tool_set_refs):
             raise ItemSchemaError("assembly ToolSetRef 存在重复 identity")
         for entry in self.selection:
-            if isinstance(entry.ref, ToolSetRef):
+            if isinstance(entry.ref, ToolSetIdentityRef):
                 if (
                     entry.ref.session_id != self.session_id
                     or entry.ref.thread_id != self.thread_id
@@ -221,7 +231,12 @@ class ContextAssemblySnapshot:
                 ):
                     raise ItemSchemaError("selection ToolSetRef scope 不一致")
                 registered_tool = tool_registry.get(entry.ref.ref_id)
-                if (entry.included or registered_tool is not None) and registered_tool != entry.ref:
+                expected_ref = (
+                    registered_tool.identity_ref()
+                    if not entry.included and registered_tool is not None
+                    else registered_tool
+                )
+                if (entry.included or registered_tool is not None) and expected_ref != entry.ref:
                     raise ItemSchemaError("selection ToolSetRef manifest 不一致")
                 continue
             if ref_registry.get(selection_ref_identity(entry.ref)) != entry.ref:
@@ -369,6 +384,7 @@ class ContextAssemblySnapshot:
             projector_version=self.projector_version,
             target_format=self.target_format,
             request_hash_preimage=self.request_hash_preimage,
+            request_input_hash=self.request_input_hash,
             seal_binding=self.seal_binding,
         )
 
@@ -468,6 +484,7 @@ class ContextAssemblySnapshot:
             "projector_version": self.projector_version,
             "target_format": self.target_format,
             "request_hash_preimage": self.request_hash_preimage,
+            "request_input_hash": self.request_input_hash,
             "active_view_id": self.active_view_id,
             "selection_policy": self.selection_policy,
             "model_call_id": self.model_call_id,

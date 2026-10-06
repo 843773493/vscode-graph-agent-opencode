@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 from app.domain.itemized.enums import (
     BaseDeltaRole,
@@ -507,8 +507,8 @@ class ContextRef:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolSetRef:
-    """Provider tool manifest 的独立 selection source。"""
+class ToolSetIdentityRef:
+    """ToolSet 的来源与 manifest 身份；omitted selection 不持有工具正文。"""
 
     ref_id: str
     session_id: str
@@ -523,79 +523,8 @@ class ToolSetRef:
     redacted_stable_digest: str | None = None
     protection: str = DetailProtection.PUBLIC
     availability: str = DetailAvailability.AVAILABLE
-    tool_policy: Mapping[str, object] = field(default_factory=dict)
-    tools: tuple[Mapping[str, object], ...] = ()
     assembly_id: str | None = None
     ref_type: str = "tool_set"
-
-    @classmethod
-    def from_tool_snapshot(
-        cls,
-        *,
-        snapshot_id: str,
-        session_id: str,
-        thread_id: str,
-        plan_id: str,
-        tools: Sequence[Mapping[str, object]],
-        source_revision: str,
-        tool_policy: Mapping[str, object] | None = None,
-        tool_set_schema: str = "openai.tools",
-        tool_set_schema_version: str = "v1",
-        tool_policy_version: str = "v1",
-        assembly_id: str | None = None,
-    ) -> ToolSetRef:
-        """从 provider-neutral tool snapshot 建立带 manifest 的 ToolSetRef。"""
-        for value, field_name in (
-            (snapshot_id, "ToolSetRef.snapshot_id"),
-            (session_id, "ToolSetRef.session_id"),
-            (thread_id, "ToolSetRef.thread_id"),
-            (plan_id, "ToolSetRef.plan_id"),
-            (source_revision, "ToolSetRef.source_revision"),
-            (tool_set_schema, "ToolSetRef.tool_set_schema"),
-            (tool_set_schema_version, "ToolSetRef.tool_set_schema_version"),
-            (tool_policy_version, "ToolSetRef.tool_policy_version"),
-        ):
-            _non_empty_string(value, field_name)
-        if isinstance(tools, (str, bytes)):
-            raise TypeError("ToolSetRef.tools 必须是 mapping 序列")
-        if tool_policy is not None and not isinstance(tool_policy, Mapping):
-            raise TypeError("ToolSetRef.tool_policy 必须是 object")
-
-        normalized_tools: list[dict[str, object]] = []
-        for tool in tools:
-            if not isinstance(tool, Mapping):
-                raise TypeError("ToolSetRef.tools 元素必须是 object")
-            normalized = dict(tool)
-            tool_id = _tool_identity(normalized)
-            _non_empty_string(tool_id, "ToolSetRef.tools[].tool_id")
-            normalized_tools.append(normalized)
-        ordered_tools = tuple(sorted(normalized_tools, key=_tool_identity))
-        policy = dict(tool_policy) if tool_policy is not None else {}
-        manifest = {
-            "tool_set_schema": tool_set_schema,
-            "tool_set_schema_version": tool_set_schema_version,
-            "tools": [dict(tool) for tool in ordered_tools],
-            "tool_policy": policy,
-            "tool_policy_version": tool_policy_version,
-        }
-        encoded = canonical_json_bytes(manifest)
-        return cls(
-            ref_id=snapshot_id,
-            session_id=session_id,
-            thread_id=thread_id,
-            plan_id=plan_id,
-            source_revision=source_revision,
-            tool_set_schema=tool_set_schema,
-            tool_set_schema_version=tool_set_schema_version,
-            tool_policy_version=tool_policy_version,
-            content_length=len(encoded),
-            content_hash="sha256:jcs:v1:" + hashlib.sha256(encoded).hexdigest(),
-            protection=DetailProtection.PUBLIC,
-            availability=DetailAvailability.AVAILABLE,
-            tool_policy=policy,
-            tools=ordered_tools,
-            assembly_id=assembly_id,
-        )
 
     def __post_init__(self) -> None:
         for name in (
@@ -646,6 +575,100 @@ class ToolSetRef:
             raise ItemSchemaError(f"未知 ToolSetRef.availability: {self.availability}")
         if self.assembly_id is not None:
             _non_empty_string(self.assembly_id, "ToolSetRef.assembly_id")
+
+    def identity_ref(self) -> ToolSetIdentityRef:
+        """只读取共享身份字段；即使 omitted 正文不可读也不触碰 tools/policy。"""
+        return ToolSetIdentityRef(**{
+            item.name: getattr(self, item.name) for item in fields(ToolSetIdentityRef)
+        })
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            item.name: getattr(self, item.name) for item in fields(ToolSetIdentityRef)
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSetRef(ToolSetIdentityRef):
+    """完整 ToolSet manifest；只有该类型可以提供 Provider 工具正文。"""
+
+    tool_policy: Mapping[str, object] = field(default_factory=dict)
+    tools: tuple[Mapping[str, object], ...] = ()
+
+    @classmethod
+    def from_tool_snapshot(
+        cls,
+        *,
+        snapshot_id: str,
+        session_id: str,
+        thread_id: str,
+        plan_id: str,
+        tools: Sequence[Mapping[str, object]],
+        source_revision: str,
+        tool_policy: Mapping[str, object] | None = None,
+        tool_set_schema: str = "openai.tools",
+        tool_set_schema_version: str = "v1",
+        tool_policy_version: str = "v1",
+        assembly_id: str | None = None,
+    ) -> ToolSetRef:
+        """从 provider-neutral tool snapshot 建立带 manifest 的 ToolSetRef。"""
+        for value, field_name in (
+            (snapshot_id, "ToolSetRef.snapshot_id"),
+            (session_id, "ToolSetRef.session_id"),
+            (thread_id, "ToolSetRef.thread_id"),
+            (plan_id, "ToolSetRef.plan_id"),
+            (source_revision, "ToolSetRef.source_revision"),
+            (tool_set_schema, "ToolSetRef.tool_set_schema"),
+            (tool_set_schema_version, "ToolSetRef.tool_set_schema_version"),
+            (tool_policy_version, "ToolSetRef.tool_policy_version"),
+        ):
+            _non_empty_string(value, field_name)
+        if isinstance(tools, (str, bytes)):
+            raise TypeError("ToolSetRef.tools 必须是 mapping 序列")
+        if tool_policy is not None and not isinstance(tool_policy, Mapping):
+            raise TypeError("ToolSetRef.tool_policy 必须是 object")
+
+        normalized_tools: list[dict[str, object]] = []
+        for tool in tools:
+            if not isinstance(tool, Mapping):
+                raise TypeError("ToolSetRef.tools 元素必须是 object")
+            normalized = dict(tool)
+            tool_id = _tool_identity(normalized)
+            _non_empty_string(tool_id, "ToolSetRef.tools[].tool_id")
+            normalized_tools.append(normalized)
+        ordered_tools = tuple(sorted(normalized_tools, key=_tool_identity))
+        policy = dict(tool_policy) if tool_policy is not None else {}
+        # 新 manifest 在唯一构造边界冻结真实工具顺序；正文仍按 identity
+        # 规范排序，读取已存快照时不能凭当前 tools 补造此请求事实。
+        policy.setdefault("wire_tool_order", [_tool_identity(tool) for tool in normalized_tools])
+        manifest = {
+            "tool_set_schema": tool_set_schema,
+            "tool_set_schema_version": tool_set_schema_version,
+            "tools": [dict(tool) for tool in ordered_tools],
+            "tool_policy": policy,
+            "tool_policy_version": tool_policy_version,
+        }
+        encoded = canonical_json_bytes(manifest)
+        return cls(
+            ref_id=snapshot_id,
+            session_id=session_id,
+            thread_id=thread_id,
+            plan_id=plan_id,
+            source_revision=source_revision,
+            tool_set_schema=tool_set_schema,
+            tool_set_schema_version=tool_set_schema_version,
+            tool_policy_version=tool_policy_version,
+            content_length=len(encoded),
+            content_hash="sha256:jcs:v1:" + hashlib.sha256(encoded).hexdigest(),
+            protection=DetailProtection.PUBLIC,
+            availability=DetailAvailability.AVAILABLE,
+            tool_policy=policy,
+            tools=ordered_tools,
+            assembly_id=assembly_id,
+        )
+
+    def __post_init__(self) -> None:
+        ToolSetIdentityRef.__post_init__(self)
         if not isinstance(self.tool_policy, Mapping):
             raise ItemSchemaError("ToolSetRef.tool_policy 必须是 object")
         if not isinstance(self.tools, tuple):
@@ -667,6 +690,15 @@ class ToolSetRef:
             raise ItemSchemaError("ToolSetRef.tools 必须按 tool_id 稳定排序")
         if len(tool_ids) != len(set(tool_ids)):
             raise ItemSchemaError("ToolSetRef.tools 不得包含重复 tool_id")
+        if self.protection == DetailProtection.PUBLIC:
+            wire_order = self.tool_policy.get("wire_tool_order")
+            if (
+                not isinstance(wire_order, (list, tuple))
+                or not all(isinstance(identity, str) for identity in wire_order)
+                or len(wire_order) != len(tool_ids)
+                or set(wire_order) != set(tool_ids)
+            ):
+                raise ItemSchemaError("ToolSetRef.wire_tool_order 必须完整且唯一")
 
     def manifest_preimage(self) -> dict[str, object]:
         return {
@@ -695,31 +727,16 @@ class ToolSetRef:
             raise ItemSchemaError("ToolSetRef manifest content_hash 不匹配")
 
     def to_dict(self) -> dict[str, object]:
-        result: dict[str, object] = {
-            "ref_type": self.ref_type,
-            "ref_id": self.ref_id,
-            "plan_id": self.plan_id,
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "assembly_id": self.assembly_id,
-            "source_revision": self.source_revision,
-            "tool_set_schema": self.tool_set_schema,
-            "tool_set_schema_version": self.tool_set_schema_version,
-            "tool_policy_version": self.tool_policy_version,
-            "content_length": self.content_length,
-            "protection": self.protection,
-            "availability": self.availability,
+        return {
+            **ToolSetIdentityRef.to_dict(self),
             "tool_policy": dict(self.tool_policy),
             "tools": [dict(tool) for tool in self.tools],
         }
-        # manifest token 的 key 固定存在；另一侧使用 null 表示未采用。
-        result["content_hash"] = self.content_hash
-        result["redacted_stable_digest"] = self.redacted_stable_digest
-        return result
 
 
 __all__ = [
     "ContextRef",
+    "ToolSetIdentityRef",
     "ToolSetRef",
     "ref_identity",
     "require_manifest_token",

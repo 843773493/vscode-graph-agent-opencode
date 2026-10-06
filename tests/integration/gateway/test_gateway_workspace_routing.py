@@ -5,6 +5,8 @@ import json
 import re
 import shutil
 import time
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +23,10 @@ from app.agents.tools.session_history import (
     create_search_context_tool,
 )
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import (
@@ -33,12 +39,30 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.services.business.gateway_context_query_service import (
     GatewayContextQueryService,
 )
+from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
+    session_resource_identity,
+    session_resource_uri,
+)
+from app.services.business.session_service import SessionService
+from app.services.business.session_target_resolver import SessionTargetResolver
+from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    start_terminal_backend,
+)
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
+)
+from tests.support.api_helpers import checkpoint_fixture
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
@@ -50,8 +74,11 @@ from tests.support.gateway_processes import (
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes import (
     close_backend_process,
+    ensure_local_port_available,
     start_backend_process,
+    terminate_process,
 )
+from tests.support.session_catalog_owner import FixtureCatalogOwner
 
 
 def _prepare_workspace(path: Path, name: str) -> Path:
@@ -131,43 +158,135 @@ async def _write_session_context_checkpoint(
     )
 
 
-    checkpoint = {
-        "channel_values": {
-            "messages": [
-                HumanMessage(content=f"请记住 {marker}"),
-                AIMessage(
-                    content=[
-                        {
-                            "type": "reasoning",
-                            "reasoning": "SECRET_REASONING_E2E",
-                        },
-                        {"type": "text", "text": marker},
-                    ],
-                    tool_calls=[
-                        {
-                            "name": "diagnostic_tool",
-                            "args": {"value": "SECRET_TOOL_ARG_E2E"},
-                            "id": "call_context_e2e",
-                            "type": "tool_call",
-                        }
-                    ],
-                ),
-                ToolMessage(
-                    content="SECRET_TOOL_RESULT_E2E",
-                    tool_call_id="call_context_e2e",
-                    name="diagnostic_tool",
-                ),
-            ]
-        },
-        "channel_versions": {"messages": "1"},
-        "updated_channels": ["messages"],
-        "id": checkpoint_id,
-    }
-    await saver.aput(
-        build_checkpoint_config(session_id),
-        checkpoint,
-        {"source": "e2e_fixture", "step": 1, "writes": {}},
-        {"messages": "1"},
+    owner = saver.resolve_main_thread_owner(session_id)
+    config = build_checkpoint_config(owner.thread_id)
+    turn_id = f"context-turn:{checkpoint_id}"
+    execution_id = f"context-execution:{checkpoint_id}"
+    model_call_id = f"context-model-call:{checkpoint_id}"
+    user = HumanMessage(
+        id=f"context-user:{checkpoint_id}",
+        content=f"请记住 {marker}",
+        response_metadata={"message_metadata": {"turn_id": turn_id, "job_id": turn_id}},
+    )
+    messages = [
+        user,
+        AIMessage(
+            id=f"context-assistant:{checkpoint_id}",
+            content=[
+                {
+                    "type": "reasoning",
+                    "reasoning": "SECRET_REASONING_E2E",
+                },
+                {"type": "text", "text": marker},
+            ],
+            tool_calls=[
+                {
+                    "name": "diagnostic_tool",
+                    "args": {"value": "SECRET_TOOL_ARG_E2E"},
+                    "id": f"call_context_e2e:{checkpoint_id}",
+                    "type": "tool_call",
+                }
+            ],
+            response_metadata={"model_call_id": model_call_id},
+        ),
+        ToolMessage(
+            id=f"context-tool-result:{checkpoint_id}",
+            content="SECRET_TOOL_RESULT_E2E",
+            tool_call_id=f"call_context_e2e:{checkpoint_id}",
+            name="diagnostic_tool",
+            response_metadata={"model_call_id": model_call_id},
+        ),
+        AIMessage(id=f"context-final:{checkpoint_id}", content="工具已完成"),
+    ]
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        previous = await saver.aget_tuple(config)
+        version = 1
+        if previous is not None:
+            messages = [*previous.checkpoint["channel_values"]["messages"], *messages]
+            config = previous.config
+            version = int(previous.checkpoint["channel_versions"]["messages"].split(".", 1)[0]) + 1
+        saver.accept_turn(
+            session_id,
+            thread_id=owner.thread_id,
+            accepted_ingress_id=user.id,
+            acceptance_idempotency_key=f"context-acceptance:{checkpoint_id}",
+            job_id=turn_id,
+            admission_idempotency_key=f"context-admission:{checkpoint_id}",
+            turn_id=turn_id,
+            root_item_id=f"item-{user.id}",
+            payload=user.content,
+            initial_execution_id=execution_id,
+        )
+        admission = saver.execution_admission(
+            session_id, thread_id=owner.thread_id, execution_id=execution_id
+        )
+        with execution_admission_scope(admission, langgraph_thread_id=owner.thread_id):
+            await saver.aput(
+                config,
+                checkpoint_fixture(checkpoint_id, messages, channel_version=version),
+                {"source": "e2e_fixture", "step": version, "writes": {}},
+                {"messages": str(version)},
+            )
+            saver.finalize_turn(
+                session_id=session_id,
+                thread_id=owner.thread_id,
+                turn_id=turn_id,
+                final_message_id=f"context-final:{checkpoint_id}",
+            )
+
+
+@pytest.fixture
+def gateway_local_token_supplier() -> Callable[[], str]:
+    return lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"]
+
+
+@pytest.fixture
+def context_auxiliary_services(
+    request: pytest.FixtureRequest,
+) -> Iterator[Callable[[Path], dict[str, str]]]:
+    """为 overview 的真实资源查询启动目标工作区专属辅助服务。"""
+    port_block = integration_port_block_for_file(Path(request.node.fspath))
+    terminal_port, browser_port, browser_frontend_port = (
+        port_block.port(offset) for offset in (40, 42, 43)
+    )
+    with ExitStack() as lifetime:
+        def start(workspace_root: Path) -> dict[str, str]:
+            for port in (terminal_port, browser_port, browser_frontend_port):
+                ensure_local_port_available(port, service_name="context 测试辅助服务")
+            terminal = start_terminal_backend(
+                backend_port=terminal_port, workspace_root=str(workspace_root)
+            )
+            lifetime.callback(terminate_process, terminal)
+            browser = start_browser_manager_processes(
+                workspace_root=workspace_root,
+                backend_port=browser_port,
+                frontend_port=browser_frontend_port,
+                backend_host="127.0.0.1",
+            )
+            lifetime.callback(close_browser_manager_processes, browser)
+            return {
+                "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{terminal_port}",
+                "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{browser_port}",
+            }
+
+        yield start
+
+
+@pytest.fixture
+def local_context_session_service(
+    integration_workspace_root_path: str,
+    session_catalog_owner: FixtureCatalogOwner,
+) -> SessionService:
+    workspace_root = Path(integration_workspace_root_path).resolve()
+    sessions_root = workspace_root / ".boxteam" / "sessions"
+    workspace_id = load_or_create_workspace_id(workspace_root)
+    catalog = session_catalog_owner.get_catalog_components(sessions_root, workspace_id)
+    return SessionService(
+        config_service=ConfigService(workspace_root=workspace_root),
+        trace_event_store=TraceEventStore(sessions_root),
+        workspace_id=workspace_id,
+        path_resolver=catalog.resolver,
+        creation_service=catalog.creation_service,
     )
 
 
@@ -192,6 +311,9 @@ async def _wait_for_gateway_pending_restart(
 
 
 class _UnexpectedLocalQueryService:
+    def __init__(self, workspace_id: str) -> None:
+        self.workspace_id = workspace_id
+
     def __getattr__(self, name: str):
         raise AssertionError(f"跨工作区工具不应调用本地查询服务: {name}")
 
@@ -417,6 +539,9 @@ async def test_gateway_routes_sessions_between_local_workspaces(
 async def test_session_context_tools_query_another_workspace_through_gateway(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
+    gateway_local_token_supplier: Callable[[], str],
+    local_context_session_service: SessionService,
+    context_auxiliary_services: Callable[[Path], dict[str, str]],
 ):
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     primary_workspace = Path(integration_workspace_root_path).resolve()
@@ -436,6 +561,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         workspace_root=str(secondary_workspace),
         port=port_block.port(21),
         log_name="context-tool-secondary-backend",
+        env_overrides=context_auxiliary_services(secondary_workspace),
     )
     gateway = start_gateway_process(
         workspace_root=primary_workspace,
@@ -443,6 +569,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         port=gateway_port,
     )
 
+    gateway_scope_token = None
     try:
         async with httpx.AsyncClient(
             base_url=gateway_url,
@@ -450,6 +577,10 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             timeout=30,
         ) as client:
             await acquire_gateway_guest(client)
+            health_response = await client.get("/api/gateway/health")
+            assert health_response.status_code == 200, health_response.text
+            gateway_id = health_response.json()["data"]["gateway_id"]
+            gateway_scope_token = set_current_gateway_id(gateway_id)
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={
@@ -473,6 +604,8 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             )
             assert create_response.status_code == 200, create_response.text
             source_session_id = create_response.json()["data"]["session_id"]
+            backend_workspace_id = create_response.json()["data"]["workspace_id"]
+            assert backend_workspace_id != secondary_workspace_id
 
         marker = "CROSS_WORKSPACE_CONTEXT_ALPHA"
         await _write_session_context_checkpoint(
@@ -481,31 +614,47 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             marker=marker,
         )
 
+        context_client = GatewayContextQueryService(
+            transport=GatewaySessionContextClient(
+                gateway_url=gateway_url,
+                local_token_supplier=gateway_local_token_supplier,
+            )
+        )
         context = SimpleNamespace(
-            session_context_query_service=_UnexpectedLocalQueryService(),
-            workspace_session_context_client=GatewayContextQueryService(
-                transport=GatewaySessionContextClient(gateway_url=gateway_url)
+            session_context_query_service=_UnexpectedLocalQueryService(
+                local_context_session_service.workspace_id
+            ),
+            workspace_session_context_client=context_client,
+            session_target_resolver=SessionTargetResolver(
+                session_service=local_context_session_service,
+                workspace_session_context_client=context_client,
             ),
         )
         read_tool = create_read_context_tool(context)
         search_tool = create_search_context_tool(context)
-        resource = (
-            f"boxteam://workspace/{secondary_workspace_id}/session/"
-            f"{source_session_id}"
-        )
+        resource_ref = {
+            "resource_identity": str(session_resource_identity(backend_workspace_id, source_session_id)),
+            "uri": session_resource_uri(backend_workspace_id, source_session_id),
+            "scope": "workspace",
+        }
+        gateway_ref = {
+            "resource_identity": str(gateway_session_inventory_identity(gateway_id)),
+            "uri": gateway_session_inventory_uri(gateway_id),
+            "scope": "gateway",
+        }
 
         async with httpx.AsyncClient(base_url=gateway_url, timeout=30) as client:
             unauthenticated_response = await client.post(
                 "/api/v1/context/read",
                 headers={"X-BoxTeam-Workspace-Id": secondary_workspace_id},
-                json={"resource": resource},
+                json=resource_ref,
             )
         assert unauthenticated_response.status_code == 200, (
             unauthenticated_response.text
         )
 
         overview_payload = json.loads(
-            await read_tool.ainvoke({"resource": resource})
+            await read_tool.ainvoke(resource_ref)
         )
         revision = overview_payload["revision"]
         assert overview_payload["view"] == "overview"
@@ -519,7 +668,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         detailed_payload = json.loads(
             await read_tool.ainvoke(
                 {
-                    "resource": resource,
+                    **resource_ref,
                     "view": "records",
                     "include": [
                         "visible_text",
@@ -538,21 +687,23 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         search_payload = json.loads(
             await search_tool.ainvoke(
                 {
-                    "resource": resource,
+                    **resource_ref,
                     "query": marker,
-                    "expected_revision": revision,
+                    "revision": revision,
                 }
             )
         )
         assert search_payload["total_matches"] == 2
         match = search_payload["matches"][0]
+        match_ref = {key: match[key] for key in ("resource_identity", "uri", "scope")}
+        assert match_ref == resource_ref
 
         read_payload = json.loads(
             await read_tool.ainvoke(
                 {
-                    "resource": match["locator"],
+                    **match_ref,
                     "view": "records",
-                    "expected_revision": match["revision"],
+                    "revision": match["revision"],
                 }
             )
         )
@@ -561,7 +712,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         inventory_payload = json.loads(
             await read_tool.ainvoke(
                 {
-                    "resource": "boxteam://gateway/workspaces",
+                    **gateway_ref,
                     "view": "inventory",
                 }
             )
@@ -571,7 +722,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         gateway_search_payload = json.loads(
             await search_tool.ainvoke(
                 {
-                    "resource": "boxteam://gateway",
+                    **gateway_ref,
                     "query": marker,
                 }
             )
@@ -599,9 +750,9 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
                 "args": {
                     "tool_name": read_tool.name,
                     "arguments": {
-                        "resource": match["locator"],
+                        **match_ref,
                         "view": "records",
-                        "expected_revision": match["revision"],
+                        "revision": match["revision"],
                     },
                 },
             }
@@ -618,26 +769,27 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
                 "args": {
                     "tool_name": read_tool.name,
                     "arguments": {
-                        "resource": (
-                            "boxteam://workspace/gw_wrong_workspace_id/session/"
-                            f"{source_session_id}"
-                        )
+                        "resource_identity": str(session_resource_identity("wrong_backend_workspace_id", source_session_id)),
+                        "uri": session_resource_uri("wrong_backend_workspace_id", source_session_id),
+                        "scope": "workspace",
                     },
                 },
             }
         )
         assert isinstance(failed_result, ToolMessage)
         assert failed_result.status == "error"
-        assert "workspace_id=gw_wrong_workspace_id" in failed_result.text
+        assert "backend_workspace_id=wrong_backend_workspace_id" in failed_result.text
 
         close_backend_process(secondary_backend)
         partial_gateway_search = json.loads(
             await search_tool.ainvoke(
-                {"resource": "boxteam://gateway", "query": marker}
+                {**gateway_ref, "query": marker}
             )
         )
         assert partial_gateway_search["partial_errors"]
     finally:
+        if gateway_scope_token is not None:
+            reset_current_gateway_id(gateway_scope_token)
         close_gateway_process(gateway)
         close_backend_process(secondary_backend)
         close_backend_process(primary_backend)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -524,7 +525,9 @@ def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None
 
 
 def test_binding_for_combines_graph_and_thread_bindings() -> None:
-    thread_binding = ThreadRuntimeBinding(session_id="ses_graph", thread_id="main")
+    thread_binding = ThreadRuntimeBinding(
+        session_id="ses_graph", thread_id=thread_id_at(datetime(2026, 6, 1, tzinfo=UTC)),
+    )
     combined = binding_for(DEEP_AGENT_GRAPH_BINDING, thread_binding)
     assert isinstance(combined, InvocationGraphBinding)
     assert combined.graph is DEEP_AGENT_GRAPH_BINDING

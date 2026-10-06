@@ -9,21 +9,18 @@ from deepagents.middleware.summarization import SummarizationToolMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import SystemMessage
 
-from app.agents.agent_factory import (
-    _runtime_identity_system_prompt,
-    _team_aware_system_prompt,
-)
 from app.agents.cache_preserving_summarization import (
     NoDurableOwnerCompactionPreflight,
 )
 from app.agents.deep_agent_stack import build_deep_agent_middleware
+from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
     FILESYSTEM_TOOL_DESCRIPTIONS,
     SKILLS_SYSTEM_PROMPT,
+    TEAM_COORDINATION_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
     TODO_TOOL_DESCRIPTION,
 )
@@ -40,6 +37,9 @@ from app.agents.tool_invocation_context import (
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 
 
@@ -63,6 +63,7 @@ def _build_middleware(
     *,
     denylist: set[str] | None = None,
     skill_catalog: Any | None = None,
+    context_source_manager: ContextSourceManager | None = None,
 ) -> list[AgentMiddleware]:
     invocation_context = ToolInvocationContext()
     return build_deep_agent_middleware(
@@ -71,6 +72,7 @@ def _build_middleware(
         workspace_root=tmp_path,
         permissions=None,
         resolved_skills=skill_catalog,
+        context_source_manager=context_source_manager or ContextSourceManager(),
         compaction_preflight=NoDurableOwnerCompactionPreflight(),
         resolved_tool_denylist=set(denylist or set()),
         interrupt_on=None,
@@ -91,16 +93,21 @@ def _find_middleware(
 
 
 def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
-    middleware = _build_middleware(tmp_path)
+    manager = ContextSourceManager()
+    middleware = _build_middleware(tmp_path, context_source_manager=manager)
+    sources = {source.descriptor.source_id: source for source in manager.prepare_sources().sources}
+    assert sources["instruction:todo-list"].content == TODO_SYSTEM_PROMPT
+    assert sources["instruction:filesystem-rules"].content == FILESYSTEM_SYSTEM_PROMPT
+    assert sources["instruction:compact-tool-usage"].content == COMPACT_CONVERSATION_SYSTEM_PROMPT
 
     _find_middleware(middleware, StructuredPromptValidationMiddleware)
 
     todo = _find_middleware(middleware, TodoListMiddleware)
-    assert todo.system_prompt == TODO_SYSTEM_PROMPT
+    assert todo.system_prompt == ""
     assert todo.tools[0].description == TODO_TOOL_DESCRIPTION
 
     filesystem = _find_middleware(middleware, FilesystemMiddleware)
-    assert filesystem._custom_system_prompt == FILESYSTEM_SYSTEM_PROMPT
+    assert filesystem._custom_system_prompt == ""
     assert {tool.name: tool.description for tool in filesystem.tools} == FILESYSTEM_TOOL_DESCRIPTIONS
     assert "execute" not in {tool.name for tool in filesystem.tools}
     read_file = next(tool for tool in filesystem.tools if tool.name == "read_file")
@@ -111,7 +118,7 @@ def test_middleware_uses_project_prompts_without_upstream_demo_agents(tmp_path):
     }
 
     compact = _find_middleware(middleware, SummarizationToolMiddleware)
-    assert compact.system_prompt == COMPACT_CONVERSATION_SYSTEM_PROMPT
+    assert compact.system_prompt is None
 
 
 def test_workspace_skills_uses_compact_project_template(tmp_path):
@@ -175,33 +182,30 @@ def test_project_middleware_prompt_budget_stays_small(tmp_path):
     assert tool_description_chars < 2_500
 
 
-def test_team_system_prompt_forbids_polling_and_preserves_base_prompt():
-    prompt = _team_aware_system_prompt("base prompt", enabled=True)
-
-    assert isinstance(prompt, SystemMessage)
-    assert "base prompt" in prompt.text
-    assert "exec_command/sleep" in prompt.text
-    assert "get_team_board once" in prompt.text
-    assert "never claim that the team board is pending" in prompt.text
+def test_team_source_rules_forbid_polling():
+    assert "exec_command/sleep" in TEAM_COORDINATION_SYSTEM_PROMPT
+    assert "get_team_board once" in TEAM_COORDINATION_SYSTEM_PROMPT
+    assert "never claim that the team board is pending" in TEAM_COORDINATION_SYSTEM_PROMPT
 
 
 def test_runtime_identity_separates_model_from_project_and_path_roots(tmp_path):
-    prompt = _runtime_identity_system_prompt(
-        "base prompt",
-        workspace_root=tmp_path,
+    producers = runtime_instruction_producers(
+        agent_id="default", content="base prompt", config_revision="config:1",
+        workspace_root=str(tmp_path.resolve()),
         provider_candidates=(
             ("backup_3", "gpt-5.6-luna"),
             ("backup_4", "gpt-5.6-luna"),
         ),
     )
 
-    assert "base prompt" in prompt.text
-    assert "provider id：`backup_3`" in prompt.text
-    assert "model id：`gpt-5.6-luna`" in prompt.text
-    assert "config/name` 只是项目显示名" in prompt.text
-    assert str(tmp_path.resolve()) in prompt.text
-    assert "parry_arena/godot_export/parry_arena.html" in prompt.text
-    assert "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次" in prompt.text
+    assert producers[0].content == "base prompt"
+    prompt = producers[1].content
+    assert "provider id：`backup_3`" in prompt
+    assert "model id：`gpt-5.6-luna`" in prompt
+    assert "config/name` 只是项目显示名" in prompt
+    assert str(tmp_path.resolve()) in prompt
+    assert "parry_arena/godot_export/parry_arena.html" in prompt
+    assert "exec_command 的相对 workdir 只相对于上述 workspace 根目录解析一次" in prompt
 
 
 def test_build_runtime_injects_selected_provider_and_workspace_root(
@@ -215,6 +219,7 @@ def test_build_runtime_injects_selected_provider_and_workspace_root(
     from app.agents import agent_factory
 
     config_service = MagicMock()
+    config_service.get_revision.return_value = "config:runtime-identity"
     config_service.get_agent_runtime_config.return_value = {
         "system_prompt": "base prompt",
         "providers": [
@@ -254,6 +259,6 @@ def test_build_runtime_injects_selected_provider_and_workspace_root(
         workspace_root=tmp_path,
     )
 
-    assert "backup_3" in runtime["system_prompt"].text
-    assert "gpt-5.6-luna" in runtime["system_prompt"].text
-    assert str(tmp_path.resolve()) in runtime["system_prompt"].text
+    assert "backup_3" in runtime["instruction_producers"][1].content
+    assert "gpt-5.6-luna" in runtime["instruction_producers"][1].content
+    assert str(tmp_path.resolve()) in runtime["instruction_producers"][1].content

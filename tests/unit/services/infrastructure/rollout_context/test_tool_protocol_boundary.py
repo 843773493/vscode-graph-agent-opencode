@@ -7,6 +7,7 @@ chokepoint；rewind（含 replay 使用的 arewind/arewind_to_turn）经由同�
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,9 +16,12 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.hashing import contribution_content_hash
-from app.domain.itemized.request_plan import ContextContribution
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.business.message_display import project_message_for_display
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
@@ -30,12 +34,48 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceDescriptor,
+    ContextSourceManager,
+)
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
 )
 
 SESSION_ID = "ses_019c3635a6c278efb831fe265bdcd656"
+
+
+@pytest.fixture
+def protocol_case(
+    tmp_path: Path, session_bundle_factory,
+) -> Iterator[tuple[RolloutCheckpointSaver, RolloutStorage, str, dict[str, object]]]:
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    storage = RolloutStorage(
+        sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
+    )
+    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
+    thread = storage.main_thread_id(SESSION_ID)
+    accepted = saver.accept_turn(
+        SESSION_ID, thread_id=thread, accepted_ingress_id="user-1",
+        acceptance_idempotency_key="protocol-accept", job_id="protocol-job",
+        admission_idempotency_key="protocol-admission", payload="读取配置",
+        turn_id="rewind-turn", root_item_id="item-user-1",
+    )
+    admission = saver.execution_admission(
+        SESSION_ID, thread_id=thread, execution_id=str(accepted["initial_execution_id"]),
+    )
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        yield saver, storage, thread, accepted
 
 
 def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separate() -> None:
@@ -195,12 +235,12 @@ def _put_checkpoint(
     )
 
 
-def _seed_closed_tool_group(saver: RolloutCheckpointSaver) -> None:
+def _seed_closed_tool_group(saver: RolloutCheckpointSaver, thread: str) -> None:
     """checkpoint-1 只有 user；checkpoint-2 追加 call 与 terminal result。"""
     user = HumanMessage(content="读取配置", id="user-1")
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(SESSION_ID),
+        build_checkpoint_config(thread),
         "checkpoint-1",
         [user],
         1,
@@ -227,22 +267,14 @@ def _seed_closed_tool_group(saver: RolloutCheckpointSaver) -> None:
     )
 
 
-def test_rewind_conflict_keeps_old_view_zero_side_effects(
-    tmp_path: Path,
-    session_bundle_factory,
-) -> None:
-    sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
-        sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
-    )
-    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
-    _seed_closed_tool_group(saver)
+def test_rewind_conflict_keeps_old_view_zero_side_effects(protocol_case) -> None:
+    saver, storage, thread, _accepted = protocol_case
+    _seed_closed_tool_group(saver, thread)
     manifest_before = storage.initialize(SESSION_ID)
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
         storage.rewind_to_checkpoint(
-            thread_id=SESSION_ID,
+            thread_id=thread,
             checkpoint_id="checkpoint-2",
             source_anchor="assistant-call-1",
             anchor_mode="inclusive",
@@ -263,20 +295,12 @@ def test_rewind_conflict_keeps_old_view_zero_side_effects(
     assert manifest_after == manifest_before
 
 
-def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(
-    tmp_path: Path,
-    session_bundle_factory,
-) -> None:
-    sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
-        sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
-    )
-    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
+def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(protocol_case) -> None:
+    saver, storage, thread, _accepted = protocol_case
     user = HumanMessage(content="读取配置", id="user-1")
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(SESSION_ID),
+        build_checkpoint_config(thread),
         "checkpoint-1",
         [user],
         1,
@@ -299,7 +323,7 @@ def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(
 
     with pytest.raises(ToolProtocolBoundaryConflict) as exc_info:
         storage.rewind_to_checkpoint(
-            thread_id=SESSION_ID,
+            thread_id=thread,
             checkpoint_id="checkpoint-2",
             source_anchor="assistant-call-1",
             anchor_mode="inclusive",
@@ -310,22 +334,14 @@ def test_rewind_conflict_for_pending_call_has_no_safe_anchor_above(
     assert storage.initialize(SESSION_ID) == manifest_before
 
 
-def test_rewind_at_closed_boundaries_succeeds(
-    tmp_path: Path,
-    session_bundle_factory,
-) -> None:
-    sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
-        sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
-    )
-    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
-    _seed_closed_tool_group(saver)
+def test_rewind_at_closed_boundaries_succeeds(protocol_case) -> None:
+    saver, storage, thread, _accepted = protocol_case
+    _seed_closed_tool_group(saver, thread)
     manifest_before = storage.initialize(SESSION_ID)
 
     # 包含完整 call+result 的闭合边界：rewind 成功并推进 view revision。
     manifest = storage.rewind_to_checkpoint(
-        thread_id=SESSION_ID,
+        thread_id=thread,
         checkpoint_id="checkpoint-2",
         source_anchor="tool-result-1",
         anchor_mode="inclusive",
@@ -334,7 +350,7 @@ def test_rewind_at_closed_boundaries_succeeds(
 
     # 位于 tool-call group 之前的 user 锚点同样是闭合边界。
     manifest_user = storage.rewind_to_checkpoint(
-        thread_id=SESSION_ID,
+        thread_id=thread,
         checkpoint_id="checkpoint-1",
         source_anchor="user-1",
         anchor_mode="inclusive",
@@ -344,21 +360,13 @@ def test_rewind_at_closed_boundaries_succeeds(
     )
 
 
-def test_rewind_keeps_sealed_assembly_bytes_unchanged(
-    tmp_path: Path,
-    session_bundle_factory,
-) -> None:
+def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_wire, protocol_case) -> None:
     """rewind 只推进 view/pending epoch：已 seal assembly 的持久字节保持不变。
 
     OpenSpec add-context-injection-lifecycle 6.3：旧 sealed bytes 不变；
     rewind 提交 view/transition，不改写已封存 assembly 与 detail ref。
     """
-    sessions_dir = tmp_path / "sessions"
-    session_bundle_factory(sessions_dir, SESSION_ID)
-    storage = RolloutStorage(
-        sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec()
-    )
-    saver = RolloutCheckpointSaver(sessions_dir, storage=storage)
+    saver, storage, thread, accepted = protocol_case
     # user 消息携带 turn_id，使后续 prepare/seal 有真实 Turn root 可绑定。
     user = HumanMessage(
         content="读取配置",
@@ -367,7 +375,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(
     )
     first_config = _put_checkpoint(
         saver,
-        build_checkpoint_config(SESSION_ID),
+        build_checkpoint_config(thread),
         "checkpoint-1",
         [user],
         1,
@@ -394,35 +402,39 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(
     )
     manifest_before = storage.initialize(SESSION_ID)
 
-    body = {"policy": "rewind-guard-prompt"}
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(SESSION_ID, thread), control_state_port=saver,
+    )
+    manager.register(ContextSourceDescriptor(
+        source_id="agents:rewind-policy", source_kind="workspace_agents",
+        name="rewind policy", description="边界保护策略",
+        internal_locator="boxteam://workspace/agents",
+    ), tracking_status="tracked")
+    manager.observe(
+        "agents:rewind-policy", "rewind-guard-prompt", revision="rewind-guard-prompt",
+    )
+    selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
     prepared = saver.prepare_context_for_provider(
-        SESSION_ID,
-        turn_id="rewind-turn",
-        prompt_contributions=(
-            ContextContribution(
-                contribution_id="rewind-guard-prompt",
-                source_kind="workspace_policy",
-                source_revision="rewind-guard-prompt",
-                body=body,
-                content_hash=contribution_content_hash("prompt", body),
-            ),
-        ),
-        provider_version="rewind-guard-provider",
-        target_format="chat_completions",
+        SESSION_ID, thread,
+        turn_id=str(accepted["turn_id"]),
+        execution_id=str(accepted["initial_execution_id"]),
+        context_source_manager=manager, tool_set_supplier=lambda: selected,
+        **frozen_provider_wire("rewind-guard-provider", "chat_completions"),
+
         plan_creation_idempotency_key="rewind-guard:create",
         seal_idempotency_key="rewind-guard:seal",
     )
     assert prepared["losses"] == ()
-    sealed_before = saver.list_context_assemblies(SESSION_ID)
+    sealed_before = saver.list_context_assemblies(SESSION_ID, thread)
     assert len(sealed_before) == 1
     assembly_before = sealed_before[0]
     detail_ref_before = storage.get_context_assembly_detail_ref(
-        SESSION_ID, assembly_id=assembly_before.assembly_id
+        SESSION_ID, thread, assembly_id=assembly_before.assembly_id
     )
 
     # rewind 到闭合边界（user 锚点）并推进 view revision。
     manifest = storage.rewind_to_checkpoint(
-        thread_id=SESSION_ID,
+        thread_id=thread,
         checkpoint_id="checkpoint-1",
         source_anchor="user-1",
         anchor_mode="inclusive",
@@ -430,14 +442,14 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(
     assert manifest.history_view_revision == manifest_before.history_view_revision + 1
 
     # 已 seal assembly 的持久字节/详情引用逐项不变。
-    assert saver.list_context_assemblies(SESSION_ID) == sealed_before
+    assert saver.list_context_assemblies(SESSION_ID, thread) == sealed_before
     assert (
-        saver.get_context_assembly(SESSION_ID, assembly_id=assembly_before.assembly_id)
+        saver.get_context_assembly(SESSION_ID, thread, assembly_id=assembly_before.assembly_id)
         == assembly_before
     )
     assert (
         storage.get_context_assembly_detail_ref(
-            SESSION_ID, assembly_id=assembly_before.assembly_id
+            SESSION_ID, thread, assembly_id=assembly_before.assembly_id
         )
         == detail_ref_before
     )

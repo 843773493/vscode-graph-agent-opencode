@@ -65,6 +65,8 @@ def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
             source_revision=source.source_revision,
             content_length=source.content_length,
             content_hash=source.content_hash,
+            visibility=source.visibility if isinstance(source, ContextRef) else "internal",
+            protection=source.protection, availability=source.availability,
         )
         for ordinal, (source, kind) in enumerate(
             (

@@ -54,6 +54,7 @@ async def test_responses_stream_open_has_a_bounded_provider_timeout(monkeypatch)
         litellm_session_id="ses_latency_probe",
         responses_store=False,
         responses_include=["reasoning.encrypted_content"],
+        invocation_purpose="tool_test",
     )
 
     first_chunk = asyncio.create_task(
@@ -86,6 +87,7 @@ async def test_responses_payload_preparation_does_not_block_event_loop(monkeypat
         custom_llm_provider="chatgpt",
         provider_id="backup_4",
         responses_store=False,
+        invocation_purpose="tool_test",
     )
     original_payload_builder = model._responses_payload
 
@@ -134,6 +136,7 @@ async def test_responses_payload_timeout_is_reported_before_provider_call(
         custom_llm_provider="chatgpt",
         provider_id="backup_4",
         responses_store=False,
+        invocation_purpose="tool_test",
     )
 
     def timed_out_payload(*_args, **kwargs):
@@ -175,6 +178,7 @@ async def test_responses_payload_build_watchdog_does_not_wait_for_blocked_builde
         custom_llm_provider="chatgpt",
         provider_id="backup_4",
         responses_store=False,
+        invocation_purpose="tool_test",
     )
 
     def blocked_payload_builder(*_args, **_kwargs):
@@ -252,6 +256,7 @@ async def test_responses_semantic_delta_reaches_hook_before_langchain_yield(
         model="gpt-test",
         api_key="test-key",
         custom_llm_provider="openai",
+        invocation_purpose="tool_test",
     )
     observed: list[str] = []
 

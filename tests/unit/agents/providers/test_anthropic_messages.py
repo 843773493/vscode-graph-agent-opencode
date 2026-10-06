@@ -97,7 +97,7 @@ async def test_anthropic_messages_stream_uses_litellm_acompletion(
         "acompletion_with_retry",
         fake_acompletion_with_retry,
     )
-    model = build_model_from_provider(_provider(), {})
+    model = build_model_from_provider(_provider(), {}, invocation_purpose="tool_test")
 
     chunks = [
         chunk

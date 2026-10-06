@@ -771,14 +771,12 @@ class RolloutItemsMixin:
         checkpoint_ns: str = "",
         item_ids: Iterable[str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
-        _allow_migrating: bool = False,
     ) -> list[CanonicalItemRecord]:
         """在一致的 rollout 读边界内读取已提交 v2 item。
 
         没有调用方 snapshot 时也必须持有 rollout 文件锁，直到 JSONL 正文
         完成校验；否则 compaction/backup 可能在 SQLite locator 已读出后改写
-        JSONL，形成跨文件的半个快照。显式 migration 仍可通过内部参数读取
-        staging 数据，但不会绕过 locator/hash 校验。
+        JSONL，形成跨文件的半个快照。
         """
         if snapshot is None:
             with self._lock(
@@ -792,7 +790,6 @@ class RolloutItemsMixin:
                     checkpoint_ns=checkpoint_ns,
                     item_ids=item_ids,
                     snapshot=None,
-                    _allow_migrating=_allow_migrating,
                 )
         return self._read_items_unlocked(
             session_id,
@@ -800,7 +797,6 @@ class RolloutItemsMixin:
             checkpoint_ns=checkpoint_ns,
             item_ids=item_ids,
             snapshot=snapshot,
-            _allow_migrating=_allow_migrating,
         )
 
     def _read_items_unlocked(
@@ -811,7 +807,6 @@ class RolloutItemsMixin:
         checkpoint_ns: str = "",
         item_ids: Iterable[str] | None = None,
         snapshot: RolloutReadSnapshot | None = None,
-        _allow_migrating: bool = False,
     ) -> list[CanonicalItemRecord]:
         """按 SQLite catalog 定位并校验已提交 v2 item，避免扫描 JSONL。"""
         if snapshot is not None and (
@@ -836,14 +831,12 @@ class RolloutItemsMixin:
         )
         assert connection is not None
         try:
-            self._require_v2_readable(
-                connection,
-                allow_migrating=_allow_migrating,
-            )
-            values = tuple(dict.fromkeys(item_ids or ()))
+            self._require_v2_readable(connection)
+            # None 请求全部；显式空选集仍须过滤，不得读回全部历史。
+            values = tuple(dict.fromkeys(item_ids if item_ids is not None else ()))
             if any(not isinstance(item_id, str) or not item_id for item_id in values):
                 raise TypeError("canonical item_ids 必须是非空字符串")
-            if values:
+            if item_ids is not None:
                 placeholders = ",".join("?" for _ in values)
                 rows = connection.execute(
                     f"SELECT item_sequence, item_id, content_hash, payload_length, source_revision, jsonl_offset, jsonl_length, projection_manifest_json, tool_call_id FROM item_catalog WHERE item_id IN ({placeholders}) ORDER BY item_sequence",

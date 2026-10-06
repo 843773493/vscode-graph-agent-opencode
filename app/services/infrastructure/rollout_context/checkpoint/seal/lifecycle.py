@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict, replace
 from uuid import uuid4
 
-from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.agents.providers.wire_finalize import (
+    WIRE_PROJECTOR_ID,
+    WIRE_PROJECTOR_VERSION,
+    ChatWireProfile,
+    ResponsesWireProfile,
+    finalize_provider_wire,
+)
+from app.domain.itemized.assembly_snapshot import (
+    ContextAssemblySnapshot,
+    context_request_hash,
+)
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
+from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
     release_uncommitted_details,
@@ -19,6 +32,13 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     runtime_draft,
     seal_input_hash,
 )
+from app.services.infrastructure.rollout_context.provider.native_request import (
+    project_native_request,
+)
+from app.services.infrastructure.rollout_context.provider.toolset_request_bridge import (
+    project_tool_set_ref,
+)
+from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
 
 
 def seal_registered_plan(
@@ -32,10 +52,36 @@ def seal_registered_plan(
     assembly_options: Mapping[str, object],
     request_only_content: Mapping[str, object] | None,
     request_input_hash: str | None,
+    wire_profile: ChatWireProfile | ResponsesWireProfile | None,
+    wire_params: Mapping[str, object] | None,
     activation_snapshot=None,
     context_preparation: ContextSealPreparation | None = None,
 ) -> ContextAssemblySnapshot:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
+    if (wire_profile is None) != (wire_params is None):
+        raise ValueError("source-mismatch: wire profile/params 必须成对提供")
+    wire_configuration = None
+    if wire_profile is not None:
+        if not isinstance(wire_profile, (ChatWireProfile, ResponsesWireProfile)):
+            raise TypeError("source-mismatch: wire seal 需要纯值 profile")
+        if not isinstance(wire_params, Mapping):
+            raise TypeError("source-mismatch: wire seal 需要纯数据 params")
+        target_format = "responses" if isinstance(wire_profile, ResponsesWireProfile) else "chat_completions"
+        if assembly_options["provider_version"] != wire_profile.identity() or assembly_options["target_format"] != target_format:
+            raise ValueError("source-mismatch: wire profile 与 seal 声明不一致")
+        if context_preparation is None:
+            raise ValueError("source-mismatch: wire seal 缺少封存 prefix 准备")
+        wire_configuration = {
+            "wire_profile": asdict(wire_profile),
+            "wire_params": normalize_wire_request(wire_params),
+            "projector_id": WIRE_PROJECTOR_ID,
+            "projector_version": WIRE_PROJECTOR_VERSION,
+        }
+        assembly_options = {
+            **assembly_options,
+            "projector_id": WIRE_PROJECTOR_ID,
+            "projector_version": WIRE_PROJECTOR_VERSION,
+        }
     with owner._lock:
         registered = require_registered_draft(
             owner, session_id, thread_id, plan, checkpoint_ns
@@ -60,6 +106,7 @@ def seal_registered_plan(
                 context_preparation.input_hash()
                 if context_preparation is not None else None
             ),
+            wire_configuration=wire_configuration,
         )
         retry = committed_retry(
             owner,
@@ -110,12 +157,54 @@ def seal_registered_plan(
                 session_id=session_id,
                 thread_id=thread_id,
                 request_detail_refs=detail_refs,
+                request_input_hash=request_input_hash,
                 seal_binding=(
                     context_preparation.bind(assembly_id)
                     if context_preparation is not None else None
                 ),
                 **assembly_options,
             )
+            if wire_profile is not None:
+                sealed_plan = snapshot.as_sealed_plan()
+                if snapshot.seal_binding is None:
+                    raise ValueError("source-mismatch: wire seal 缺少已绑定 prefix")
+                item_ids = tuple(
+                    entry.ref.ref_id for entry in snapshot.selection
+                    if entry.included and entry.ref.ref_type == "canonical_item"
+                )
+                items = owner._storage.read_items(
+                    session_id, thread_id, item_ids=item_ids, checkpoint_ns=checkpoint_ns,
+                )
+                bodies = owner._request_content_for_plan(
+                    session_id, thread_id, checkpoint_ns, sealed_plan, None,
+                )
+                if isinstance(wire_profile, ResponsesWireProfile):
+                    native_request = project_native_request(
+                        sealed_plan, items, bodies, seal_binding=snapshot.seal_binding,
+                    )["request"]
+                    messages, tools = (), ()
+                else:
+                    native_request = None
+                    messages = project_sealed_prefix(
+                        sealed_plan, snapshot.seal_binding, items, bodies,
+                    )
+                    tools = [
+                        tool for entry in snapshot.selection
+                        if entry.included and isinstance(entry.ref, ToolSetRef)
+                        for tool in project_tool_set_ref(entry.ref, target_format=snapshot.target_format)
+                    ]
+                preimage = normalize_wire_request(finalize_provider_wire(
+                    messages=messages, tools=tools, native_request=native_request,
+                    profile=wire_profile, params=wire_params,
+                ))
+                snapshot = replace(
+                    snapshot, request_hash_preimage=preimage,
+                    request_hash=context_request_hash(
+                        sealed_plan, snapshot.provider_version,
+                        projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
+                        target_format=snapshot.target_format, wire_request=preimage,
+                    ),
+                )
         except BaseException as error:
             record_failed_seal(
                 owner,

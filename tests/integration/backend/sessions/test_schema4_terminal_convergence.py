@@ -6,27 +6,39 @@ import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import HumanMessage
 
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
 )
 from tests.harness.python.run_context import TestRunContext
 
@@ -35,6 +47,7 @@ from tests.harness.python.run_context import TestRunContext
 class TerminalCase:
     sessions: Path
     session_id: str
+    thread_id: str
     turn_id: str
     execution_id: str
     root: Path
@@ -53,7 +66,7 @@ class TerminalCase:
 def terminal_case(
     request: pytest.FixtureRequest,
     session_bundle_factory,
-) -> TerminalCase:
+) -> Iterator[TerminalCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     sessions = context.workspace_root / ".boxteam" / "sessions"
     session_id = f"ses_{create_uuid_hex()}"
@@ -72,14 +85,25 @@ def terminal_case(
         initial_execution_id=f"execution-{session_id}",
     )
     thread_id = saver._storage._resolve_thread_identity(session_id, None)
-    return TerminalCase(
+    case = TerminalCase(
         sessions=sessions,
         session_id=session_id,
+        thread_id=thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         root=saver._storage.root(session_id, thread_id=thread_id),
         saver=saver,
     )
+    admission = saver.execution_admission(
+        session_id, thread_id=thread_id, execution_id=case.execution_id,
+    )
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        yield case
 
 
 def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> CanonicalItemRecord:
@@ -103,17 +127,24 @@ def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> Canonical
     )
 
 
-def _assemble_and_register_model_call(case: TerminalCase) -> str:
-    assembly_id = case.saver.seal_context_for_dispatch(
-        case.session_id,
-        turn_id=case.turn_id,
-        execution_id=case.execution_id,
-        model_call_id=f"model-call-{case.execution_id}",
-        provider_version="schema4-terminal-test",
-        target_format="chat_completions",
+def _assemble_and_register_model_call(frozen_provider_wire, case: TerminalCase) -> str:
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(case.session_id, case.thread_id),
+        control_state_port=case.saver,
     )
+    selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+    prepared = case.saver.prepare_context_for_provider(
+        case.session_id, case.thread_id,
+        turn_id=case.turn_id, execution_id=case.execution_id,
+        plan_creation_idempotency_key=f"terminal-create:{case.execution_id}",
+        seal_idempotency_key=f"terminal-seal:{case.execution_id}",
+        context_source_manager=manager, tool_set_supplier=lambda: selected,
+        **frozen_provider_wire("schema4-terminal-test", "chat_completions"),
+    )
+    assembly_id = str(prepared["assembly_id"])
     case.saver.register_model_call(
         case.session_id,
+        thread_id=case.thread_id,
         execution_id=case.execution_id,
         model_call_id=f"model-call-{case.execution_id}",
         attempt=1,
@@ -254,13 +285,14 @@ def test_pre_model_failure_keeps_accepted_user_turn_visible(
 
     case.saver.mark_execution_lost(
         case.session_id,
+        thread_id=case.thread_id,
         turn_id=case.turn_id,
         execution_id=case.execution_id,
         reason="provider_configuration_error",
     )
 
     latest, _older_cursor, _projection_epoch = case.saver.bootstrap_history(
-        case.session_id
+        case.session_id, case.thread_id,
     )
     assert latest is not None
     assert latest.turn_id == case.turn_id
@@ -458,7 +490,7 @@ def test_completed_terminal_cannot_split_precommitted_final_item(
 ) -> None:
     case = terminal_case
     output = _assistant_item(case, f"item-precommitted-{case.execution_id}", "不能拆分")
-    case.saver.append_items(case.session_id, (output,))
+    case.saver.append_items(case.session_id, (output,), thread_id=case.thread_id)
     before = case.jsonl.read_bytes()
 
     with pytest.raises(ValueError, match="同一提交中包含 final canonical item"):
@@ -526,6 +558,7 @@ import sys
 from pathlib import Path
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from tests.support.session_catalog_owner import fixture_catalog_scope
 
 sessions = Path(sys.argv[1])
 session_id = sys.argv[2]
@@ -545,15 +578,17 @@ def crash_after_jsonl_barrier(fd):
         os._exit(83)
 
 os.fsync = crash_after_jsonl_barrier
-RolloutCheckpointSaver(sessions).converge_execution(
-    session_id,
-    turn_id=turn_id,
-    execution_id=execution_id,
-    outcome="completed",
-    turn_status="completed",
-    items=(item,),
-    final_item_id=item.item_id,
-)
+with fixture_catalog_scope():
+    RolloutCheckpointSaver(sessions).converge_execution(
+        session_id,
+        thread_id=sys.argv[7],
+        turn_id=turn_id,
+        execution_id=execution_id,
+        outcome="completed",
+        turn_status="completed",
+        items=(item,),
+        final_item_id=item.item_id,
+    )
 """
     result = subprocess.run(
         [
@@ -566,6 +601,7 @@ RolloutCheckpointSaver(sessions).converge_execution(
             case.execution_id,
             json.dumps(output.to_dict(), ensure_ascii=False),
             str(case.jsonl),
+            case.thread_id,
         ],
         cwd=Path.cwd(),
         capture_output=True,

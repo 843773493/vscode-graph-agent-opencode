@@ -51,6 +51,7 @@ async def test_chat_attempts_do_not_accumulate_across_calls() -> None:
             custom_llm_provider="openai",
             provider_id="primary",
             streaming=True,
+            invocation_purpose="tool_test",
         )
         for round_index in range(4):
             attempts = await _capture(
@@ -80,6 +81,7 @@ async def test_responses_attempts_do_not_accumulate_across_calls() -> None:
             provider_id="backup_3",
             responses_store=False,
             streaming=True,
+            invocation_purpose="tool_test",
         )
         for round_index in range(4):
             attempts = await _capture(
@@ -107,6 +109,7 @@ async def test_model_calls_leave_litellm_callback_tables_untouched() -> None:
             api_base="https://opencode.ai/zen/v1",
             custom_llm_provider="openai",
             streaming=True,
+            invocation_purpose="tool_test",
         )
         for round_index in range(3):
             await _capture(

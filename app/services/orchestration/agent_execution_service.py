@@ -182,6 +182,7 @@ class AgentExecutionService(JobStepExecutor):
             session_id=session_id,
             thread_id=thread_id,
             agent_id=agent_id,
+            tool_selection_reader=self._tool_selection_store,
             config_service=self._config_service,
             background_task_registry=self._background_task_registry,
             background_message_bus=self._background_message_bus,

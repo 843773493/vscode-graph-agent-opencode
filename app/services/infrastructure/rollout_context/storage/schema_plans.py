@@ -1,4 +1,4 @@
-"""schema4 plan registry DDL；由 schema owner 的初始化/显式升级调用。"""
+"""当前 typed plan registry DDL；由 schema owner 初始化。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ CREATE TABLE context_plans (
     thread_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
     registration_origin TEXT NOT NULL DEFAULT 'runtime'
-        CHECK(registration_origin IN ('runtime', 'schema3_import', 'fork_import')),
+        CHECK(registration_origin IN ('runtime', 'fork_import')),
     source_provenance_json TEXT,
     source_manifest_json TEXT,
     plan_creation_idempotency_key TEXT,
@@ -36,7 +36,7 @@ CREATE TABLE context_plans (
             AND creation_json IS NOT NULL AND draft_json IS NOT NULL AND draft_hash IS NOT NULL
             AND ((plan_state='unsealed' AND seal_input_hash IS NULL)
                 OR (plan_state='sealed' AND seal_input_hash IS NOT NULL AND length(seal_input_hash) > 0)))
-        OR (registration_origin IN ('schema3_import', 'fork_import')
+        OR (registration_origin = 'fork_import'
             AND source_provenance_json IS NOT NULL AND length(source_provenance_json) > 0
             AND source_manifest_json IS NOT NULL AND length(source_manifest_json) > 0
             AND plan_state = 'sealed' AND revision = 0

@@ -15,7 +15,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextContribution, SourceBinding
@@ -49,6 +50,9 @@ __all__ = [
 ]
 
 
+EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
 def test_saver_seal_restores_same_selection_across_projections_and_process(
     projection_saver,
     projection_plan,
@@ -56,7 +60,9 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
     saver, session_id, _ = projection_saver
     snapshot = projection_plan
     plan = snapshot.as_sealed_plan()
-    messages = saver.project_context_plan_to_messages(session_id, plan)
+    messages = saver.project_context_plan_to_messages(
+        session_id, saver._storage.main_thread_id(session_id), plan
+    )
     assert [type(message) for message in messages] == [
         AIMessage,
         SystemMessage,
@@ -106,8 +112,10 @@ def test_saver_seal_restores_same_selection_across_projections_and_process(
                 "from pathlib import Path; "
                 "from tests.integration.backend.sessions.test_itemized_projection_contract import _project; "
                 "from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver; "
-                "saver=RolloutCheckpointSaver(Path(sys.argv[1])); "
-                "print(json.dumps(_project(saver,sys.argv[2],sys.argv[3]),ensure_ascii=False))"
+                "from tests.support.session_catalog_owner import fixture_catalog_scope; "
+                "\nwith fixture_catalog_scope():\n"
+                " with RolloutCheckpointSaver(Path(sys.argv[1])) as saver:\n"
+                "  print(json.dumps(_project(saver,sys.argv[2],sys.argv[3]),ensure_ascii=False))"
             ),
             str(saver._storage.sessions_dir),
             session_id,
@@ -139,16 +147,17 @@ def test_projection_evidence_is_shared_across_saver_projection_surfaces(
     plan = projection_plan.as_sealed_plan()
 
     _, langchain_evidence = saver.project_context_plan_to_messages_with_evidence(
-        session_id, plan
+        session_id, saver._storage.main_thread_id(session_id), plan
     )
     _, history_evidence = saver.project_context_plan_to_history_with_evidence(
-        session_id, plan
+        session_id, saver._storage.main_thread_id(session_id), plan
     )
     native, native_evidence = saver.project_context_plan_to_native_with_evidence(
-        session_id, plan
+        session_id, saver._storage.main_thread_id(session_id), plan
     )
     _, _, provider_evidence = saver.project_context_plan_to_provider_with_evidence(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan,
         target_format="chat_completions",
     )
@@ -169,7 +178,9 @@ def test_projection_evidence_is_shared_across_saver_projection_surfaces(
     assert len({evidence.plan_hash for evidence in evidences}) == 1
     assert len({evidence.source_overlay_epoch for evidence in evidences}) == 1
     assert len({evidence.history_view_revision for evidence in evidences}) == 1
-    assert all(evidence.selection == langchain_evidence.selection for evidence in evidences)
+    assert all(
+        evidence.selection == langchain_evidence.selection for evidence in evidences
+    )
     assert native["selection"] == list(langchain_evidence.selection)
     assert native["losses"] == list(native_evidence.losses)
     assert all(evidence.session_id == session_id for evidence in evidences)
@@ -178,7 +189,12 @@ def test_projection_evidence_is_shared_across_saver_projection_surfaces(
 
 def test_unsealed_saver_plan_cannot_enter_any_projection(projection_saver) -> None:
     saver, session_id, _ = projection_saver
-    draft = saver.compose_committed_context_plan(session_id, plan_id="draft-only")
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id="draft-only",
+        tool_set=EMPTY_TOOL_SET,
+    )
     assert draft.plan_state == "unsealed" and draft.assembly_id is None
     assert draft.selection == ()
     for projector in (
@@ -187,7 +203,7 @@ def test_unsealed_saver_plan_cannot_enter_any_projection(projection_saver) -> No
         saver.project_context_plan_to_native,
     ):
         with pytest.raises(ValueError, match="未 sealed"):
-            projector(session_id, draft)
+            projector(session_id, saver._storage.main_thread_id(session_id), draft)
 
 
 @pytest.mark.parametrize(
@@ -225,10 +241,15 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
         omitted_ref_ids=omitted,
         request_only_content=bodies,
@@ -307,7 +328,7 @@ def test_persisted_manifest_mismatch_rejects_every_projection(
             with pytest.raises(
                 (RuntimeError, ValueError), match="不一致|mismatch|manifest"
             ):
-                projector(session_id, plan)
+                projector(session_id, plan.thread_id, plan)
 
 
 @pytest.mark.parametrize("damage", ["missing", "body", "hash", "revision", "length"])
@@ -338,9 +359,11 @@ def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
             restarted.project_context_plan_to_native,
         ):
             with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
-                projector(session_id, plan)
+                projector(session_id, plan.thread_id, plan)
         # 普通历史不读取任何 request-only 详情正文，仍可返回 canonical history。
-        history = restarted.project_context_plan_to_history(session_id, plan)
+        history = restarted.project_context_plan_to_history(
+            session_id, restarted._storage.main_thread_id(session_id), plan
+        )
         assert [message.id for message in history] == ["answer-1", "user-1"]
 
 
@@ -349,7 +372,12 @@ def test_canonical_source_mismatch_is_rejected_before_seal(
     projection_saver, field: str
 ) -> None:
     saver, session_id, _ = projection_saver
-    draft = saver.compose_committed_context_plan(session_id, plan_id="source-mismatch")
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id="source-mismatch",
+        tool_set=EMPTY_TOOL_SET,
+    )
     value = 1 if field == "content_length" else "sha256:jcs:v1:" + "0" * 64
     draft = replace(
         draft, refs=(replace(draft.refs[0], **{field: value}), *draft.refs[1:])
@@ -358,13 +386,23 @@ def test_canonical_source_mismatch_is_rejected_before_seal(
         draft = register_projection_draft(saver, session_id, draft)
         saver.seal_context_plan(
             session_id,
+            saver._storage.main_thread_id(session_id),
             draft,
-            seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
-            execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+            execution_id=saver.execution_for_turn(
+                session_id,
+                turn_id="turn-1",
+                thread_id=saver._storage.main_thread_id(session_id),
+            ),
             provider_version="contract-provider",
         )
-    assert saver.list_context_assemblies(session_id) == ()
+    assert (
+        saver.list_context_assemblies(
+            session_id, saver._storage.main_thread_id(session_id)
+        )
+        == ()
+    )
 
 
 def test_overlay_reuses_source_after_history_rewind_and_restart(
@@ -379,21 +417,29 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
     }
     checkpoint["channel_versions"] = {"messages": "2"}
     saver.put(
-        build_checkpoint_config(session_id),
+        build_checkpoint_config(saver._storage.main_thread_id(session_id)),
         checkpoint,
         {"source": "projection-contract"},
         {"messages": "2"},
     )
     first_draft = saver.compose_committed_context_plan(
-        session_id, plan_id="overlay-before"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id="overlay-before",
+        tool_set=EMPTY_TOOL_SET,
     )
     first_draft = register_projection_draft(saver, session_id, first_draft)
     first = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         first_draft,
-        seal_idempotency_key=f"seal:{first_draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{first_draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
     )
     first_result = _project(saver, session_id, first.assembly_id)
@@ -402,20 +448,31 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
     ]
     assert [entry.ref.ref_id for entry in first_overlay] == ["z-base", "a-delta"]
     assert [entry.contribution_ordinal for entry in first_overlay] == [0, 1]
-    saver.rewind(build_checkpoint_config(session_id), checkpoint_id="cp-initial")
+    saver.rewind(
+        build_checkpoint_config(saver._storage.main_thread_id(session_id)),
+        checkpoint_id="cp-initial",
+    )
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         draft = restarted.compose_committed_context_plan(
-            session_id, plan_id="overlay-after"
+            session_id,
+            restarted._storage.main_thread_id(session_id),
+            plan_id="overlay-after",
+            tool_set=EMPTY_TOOL_SET,
         )
         assert draft.history_view_revision > first.history_view_revision
         assert draft.source_overlay_epoch == first.source_overlay_epoch == 0
         draft = register_projection_draft(restarted, session_id, draft)
         second = restarted.seal_context_plan(
             session_id,
+            restarted._storage.main_thread_id(session_id),
             draft,
-            seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
-            execution_id=restarted.execution_for_turn(session_id, turn_id="turn-1"),
+            execution_id=restarted.execution_for_turn(
+                session_id,
+                turn_id="turn-1",
+                thread_id=restarted._storage.main_thread_id(session_id),
+            ),
             provider_version="contract-provider",
         )
         second_result = _project(restarted, session_id, second.assembly_id)
@@ -463,6 +520,7 @@ def test_gc_tombstone_survives_file_delete_failure_and_restart(
     # 真实 detail writer/registry 构造 seal 前已落盘但尚未被 assembly 引用的孤立详情。
     record = saver._detail_store.write(
         session_id=session_id,
+        thread_id=saver._storage.main_thread_id(session_id),
         assembly_id="orphan-assembly",
         detail_kind="assembly_snapshot",
         retention_class="assembly_audit",
@@ -491,11 +549,17 @@ def test_gc_tombstone_survives_file_delete_failure_and_restart(
     with monkeypatch.context() as patch:
         patch.setattr(Path, "unlink", fail_delete)
         with pytest.raises(OSError, match="injected detail deletion failure"):
-            saver.gc_context_plan_details(session_id, expired_before=expired)
+            saver.gc_context_plan_details(
+                session_id,
+                saver._storage.main_thread_id(session_id),
+                expired_before=expired,
+            )
     assert target.is_file()
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
         assert restarted.gc_context_plan_details(
-            session_id, expired_before=expired
+            session_id,
+            restarted._storage.main_thread_id(session_id),
+            expired_before=expired,
         ) == (record.detail_ref,)
         assert not target.exists()
 
@@ -519,16 +583,28 @@ def test_protected_reasoning_reports_loss_in_all_projections(projection_saver) -
         turn_id="turn-1",
         turn_scope="turn_member",
     )
-    saver.append_items(session_id, (opaque,))
-    draft = saver.compose_committed_context_plan(session_id, plan_id="opaque-plan")
+    saver.append_items(
+        session_id, (opaque,), thread_id=saver._storage.main_thread_id(session_id)
+    )
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id="opaque-plan",
+        tool_set=EMPTY_TOOL_SET,
+    )
     assert "opaque-reasoning" in {ref.ref_id for ref in draft.refs}
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
     )
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
@@ -553,7 +629,10 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
 ) -> None:
     saver, session_id, _ = projection_saver
     draft = saver.compose_committed_context_plan(
-        session_id, plan_id=f"omit-overlay-{omission}"
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id=f"omit-overlay-{omission}",
+        tool_set=EMPTY_TOOL_SET,
     )
     omitted = ("z-base", "a-delta") if omission == "both" else (omission,)
     draft = register_projection_draft(saver, session_id, draft)
@@ -562,20 +641,30 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
         with pytest.raises((ValueError, RuntimeError), match="overlay|base|chain|基线"):
             saver.seal_context_plan(
                 session_id,
+                saver._storage.main_thread_id(session_id),
                 draft,
-                seal_idempotency_key=f"seal:{draft.plan_id}",
+                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
                 turn_id="turn-1",
-                execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+                execution_id=saver.execution_for_turn(
+                    session_id,
+                    turn_id="turn-1",
+                    thread_id=saver._storage.main_thread_id(session_id),
+                ),
                 provider_version="contract-provider",
                 omitted_ref_ids=omitted,
             )
         return
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
         omitted_ref_ids=omitted,
     )
@@ -601,11 +690,14 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
     saver, session_id, session = projection_saver
     key = b"projection-contract-test-key-001"
     body = [{"type": "text", "text": "protected-source-only-42"}]
-    with RolloutCheckpointSaver(saver._storage.sessions_dir, protected_detail_key=key) as saver:
+    with RolloutCheckpointSaver(
+        saver._storage.sessions_dir, protected_detail_key=key
+    ) as saver:
         # 用真实 protected writer 取得该 session 的 HMAC source manifest；
         # source 只传 metadata，正文经显式 Saver seal 输入，不构造 sealed snapshot。
         source = saver._detail_store.write(
             session_id=session_id,
+            thread_id=saver._storage.main_thread_id(session_id),
             assembly_id="protected-source",
             detail_kind="request_source",
             retention_class="request_replay",
@@ -619,6 +711,7 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
         if backed:
             saver.register_context_contribution(
                 session_id,
+                saver._storage.main_thread_id(session_id),
                 ContextContribution(
                     contribution_id="protected-contribution",
                     source_kind="protected_source",
@@ -626,16 +719,21 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
                     content_length=source.length,
                     redacted_stable_digest=source.redacted_stable_digest,
                     protection="protected",
-                    extensions={} , source_binding=SourceBinding(source_ref='source:protected'),
+                    extensions={},
+                    source_binding=SourceBinding(source_ref="source:protected"),
                 ),
                 request_content=body,
             )
         draft = saver.compose_committed_context_plan(
-            session_id, plan_id="protected-plan"
+            session_id,
+            saver._storage.main_thread_id(session_id),
+            plan_id="protected-plan",
+            tool_set=EMPTY_TOOL_SET,
         )
         ref = ContextRef.request_only_ref(
             "protected-plan-ref",
-            session_id=session_id, thread_id="thread-1",
+            session_id=session_id,
+            thread_id=saver._storage.main_thread_id(session_id),
             plan_id=draft.plan_id,
             source_revision="protected-v1",
             content_length=source.length,
@@ -654,15 +752,22 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
         draft = register_projection_draft(saver, session_id, draft)
         snapshot = saver.seal_context_plan(
             session_id,
+            saver._storage.main_thread_id(session_id),
             draft,
-            seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
-            execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+            execution_id=saver.execution_for_turn(
+                session_id,
+                turn_id="turn-1",
+                thread_id=saver._storage.main_thread_id(session_id),
+            ),
             provider_version="contract-provider",
             request_only_content={"protected-plan-ref": body} if not backed else None,
         )
         before = _project(saver, session_id, snapshot.assembly_id)
-    with RolloutCheckpointSaver(saver._storage.sessions_dir, protected_detail_key=key) as restarted:
+    with RolloutCheckpointSaver(
+        saver._storage.sessions_dir, protected_detail_key=key
+    ) as restarted:
         assert _project(restarted, session_id, snapshot.assembly_id) == before
     assert "protected-source-only-42" in json.dumps(before["native"]["request"])
     public_files = [
@@ -683,11 +788,13 @@ def test_protected_request_digest_restores_with_backend_and_rejects_missing_key(
             without_key.project_context_plan_to_native,
         ):
             with pytest.raises(RuntimeError, match="protected|detail|backend"):
-                projector(session_id, snapshot.as_sealed_plan())
+                projector(session_id, snapshot.thread_id, snapshot.as_sealed_plan())
         assert (
             len(
                 without_key.project_context_plan_to_history(
-                    session_id, snapshot.as_sealed_plan()
+                    session_id,
+                    without_key._storage.main_thread_id(session_id),
+                    snapshot.as_sealed_plan(),
                 )
             )
             == 2
@@ -710,14 +817,24 @@ def test_invalid_request_body_does_not_leave_partial_seal_details(
     with pytest.raises(ValueError, match=f"source-mismatch: request-only {damage}"):
         saver.seal_context_plan(
             session_id,
+            saver._storage.main_thread_id(session_id),
             draft,
-            seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
-            execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+            execution_id=saver.execution_for_turn(
+                session_id,
+                turn_id="turn-1",
+                thread_id=saver._storage.main_thread_id(session_id),
+            ),
             provider_version="contract-provider",
             request_only_content=bodies,
         )
-    assert saver.list_context_assemblies(session_id) == ()
+    assert (
+        saver.list_context_assemblies(
+            session_id, saver._storage.main_thread_id(session_id)
+        )
+        == ()
+    )
     assert not any(
         path.is_file() for path in (session / "rollout/context-plan-details").rglob("*")
     )
@@ -754,19 +871,29 @@ def test_native_tool_calls_and_results_keep_saver_selection_order(
     }
     checkpoint["channel_versions"] = {"messages": "2"}
     saver.put(
-        build_checkpoint_config(session_id),
+        build_checkpoint_config(saver._storage.main_thread_id(session_id)),
         checkpoint,
         {"source": "projection-contract"},
         {"messages": "2"},
     )
-    draft = saver.compose_committed_context_plan(session_id, plan_id="native-tool-plan")
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        saver._storage.main_thread_id(session_id),
+        plan_id="native-tool-plan",
+        tool_set=EMPTY_TOOL_SET,
+    )
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
     )
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
@@ -785,7 +912,11 @@ def test_native_tool_calls_and_results_keep_saver_selection_order(
     assert result["history"] == result["messages"]
     assert [
         source["plan_ordinal"] for source in result["native"]["wire_sources"]
-    ] == list(range(len(snapshot.selection)))
+    ] == [
+        entry.plan_ordinal for entry in snapshot.selection
+        if entry.included and entry.ref.ref_type == "canonical_item"
+    ]
+    assert len(snapshot.tool_set_refs) == 1 and snapshot.tool_set_refs[0].tools == ()
 
 
 def test_toolset_manifest_keeps_one_plan_across_wire_formats(projection_saver) -> None:
@@ -798,33 +929,44 @@ def test_toolset_manifest_keeps_one_plan_across_wire_formats(projection_saver) -
     }
     draft = saver.compose_committed_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan_id="toolset-wire-formats",
-        tool_snapshot=(
-            {
-                "tool_id": "stable-tool-id",
-                "type": "function",
-                "function": function,
-            },
+        tool_set=ToolSetSnapshot(
+            selection_revision=sha256_jcs({"read_file": True}),
+            tools=(
+                {
+                    "tool_id": "stable-tool-id",
+                    "type": "function",
+                    "function": function,
+                },
+            ),
         ),
     )
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
         session_id,
+        saver._storage.main_thread_id(session_id),
         draft,
-        seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
-        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=saver._storage.main_thread_id(session_id),
+        ),
         provider_version="contract-provider",
     )
     plan = snapshot.as_sealed_plan()
     chat_messages, chat_tools, chat_loss = saver.project_context_plan_to_provider(
         session_id,
+        saver._storage.main_thread_id(session_id),
         plan,
         target_format="chat_completions",
     )
     response_messages, response_tools, response_loss = (
         saver.project_context_plan_to_provider(
             session_id,
+            saver._storage.main_thread_id(session_id),
             plan,
             target_format="responses",
         )
@@ -832,6 +974,8 @@ def test_toolset_manifest_keeps_one_plan_across_wire_formats(projection_saver) -
     assert chat_tools == [{"type": "function", "function": function}]
     assert response_tools == [{"type": "function", **function}]
     assert chat_messages == response_messages and chat_loss == response_loss == ()
-    native = saver.project_context_plan_to_native(session_id, plan)
+    native = saver.project_context_plan_to_native(
+        session_id, saver._storage.main_thread_id(session_id), plan
+    )
     assert native["request"]["tools"] == response_tools
     assert native["plan_hash"] == snapshot.plan_hash

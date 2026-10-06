@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import replace
 
 from app.domain.itemized.enums import BaseDeltaRole, SemanticKind
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.request_plan import (
     ContextContribution,
@@ -14,6 +16,9 @@ from app.domain.itemized.request_plan import (
 )
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
+)
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutReadSnapshot,
 )
 from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
 
@@ -84,7 +89,7 @@ class ContextPlanCompositionMixin:
         thread_id: str,
         plan_id: str,
         refs: Sequence[ContextRef],
-        tool_snapshot: Sequence[Mapping[str, object]] = (),
+        tool_set: ToolSetSnapshot,
         history_view_revision: int = 0,
         source_overlay_epoch: int = 0,
         compiler_version: str = "itemized-context-v1",
@@ -95,7 +100,7 @@ class ContextPlanCompositionMixin:
             thread_id=thread_id,
             plan_id=plan_id,
             refs=refs,
-            tool_snapshot=tool_snapshot,
+            tool_set=tool_set,
             history_view_revision=history_view_revision,
             source_overlay_epoch=source_overlay_epoch,
             compiler_version=compiler_version,
@@ -161,10 +166,11 @@ class ContextPlanCompositionMixin:
         thread_id: str,
         *,
         plan_id: str,
-        tool_snapshot: Sequence[Mapping[str, object]] = (),
+        tool_set: ToolSetSnapshot,
         include_pending_notices: bool = True,
         compiler_version: str = "itemized-context-v1",
         checkpoint_ns: str = "",
+        read_snapshot: RolloutReadSnapshot | None = None,
     ) -> ContextRequestPlan:
         """由 Saver 从已提交 active view 生成一次 request plan。
 
@@ -173,11 +179,14 @@ class ContextPlanCompositionMixin:
         在 view 切换过程中拼出跨 snapshot 的混合上下文。
         """
         # 调用方必须提供当前真实 thread；composer 不得从 session 推断。
-        with self._context_reader.open_snapshot(
-            session_id,
-            thread_id,
-            checkpoint_ns,
+        with (
+            self._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns)
+            if read_snapshot is None else nullcontext(read_snapshot)
         ) as snapshot:
+            if (snapshot.session_id, snapshot.thread_id, snapshot.checkpoint_ns) != (
+                session_id, thread_id, checkpoint_ns,
+            ):
+                raise ValueError("source-mismatch: composition snapshot owner 不一致")
             committed_items = self._storage.committed_context_items(
                 snapshot,
                 include_pending_notices=include_pending_notices,
@@ -445,7 +454,7 @@ class ContextPlanCompositionMixin:
                         # cache/detail backend，seal 时独立读取并验证 HMAC。
                         body=(
                             self._request_only_content.get(
-                                (session_id, checkpoint_ns, contribution_id)
+                                (session_id, thread_id, checkpoint_ns, contribution_id)
                             )
                             if raw["content_hash"] is not None else None
                         ),
@@ -506,7 +515,7 @@ class ContextPlanCompositionMixin:
             thread_id=thread_id,
             plan_id=plan_id,
             refs=tuple(refs),
-            tool_snapshot=tool_snapshot,
+            tool_set=tool_set,
             history_view_revision=history_view_revision,
             source_overlay_epoch=source_overlay_epoch,
             compiler_version=compiler_version,

@@ -379,6 +379,7 @@ def test_chatgpt_oauth_responses_uses_stable_litellm_session_id(monkeypatch):
         provider,
         {},
         prompt_cache_key="ses_chatgpt_cache_affinity",
+        invocation_purpose="tool_test",
     )
 
     assert isinstance(model, BoxteamOpenAIResponsesModel)
@@ -405,6 +406,9 @@ def test_runtime_skips_invalid_fallback_without_blocking_selected_provider(
     providers[1]["id"] = "broken-fallback"
 
     class ConfigServiceStub:
+        def get_revision(self):
+            return "config:runtime-fallback"
+
         def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
             assert preferred_provider_id == "selected"
             return {"providers": providers, "system_prompt": "test"}
@@ -433,6 +437,9 @@ def test_runtime_reports_invalid_selected_provider(monkeypatch):
     providers[0]["id"] = "broken-selected"
 
     class ConfigServiceStub:
+        def get_revision(self):
+            return "config:runtime-fallback"
+
         def get_agent_runtime_config(self, _agent_id, *, preferred_provider_id=None):
             return {"providers": providers, "system_prompt": "test"}
 
@@ -463,7 +470,7 @@ def test_chatgpt_provider_rejects_missing_oauth_config():
 def test_responses_history_replays_encrypted_reasoning_without_server_id():
     from langchain_core.messages import AIMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     message = AIMessage(
         content=[
             {
@@ -490,7 +497,7 @@ def test_responses_history_replays_encrypted_reasoning_without_server_id():
 def test_responses_attachment_history_drops_reasoning_output_content():
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="先处理上一条请求"),
@@ -544,7 +551,7 @@ def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
 ):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     legacy_history = [
         AIMessage(
             content=[
@@ -577,7 +584,7 @@ def test_responses_payload_final_boundary_drops_reintroduced_reasoning_content(
 def test_responses_history_drops_unportable_provider_reasoning_id():
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="执行任务"),
         AIMessage(
@@ -610,7 +617,7 @@ def test_responses_history_drops_unportable_provider_reasoning_id():
 def test_responses_history_drops_encrypted_reasoning_from_another_provider():
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="跨模型继续"),
         AIMessage(
@@ -675,7 +682,7 @@ def test_responses_native_projection_rejects_unknown_system_block():
 def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(content="读取 README"),
         AIMessage(
@@ -716,7 +723,7 @@ def test_responses_history_keeps_tool_call_when_dropping_unportable_reasoning():
 def test_responses_history_reconstructs_content_function_call_before_result():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="读取 README"),
@@ -755,7 +762,7 @@ def test_responses_history_reconstructs_content_function_call_before_result():
 def test_responses_history_drops_unpaired_tool_result_and_allows_continuation():
     from langchain_core.messages import HumanMessage, ToolMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -779,7 +786,7 @@ def test_responses_history_drops_stale_unfinished_tool_segment_at_new_job_bounda
     from langchain_core.messages import AIMessage, HumanMessage
 
     stale_call_id = "call_mnM0tiEs03n5IxxaST3"
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="旧 job 的任务"),
@@ -812,7 +819,7 @@ def test_responses_history_drops_late_tool_result_after_job_boundary():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     stale_call_id = "call_mnM0tiEs03n5IxxaST3"
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -843,7 +850,7 @@ def test_responses_history_isolates_previous_tool_transactions_and_internal_remi
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     stale_call_id = "call_QWLcaGAtSpzygm4gaup0JyJS"
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="旧任务"),
@@ -886,7 +893,7 @@ def test_responses_history_recovers_from_persisted_orphan_tool_result():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     orphan_call_id = "call_EgMF1XbUORJwSX5TTOXTBmBg"
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
 
     payload = model._responses_payload(
         [
@@ -915,7 +922,7 @@ def test_responses_history_replays_image_tool_result_as_portable_text_pair():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
     call_id = "call_UDf0yQNxKcvfzQMU265h0Egf"
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     payload = model._responses_payload(
         [
             HumanMessage(content="继续处理附件任务"),
@@ -966,7 +973,7 @@ def test_responses_history_replays_image_tool_result_as_portable_text_pair():
 def test_responses_payload_converts_image_and_replays_encrypted_reasoning():
     from langchain_core.messages import AIMessage, HumanMessage
 
-    model = build_model_from_provider(_provider("responses"), {})
+    model = build_model_from_provider(_provider("responses"), {}, invocation_purpose="tool_test")
     history = [
         HumanMessage(
             content=[

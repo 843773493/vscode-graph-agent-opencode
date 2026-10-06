@@ -1,8 +1,7 @@
-"""把已封存 assembly 的原生投影短暂交给 Provider adapter。
+"""向两协议发送边界传递 Saver 已提交 assembly，并校验实际发送请求。
 
-这里是无状态 dispatch bridge：它不捕获 middleware 差异、不重建上下文、
-不保存 replay 队列。Saver 在进入 bridge 前已经完成 selection、hash 和
-assembly 校验；ContextVar 只承载当前 handler 生命周期内的只读引用。
+ContextVar 只承载本次 handler 的不可变绑定，不重建上下文、不读 storage、
+不维护第二份持久账本。非 Agent 调用只能由构建方显式标注用途。
 """
 
 from __future__ import annotations
@@ -11,45 +10,141 @@ import copy
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Literal
 
-_SEALED_NATIVE_PROJECTION: ContextVar[dict[str, object] | None] = ContextVar(
-    "sealed_native_request_projection",
+from app.agents.providers.wire_finalize import (
+    WIRE_PROJECTOR_ID,
+    WIRE_PROJECTOR_VERSION,
+    ChatWireProfile,
+    ResponsesWireProfile,
+)
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.errors import ItemSchemaError
+from app.domain.itemized.hash.request_hash import context_request_hash
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.serialization import normalize_wire_request
+
+ProviderInvocationPurpose = Literal["agent", "tool_test"]
+
+
+@dataclass(frozen=True, slots=True)
+class SealedAssemblyDispatch:
+    """同一已提交 snapshot 与它的可选 Responses 原生投影。"""
+
+    snapshot: ContextAssemblySnapshot
+    native_projection: dict[str, object] | None = None
+
+_SEALED_ASSEMBLY_DISPATCH: ContextVar[SealedAssemblyDispatch | None] = ContextVar(
+    "sealed_assembly_dispatch",
     default=None,
 )
 
 
 @contextmanager
-def sealed_native_projection_scope(
-    projection: Mapping[str, object] | None,
+def sealed_assembly_dispatch_scope(
+    snapshot: ContextAssemblySnapshot,
+    *,
+    native_projection: Mapping[str, object] | None = None,
 ) -> Iterator[None]:
-    """仅在本次 Provider handler 生命周期内传递 Saver 的 sealed projection。"""
-    if projection is not None:
+    """仅在本次 handler 内绑定 Saver snapshot；两协议都必须有真实封存。"""
+    if not isinstance(snapshot, ContextAssemblySnapshot):
+        raise TypeError("source-mismatch: dispatch 需要已提交 ContextAssemblySnapshot")
+    if not isinstance(snapshot.request_hash_preimage, Mapping):
+        raise TypeError("source-mismatch: sealed assembly 缺少完整 wire preimage")
+    try:
+        snapshot.validate_hashes()
+    except ItemSchemaError as error:
+        raise ValueError("source-mismatch: sealed assembly hash/manifest 非法") from error
+    if snapshot.target_format == "responses":
+        if not isinstance(native_projection, Mapping):
+            raise ValueError("source-mismatch: Responses binding 缺少 sealed native projection")
         required = ("session_id", "assembly_id", "plan_hash", "selection", "request")
-        if any(key not in projection for key in required):
-            raise TypeError("sealed assembly projection 缺少必需 manifest 字段")
-        if not isinstance(projection["session_id"], str):
-            raise TypeError("sealed assembly projection.session_id 必须是字符串")
-        if not isinstance(projection["assembly_id"], str):
-            raise TypeError("sealed assembly projection.assembly_id 必须是字符串")
-        if not isinstance(projection["plan_hash"], str):
-            raise TypeError("sealed assembly projection.plan_hash 必须是字符串")
-        if not isinstance(projection["selection"], list):
-            raise TypeError("sealed assembly projection.selection 必须是列表")
-        if not isinstance(projection["request"], dict):
-            raise TypeError("sealed assembly projection.request 必须是对象")
-    token = _SEALED_NATIVE_PROJECTION.set(
-        copy.deepcopy(dict(projection)) if projection is not None else None
+        if any(key not in native_projection for key in required):
+            raise TypeError("source-mismatch: sealed native projection 缺少 manifest 字段")
+        if (
+            native_projection["session_id"] != snapshot.session_id
+            or native_projection["assembly_id"] != snapshot.assembly_id
+            or native_projection["plan_hash"] != snapshot.plan_hash
+            or canonical_json_bytes(native_projection["selection"])
+            != canonical_json_bytes([entry.to_dict() for entry in snapshot.selection])
+        ):
+            raise ValueError("source-mismatch: native projection 与 sealed assembly 不一致")
+        request = native_projection["request"]
+        if not isinstance(request, Mapping) or not all(
+            key in request for key in ("input", "tools")
+        ):
+            raise TypeError("source-mismatch: native request 缺少 sealed input/tools")
+    elif snapshot.target_format != "chat_completions" or native_projection is not None:
+        raise ValueError("source-mismatch: sealed dispatch protocol/native projection 不一致")
+    binding = SealedAssemblyDispatch(
+        snapshot=snapshot,
+        native_projection=dict(native_projection) if native_projection is not None else None,
     )
+    token = _SEALED_ASSEMBLY_DISPATCH.set(copy.deepcopy(binding))
     try:
         yield
     finally:
-        _SEALED_NATIVE_PROJECTION.reset(token)
+        _SEALED_ASSEMBLY_DISPATCH.reset(token)
 
 
-def read_sealed_native_projection() -> dict[str, object] | None:
-    """返回当前调用的独立 projection 副本，禁止 Provider 原地修改 manifest。"""
-    value = _SEALED_NATIVE_PROJECTION.get()
-    return copy.deepcopy(value) if value is not None else None
+def read_sealed_assembly_dispatch(
+    *, invocation_purpose: ProviderInvocationPurpose,
+) -> SealedAssemblyDispatch | None:
+    """用途由真实构建方给出；缺 binding/admission 不产生直连豁免。"""
+    value = _SEALED_ASSEMBLY_DISPATCH.get()
+    if invocation_purpose == "tool_test":
+        if value is not None:
+            raise ValueError("source-mismatch: tool_test 调用不得消费 Agent assembly binding")
+        return None
+    if invocation_purpose != "agent":
+        raise ValueError("source-mismatch: Provider invocation_purpose 非法")
+    if value is None:
+        raise ValueError("source-mismatch: Agent Provider 发送缺少 sealed assembly binding")
+    return copy.deepcopy(value)
 
 
-__all__ = ["read_sealed_native_projection", "sealed_native_projection_scope"]
+def validate_sealed_assembly_dispatch(
+    *,
+    invocation_purpose: ProviderInvocationPurpose,
+    profile: ChatWireProfile | ResponsesWireProfile,
+    wire_request: Mapping[str, object],
+) -> None:
+    """在真实网络入口前校 profile、完整 finalized body 与同一 request hash。"""
+    binding = read_sealed_assembly_dispatch(invocation_purpose=invocation_purpose)
+    if binding is None:
+        return
+    snapshot = binding.snapshot
+    target_format = "responses" if isinstance(profile, ResponsesWireProfile) else "chat_completions"
+    if (
+        profile.identity() != snapshot.provider_version
+        or target_format != snapshot.target_format
+        or snapshot.projector_id != WIRE_PROJECTOR_ID
+        or snapshot.projector_version != WIRE_PROJECTOR_VERSION
+    ):
+        raise ValueError("source-mismatch: 当前 Provider profile/projector 与 sealed assembly 不一致")
+    try:
+        preimage = normalize_wire_request(wire_request)
+        actual_body = canonical_json_bytes(preimage)
+        sealed_body = canonical_json_bytes(snapshot.request_hash_preimage)
+        actual_hash = context_request_hash(
+            snapshot.as_sealed_plan(),
+            profile.identity(),
+            projector_id=WIRE_PROJECTOR_ID,
+            projector_version=WIRE_PROJECTOR_VERSION,
+            target_format=target_format,
+            wire_request=preimage,
+        )
+    except ItemSchemaError as error:
+        raise ValueError("source-mismatch: 实际 Provider wire preimage 非法") from error
+    if actual_body != sealed_body or actual_hash != snapshot.request_hash:
+        raise ValueError("source-mismatch: 实际 Provider wire 与 sealed request_hash/preimage 不一致")
+
+
+__all__ = [
+    "ProviderInvocationPurpose",
+    "SealedAssemblyDispatch",
+    "read_sealed_assembly_dispatch",
+    "sealed_assembly_dispatch_scope",
+    "validate_sealed_assembly_dispatch",
+]

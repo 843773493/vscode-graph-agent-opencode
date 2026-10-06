@@ -26,11 +26,11 @@ from app.domain.itemized.identity.item_projection import (
     ReasoningCarrier,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.carrier_dedup import (
     superseded_stream_item_ids,
     superseded_stream_tool_group_item_ids,
 )
-from app.services.mapping.itemized.langchain import project_canonical_items
 
 TURN = "job_parent_turn2"
 EXECUTION = "execution-parent-turn2"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
         ContextSourceControlState,
@@ -145,13 +146,10 @@ class SourceRegistryMixin:
         def _persist_control_state(
             self,
             state: SourceState,
-            *,
-            applied_revision: str | None = None,
         ) -> None:
             """把具有跨重启价值的 registration 状态经唯一 owner 端口写入。
 
-            applied_revision 显式指定提交时刻的 applied 基准（model_call 提交路径
-            传 state.latest_revision）；缺省时使用内存当前 applied 值。
+            本端口只保存 observed/tracking；applied 只能由 assembly seal 事务推进。
             """
             port = self._control_state_port
             owner = self._owner
@@ -159,6 +157,20 @@ class SourceRegistryMixin:
                 return
             if not state.has_durable_interest():
                 return
+            durable = next((
+                stored for stored in port.load_context_source_control_states(owner)
+                if stored.source_id == state.source_id
+            ), None)
+            if durable is not None and durable.state_revision != state.persisted_state_revision:
+                # seal 可以在 CSM 确认前推进 applied；观察路径只对齐这一个变化，
+                # 不吸收其它 writer 的 observed/tracking 漂移。
+                before_seal = replace(
+                    durable, latest_visible_committed_revision=state.latest_visible_committed_revision,
+                )
+                if before_seal.durable_fields() != state.persisted_fields:
+                    raise RuntimeError(
+                        "context-source-control-state-conflict: observed/tracking 已被其它 writer 推进"
+                    )
             snapshot = ContextSourceControlState(
                 owner=owner,
                 source_id=state.source_id,
@@ -167,14 +179,14 @@ class SourceRegistryMixin:
                 binding_revision=state.binding_revision,
                 tracking_status=state.tracking_status,
                 latest_visible_committed_revision=(
-                    state.latest_visible_committed_revision
-                    if applied_revision is None
-                    else applied_revision
+                    durable.latest_visible_committed_revision if durable is not None else None
                 ),
                 latest_revision=state.latest_revision,
-                state_revision=state.persisted_state_revision,
+                state_revision=durable.state_revision if durable is not None else state.persisted_state_revision,
             )
-            if state.persisted_fields == snapshot.durable_fields():
+            if durable is not None and durable.durable_fields() == snapshot.durable_fields():
+                state.persisted_state_revision = durable.state_revision
+                state.persisted_fields = durable.durable_fields()
                 return
             stored = port.save_context_source_control_state(snapshot)
             if stored.owner != owner or stored.source_id != state.source_id:

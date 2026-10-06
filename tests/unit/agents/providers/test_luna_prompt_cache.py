@@ -92,6 +92,7 @@ async def _run_three_rounds(
         provider,
         {},
         prompt_cache_key=f"boxteam-cache-test:{provider['id']}",
+        invocation_purpose="tool_test",
     )
     messages: list[BaseMessage] = [SystemMessage(content=_cacheable_system_prompt())]
     statistics: list[tuple[int, int]] = []

@@ -167,6 +167,7 @@ async def test_minimal_model_does_not_send_unspecified_generation_parameters(
             "api_mode": _chat_api_mode(),
         },
         runtime_config={},
+        invocation_purpose="tool_test",
     )
 
     chunks = [chunk async for chunk in model._astream([HumanMessage(content="hi")])]
@@ -214,6 +215,7 @@ async def test_nonstream_call_keeps_nonstream_request_parameters(
     model = BoxteamLiteLLMChatModel(
         model="test-model", api_key="test-key", custom_llm_provider="openai",
         streaming=False, max_retries=0,
+        invocation_purpose="tool_test",
     )
     messages = [HumanMessage(content="hi")]
     if mode == "sync":
@@ -236,6 +238,7 @@ async def test_raw_semantic_delta_reaches_hook_before_langchain_yield(
         api_key="test-key",
         custom_llm_provider="openai",
         streaming=True,
+        invocation_purpose="tool_test",
     )
     observed: list[str] = []
 
@@ -287,6 +290,7 @@ async def test_async_delta_hook_cancellation_stops_upstream_iteration(
         api_key="test-key",
         custom_llm_provider="openai",
         streaming=True,
+        invocation_purpose="tool_test",
     )
     stream = AsyncChunkStream(
         [_text_chunk("不会继续"), _synthetic_finish_chunk()],
@@ -325,6 +329,7 @@ async def test_async_reader_cancels_pending_litellm_anext_and_closes_stream(
         api_key="test-key",
         custom_llm_provider="openai",
         streaming=True,
+        invocation_purpose="tool_test",
     )
 
     class BlockingStream:
@@ -583,6 +588,7 @@ async def test_litellm_stream_sends_extra_body(monkeypatch):
             "temperature": 1,
             "extra_body": {"reasoning_effort": "low"},
         },
+        invocation_purpose="tool_test",
     )
 
     async def fake_acompletion_with_retry(self, **kwargs):
@@ -635,6 +641,7 @@ async def test_incomplete_stream_is_not_retried_after_semantic_delta(
         custom_llm_provider="openai",
         max_retries=1,
         streaming=True,
+        invocation_purpose="tool_test",
     )
 
     published_chunks = []
@@ -682,6 +689,7 @@ async def test_synthetic_finish_reason_exposes_partial_tool_call_then_fails(
         provider_id="test-provider",
         max_retries=2,
         streaming=True,
+        invocation_purpose="tool_test",
     )
     published_chunks = []
 
