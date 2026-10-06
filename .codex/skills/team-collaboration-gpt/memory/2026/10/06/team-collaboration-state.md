@@ -8,7 +8,7 @@
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
-- 主独占 history-loading、context_source_manager、Gateway context 三文件及导航 test_catalog_service/test_operations_queue；精确路径见各自 freeze.json。本轮另独占新增 `tests/integration/workspace_services/test_resource_owner_crash_recovery.py`，只补原persistent1.4/5.3验收，不实施新增文件工具。同一 Sol 已转做 normalized wire/profile 功能闭包，不编辑上述八个测试。此次是核验后释放归属的范围纠正，不因观察超时另换 writer。至少3常驻、注册14；失败旧agent不重启制造重复工作。N01由wire_contract_reviewer独审导航两测试；P06由wire_http_acceptance_reviewer独审新崩溃测试，两者本轮仍running，报告待交。
+- 主独占 history-loading、context_source_manager、Gateway context 三文件及导航 test_catalog_service/test_operations_queue；精确路径见各自 freeze.json。本轮另独占新增 `tests/integration/workspace_services/test_resource_owner_crash_recovery.py`，只补原persistent1.4/5.3验收，不实施新增文件工具。同一 Sol 已转做 normalized wire/profile 功能闭包，不编辑上述八个测试。此次是核验后释放归属的范围纠正，不因观察超时另换 writer。至少3常驻、注册14；失败旧agent不重启制造重复工作。N01已交导航两测试无缺陷结论，最终整跑建议需核未变依赖的复用范围，报告修订中；P06独审新崩溃测试仍running，报告待交。
 - WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。当前历史迁移固定基线是 tree **0b0642393aee621ccec38a102991a2b3567633ee**；恢复观察 index=TEMP/coordinator/git/r-sol-history-focus-0b064.idx，主已初始化于该tree并恢复同Sol。8e9c113仅为签名早包，不是新baseline。作者只读此index；WT HEAD及观察index都不能代替live，差异显式给固定对象。R最初7f8dc、b086/209481及resume索引仅为历史证据，不再作为恢复坐标。
 - 主串行集成与机械冻结导出，作者仅编辑、定向静态分析和运行检查，不改 index/refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
@@ -18,7 +18,7 @@
 
 ## 当前主树与真实运行
 
-本次文档更新前ROOT HEAD **dab60b5eb7507bc0733fb90914a320d21f2fa40d**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。退休＋reader/terminal/checkpoint＋display固定0b064、history固定fc518、Gateway三caller固定1c377及导航两测试固定f222已物化ROOT，owned144组合为 **6f1a621be4624ae97b4071649aeb4a5a87671471**。本轮新增persistent真实崩溃测试固定组合 **96a5959da86f9564f8a1c7acbb527c76e3f075f1**、累计owned145，业务仍未提交；补丁严格重建通过、测试及ROOT/WT默认index一致，独审待交。17规划文件当前SHA及HEAD blob逐字匹配已验版本，复用strict41/0，不重复修改。原checkpoint ROOT49、display ROOT22和history/Gateway分轮验收按原记录复用，不相加。主未手写生产源码，history、Gateway与导航fixture迁移、新崩溃测试及主错误成本单列。wire/profile、真实transition/CSM及后续原scope尚未闭合，下次恢复仍核live，不把本文当实际HEAD。
+本次文档更新前ROOT HEAD **97840d25665951db1680b8331b809f7ce6cd4079**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。退休＋reader/terminal/checkpoint＋display固定0b064、history固定fc518、Gateway三caller固定1c377及导航两测试固定f222已物化ROOT，owned144组合为 **6f1a621be4624ae97b4071649aeb4a5a87671471**。本轮persistent真实崩溃测试含Workspace增量固定组合 **b27f2cb9f4957658148e88c1eee989bf29a21146**（前版96a595）、累计owned145，业务仍未提交；补丁严格重建通过、测试及ROOT/WT默认index一致，独审待交。17规划文件当前SHA及HEAD blob逐字匹配已验版本，复用strict41/0，不重复修改。原checkpoint ROOT49、display ROOT22和history/Gateway分轮验收按原记录复用，不相加。主未手写生产源码，history、Gateway与导航fixture迁移、新崩溃测试及主错误成本单列。wire/profile、真实transition/CSM及后续原scope尚未闭合，下次恢复仍核live，不把本文当实际HEAD。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -120,3 +120,9 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - 既有“正常退出不能证明强杀安全”规则本轮获得真实Terminal/Browser unknown窗口的8场景证据；回执替身与时钟注入明确标integration，不冒充完整Web或墙钟30分钟。测试首场景实际0/39.802秒、全8实际0/222.586秒；全8后主发现library默认临时目录未显式定位，窄改fixture并复验Browser实际0/37.905秒。所有受影响断言保留、mechanical两包均0；主写测试及错误路径猜测的工具成本另计，不归Sol。没有新的严重模型失败，不叠同义技能条款；P06未交仍标待审。
 
 旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index当前观察ROOT=`c77082e3…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
+
+- 主按原persistent Workspace恢复Scenario补scope参数，保留原Thread四场景和orphan四场景。固定b27f2cb9（base当前组合d989914）、测试SHA825056a4、owned仍145。新增Workspace四场景与原Thread四场景同轮actual0/341.056秒（pytest8pass/336.59秒）；Session释放只移除关联、保Workspace资源，再owner显式delete，unknown无盲重放。orphan两worker/测试与fixture AST及生产支撑依赖不变复用既有4绿，不称最终单轮12绿。ROOT/WT Ruff0、仅同步该测试、strict重建0、共享index不变；P06待，1.4/5.3仍未勾。证据persistent-crash-primary/workspace-scope-attempt-1/；遗漏scope及新增验收计主成本，不归Sol。
+- Sol serialization阶段2 SHA89c2187已保业务metadata.timestamp/request_id/headers，普通data.properties凭据也拒绝；主0.233秒纯域探针发现任意metadata伪装type=function/json_schema仍绕marker。已要求由tools/response_format/text.format真实入口路径与合同识别schema，入口技能只修同一条规则；无实际HTTP结论，修复待验。证据r-wire-normalizer-primary-review/stage2-shape-probe-attempt-1/；主临时probe Ruff首I001已规范导入修正后0，不改生产。
+- N01两导航测试独审无代码缺陷，报告ed06f588首次建议最终两文件整跑，主要求先核49未变成功入口与依赖复用、纠正函数数49与参数case50；没有单轮终版50绿为限制，不自动成为必重跑缺口。审查者修订待；不删原失败raw、不用静态审冒充运行。
+- 17规划文件再次逐项核SHA与HEAD均匹配已验版本，strict41/0复用；新增文件工具22项仍未启动。主核公开工具证Sol在完整baseline-0b064-tree副本跑pytest并写/tmp/baseline-privacy.log，已收窄此wire切片到指定WT源码/Ruff，Git/测试由主承接。核3458 tracked源码逐blob相同、无额外源码和子目录活进程/日志句柄后删353MB副本；原114105-byte raw保留于r-wire-profile-production/checks/baseline-copy-audit-attempt-1/，receipt/cleanup.json记录来源和SHA，不复建。基线同失败不当绿。此次主首次status漏私有index，随后ROOT/WT默认index仍与既有精确hash相同，未发生索引恢复，工具成本单列。
+- N01公开工具又把文件SHA256作为Git对象查询，继而裸git环境调查；主已停该审查者Git权限、只准已有字节/AST证据修报告。技能在既有基线条款补辨Git ID与文件SHA256，路径条款不叠同义规则；修订效果待后续交付验证。主基线进程核查首inline Python括号错误actual1已立即修正，后audit/cleanup实际0，计主协调错误。ROOT/WT默认index仍匹配原精确hash，没有宣称做过恢复。
