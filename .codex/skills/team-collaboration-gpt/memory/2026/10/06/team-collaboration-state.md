@@ -191,3 +191,5 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 
 - P61只读三规范的报告SHA ebacf4acdf01d9a79dd1f2ed2dcc82372a64edebd2d7d6143057c1042b3bb0bc已主核：6.1的禁止项与唯一owner引用存在，勾选只证明normative写入。关闭顺序与已删除Browser迟到grant分别落为5.4/5.5、design第8节和两个scenario；persistent最新21/23、strict1/0，不能归档。两修复排当前wire后同Sol实施；新文件工具仍0/22。17规划本轮逐blob/SHA与HEAD和已验记录相同，继续复用strict41/0。
 - WHTTP更正版报告SHA 1742eb527f8a935f8becb01c354935afe4464de8a3965b76cdb9d35dadbcfc13已主核，独立TCP正文全等断言符合既定完整wire合同；旧版dda57467作废。只更正报告，不改测试或增加运行，生产完整wire未验。漏给原合同定位属主协调成本，不归Sol返工。
+
+- wire参数WIP早验两项原最小配置单测1pass/1fail（11.913秒、源码指纹未变）：新send helper重新带入temperature=None等未设置字段。真实sync/async非流式调用对照ROOT actual0、WT actual1，WT共享入口强制stream=True/include_usage；两边指纹未变，只mock网络边界。证据wire-finalize-early-minimal-options-attempt-1与wire-finalize-early-nonstream-attempt-1；同Sol收修正，主未补生产源码，完整wire仍未验。
