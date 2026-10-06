@@ -92,7 +92,10 @@ def owner(source_seal_case) -> ContextSourceOwnerKey:
 
 
 @pytest.fixture
-def seal_sources(control_state_port: RolloutCheckpointSaver) -> Callable:
+def seal_sources(
+    control_state_port: RolloutCheckpointSaver,
+    frozen_provider_wire: Callable[[str, str], dict[str, object]],
+) -> Callable:
     cases: dict[ContextSourceOwnerKey, SourceSealCase] = {}
 
     def seal(manager: ContextSourceManager):
@@ -107,7 +110,9 @@ def seal_sources(control_state_port: RolloutCheckpointSaver) -> Callable:
                 admission_idempotency_key="control-state-admission:" + owner.thread_id,
                 payload="控制状态重建真实 seal",
             )
-            cases[owner] = SourceSealCase(control_state_port, owner, accepted)
+            cases[owner] = SourceSealCase(
+                control_state_port, owner, accepted, frozen_provider_wire,
+            )
         return cases[owner].seal(manager)
 
     return seal
