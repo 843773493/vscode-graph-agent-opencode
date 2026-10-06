@@ -11,10 +11,6 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
-from app.schemas.internal_v2.session_navigation import (
-    SessionFolderCreateRequest,
-    SessionFolderUpdateRequest,
-)
 from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
@@ -35,17 +31,6 @@ T = TypeVar("T")
 def canonical(name: str) -> str:
     """R17 任务书 §2.2 的确定性 canonical session ID 映射（v7 位 profile）。"""
     return f"ses_{uuid7_hex_from_name(name)}"
-
-
-async def _run_with_catalog_worker(
-    catalog: SessionCatalogService,
-    operation: Awaitable[T],
-) -> T:
-    await catalog.operations.start()
-    try:
-        return await operation
-    finally:
-        await catalog.operations.stop()
 
 
 def _relocate(
@@ -306,12 +291,11 @@ async def test_renaming_folder_does_not_require_descendant_sessions_idle(
         for session_id in session_ids
     }
 
-    await _run_with_catalog_worker(
+    await _submit_catalog_mutation(
         catalog,
-        catalog.update_folder(
-            folder.node_id,
-            SessionFolderUpdateRequest(name="任务目录已改名"),
-        ),
+        "rename_node",
+        target_node_id=folder.node_id,
+        name="任务目录已改名",
     )
 
     # 不再经过 idle guard，且物理 locator 不变。
@@ -411,9 +395,11 @@ async def test_recursive_delete_uses_catalog_subtree_protocol_without_folder_pat
     )
 
     await asyncio.wait_for(
-        _run_with_catalog_worker(
+        _submit_catalog_mutation(
             catalog,
-            catalog.delete_folder(parent.node_id, recursive=True),
+            "delete_folder",
+            target_node_id=parent.node_id,
+            recursive=True,
         ),
         timeout=2,
     )
@@ -460,9 +446,8 @@ async def test_snapshot_aggregates_full_catalog_once(
 ) -> None:
     """§10.3b：``refresh()`` 与一次目录 mutation 各只做一次全 catalog 聚合。
 
-    改前 ``_snapshot`` 在 ``revision``(×2) 与 ``list_nodes``(×1) 上共做 3 次
-    全表扫描；改后 ``revision`` 取 ``catalog_metadata.generation`` 单行查询，
-    只剩 ``list_nodes`` 一次。恢复重复聚合本用例立刻变红。
+    ``revision`` 只读单行版本，节点与版本通过一次原子 catalog snapshot 读取；
+    不得再附加旧 BFS 聚合或重复加载快照。
     """
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
@@ -473,22 +458,25 @@ async def test_snapshot_aggregates_full_catalog_once(
     _relocate(resolver, session_id, folder.node_id)
     catalog = SessionCatalogService(session_service=session_service)
 
-    count = _count_full_catalog_aggregations(monkeypatch, resolver)
+    count = _count_catalog_snapshots(monkeypatch, resolver)
+    full_scan_count = _count_full_catalog_aggregations(monkeypatch, resolver)
 
     # refresh() 走 force 路径，必须只聚合一次。
     await catalog.refresh()
     assert count[0] == 1
+    assert full_scan_count[0] == 0
 
     # 一次目录 mutation（新建 folder）后一次读：同样只聚合一次。
     count[0] = 0
-    await _run_with_catalog_worker(
+    await _submit_catalog_mutation(
         catalog,
-        catalog.create_folder(
-            SessionFolderCreateRequest(name="新建目录", parent_folder_id=None)
-        ),
+        "create_folder",
+        name="新建目录",
+        parent_node_id=None,
     )
     await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
     assert count[0] == 1
+    assert full_scan_count[0] == 0
 
 
 @pytest.mark.asyncio

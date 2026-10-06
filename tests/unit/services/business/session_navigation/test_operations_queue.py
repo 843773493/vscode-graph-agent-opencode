@@ -46,6 +46,10 @@ from app.services.business.session_navigation.queue_store import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.support.canonical_id_at import uuid7_hex_from_name
+from tests.support.session_navigation_queue import (
+    create_catalog_intent,
+    submit_catalog_intent,
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -794,22 +798,18 @@ async def test_status_query_reports_unknown_ids_explicitly(
 
 
 @pytest.mark.asyncio
-async def test_sync_facade_uses_same_single_write_path(
+async def test_catalog_folder_intent_uses_same_single_write_path(
     navigation_workspace: Path,
 ) -> None:
-    """同步目录 API 只是同一写路径的 façade：产生相同的 durable operation 记录。"""
+    """目录服务消费同一队列的已提交回执，不保留同步写入 façade。"""
     sessions_root = navigation_workspace / ".boxteam" / "sessions"
     session_service = _SessionService(sessions_root)
     catalog = SessionCatalogService(session_service=session_service)
-    from app.schemas.internal_v2.session_navigation import SessionFolderCreateRequest
-
-    await catalog.operations.start()
-    try:
-        breadcrumb = await catalog.create_folder(
-            SessionFolderCreateRequest(name="同步目录")
-        )
-    finally:
-        await catalog.operations.stop()
+    intent = create_catalog_intent(catalog, "create_folder", name="同步目录")
+    receipt = await submit_catalog_intent(catalog, intent)
+    assert receipt.state == "committed", receipt.error_detail
+    assert receipt.result_node_id is not None
+    breadcrumb = await catalog.breadcrumb(receipt.result_node_id)
 
     assert [item.name for item in breadcrumb.items] == ["同步目录"]
     created_id = breadcrumb.items[-1].node_id
@@ -850,8 +850,15 @@ async def test_nonrecursive_folder_delete_uses_queue_and_preserves_nonempty_tree
     await stack.settle(child_intent.client_operation_id)
     child_id = stack.node_id(child_intent.client_operation_id)
 
-    with pytest.raises(ValueError, match="非空 folder 的非递归删除被明确拒绝"):
-        await catalog.delete_folder(parent_id, recursive=False)
+    rejected = await submit_catalog_intent(
+        catalog,
+        create_catalog_intent(
+            catalog, "delete_folder", target_node_id=parent_id, recursive=False
+        ),
+    )
+    assert rejected.state == "rejected"
+    assert rejected.error_detail is not None
+    assert "非空 folder 的非递归删除被明确拒绝" in rejected.error_detail
 
     parent = stack.resolver.get_node(parent_id)
     child = stack.resolver.get_node(child_id)
@@ -874,7 +881,13 @@ async def test_nonrecursive_folder_delete_uses_queue_and_preserves_nonempty_tree
     )
     await stack.settle(empty_intent.client_operation_id)
     empty_id = stack.node_id(empty_intent.client_operation_id)
-    await catalog.delete_folder(empty_id, recursive=False)
+    committed = await submit_catalog_intent(
+        catalog,
+        create_catalog_intent(
+            catalog, "delete_folder", target_node_id=empty_id, recursive=False
+        ),
+    )
+    assert committed.state == "committed", committed.error_detail
     with pytest.raises(KeyError):
         stack.resolver.get_node(empty_id)
     with stack.store.read_transaction() as connection:
