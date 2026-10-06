@@ -309,3 +309,9 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 
 - shadow第二修ef26共同路径收口先5真实sole/modelscope项actual0/5.852秒，再完整恢复/checkpoint消息组/activity unit三file87pass/actual0/42.528秒、1462不变；P08增量报告72306f87静态接受signature/typed scope/parallel/无counterpart边界，未由其跑测试。原65pass1fail保留，不能拼首轮为绿；同owner净删除重复和不可达分支，未弱原item_count2。
 - 同checkpoint早user-anchor正式回归仅新增test02f1，20既存顶层AST全等，严格固定a5f9889b/Ruff0；实际1fail/8.006秒、1460不变，prepare messages中snapshot body复活，首次静态疑点现在已有具名行为。P07原报告5aa1b73a保持静态等级，不改写其历史证据；真实replay before-anchor与inclusive用例合同均有caller，下一动作同Sol在checkpoint cutoff/source-selection owner确定权威membership后修，不只在compiler猜source身份/ordinal。入口仅窄补现CSM规则并明确待验，不声称完整epoch通过。
+
+## Source cutoff 本轮接口早审（待生产验证）
+
+ROOT完整54条源码/test overlay已从当前HEAD66e91a64严格重建为0364bc65，最新文档保留；这只是机械集成基线，不代表epoch接受。收据 `r-epoch-csm-focused-dispatch/current-HEAD-exact-source-base-attempt-1/manifest.json`；共享index SHA不变。
+
+同Sol继续唯一selection/seal writer记录source→canonical语义前沿，既有同checkpoint snapshot复活红回归02f1保持。lease现69existing＋4allowed_new，仅新增manifest读取callee，三保护未改。P07早审指出动态source经新epoch提升root后若一概记start，会洗掉首次激活位置；已要求从精确ref与既有assembly继承，首次位置由真实admission边界给出，不能从wire排序推断。P08并行只读确定最小真实验收节点；root提升、before/inclusive及无anchor整checkpoint三边界的实现与验证仍待交，不写已修复或模型效率结论。
