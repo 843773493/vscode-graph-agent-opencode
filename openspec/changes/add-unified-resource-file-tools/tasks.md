@@ -20,10 +20,11 @@
 ## 4. 工作区源码树与条件写入
 
 - [ ] 4.1 接通files/root工作区根并平移现有write_file/edit_file/apply_patch到同一owner，绑定expected byte hash/owner revision或expected_absent；普通hash按需计算。
-- [ ] 4.2 一次patch固定一个根，全部preflight后单文件原子发布；限定首批文本新增/修改，拒绝跨根/绝对/越界路径、只读根/历史revision/领域对象。
+- [ ] 4.2 一次patch固定一个根，全部preflight后单文件原子发布；迁移既有文本新增/修改/删除/同根文件移动，source与destination都纳入能力及预期版本校验，拒绝跨根/绝对/越界路径、只读根/历史revision/领域对象。
 - [ ] 4.3 验证并发编辑、expected_absent竞争、补丁preflight失败零写入，公布对服务内writer与外部writer不同的可验证CAS能力边界，不伪造跨文件事务。
 - [ ] 4.4 故障注入覆盖多文件首个发布后失败、目标退出/响应丢失、取消尚未确认和重开核实；逐文件published/not_published/not_attempted/unknown准确，禁止自动重放/假回滚。
 - [ ] 4.5 两个真实目标验证远端patch修改目标端、source不变；独立权限、失败能力、目标固定与UTF-8/raw-byte hash合同一致。
+- [ ] 4.6 复用既有apply_patch add/delete与hints/move正式测试，保留输入、内容和changeset断言；覆盖删除版本冲突、移动目的版本/expected_absent冲突及目的已发布但源未删除的逐路径部分结果，不把文本文件操作扩成通用目录mutation。
 
 ## 5. 会话产物与旧链路下线
 

@@ -4,7 +4,7 @@
 
 ## 授权与恢复坐标
 
-- 唯一实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写，只读审查按需复用。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。
+- 唯一实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；本轮另有 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer` 两个只读审查者，实际turn_context均为 **gpt-6-luna/max**，分别准备下一公共合同与真实HTTP验收，不改源码或重复当前包审查。其产物在TEMP同名任务的artifacts/wire-preimage-contract/report.md，index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **4fa857e8f95597941df2b08295e38ea4dfc48b6c**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e/4fa只改交接与技能文档。本轮在326e重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
+本文更新前ROOT HEAD **e430741c347d7fac3c4e7c7fb1cbbe5321f20cc8**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e/4fa只改交接与技能文档。本轮在326e重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -87,9 +87,9 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 
 | 顺序 | 实际状态及验收 | 证据入口（相对 A） |
 |---|---|---|
-| history-loading caller | 同Sol在途，base0b064。受影响两文件原组17pass/15fail actual1/299.26秒；真实raw显示Session当Thread、Reader.load/open_read_snapshot缺必填thread及checkpoint缺owner/admission。允许整文件迁test_session_history_loading.py，保所有分页/预算/不读JSONL/可见性/错pointer断言；先真实最小入口，再单文件全文，不恢复alias | r-producers-and-toolset-production/checks/internal-display-view-order-affected-consumers-1.* |
+| history-loading caller | 同Sol在途，base0b064。原两文件组17pass/15fail actual1/299.26秒；全文件必要owner/admission迁移未完。selector首增量已固定d58fcc（仅早包、未物化ROOT），原18测试保留、selector断言/decorator AST不变、Ruff0；作者正式单例1pass actual0/17.041秒。未变单例不重跑，继续全文、复杂fixture，保分页/预算/不读JSONL/可见性/错pointer语义；cursor陈旧空items期望按冻结include迁轻量摘要。不恢复alias | r-history-loading-primary-review/selector-early-review-attempt-1/、selector-fixed-early-export-attempt-1/；r-producers-and-toolset-production/checks/session-history-selector-thread-migration-1.* |
 | wire/profile | 先固定真实Chat `_create_message_dicts→_astream`及Responses `_responses_payload→aresponses`最终规范化HTTP正文，含projector/version/provider/model/tools/attachment/loss/redaction，同owner剔除auth/transport/attempt。drift发送前拒绝；envelope/fake handler不代验收 | r-wire-preimage-owner-review/attempt-1/ |
-| transition/CSM | epoch intent仍NotImplemented；view事务未pending transition；prepare未传transition；checkpoint-versioned CSM未恢复。原owner同事务view+CSM+pending，首成功新epoch seal才consume/applied。paired barrier已有rewind/replay/compaction接线，不重做；source_manager deferred一并收口 | r-transition-owner-boundary-review/attempt-1/ |
+| transition/CSM | epoch intent仍NotImplemented；view事务未pending transition；prepare未传transition；checkpoint-versioned CSM未恢复。原owner同事务view+CSM+pending，首成功新epoch seal才consume/applied。paired barrier已有rewind/replay/compaction接线，不重做；source_manager已有live测试WIP，但固定包及真实transition闭包仍待 | r-transition-owner-boundary-review/attempt-1/ |
 | ToolSet与后续 | producer已消费新selection并联合seal，不报漏接；SessionControl第二applied只在未接helper/tests，按8.3-B/C清理。activation、delegate publication/runtime source/wakeup、同Session child/team、通信binding/cold recovery/mailbox仍待 | runtime-event-task-evidence-review/attempt-1/ |
 | 联邦/继承caller | target-main及联邦URI沿原grant/channel。GatewaySessionContextClient三个旧test缺local_token_supplier待迁，无None旁路；DTO分域/reducer、强杀关闭风险待 | remaining-addressing-contract-review/；local-uri-task-acceptance/；mounting-architecture-review/；remote-cleanup-review/ |
 | outbox/最终产品 | Web runtime/worker/flock/generation、旧sync第二writer下线已有，不重做。两pending-parent建child入口、test_catalog_service/test_operations_queue旧caller、App/Gateway/backend真实验收待，8.1/10.8不勾；persistent unknown崩溃及正式WebE2E待 | session-catalog-outbox-current-owner-review/attempt-1/；persistent-remaining-review/attempt-1/ |
@@ -98,12 +98,13 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 
 ## 新增规划及技能调整效果
 
-- 新建议已纳四组：统一寻址拥有directory/file/domain_object、files/root、技能多层、分段编码、产物单文件模板和轻量访问；context拥有读取/skill_load分离；Session拥有send/read/wait归一；独立add-unified-resource-file-tools拥有七工具、目标端、条件写/部分/unknown与旧boxteam-session迁移。17文件与HEAD/已验版逐字相同，复用strict41/0及独审，新增实施全未勾/未启动。证据 `file-tools-openspec-plan/current-reuse-attempt-9/receipt.json`。保原read_file媒体及original/thumbnail；终端/浏览器/团队保业务ID，其余mutation/watch/跨Gatewaycopy/generaloperation_id留后续。
+- 新建议已纳四组：统一寻址拥有directory/file/domain_object、files/root、技能多层、分段编码、产物单文件模板和轻量访问；context拥有读取/skill_load分离；Session拥有send/read/wait归一；独立add-unified-resource-file-tools拥有七工具、目标端、条件写/部分/unknown与旧boxteam-session迁移。前次17文件与已验版逐字相同，复用strict41/0；本轮核现有parser/executor及正式add/delete、hints/move用例又发现规划误将既有文本删除/移动延期，已同步修订文件工具proposal/design/spec/tasks：保原Delete File/Move to、两端点preimage、逐路径部分结果，通用目录mutation仍延期。新增实施全未勾/未启动，未改生产或正式测试；本轮strict全量41/0、skill quick_validate及diff check均actual0；收据在 `file-tools-openspec-plan/text-patch-preservation-attempt-10/`。保原read_file媒体及original/thumbnail；终端/浏览器/团队保业务ID，其余mutation/watch/跨Gatewaycopy/generaloperation_id留后续。
 - fixed/direct/helper/间接/deferred分列已发现漏caller；真实callee/MRO规则纠正不存在Saver.main_thread_id阻断28项，固定209481 ROOT49验证checkpoint迁移效果。named旧API归零不能代完整签名闭包。
 - 作者无超时rg扫`/`找日志，主核PID/cwd后只SIGTERM该rg，延迟534.29秒；恢复同Sol并重发绝对WT/index/A，入口限定根及外部超时。恢复replay通过，后续自主完整交付效果待证。证据 `sol-unbounded-search-correction/attempt-1/`。
 - 两退休reviewer容量错误无新报告，主独审增量并复用删除边界。主误把AGENTS owned路径当删除已撤；旧Gateway缺句柄假诊断、private index/旧tree混读、preload猜错等另计主成本，不归作者/模型。
 - Sol对固定tree跑git log/-S得到空结果，不能据此判断提交来源；已纠正为先核对象类型，仅commit核历史，入口原基线条款补一句，后续效果待证。cursor旧items为空断言又与active design:692的冻结include冲突；主独核合同，允许迁为精确轻量摘要/不读完整body，保分页完整性，其它断言仍保留，尚未验收。证据 `skill-object-type-correction/attempt-1/receipt.json`。
 - 再次上下文恢复后Sol用裸Git读到相对旧WT HEAD的1057路径及history既有67+/21-历史差异；重发坐标并初始化0b064私有观察index后，真实工具已确认当前history与base相同、display匹配已绿blob，尚未交新增候选。18测试/140断言基线清单在 `r-history-loading-primary-review/baseline-inventory-attempt-1/`；已调整顺序为先一次迁完已明确签名并验证代表入口，再闭合复杂fixture，完整验收不减。证据 `r-history-loading-primary-review/restore-state-index-attempt-1/receipt.json`；不因观察超时或没有shell进程重启活跃agent，不为这次重复问题新增同义技能规则。
+- 主用ROOT HEAD观察index跨WT diff误报conftest删除；直接固定blob逐字复核它未变后立即撤回，不要求作者恢复。source_manager测试确有live WIP117行迁移，旧_commit_model_call_pending已归零；固定0b064包仍不包含此WIP，不把两个状态混同。证据 `r-history-loading-primary-review/deferred-direct-blob-check-attempt-1/`。成本计主协调，入口补充对应比较规则，效果仅为此次纠错，后续交付待验。
 - 比较只维护 `efficiency-comparison.json`；继承前置、作者返工、依赖等待、主机械导出和主错误分列。无同起点可比计时，不报倍率/永久最佳模型；继续一个Sol贯穿、独审和主串行集成。
 
 旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index观察ROOT=`98850fa4…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
