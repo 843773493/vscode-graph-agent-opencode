@@ -96,7 +96,9 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 - Gateway 普通整组关闭同时向 backend 和辅助服务发 TERM，而 backend 的 Thread unload 仍需向辅助服务同步 owner revision。由现有 runtime owner 先等待 backend 完成 drain/unload，再关闭辅助服务；关闭失败保留原错误与精确 handle。不能把辅助服务不可达降级为资源已核实。证据为 `wire_http_acceptance_reviewer/artifacts/persistent-web-shutdown-order/report.md`（相对本轮团队 TEMP）；safe restart 保留辅助服务的路径只证明该路径，不代整组关闭。
 - 已核实删除的 Browser 仍进入传输 grant，目标端普通错误被包装为 HTTP 500，继而污染 owner 的确定终态。owner 先按已核状态拒绝非 running 目标；目标端同样在原状态/revision 边界提供确定拒绝，保留错误但不把确定拒绝当作未知停止/删除结果。响应丢失或无法核实的异常仍沿现有未知结果规则处理，不增加兼容分支或另一份授权账本。证据为正式 Web `attempt-16` 的 `local-backend-40647.log` 第 182 行起。
 
-这两个修复沿当前 wire 切片之后由同一实现者完成；tasks 5.4/5.5 分别要求真实整组关闭与迟到授权/目标竞争验收。既有 5.2 五项事实已通过，不代表上述缺口已修复。
+这两个修复已由同一 Sol 实现者贯穿十一条生产路径，主线程补齐六条测试路径并机械集成。runtime 在 backend 成功完成关闭后才关闭 auxiliary；超时强杀保原 handle/close_failure 并明确失败，后续重试即使进程已退出也不能证明 unload 完成或继续洗掉失败事实。registry/CRUD/remote 清理成功后才移除对应对象；8 秒关闭预算不变。 Linux由同目录process_groups叶模块核原PGID/session、leader starttime与非zombie活成员，root PID退出不能当整组退出；关闭预算由根wait和剩余成员共用。unit清理从root启动即保护，child未登记时仍按原组收口，故障注入已通过。Browser 的 Node grant 边界在 token/Map 副作用前返回专用 409/no-effect 当前快照，Python client/owner 仅在精确入口、身份/工作区/verified/revision 联校通过时消费这一确定拒绝；其余异常仍按未知结果阻断。已核实非 running 资源的本地短路优先于 Thread admission，其拒绝不证明 Thread 有效。
+
+已集成 `1b6305d7`、固定候选 `340dcbd74a9051584a20b730d8f90525e84800ca` 的正式非 preserve 关闭集成通过（真实 Gateway/backend/Job/residency/PTY/Chromium，模型采用 TCP Responses 回放替身），目标端 grant HTTP 竞争两场景通过，独审和 ROOT 定向检查通过；具体收据与范围见 tasks 5.4/5.5。首次 Chat fixture 的 canonical typed provenance 冲突在关闭前发生，仍属于后续 R producer 未修缺口；本次 Responses 关闭成功不证明 Chat 或完整模型 E2E 已通过。既有 safe restart、5.2 Web 和 5.3 崩溃收据分别保留，不混作本项证据。
 
 ## 风险与权衡
 

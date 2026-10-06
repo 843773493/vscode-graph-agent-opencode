@@ -1,6 +1,6 @@
 # 团队协作实时状态与实测改进
 
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-06 本轮（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
+主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-07 本轮（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
 
 ## 授权与恢复坐标
 
@@ -20,7 +20,9 @@
 
 实际HEAD与恢复index以外部 `A/current-recovery-receipt.json` 为准。发送前窄闭包已以 **4a9b88b2** 集成固定c0d7554c的171路径，原141 accepted-owned已全部消费，不再重放旧队列。封存snapshot、实际wire/profile/hash与唯一临时binding联校；Agent默认缺binding拒绝，非Agent工具测试由真实builder显式标记用途；结构化ToolSet、identity-only omitted恢复、认证wrapper、checkpoint namespace及必要caller均收口。完整导出/重建/audit actual0（43个作者外差异，42个独立文档/Web/后续fixture精确defer），ROOT128个Python静态0，ROOT9项实际验收0且927源码/SQL/fixture与已测WT相同，guard/双祖先/共享index SHA全部核通过。旧55 outside失败保留，不能倒改为通过。
 
-当前ROOT无未提交生产或测试；协作技能本轮窄改待独立提交。WT仍有主此前迁移的 `tests/unit/services/infrastructure/rollout_context/test_context_source_manager.py`，仅在WT、明确defer至R，不吸收入本次wire。R实际producer/epoch/CSM/view、activation及后续runtime仍未验收；`add-itemized-rollout-context`保持50/87，不能因发送门通过勾整项。persistent21/23，下一5.4/5.5；17规划文件未变，复用strict41/0，新文件工具0/22未实施。主未手写生产源码，测试、机械集成和协调成本另计。
+persistent 5.4/5.5最终17路径tree **340dcbd74a9051584a20b730d8f90525e84800ca** 已以 **1b6305d7** 串行集成；guard/双祖先及共享index精确SHA c77082e3通过。关闭生产十一路径/Sol、六测试/主；7unit（含未登记child清理故障）actual0，生产未变的48caller及真实三个PGID成员关闭1项复用627f收据。5.5目标端两HTTP竞争、Node15/client17及P08静态0aec复用；P07最终4f6fd4ac接受、旧P2保留历史。tasks正式23/23（本轮规划strict待验后独立提交），不代表原Goal完成。
+
+Sol下一R Chat最终消息identity两生产已固定 **5b4da9a9**，ROOT未同步；真实provenance guard未改，fork同步source→target模型身份。作者正在三regression，P08两生产早审；主将补正式Chat/Responses真实Job验收。生产修复未行为接受，不宣称Chat已修。WT CSM旧WIP仍defer至后续R，itemized50/87及完整R/epoch/CSM/view、activation等待验。协作记忆按北京时间移动10/07、规则修订待本轮独立提交；17目录/文件工具规划未变、strict41/0复用、新文件工具0/22未实施。主补生产0，测试/机械/协调成本单列。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -52,13 +54,23 @@
 ## 当前执行与后续顺序
 
 发送前binding/purpose本轮已集成；旧候选和失败按历史查收据，下一轮不重复检查未变范围。
-1. **当前：persistent 5.4/5.5**。整组关闭先完成backend owner收尾再停辅助服务；已删除Browser迟到grant须为确定拒绝，不能重新污染verified终态。5.2固定f29222的完整Web验收已以a759cf49集成，6.1仅规范验收，当前21/23；复用未变场景，按新增差异和目标race验证。
+1. **已完成persistent 5.4/5.5**。17路径340dc以1b6305d7集成，23/23；5.2 Web和5.3崩溃证据按未变范围复用，6.1仅规范验收。当前同Sol修真实Chat最终消息model-call身份不一致，再接后续R，不重复整组关闭。
 2. **R epoch/CSM/view事务及R01–R07**。公共合同8ac、封存事务39509和语义revision0e423已集成；原固定0b064的退休、reader/terminal/checkpoint、display与history/Gateway caller已随171路径集成；实际R producer/epoch事务仍待闭合。真实dispatch/API35及Chat双协议正文11项只归原固定包，不代完整Provider/E2E；不复做已集成caller迁移，不重放已消费的141 owned或其它陈旧清单。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 3. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
 4. **runtime/source/wakeup、delegate publication与mailbox**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。原task E01–E07、同Session team/fanout及8.15均保留；`create_and_run_internal`已有InternalExecutionIntent，Terminal已有精确source_thread/claim，缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
 5. **durable communication recovery、联邦URI与target-main**：通信accepted→binding→cold recovery/持久观察仍待验；联邦复用现有authority/grant/channel/cursor。已有GET `/api/v1/sessions/{session_id}/main-thread` 是合同来源，不新增同义endpoint；稳定Gateway authority、受控peer-hub-star最多transit1/hops2/deadline，真实B⇄A⇄C与零副作用拒绝。证据 `remaining-addressing-contract-review/attempt-1/report.md`。
 6. **DTO/reducer、继承关闭风险与最终验收**：9.1架构证据已勾；9.2按DTO域直接迁import、9.3只提纯reducer，保Store事务顺序，交同Sol后续，不插R。报告 `mounting-architecture-review/attempt-1/report.md`。通用fixture10秒强杀Gateway父级的关闭风险仍待精确owner handle回收和透明失败，正常attempt7不能证明强杀安全，见 `remote-cleanup-review/attempt-1/report.md`。最后逐原task/入口验收七change及handoff，不能当前阶段完成就结束goal；新增文件工具保持0/22，独立排期。
+
+## Persistent 5.4/5.5 本轮收尾（已集成）
+
+- D=A/persistent-shutdown-grant-focused-dispatch；最终340dc/17路径以1b6305d7集成，D/full-candidate-5.json及ROOT-integration-final/integration-receipt.json。Sol报告a4ffc9ee；process763/叶模块83行，无wrapper/alias；未拆分bdde与最终两文件AST/多重集独立相同。
+- 原940d只查root的绿不证明组回收；主probe确认root已退、child仍活，Managed/Adopted原生产2红。最终7unit actual0/5.659s（新增root已退且child未登记故障），生产等627f的48caller actual0/11.881s与真实非preserve关闭1pass/35.707s复用；三个服务PGID活成员全部退、owner scope/revision断言保留。模型TCP Responses cassette，非完整模型E2E；1458–1461依赖匹配且前后未变。8秒未增，强杀不等于unload，重试保同错误，Windows/其它POSIX未验。
+- P07四路径原627f报告b922保留P2清理窗口，340dc窄复核4f6fd4ac闭合；test finally整体回收/reap子组，outer timeout按root实例回执重扫PGID/session。主一次嵌套probe字符串换行错误在编译预检捕获、测试前修正，计主成本。
+- Grant生产/测试未变，Node15/client17/真实HTTP2及P08静态0aec4a80复用。本地verified终态先于Thread admission拒绝只证明资源拒绝；未改remote/retired存量风险分列，非本包引入。
+- 627f作者WT机械17/43 outside通过；最终340dc主ROOT组合机械17/15 exact outside通过11.093s，R writer已在独立WT、最终unit由主写。ROOT首次只用Git差异列defer，漏6个ignored本地/演示产物，actual2/11.707s原raw保留；逐路径声明，不改保护源码/运行输入，不夹提交。旧index-dir两误调用保留。最终guard/双祖先/shared index c770不变。
+- Chat原Job在关闭前typed provenance/extensions失败；D/chat-provenance-followup.json事实转录与原service日志保留，trace被fixture重建，不伪造raw。当前同Sol已定位projection_identity.model_call_id第一次None/重复put真实ID，两生产早包5b4da9a9待回归/真实Job；guard未放宽。client首轮主fixture漏page_id修后17绿，主成本单列。
+- 17规划逐字匹配strict41/0，新文件工具0/22未实施。普通Skill读/activation与URI分段编码规范旧冲突已改。
 
 ## 实测改进与未证结论
 
