@@ -9,7 +9,7 @@
 ```text
 user/assistant/tool protocol ── AppendCanonicalItemIntent ───────────┐
 SkillCatalog/AGENTS/team ───── ApplySourceLifecycleDecision (CSM) ──┤
-tool selection/policy ──────── SwitchToolSetIntent ─────────────────┤
+tool selection/policy ──────── ToolSetSnapshot → prepare/seal ───────┤
 compaction/rewind ──────────── RebuildContextEpochIntent ───────────┤
                                                                    ▼
 RolloutCheckpointSaver / ContextStore mutation owner
@@ -69,13 +69,12 @@ optional stateless framework dispatch bridge -> Provider adapter
 ContextMutationIntent =
     AppendCanonicalItemIntent
   | ApplySourceLifecycleDecision
-  | SwitchToolSetIntent
   | RebuildContextEpochIntent
 ```
 
 - `AppendCanonicalItemIntent`：真实 user input/attachment、assistant/reasoning、tool call/result 等一次性 canonical 事实；保留原始 item identity、origin Turn、协议配对和 append ordinal，不建立 source revision/tracking。
 - `ApplySourceLifecycleDecision`：CSM 对 instruction/file/runtime source 的 base、delta、tracking 和恢复决策；可产生 ambient/pending source item与控制状态。
-- `SwitchToolSetIntent`：应用模型可见工具及 policy 的新 desired revision，并触发 hard rebase；ToolSet 不是 message/source item。
+- ToolSet 不另建 mutation intent：完整 `ToolSetSnapshot` 是安全 preparation 的 typed 输入，其 revision/compatibility 绑定工具正文、policy 和 wire order。编译器复用现有 hard rebase，唯一成功 seal 保存 applied binding；ToolSet 不是 message/source item。
 - `RebuildContextEpochIntent`：compaction或rewind先提交active view与版本化CSM control state，并登记只可由下一次model-call preparation消费的`PendingPrefixEpochTransition(reason, view_revision, control_revision)`；首次assembly由owner直接初始化epoch。
 
 `ContextSourceManager`（CSM）是该 owner 下的 source-specific 子管理器。producer向CSM提交结构化observation或名称化Skill操作；CSM负责source identity、`observed/pending/applied` revision、diff基准、tracking state和reconciliation决策，但只能返回`ApplySourceLifecycleDecision`，不能截获普通canonical append、重组整个消息历史或直接生成LangChain/Provider message。team fanout、跨Session inbox或其它异步producer可以在没有model call时提交幂等pending observation/ambient item和wakeup intent，此时不得推进`applied/injected_revision`、diff基准或创建assembly；下一次真正model-call preparation才把pending事实选择进plan并原子推进applied状态。已经创建的pending item仍是不可变事实，失败重试按identity复用而非覆盖。
@@ -126,16 +125,16 @@ ToolSetSnapshot/ToolSetRef 只描述 Provider `tools` 中的少量直接工具�
 
 扩展调用必须在产生该tool call的sealed model-call上冻结`ExtensionCatalogBindingRef`，并由dispatcher按该ref解析target，而不是按执行时的最新目录悄悄改投。目录与指引必须在同一资源激活边界原子选中：默认Turn固定；显式`model_call`时只在下一安全preparation消费Registry已发布snapshot。每次实际调用仍按最新不可关闭的身份/完整性校验和可热变的权限策略重新授权，撤权返回与原`tool_call_id`配对的明确失败，不修改已sealed的调用身份、schema或目标。未知/已删除目标显式报错，不伪造成功。内层目录ref、target/schema revision与结果provenance独立持久化和校验，不塞进Provider ToolSetRef、也不以目录revision扰动同epoch前缀。
 
-ToolSelectionStore/ToolService继续拥有 workspace/agent级 desired selection及其控制面 revision；它们不写 Session context。其直接工具选择产生Provider ToolSet desired revision；内层扩展目标选择只产生ExtensionToolCatalog desired revision。每个 SessionThread 的 ContextStore owner分别持久化最后观察到的desired、当前applied ToolSetRef和内层catalog binding，并仅对前者的有效Provider形状变化构造`SwitchToolSetIntent`。历史assembly永远只读自身封存的两种binding，不能用当前ToolSelectionStore反推。
+ToolSelectionStore/ToolService继续拥有 workspace/agent级 desired selection及其控制面 revision；它们不写 Session context。其直接工具选择产生Provider ToolSet desired revision；内层扩展目标选择只产生ExtensionToolCatalog desired revision。每次新 model-call preparation 由 SessionThread ContextStore owner冻结完整 desired ToolSetSnapshot，并与当前合法执行链的 sealed assembly binding 比较；该 binding 是 applied ToolSetRef/revision 的唯一权威。控制面保留 desired selection/revision 的因果审计，SessionControl 不再保存第二份 observed/applied ToolSet 字段或提前成功回执。失败 preparation 不推进 applied；重试与历史 assembly 复用自身封存的 binding。历史assembly永远只读自身封存的两种binding，不能用当前ToolSelectionStore反推。
 
 运行中的 sealed model call 永远绑定其 applied ToolSet revision，用户或控制面此时修改工具选择只能更新 pending desired revision，不能改写该请求。owner 在下一次 model-call safe boundary 按以下顺序生效：
 
 1. 停止为旧 ToolSet 创建新的 model call；
 2. 让旧 assembly 已产生的 outstanding tool call得到真实且配对的 terminal outcome：已开始执行的调用完成或返回真实失败；尚未执行且权限已撤销的调用返回绑定原 `tool_call_id` 的 policy-denied结果，不伪造“已执行”或无配对取消；
-3. 原子封存新的 ToolSetSnapshot/ToolSetRef，并把 desired revision推进为 applied revision；
+3. 冻结最终 desired ToolSetSnapshot/ToolSetRef候选，此时不推进 applied；
 4. 创建 `epoch_reason=toolset_changed` 的新 `prefix_epoch`；
 5. CSM只对当前 source registration/revision执行 reconciliation，assembly compiler据此重建 root context、active canonical view、source projection与 tools；
-6. seal 新 assembly 后才允许下一次 Provider dispatch。
+6. 在同一成功 seal 事务中保存新 assembly、ToolSet/prefix binding并确立唯一 applied revision；全部提交后才允许下一次 Provider dispatch。
 
 hard rebase不修改已有 canonical item identity、正文或因果顺序，也不把“工具已切换”追加成 user-role控制文本。它和 compaction都允许重新编译请求前缀，但 compaction会改变 active history view并产生/选择 compaction summary；ToolSet hard rebase默认保留同一 active canonical history，只改变 epoch、条件化 root projection与工具 binding。因此一个 Turn可跨多个 model-call-scoped prefix epoch，`prefix_epoch` 不能再被解释为 Turn 属性。
 
@@ -480,7 +479,7 @@ snapshot/untracked 内容不允许重新读取源文件。压缩器只能根据 
 | E07 | checkpoint/runtime reminder：`checkpoint_reminder`，覆盖 interrupt、startup/turn/scope/tool timeout、execution lost/error、resource cancel 等原因 | `append_system_reminder_checkpoint()` 直接读取并改写 LangGraph checkpoint messages，追加 `HumanMessage` | 绕过 canonical item、ContextStore transaction和 source owner，是最明显的第二 writer | 删除直接 checkpoint message mutation；按 `checkpoint:<reason>:<execution/resource>` identity 经 Saver/CSM 原子提交 pending source/control outcome；恢复只读已提交事实，不从当前 runtime补造 |
 | D01 | 压缩派生上下文：`compaction_summary_instruction`、`compaction_retry_marker`、派生请求 fallback `SystemMessage("Summarize...")`，以及返回主上下文的 `compaction_summary` | summarization middleware建立独立模型请求；instruction/retry 是 `HumanMessage`；结果替换 active history 中段 | 静态压缩工具规则、派生请求控制项、最终 summary 和 source materialization 容易混为同一注入来源 | 派生摘要请求使用独立sealed derived assembly和自己的root system item；instruction/retry是该derived assembly的request-only control；结果由compaction owner持久化为canonical `compaction_summary`并登记pending prefix transition，不是CSM source；CSM只在下一次model-call preparation内按规则物化各tracked source一次并与首个新epoch assembly原子seal |
 | C01 | 真实用户输入与附件：可信UI/API ingress、replay-as-new-turn，以及producer显式标记的user-derived generated seed | `UserContentBuilder`组装文本/多模态blocks，runner创建`HumanMessage`并持久化user root；当前模型侧session消息工具也可用`simulate_user`进入该路径 | 当前`MessageRole.user`同时被内部消息复用，且模型工具可伪造可信用户来源；role无法证明真实用户来源 | 不进入CSM；只有可信UI/API ingress owner可构造`AppendCanonicalItemIntent`，经统一ContextStore owner创建唯一`semantic_kind=user_input` root。模型工具和内部source禁止调用此路径；模型侧`send_message_to_session`不暴露`simulate_user` |
-| C02 | 模型可见工具定义与内层扩展目录：当前直接built-in、Todo/filesystem/compact、自定义、MCP、Session内team tools及visibility/policy过滤 | Agent构建和request middleware确定实际tools/tool config；Itemized middleware快照为`ToolSetSnapshot/ToolSetRef`；当前执行step只在Turn/Job开始时读取一次selection，运行中Job保留旧Agent引用 | descriptions与静态prompt散落；Provider可见工具和内部target目录混合，变化会扰动工具schema与前缀；运行中selection无model-call安全边界 | 拆成Provider可见直接工具+固定`invoke_extension_tool`信封的ToolSetRef，以及独立ExtensionToolCatalog binding。只有前者有效变化经`SwitchToolSetIntent`在安全边界hard rebase；内层MCP/自定义/内置target变化只在资源激活边界更新binding与对应CSM指引，执行期重新鉴权且旧tool call真实配对收敛。main/child capability profile仍决定直接工具集合，Skill`allowed_tools`不改变此权威 |
+| C02 | 模型可见工具定义与内层扩展目录：当前直接built-in、Todo/filesystem/compact、自定义、MCP、Session内team tools及visibility/policy过滤 | Agent构建和request middleware确定实际tools/tool config；Itemized middleware快照为`ToolSetSnapshot/ToolSetRef`；当前执行step只在Turn/Job开始时读取一次selection，运行中Job保留旧Agent引用 | descriptions与静态prompt散落；Provider可见工具和内部target目录混合，变化会扰动工具schema与前缀；运行中selection无model-call安全边界 | 拆成Provider可见直接工具+固定`invoke_extension_tool`信封的ToolSetRef，以及独立ExtensionToolCatalog binding。只有前者有效变化经完整ToolSetSnapshot与原子prepare/seal在安全边界hard rebase；内层MCP/自定义/内置target变化只在资源激活边界更新binding与对应CSM指引，执行期重新鉴权且旧tool call真实配对收敛。main/child capability profile仍决定直接工具集合，Skill`allowed_tools`不改变此权威 |
 | M01 | MCP工具目录：当前`McpRuntimeManager`启动时加载MCP工具适配器；变化通知尚无完整刷新闭环 | 运行中server目录变化不稳定地反映到Agent/信封绑定，目录与模型指引没有统一生效快照 | 将raw目录直接塞进Provider工具说明会破坏缓存；只刷新dispatcher又使指引和真实目标脱节 | `McpCatalogOwner`完整relist/验证/发布稳定目录；`McpToolGuidanceProducer`只从validated目录派生`tail_only` CSM source，增删改以user-role delta提示；同一`turn|model_call`激活边界封存目录与指引。原始prompts/resources/instructions不自动注册；target执行按旧binding和最新权限。 |
 | C03 | 模型与工具协议事实：assistant/reasoning、Provider tool call/result，以及 invalid args、timeout、confirmation、patch repair、compact tool生成的 synthetic `ToolMessage` | 模型流或 middleware在执行内追加 `AIMessage`/`ToolMessage`，随后进入 canonical item/checkpoint | 它们是会话事实或协议配对，不是 instruction source；误纳入 CSM 会破坏 tool_call_id 和 Provider role合同 | 不进入 CSM；由 canonical item、tool execution与terminal convergence owner构造 `AppendCanonicalItemIntent`并经统一 ContextStore owner提交，保持原生 role/配对、item identity和 plan ordinal；只能参与稳定前缀选择，不能按文本去重 |
 | P01 | 请求捕获与投影管线：`PromptReplayCaptureMiddleware`、`ItemizedContextProjectionMiddleware._prompt_contributions()`、`project_context_plan()` | 逐 middleware 比较 system blocks，推断 append/replace并全部记为 request-only contribution；LangChain projector把连续贡献合成 `request-only-system-prompt` | 这是从最终请求反推 provenance，不是 producer 权威；replace/合并会丢 item边界并破坏稳定前缀；无捕获时 synthetic fallback掩盖漏接来源 | 删除 PromptReplay、捕获标签和 instrument 链；废弃 `ItemizedContextProjectionMiddleware` 的 prompt/tool/context反向捕获。每个 R/E producer在 seal 前显式登记；若框架必须保留 middleware hook，只实现无状态 sealed-assembly dispatch bridge，按 Saver-issued reference转发精确 messages/tools/frames，缺失或不匹配即 fail closed |
@@ -519,7 +518,7 @@ bridge必须是最后一个可影响 model request的 framework hook；其后只
 - **文件 producer**：R08 与 Skill activation 使用 CSM tracked/snapshot 规则；activation 只能由 `skill_load` 建立，通用 read 工具不承担 Skill 激活语义。
 - **事件 producer**：E01–E07 先提交 ambient/pending source item，再通过独立 execution wakeup intent消费；不得调用普通 user acceptance 创建 Turn root。
 - **canonical append producer**：C01/C03 保持 acceptance/Turn、model stream和 tool execution的 domain owner，通过 `AppendCanonicalItemIntent`进入同一 ContextStore transaction，不建立 CSM tracking。
-- **ToolSet producer**：C02 由 ToolSet registry产生 `SwitchToolSetIntent`；所有有效变化在下一个 model-call safe boundary hard rebase，不追加软上下文通知。
+- **ToolSet producer**：C02 registry 为每次新 preparation 提供完整 ToolSetSnapshot；有效变化复用既有 compiler，在下一个 model-call safe boundary hard rebase。applied 仅由成功 sealed assembly binding 确立，不另建 intent/SessionControl writer，不追加软上下文通知。
 - **派生 owner**：D01 保持 compaction owner并通过 `RebuildContextEpochIntent`显式重建 active view；“统一 mutation owner”不等于把所有事实改造成 CSM source。
 - **投影管线**：P01 的反向捕获全部删除；可选 bridge只验证和转发已登记、已 sealed 的事实，不根据 LangChain 最终消息形状反推 lifecycle。
 
@@ -653,7 +652,7 @@ rehydrate只发生在execution admission或确实需要可写runtime的operation
 
 ## Migration Plan
 
-1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与后续受支持版本的显式schema migration，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
+1. 先按 itemized 新字段合同替换实验 v2 的自由 metadata 决策路径，并建立以 `(session_id, thread_id)` 为 key 的统一 `ContextMutationIntent` 端口、单一 thread owner transaction与当前格式的显式schema校验；开发旧格式直接拒绝并清理，不新增兼容升级链，使 canonical append、source lifecycle、ToolSet switch和 epoch rebuild都不再旁路 ContextStore。旧实验 v2 字段形态不做就地升级或运行时兼容读取，遇到它保留原件并明确报schema-incompatible；对已经按新合同提交的 JSONL item，仍绝不原地改字节。独立 v1 一次性导入边界保持原规划。
 2. 增加 stable-prefix epoch/reason/manifest、ToolSet compatibility key、desired/applied revision和 CSM source/tracking contract。
 3. 先提取通用`EventChannelService`、进程内`LifetimeScope`，使既有TurnExecutionScope、watcher、MCP/client及runtime stop/close复用单一异步释放合同；内置file monitor按完整watch选项共享subscription并返回释放handle（原「权威memory状态」适配已随 `remove-agent-memory` 移除 `MemoryStateAdapter`/`MemoryStateReader` 与 `memory_state` source kind；`gateway_snapshot` version token 通路亦被同一 change 回收，不再存在 Gateway 内部 snapshot 来源接入步骤）。再建立SourceReconciler、ResourceDerivationGraph、语义ResourceRegistry、initial reconcile/readiness；config owner而非scope负责候选配置与来源登记的shadow健康/原子发布，旧scope随后排空。把Job event bus迁为独立channel adapter，再迁移config、workspace file event、AGENTS和Skill consumer，迁完即删除各自旧watch loop与请求期reader/enumerator。旧ResourceManager在外部资源provider完成typed身份/状态核实后迁为只处理跨Turn持久operation lease的账本，删除工具参数猜测、cleanup policy及内存stopper控制。
 4. 建立URI grammar/resolver、三层SkillCatalog及metadata/activation facet；实现默认turn、可选model_call的ResourceActivationCoordinator和持久activation provenance，验证URI/path/credential不泄露、旧assembly不按当前URI重解。

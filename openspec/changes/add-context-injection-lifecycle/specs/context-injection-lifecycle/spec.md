@@ -93,17 +93,17 @@ CSM/source producer MUST以 typed `SourceObservation`、`ApplySourceLifecycleDec
 
 系统 SHALL 将 ToolSetSnapshot/ToolSetRef保持为独立于 canonical message和 CSM source的Provider可见权威事实。Provider `tools` SHALL仅包含按capability profile选出的少量直接工具和始终存在、名称/schema/description固定的`invoke_extension_tool(tool_name, arguments)`；其描述不得枚举内部target。直接工具或信封自身的Provider可见名称、schema、description、visibility、确认policy发生有效变化 SHALL产生 desired ToolSet revision；owner MUST在安全边界通过hard rebase生效。内层ExtensionToolCatalog的MCP/内置/自定义target增删改、schema、目录revision或执行时权限变化不属于ToolSetRef，不得仅因此创建prefix epoch。hard rebase MUST封存新的 ToolSetSnapshot/Ref、创建 `epoch_reason=toolset_changed`的新 prefix epoch并重编译 root context、active canonical/source projection和 tools；不得向旧 context追加“工具已切换”之类的软通知，也不得修改 in-flight sealed assembly。
 
-ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；直接工具选择影响Provider ToolSet，扩展目标选择只影响ExtensionToolCatalog。每个 SessionThread ContextStore SHALL分别拥有最后观察到的desired及已applied ToolSetRef/revision、ExtensionCatalogBindingRef及其原始model-call binding。恢复或重放历史 assembly MUST使用两种已封存binding，不得用当前 desired selection反推历史工具集或扩展目标。
+ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selection及其控制面 revision；直接工具选择影响Provider ToolSet，扩展目标选择只影响ExtensionToolCatalog。每次新 preparation 的完整 desired ToolSetSnapshot MUST由该 SessionThread ContextStore owner冻结，并与当前合法执行链的 sealed assembly binding 比较。该 binding MUST是 applied ToolSetRef/revision 的唯一权威；工具正文、policy 和 wire tool order MUST共同参与 revision/compatibility 校验。ToolSetSnapshot 作为 typed prepare/seal 输入，不另建 SwitchToolSetIntent 或独立 SessionControl observed/applied 字段。applied 与 ExtensionCatalogBindingRef及其原始model-call binding MUST在同一成功 seal 边界保存；失败 preparation/seal 不得提前推进 applied。恢复或重放历史 assembly MUST使用两种已封存binding，不得用当前 desired selection反推历史工具集或扩展目标。
 
 #### Scenario: model call 期间修改工具选择
 
 - **WHEN** 一个绑定 ToolSet A的 sealed model call仍在 flight时控制面把 desired ToolSet改为 B
-- **THEN** 当前请求继续只使用 A，系统把 B记录为 pending desired revision，并在下一个 model-call safe boundary之前不 seal使用 B的请求
+- **THEN** 当前请求继续只使用 A，控制面记录 B的 desired selection/revision，并在下一个 model-call safe boundary之前不 seal使用 B的请求
 
 #### Scenario: safe boundary 应用新 ToolSet
 
 - **WHEN** 当前没有未收敛的 model/tool协议步骤且 desired revision不同于 applied revision
-- **THEN** owner原子封存最终 desired ToolSet snapshot/ref、推进 applied revision、创建 `toolset_changed` prefix epoch，经 CSM reconciliation后重编译并 seal新的 root/messages/tools
+- **THEN** owner冻结最终完整 desired ToolSet snapshot/ref，复用既有编译器创建 `toolset_changed` prefix epoch并重编译 root/messages/tools，经 CSM reconciliation后在同一成功 seal 事务保存唯一 applied binding；不得在 seal 前由另一 owner推进 applied
 
 #### Scenario: 切换时存在 outstanding tool call
 
@@ -117,7 +117,7 @@ ToolSelectionStore/ToolService SHALL只拥有 workspace/agent级 desired selecti
 
 #### Scenario: ToolSet 未发生有效变化
 
-- **WHEN** desired ToolSet的规范化 snapshot和 policy hash等于当前 applied binding
+- **WHEN** desired ToolSet的工具正文、policy与原始wire tool order均等于当前 applied binding
 - **THEN** 系统保持当前 prefix epoch并继续普通 canonical/source尾部追加，不创建空 hard rebase
 
 #### Scenario: hard rebase 与 compaction 的边界不同

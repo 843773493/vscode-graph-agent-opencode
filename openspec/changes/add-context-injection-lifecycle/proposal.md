@@ -6,7 +6,7 @@
 
 ## What Changes
 
-- 新增统一的上下文 mutation 边界：真实用户消息、assistant/reasoning、tool call/result 通过 canonical append intent 提交；source lifecycle、ToolSet switch、compaction/rewind rebuild 使用各自语义明确的 intent，但全部由同一个 Saver/ContextStore owner 原子提交和 seal。
+- 新增统一的上下文 mutation 边界：真实用户消息、assistant/reasoning、tool call/result 通过 canonical append intent 提交；source lifecycle与compaction/rewind rebuild 使用各自语义明确的 intent；ToolSet使用完整typed ToolSetSnapshot作为prepare/seal输入，但全部由同一个 Saver/ContextStore owner 原子提交和 seal。
 - 与 `add-itemized-rollout-context` 的实验 v2 字段收紧共同实施：CSM 和各 producer 只能提交/消费有 owner、类型和语义注释的 source lifecycle intent、contribution selection/replacement/source binding 与 registry ordinal；命名空间化、版本化 `extensions` 仅供保留/展示，不承担追踪、注入、排序或稳定前缀决策。直接删除旧自由 `metadata` flag/路径和兼容读取，不为现有实验数据建立第二套字段解释器。
 - 该 owner 的最小生命周期单位是 `SessionThread` 而非产品 Session：Session 只保存唯一 main thread、child thread catalog 与共享资源；每个 thread 独立拥有 canonical context、CSM state、active view、prefix epoch、ToolSet applied binding 和 sealed assembly。LangGraph `checkpoint_ns` 仍仅为 thread 内子图 namespace，不得成为 CSM/ContextStore owner key。
 - Session路径与导航改由itemized change的workspace SQLite catalog统一管理：物理node固定为`sessions/YYYY/MM/DD/{session_id}`，父子Session/Folder仅是catalog关系。所有新Session副作用准入先取workspace topology shared gate、再取本地Session gate并持久化lease；Session/Folder递归删除以同库batch record一次标记整棵逻辑子树deleting，catalog commit关闭新准入，之后逐Session关闭local fence、排空旧generation lease并定点隔离日期目录。CSM不能因导航移动重建owner、因删除时部分fence仍active而新建context，也不能扫盘补洞。
@@ -58,11 +58,11 @@
 ## Impact
 
 - 影响 `app/agents/agent_factory.py`、`deep_agent_stack.py`、`middleware_prompts.py`、`skill_runtime.py`、压缩 middleware、内部 structured prompt producer；删除 `PromptReplayCaptureMiddleware`，并删除或重构 `ItemizedContextProjectionMiddleware` 为无状态 sealed-assembly dispatch bridge（原列出的 memory middleware 已随 change `remove-agent-memory` 删除，不属本 change 影响面）。
-- 影响 checkpoint/context owner、source reconciliation、assembly manifest/detail store 和 Provider projector：owner 需要接受 canonical append、source lifecycle、ToolSet switch 与 epoch rebuild 四类 mutation intent；dispatch 只能消费 Saver-issued sealed assembly reference，不能从 framework request反向生成 contribution、ToolSetSnapshot或 assembly。
+- 影响 checkpoint/context owner、source reconciliation、assembly manifest/detail store 和 Provider projector：owner 接受 canonical append、source lifecycle与epoch rebuild三类mutation intent及完整ToolSetSnapshot输入；applied工具事实仅由成功sealed assembly binding确立；dispatch 只能消费 Saver-issued sealed assembly reference，不能从 framework request反向生成 contribution、ToolSetSnapshot或 assembly。
 - 影响 SessionThread catalog、thread-qualified storage/checkpoint config 和 GraphBinding 重建：CSM source identity、tracking registration、ToolSet applied revision 与 sealed dispatch reference 必须绑定 `(session_id, thread_id)`；Session main-thread 默认路由不能被内部 producer 当作跨 thread fallback。
 - 影响由 `add-itemized-rollout-context` 定义的 ThreadRuntime residency、lazy rehydrate 和 callback fencing：logical ContextStore/CSM owner必须可从持久状态重建且任意时刻只有一个可写runtime generation；cold read与 idle policy复用其唯一合同。
 - 影响 attachment ingress、canonical append、Provider projection 与清理流程：需要 workspace attachment catalog、按内容去重、session/thread/item reference、capability 校验和引用感知 GC；CSM、history 和模型工具不得扫描 `.boxteam/attachments` 或暴露其 locator。
-- 影响 ToolSelectionStore、ToolService、执行 step/Agent 生命周期和 ToolSet registry：需要区分 desired/applied ToolSet revision，在每次 model call 前的安全边界检测变化，并以 hard rebase替代“运行中 Job 永久沿用旧 Agent/工具集”的隐式行为。
+- 影响 ToolSelectionStore、ToolService、执行 step/Agent 生命周期和 ToolSet registry：需要以控制面 desired selection/revision 对照 SessionThread sealed assembly binding 的唯一 applied ToolSet revision，在每次新 model call 前冻结完整 ToolSetSnapshot并检测变化，并以 hard rebase替代“运行中 Job 永久沿用旧 Agent/工具集”的隐式行为。
 - 影响 Goal、subagent/session generation、跨会话消息、团队、终端 steering、execution retry 和 checkpoint reminder 的派发方式；Goal只绑定main thread，team状态迁入Session内部child-thread ledger，跨Sessionsend只投递目标main thread；这些内部事件需要独立于真实用户 acceptance/Turn root 的 execution wakeup。
 - 影响`send_message_to_session`、`read_context`、等待/监控工具及Session link解析：跨workspace/server操作不materialize目标runtime或建立共享协作状态，目标resolved main-thread identity必须进入审计和幂等记录。
 - 影响Gateway federation transport、配置与权限控制：新增SSH隧道内的长期全双工WebSocket对等RPC channel、hub唯一中继、origin-preserving transit grant、channel重连/背压/多路复用，以及`permissions.federation`默认允许且运行时热发布的policy snapshot；现有持久`connection_id`不改成socket实例身份。
