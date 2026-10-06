@@ -4,7 +4,7 @@
 
 ## 授权与恢复坐标
 
-- 唯一生产源码实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；当前只读审查者为 `persistent_web_closure_reviewer` 与 `wire_http_acceptance_reviewer`，实际turn_context均为 **gpt-6-luna/max**。旧 `wire_contract_reviewer` 因重复扩大到已完成的整组关闭调查而被中断，其既有报告保留；新审查者只审 fixedf29222/task5.2。后者的整组关闭报告9989f604与七文件更正版f2b527b7已主核，完整wire仍未验收。两个原wire报告保留在TEMP同名任务的artifacts/wire-preimage-contract/report.md，观察index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。注册已达15，不新增agent。
+- 唯一生产源码实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；当前只读审查者为 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer`，沿已核 **gpt-6-luna/max** 会话复用。前者曾因重复关闭调查中断，后按≤25行验收缺口窄审恢复，已交3098406a更正版并转审新增非流式测试；后者只查SDK实际正文变换。persistent_web_closure_reviewer 的fixedf29222/task5.2与P61报告已完成保留；整组关闭9989f604与七文件更正版f2b527b7已主核，完整wire仍未验收。两个原wire报告保留在TEMP同名任务的artifacts/wire-preimage-contract/report.md，观察index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。注册已达15，不新增agent。
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
@@ -181,7 +181,7 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - 主已在tests/unit/domain/itemized/test_plan_contract.py已有必填manifest缺键矩阵增加request_input_hash（唯一新增行），Ruff0，保持原fixture/其它断言。已核WT原测试只缺该行，物化主独占测试后在匹配serde的WT跑12项全过（pytest1.95秒、runner3.498秒、actual0），domain/test前后指纹不变；只归current WT领域恢复边界，尚未固定/提交、不代完整wire/HTTP验收。证据r-wire-caller-early-seven/required-envelope-matrix/。正式integration707处仍等真实wire合同迁移，不把wire当LangChain envelope解码。main生产业务手写仍0，文档/测试/机械/诊断成本照记。
 - Browser deleted grant边界已核：attempt16/local-backend-40647.log:182→workspace_resources/owner.py:_grant→BrowserManager.issueTransportGrant。已deleted且verified仍进入grant，目标确定非running抛普通Error经HTTP500令Python_unknown污染已核终态；同Sol排wire和整组关闭之后修复，不能吞异常或返回假成功，验确定拒绝和实际target race。5.2已过场景证据保留，未修缺陷单列。P07/P08仍running；主只核其最近公开工具确认在推进，收窄重复整组关闭调查并催可行动结论，不因等待重启agent。主初次恢复裸status、数次猜目录和log尾部UTF-8解析actual1均属协调成本，未改生产/共享index。
 - 当前文档维护4195/c2b5均只提交台账，真实提交后HEAD查file-tools-openspec-plan/*forward-receipt.json，不追逐文档自身坐标再造提交。恢复反复全文读历史状态/50K-token效率JSON、重复同17规划attestation的成本已暴露；入口只补“当前坐标/相关收据＋按任务/JSON键查询、未变检查复用”规则，Skill validator0，随后窄JSON键读取实际成功，交付速度效果未量化，不归作者。
-- P07持续扩大到已由P08完成的整组关闭调查，主已中断只读旧审查者；新persistent_web_closure_reviewer按无历史最小证据包只审fixedf29222/task5.2，显式gpt-6-luna/max，团队注册达15不再新增。该调整尚未出报告，不能宣称提速。Sol仍唯一writer且继续真实finalize/profile，P08仍审fixed51b642七文件；主测试缺键迁移不动生产。
+- P07持续扩大到已由P08完成的整组关闭调查，主已中断只读旧审查者；新persistent_web_closure_reviewer按无历史最小证据包只审fixedf29222/task5.2，显式gpt-6-luna/max，团队注册达15不再新增。该调整尚未出报告，不能宣称提速。Sol仍唯一writer且继续真实finalize/profile，P08仍审fixed51b642七文件；主测试缺键迁移不动生产。当前只读窄审复用wire_contract_reviewer与wire_http_acceptance_reviewer，分别查验收缺口和SDK实际正文变换，不重做关闭调查。
 - Sol下一段已定型为agents/providers/wire_finalize.py唯一纯Chat/Responses编码面、完整params/stop、profile与封存/发送共用；主核既定合同2.2和最近AGENTS后接受该职责，不挪到明确禁止wire bridge的mapping/itemized，不import动态模型/CSM/storage。源码尚未交本段；语义参数不能窄白名单丢失，实际HTTP、profile漂移零发送及全部caller仍待验。
 
 - P08七文件更正版f2b527b7已读：保留同seal唯一事实/required键与retry链结论，撤回旧preimage形状必失配推断；缺request_input_hash键确拒绝，保原preimage+原hash恢复未实测。主迁移真实HTTP恢复caller：ROOT/WT单函数SHA d8bc08a2一致，Chat/Responses均比较snapshot.request_hash_preimage与独立TCP实际完整正文的规范化结果；原overlay/order/restore断言和参数矩阵保留，其余函数AST不变，Ruff0。只静态交付，实际HTTP待Sol完整wire；不在ROOT旧生产上跑错配新test。证据wire-http-caller-migration-attempt-1/；12case领域缺键矩阵通过范围不扩大。
@@ -193,3 +193,7 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - WHTTP更正版报告SHA 1742eb527f8a935f8becb01c354935afe4464de8a3965b76cdb9d35dadbcfc13已主核，独立TCP正文全等断言符合既定完整wire合同；旧版dda57467作废。只更正报告，不改测试或增加运行，生产完整wire未验。漏给原合同定位属主协调成本，不归Sol返工。
 
 - wire参数WIP早验两项原最小配置单测1pass/1fail（11.913秒、源码指纹未变）：新send helper重新带入temperature=None等未设置字段。真实sync/async非流式调用对照ROOT actual0、WT actual1，WT共享入口强制stream=True/include_usage；两边指纹未变，只mock网络边界。证据wire-finalize-early-minimal-options-attempt-1与wire-finalize-early-nonstream-attempt-1；同Sol收修正，主未补生产源码，完整wire仍未验。
+
+- 主另独占并同步ROOT/WT的tests/unit/agents/providers/test_provider_request_options.py（SHA c1fe8c48cf200473d6f5b2c267522987431b0c7bf1d6d2d8e82dc13eb455dd8b），新增sync/async非流式原行为测试；ROOT2pass/actual0/11.766秒、Ruff0，原None省略控制组1pass/actual0/10.769秒，两次指纹未变。测试三文件固定8331fef93ab19ddb5b3cca27b1a4fd580b2b5ff1，收据wire-http-caller-migration-attempt-1/fixed-three-tests-receipt.json；都未随完整wire集成，WT修复复验待交。主仍未手写生产源码，测试补救/验收成本另计。
+
+- 两参数回归已由同Sol修正：WT4case actual0/12.687秒，后相关参数+format两文件33pass/actual0/17.686秒，agents/mapping/tests指纹均未变，Ruff0。早固定08323627仅含新增wire_finalize、chat adapter和输出mixin三路径，完整wire未集成；freeze与原始日志见wire-parameter-fix-acceptance-attempt-1/及attempt-2/。新增非流式测试独审SHA8d209548接受，属于保原行为的纯新增，不代完整HTTP。SKILL记录同作者修正与窄复验效果，暂不换默认模型。SDK更正版333a6c8f纠正num_ctx/stream/语义参数静默剔除建议，只复用静态定位；无原始离线运行收据，不归完整TCP通过。
