@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
@@ -19,7 +20,7 @@ from langchain.agents.structured_output import (
     ProviderStrategy,
     ToolStrategy,
 )
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.runtime import ExecutionInfo, Runtime
 from pydantic import BaseModel
@@ -36,14 +37,22 @@ from app.domain.itemized.assembly_snapshot import context_request_hash
 from app.domain.itemized.epoch.prefix_epoch import (
     ProviderProfileChangeRequiresRebuildError,
 )
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
     sha256_jcs,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    ToolProtocolBoundaryConflict,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -57,6 +66,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
 )
+from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
+    CanonicalBlockAccumulator,
+)
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
@@ -871,6 +885,15 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
     turn_id = seed_dispatch_history(saver, session_id)
     thread = saver._storage.main_thread_id(session_id)
     state, endpoint = native_http_server
+    thread_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
+    detail_dirs = (
+        thread_root / "rollout" / "context-plan-details",
+        thread_root / "rollout" / "context-plan-details-protected",
+    )
+    detail_files_before = {
+        path.relative_to(thread_root): path.read_bytes()
+        for root in detail_dirs for path in root.rglob("*") if path.is_file()
+    }
     saver.register_source_overlay(
         SimpleNamespace(
             session_id=session_id, thread_id=thread, checkpoint_ns="",
@@ -906,6 +929,9 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
         available_before = connection.execute(
             "SELECT COUNT(*) FROM context_plan_details WHERE availability = 'available'"
         ).fetchone()
+        details_before = connection.execute(
+            "SELECT * FROM context_plan_details ORDER BY assembly_id, detail_id"
+        ).fetchall()
     model = BoxteamLiteLLMChatModel(
         model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
         custom_llm_provider="openai", streaming=True, max_retries=0,
@@ -942,12 +968,14 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
         assert connection.execute(
             "SELECT error_code FROM context_plan_seal_failures"
         ).fetchall() == [("source-mismatch",)]
-        removed = connection.execute(
-            "SELECT relative_path FROM context_plan_details WHERE availability = 'unavailable'"
-        ).fetchall()
-    thread_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
-    assert removed
-    assert all(not (thread_root / path).exists() for (path,) in removed)
+        assert connection.execute(
+            "SELECT * FROM context_plan_details ORDER BY assembly_id, detail_id"
+        ).fetchall() == details_before
+    # prepare 只冻结内存正文；投影拒绝发生在发布前，不应遗留 detail 或 tombstone。
+    assert {
+        path.relative_to(thread_root): path.read_bytes()
+        for root in detail_dirs for path in root.rglob("*") if path.is_file()
+    } == detail_files_before
 
 
 @pytest.mark.asyncio
@@ -1389,3 +1417,687 @@ async def test_schema_named_credentials_and_timestamp_survive_real_provider_http
         projector_id=snapshot.projector_id, projector_version=snapshot.projector_version,
         target_format=snapshot.target_format, wire_request=changed_body,
     ) != original_hash
+
+
+@tool
+def inspect_folder(folder: str) -> str:
+    """真实图注册目录的第二个工具。"""
+    return f"folder:{folder}"
+
+
+@tool
+def search_notes(query: str) -> str:
+    """真实图注册目录的第三个工具。"""
+    return f"notes:{query}"
+
+
+@pytest.fixture
+def toolset_dispatch_case(dispatch_saver, native_http_server, dispatch_bridge, target_format):
+    """ToolSelectionStore→正式 producer→实际 Bridge/Saver/HTTP，响应仍是协议桩。"""
+    saver, session, turn, sessions = dispatch_saver
+    state, endpoint = native_http_server
+    thread = saver._storage.main_thread_id(session)
+    checkpoint_id = saver.get_tuple(build_checkpoint_config(thread)).checkpoint["id"]
+    tools = (inspect_file, inspect_folder, search_notes)
+    model_type = {
+        "responses": BoxteamOpenAIResponsesModel,
+        "chat_completions": BoxteamLiteLLMChatModel,
+    }[target_format]
+    model = model_type(
+        model="openai/gpt-4.1", api_key=state.api_key, api_base=endpoint,
+        custom_llm_provider="openai", streaming=True, max_retries=0,
+    )
+    bridge = dispatch_bridge(
+        session_id=session, instruction="ToolSet sealed owner 合同",
+        checkpointer=saver, tools=tools,
+    )
+    create_dispatch_agent(model, tools=list(tools), middleware=[bridge], checkpointer=saver)
+    producer = bridge._tool_set_producer
+    selection = producer._selection_reader
+    assert isinstance(selection, ToolSelectionStore)
+    selection.apply_changes(
+        agent_id="dispatch-test",
+        changes={item.name: (item.name == "inspect_file", item.name == "inspect_file") for item in tools},
+    )
+
+    async def dispatch(task_id, *, messages=()):
+        incoming = ModelRequest(
+            model=model, messages=list(messages), tools=list(tools), model_settings={},
+            runtime=Runtime(execution_info=ExecutionInfo(
+                thread_id=thread, checkpoint_ns="", checkpoint_id=checkpoint_id,
+                task_id=task_id, node_attempt=1,
+            )),
+        )
+        outbound = []
+
+        async def send_actual(request):
+            # handler 只读已成功提交的 assembly，真实 SDK 还会联校 finalized wire/hash。
+            handle = read_sealed_assembly_dispatch(invocation_purpose="agent")
+            assert handle is not None
+            outbound.append(handle.snapshot)
+            bound = request.model.bind_tools(request.tools)
+            answer = await bound.ainvoke(request.messages, **request.model_settings)
+            return ModelResponse(result=[answer])
+
+        with dispatch_execution_scope(saver, session, turn):
+            await bridge.awrap_model_call(incoming, send_actual)
+        assert len(outbound) == 1
+        assert outbound[0].request_hash_preimage == normalize_wire_request(state.requests[-1]["body"])
+        return outbound[0]
+
+    return SimpleNamespace(
+        saver=saver, session=session, turn=turn, thread=thread, sessions=sessions,
+        state=state, target_format=target_format, bridge=bridge, producer=producer,
+        selection=selection, manager=bridge._context_source_manager,
+        tools=tools, dispatch=dispatch,
+    )
+
+
+def _select_contract_tools(case, *names):
+    """只修改真实 desired 控制面，不调用任何 applied writer。"""
+    selected = frozenset(names)
+    case.selection.apply_changes(
+        agent_id="dispatch-test",
+        changes={item.name: (item.name in selected, item.name in selected) for item in case.tools},
+    )
+    return case.selection.snapshot("dispatch-test")
+
+
+def _sealed_contract_rows(case):
+    """保存已提交 SQLite 原字符串，证明旧 assembly 持久字节没有被更新。"""
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        return tuple(tuple(row) for row in snapshot.connection.execute(
+            "SELECT assembly_id, snapshot_json, plan_hash, request_hash "
+            "FROM context_assemblies WHERE status IN ('sealed','terminal') ORDER BY rowid"
+        ))
+
+
+def _latest_contract_assembly(case):
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        return case.saver._storage.latest_context_assembly(snapshot)
+
+
+def _contract_wire_tool_names(case, body):
+    return tuple(
+        entry["name"] if case.target_format == "responses" else entry["function"]["name"]
+        for entry in body.get("tools", ())
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_inflight_selection_change_keeps_sealed_retry_and_applies_next_call(
+    toolset_dispatch_case, monkeypatch, target_format,
+):
+    """真实 HTTP in-flight 中改 desired；旧 retry 零新来源/零新 seal。"""
+    del target_format
+    case = toolset_dispatch_case
+    case.state.release_response.clear()
+    in_flight = asyncio.create_task(case.dispatch("toolset-inflight-first"))
+    try:
+        assert await asyncio.to_thread(case.state.request_ready.wait, 10)
+        (first,) = case.saver.list_context_assemblies(case.session, case.thread)
+        before = _sealed_contract_rows(case)
+        desired = _select_contract_tools(case, "inspect_folder")
+        case.manager.observe(
+            "instruction:native-contract", "下一次 safe boundary 的说明",
+            revision="native-contract:next-call",
+        )
+        assert _sealed_contract_rows(case) == before
+        assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+        assert first.seal_binding.selection_revision != desired.revision
+        assert _contract_wire_tool_names(case, case.state.requests[0]["body"]) == ("inspect_file",)
+    finally:
+        case.state.release_response.set()
+    assert await asyncio.wait_for(in_flight, 20) == first
+
+    def no_live_read_or_seal(*_args, **_kwargs):
+        pytest.fail("sealed retry 不得读取新 desired/source 或再次 seal")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(case.producer, "snapshot", no_live_read_or_seal)
+        patch.setattr(case.manager, "prepare_sources", no_live_read_or_seal)
+        patch.setattr(case.manager, "prepare_rebuild_sources", no_live_read_or_seal)
+        patch.setattr(case.saver, "seal_context_plan", no_live_read_or_seal)
+        retry = await case.dispatch("toolset-inflight-first")
+    assert retry == first
+    assert normalize_wire_request(case.state.requests[1]["body"]) == first.request_hash_preimage
+    assert _sealed_contract_rows(case) == before
+
+    changed = await case.dispatch("toolset-inflight-next")
+    assert changed.seal_binding.selection_revision == desired.revision
+    assert changed.seal_binding.applied_toolset_revision != first.seal_binding.applied_toolset_revision
+    assert changed.seal_binding.tool_set_snapshot_id != first.seal_binding.tool_set_snapshot_id
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert _contract_wire_tool_names(case, case.state.requests[2]["body"]) == ("inspect_folder",)
+    assert changed.seal_binding.root.content == "下一次 safe boundary 的说明"
+    assert _sealed_contract_rows(case)[0] == before[0]
+    assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_control_switches_coalesce_and_each_call_can_open_an_epoch_in_one_turn(
+    toolset_dispatch_case, monkeypatch, target_format,
+):
+    """多个 desired revision 只在下一 safe call 读取最终快照，同 Turn 可多次 rebase。"""
+    del target_format
+    case = toolset_dispatch_case
+    first = await case.dispatch("toolset-coalesce-initial")
+    before = _sealed_contract_rows(case)
+    intermediate = _select_contract_tools(case, "inspect_folder")
+    restored = _select_contract_tools(case, "inspect_file")
+    final = _select_contract_tools(case, "search_notes")
+    assert len({intermediate.revision, restored.revision, final.revision}) == 3
+    assert _sealed_contract_rows(case) == before
+    produced = []
+    original_snapshot = case.producer.snapshot
+
+    def record_snapshot(*args, **kwargs):
+        actual = original_snapshot(*args, **kwargs)
+        produced.append(actual)
+        return actual
+
+    monkeypatch.setattr(case.producer, "snapshot", record_snapshot)
+    second = await case.dispatch("toolset-coalesce-final")
+    assert len(produced) == 1
+    assert produced[0].selection_revision == final.revision
+    assert produced[0].tool_names == ("search_notes",)
+    assert second.seal_binding.applied_toolset_revision == produced[0].revision
+    assert second.seal_binding.tool_set_snapshot_id == produced[0].snapshot_id
+    assert _contract_wire_tool_names(case, case.state.requests[1]["body"]) == ("search_notes",)
+
+    third_selection = _select_contract_tools(case, "inspect_folder")
+    third = await case.dispatch("toolset-coalesce-third")
+    assert len(produced) == 2
+    assert produced[1].selection_revision == third_selection.revision
+    assert third.seal_binding.applied_toolset_revision == produced[1].revision
+    assert first.turn_id == second.turn_id == third.turn_id == case.turn
+    assert [entry.seal_binding.prefix.state.epoch.ordinal for entry in (first, second, third)] == [1, 2, 3]
+    assert [entry.seal_binding.previous_assembly_id for entry in (second, third)] == [first.assembly_id, second.assembly_id]
+    assert first.history_view_revision == second.history_view_revision == third.history_view_revision
+    assert case.saver.list_context_assemblies(case.session, case.thread) == (first, second, third)
+    assert _sealed_contract_rows(case)[0] == before[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("terminal_status", ["success", "error"])
+async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_seal(
+    toolset_dispatch_case, monkeypatch, target_format, terminal_status,
+):
+    """真实 request codec 先提交 call；缺 terminal result 时零来源准备/零 seal/零 HTTP。"""
+    del target_format
+    case = toolset_dispatch_case
+    first = await case.dispatch("toolset-protocol-initial")
+    before = _sealed_contract_rows(case)
+    _select_contract_tools(case, "inspect_folder")
+    case.manager.observe(
+        "instruction:native-contract", "工具组闭合后的说明", revision="native-contract:closed-group",
+    )
+    pending = case.manager.prepare_pending()
+    calls = {"sources": 0, "rebuild": 0, "seal": 0}
+    originals = {
+        "sources": case.manager.prepare_sources,
+        "rebuild": case.manager.prepare_rebuild_sources,
+        "seal": case.saver.seal_context_plan,
+    }
+
+    def record_sources(*args, **kwargs):
+        calls["sources"] += 1
+        return originals["sources"](*args, **kwargs)
+
+    def record_rebuild(*args, **kwargs):
+        calls["rebuild"] += 1
+        return originals["rebuild"](*args, **kwargs)
+
+    def record_seal(*args, **kwargs):
+        calls["seal"] += 1
+        return originals["seal"](*args, **kwargs)
+
+    monkeypatch.setattr(case.manager, "prepare_sources", record_sources)
+    monkeypatch.setattr(case.manager, "prepare_rebuild_sources", record_rebuild)
+    monkeypatch.setattr(case.saver, "seal_context_plan", record_seal)
+    call = AIMessage(
+        content="", id="toolset-outstanding-call",
+        tool_calls=[{"name": "inspect_file", "args": {"path": "README.md"}, "id": "toolset-call"}],
+    )
+    with pytest.raises(ToolProtocolBoundaryConflict) as error:
+        await case.dispatch("toolset-protocol-next", messages=(call,))
+    assert error.value.code == "tool-protocol-boundary-conflict"
+    assert calls == {"sources": 0, "rebuild": 0, "seal": 0}
+    assert len(case.state.requests) == 1
+    assert _sealed_contract_rows(case) == before
+    assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+    # 只读 pending 容器，避免测试自身调用 prepare_sources 污染边界计数。
+    assert tuple(case.manager._pending.values()) == pending.deltas
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert snapshot.connection.execute(
+            "SELECT status, result_message_sequence FROM tool_calls WHERE tool_call_id = 'toolset-call'"
+        ).fetchone() == ("pending", None)
+        call_item_id = snapshot.connection.execute(
+            "SELECT item_id FROM item_catalog WHERE semantic_kind = 'tool_call'"
+        ).fetchone()[0]
+
+    result = ToolMessage(
+        content="真实工具结果" if terminal_status == "success" else "真实工具执行失败",
+        id="toolset-terminal-result", tool_call_id="toolset-call",
+        name="inspect_file", status=terminal_status,
+    )
+    changed = await case.dispatch("toolset-protocol-next", messages=(call, result))
+    assert calls == {"sources": 1, "rebuild": 0, "seal": 1}
+    assert len(case.state.requests) == 2
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert _sealed_contract_rows(case)[0] == before[0]
+    assert call_item_id in {entry.ref.ref_id for entry in changed.selection if entry.included}
+    assert "item-toolset-terminal-result" in {entry.ref.ref_id for entry in changed.selection if entry.included}
+    body = case.state.requests[-1]["body"]
+    if case.target_format == "responses":
+        old_calls = [entry for entry in body["input"] if entry.get("type") == "function_call"]
+        old_results = [entry for entry in body["input"] if entry.get("type") == "function_call_output"]
+        assert old_calls[0]["call_id"] == old_results[0]["call_id"] == "toolset-call"
+        assert old_calls[0]["name"] == "inspect_file"
+        assert body["input"].index(old_calls[0]) < body["input"].index(old_results[0])
+    else:
+        old_calls = [call for entry in body["messages"] for call in entry.get("tool_calls", ())]
+        old_results = [entry for entry in body["messages"] if entry.get("role") == "tool"]
+        assert old_calls[0]["id"] == old_results[0]["tool_call_id"] == "toolset-call"
+        assert old_calls[0]["function"]["name"] == "inspect_file"
+    assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_bridge_seal_transaction_failure_keeps_applied_and_retry_commits_once(
+    toolset_dispatch_case, target_format,
+):
+    """真实 seal 已写 header 后在索引写入处失败；只成功提交能成为 applied。"""
+    del target_format
+    case = toolset_dispatch_case
+    first = await case.dispatch("toolset-rollback-initial")
+    before = _sealed_contract_rows(case)
+    _select_contract_tools(case, "inspect_folder")
+    case.manager.observe(
+        "instruction:native-contract", "重试后才能 applied 的说明", revision="native-contract:retry-only",
+    )
+    pending = case.manager.prepare_pending()
+    with case.saver._storage._connect(case.thread, "", session_id=case.session) as connection:
+        connection.execute(
+            "CREATE TRIGGER refuse_toolset_refs BEFORE INSERT ON assembly_item_refs "
+            "BEGIN SELECT RAISE(ABORT, 'toolset-ref-seal-injected'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="toolset-ref-seal-injected"):
+        await case.dispatch("toolset-rollback-next")
+    assert len(case.state.requests) == 1
+    assert _sealed_contract_rows(case) == before
+    assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+    assert case.manager.prepare_pending() == pending
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert snapshot.connection.execute(
+            "SELECT count(*) FROM context_assemblies WHERE status IN ('sealed','terminal')"
+        ).fetchone()[0] == 1
+        assert snapshot.connection.execute(
+            "SELECT count(*) FROM assembly_item_refs WHERE assembly_id <> ?", (first.assembly_id,),
+        ).fetchone()[0] == 0
+        assert snapshot.connection.execute(
+            "SELECT count(*) FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND status = 'committed'"
+        ).fetchone()[0] == 1
+    with case.saver._storage._connect(case.thread, "", session_id=case.session) as connection:
+        connection.execute("DROP TRIGGER refuse_toolset_refs")
+    changed = await case.dispatch("toolset-rollback-next")
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert changed.seal_binding.applied_toolset_revision != first.seal_binding.applied_toolset_revision
+    assert changed.seal_binding.root.content == "重试后才能 applied 的说明"
+    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert _sealed_contract_rows(case)[0] == before[0]
+    assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
+    assert case.saver.list_context_assemblies(case.session, case.thread) == (first, changed)
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert snapshot.connection.execute(
+            "SELECT count(*) FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND status = 'committed'"
+        ).fetchone()[0] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("manifest_change", ["policy_version", "wire_tool_order"])
+async def test_complete_snapshot_supplier_policy_and_order_changes_bind_real_bridge_seals(
+    toolset_dispatch_case, monkeypatch, target_format, manifest_change,
+):
+    """仅验证完整 supplier snapshot 的 seal 合同，不代表控制面可修改 policy/version/order。"""
+    del target_format
+    case = toolset_dispatch_case
+    _select_contract_tools(case, "inspect_file", "inspect_folder", "search_notes")
+    first = await case.dispatch("toolset-manifest-initial")
+    before = _sealed_contract_rows(case)
+    original_snapshot = case.producer.snapshot
+    first_set = original_snapshot()
+    injected = []
+
+    def supply_complete_manifest(*args, **kwargs):
+        # 保留正式 producer 的注册 schema 与真实 selection；仅在 supplier 值边界注入变体。
+        desired = original_snapshot(*args, **kwargs)
+        changed = ToolSetSnapshot(
+            selection_revision=desired.selection_revision,
+            tools=tuple(reversed(desired.tools)) if manifest_change == "wire_tool_order" else desired.tools,
+            policy_keys=desired.policy_keys,
+            policy_version="v2" if manifest_change == "policy_version" else desired.policy_version,
+        )
+        injected.append(changed)
+        return changed
+
+    monkeypatch.setattr(case.producer, "snapshot", supply_complete_manifest)
+    changed = await case.dispatch("toolset-manifest-changed")
+    assert len(injected) == 1
+    changed_set = injected[0]
+    assert first_set.selection_revision == changed_set.selection_revision
+    assert first_set.tools == changed_set.tools
+    assert first_set.policy_keys == changed_set.policy_keys
+    assert first_set.revision != changed_set.revision
+    assert changed.seal_binding.selection_revision == first.seal_binding.selection_revision
+    assert changed.seal_binding.applied_toolset_revision == changed_set.revision
+    assert changed.seal_binding.tool_set_snapshot_id == changed_set.snapshot_id
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert changed.tool_set_refs[0].tool_policy_version == changed_set.policy_version
+    assert tuple(changed.tool_set_refs[0].tool_policy["wire_tool_order"]) == changed_set.wire_tool_order
+    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == changed_set.wire_tool_order
+    assert _sealed_contract_rows(case)[0] == before[0]
+    assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+@pytest.mark.parametrize("canonical_status", ["partial", "failed"])
+async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
+    toolset_dispatch_case, monkeypatch, target_format, canonical_status,
+):
+    """合法非 completed 结果经真实 canonical sink 提交，仍不能闭合 prepare 边界。"""
+    del target_format
+    case = toolset_dispatch_case
+    first = await case.dispatch("toolset-noncompleted-unknown-initial")
+    before = _sealed_contract_rows(case)
+    _select_contract_tools(case, "inspect_folder")
+    case.manager.observe(
+        "instruction:native-contract", "工具终态闭合后才应用",
+        revision="native-contract:noncompleted-unknown",
+    )
+    pending = tuple(case.manager._pending.values())
+    model_call_id = f"terminal-scope-{canonical_status}"
+    scoped_call_id = f"{model_call_id}:tool-call:unknown-result-call"
+    with dispatch_execution_scope(case.saver, case.session, case.turn):
+        admission = current_execution_admission()
+        assert admission is not None
+        accumulator = CanonicalBlockAccumulator(
+            turn_id=case.turn, execution_id=admission.execution_id,
+            producer_id="terminal-scope-probe", model_call_id=model_call_id,
+        )
+        accumulator.accept({
+            "block_id": "terminal-scope-call", "carrier_type": "tool_call",
+            "name": "inspect_file", "args": {"path": "README.md"},
+            "tool_call_id": scoped_call_id,
+        })
+        (call,) = accumulator.finalize(first_item_sequence=1, status="completed")
+        accumulator.accept({
+            "block_id": "terminal-scope-result", "carrier_type": "tool_result",
+            "name": "inspect_file", "tool_call_id": scoped_call_id,
+            "tool_attempt_id": f"tool-attempt:{model_call_id}",
+            "text": "工具结果尚未完整收敛，执行结果未知。",
+        })
+        (result,) = accumulator.finalize(
+            first_item_sequence=1, status=canonical_status,
+        )
+        sink = CanonicalItemSink(
+            case.saver, session_id=case.session, thread_id=case.thread,
+            checkpoint_ns="",
+        )
+        await sink.append((call, result))
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        committed = case.saver._context_reader.read_canonical_items(
+            snapshot, item_ids=(call.item_id, result.item_id),
+        )
+    committed_call, committed_result = committed
+    assert committed_call.status == "completed"
+    assert committed_result.status == canonical_status
+    assert committed_result.payload["tool_outcome"] == "unknown"
+    assert committed_result.payload["execution_confirmed"] is False
+    assert committed_result.payload == result.payload
+    assert _sealed_contract_rows(case) == before
+    assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+    projected_result = LangChainMessageCodec().project_message((committed_result,))
+    assert projected_result["type"] == "tool"
+    assert projected_result["data"]["status"] == "error"
+    projected_knowledge = projected_result["data"]["response_metadata"]
+    assert projected_knowledge["canonical_item_status"] == canonical_status
+    assert projected_knowledge["tool_outcome"] == "unknown"
+    assert projected_knowledge["execution_confirmed"] is False
+    (case.state.artifacts / f"noncompleted-unknown-{canonical_status}-{case.target_format}.json").write_text(
+        json.dumps({
+            "canonical_status": committed_result.status,
+            "tool_outcome": committed_result.payload["tool_outcome"],
+            "execution_confirmed": committed_result.payload["execution_confirmed"],
+            "checkpoint_tool_message_status": projected_result["data"]["status"],
+            "expected_prepare_boundary": "tool-protocol-boundary-conflict",
+            "previous_assembly_id": first.assembly_id,
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    counts = {"sources": 0, "rebuild": 0, "seal": 0}
+
+    def count_call(name, method):
+        def counted(*args, **kwargs):
+            counts[name] += 1
+            return method(*args, **kwargs)
+        return counted
+
+    monkeypatch.setattr(
+        case.manager, "prepare_sources", count_call("sources", case.manager.prepare_sources),
+    )
+    monkeypatch.setattr(
+        case.manager, "prepare_rebuild_sources",
+        count_call("rebuild", case.manager.prepare_rebuild_sources),
+    )
+    monkeypatch.setattr(
+        case.saver, "seal_context_plan", count_call("seal", case.saver.seal_context_plan),
+    )
+    with pytest.raises(ToolProtocolBoundaryConflict) as error:
+        await case.dispatch("toolset-noncompleted-unknown-next")
+    assert error.value.code == "tool-protocol-boundary-conflict"
+    assert counts == {"sources": 0, "rebuild": 0, "seal": 0}
+    assert len(case.state.requests) == 1
+    assert case.saver.list_context_assemblies(case.session, case.thread) == (first,)
+    assert _sealed_contract_rows(case) == before
+    assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+    assert _latest_contract_assembly(case).seal_binding.prefix == first.seal_binding.prefix
+    assert tuple(case.manager._pending.values()) == pending
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert case.saver._context_reader.read_canonical_items(
+            snapshot, item_ids=(committed_result.item_id,),
+        ) == [committed_result]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_format", ["responses", "chat_completions"])
+async def test_real_prepare_observes_completed_unknown_canonical_terminal_notification(
+    toolset_dispatch_case, monkeypatch, target_format,
+):
+    """completed 终态通知保持 unknown/false；真实 codec/Bridge 投影都不得伪成功。"""
+    del target_format
+    case = toolset_dispatch_case
+    first = await case.dispatch("toolset-completed-unknown-initial")
+    before = _sealed_contract_rows(case)
+    desired = _select_contract_tools(case, "inspect_folder")
+    model_call_id = "terminal-scope-completed-unknown"
+    provider_call_id = "unknown-terminal-call"
+    scoped_call_id = f"{model_call_id}:tool-call:{provider_call_id}"
+    content = "最终通知：工具执行结果未知，未确认执行。"
+    with dispatch_execution_scope(case.saver, case.session, case.turn):
+        admission = current_execution_admission()
+        assert admission is not None
+        accumulator = CanonicalBlockAccumulator(
+            turn_id=case.turn, execution_id=admission.execution_id,
+            producer_id="terminal-scope-probe", model_call_id=model_call_id,
+        )
+        accumulator.accept({
+            "block_id": "terminal-scope-call", "carrier_type": "tool_call",
+            "name": "inspect_file", "args": {"path": "README.md"},
+            "tool_call_id": scoped_call_id,
+        })
+        (call,) = accumulator.finalize(first_item_sequence=1, status="completed")
+        accumulator.accept({
+            "block_id": "terminal-scope-result", "carrier_type": "tool_result",
+            "name": "inspect_file", "tool_call_id": scoped_call_id,
+            "tool_attempt_id": f"tool-attempt:{model_call_id}", "text": content,
+        })
+        (unknown_draft,) = accumulator.finalize(first_item_sequence=1, status="partial")
+        # accumulator 的 completed 分支固定 success；合法 completed+unknown
+        # 由正式领域工厂分别表达终态记录与未确认执行知识，再经同一真实 sink 提交。
+        result = CanonicalItemRecord.create(
+            item_sequence=unknown_draft.item_sequence, item_id=unknown_draft.item_id,
+            semantic_kind=unknown_draft.semantic_kind, payload_kind=unknown_draft.payload_kind,
+            status="completed", producer_ref=unknown_draft.producer_ref,
+            payload=unknown_draft.payload, created_at=unknown_draft.created_at,
+            projection_identity=unknown_draft.projection_identity,
+            turn_id=unknown_draft.turn_id, turn_scope=unknown_draft.turn_scope,
+            message_group_id=unknown_draft.message_group_id, wire_role=unknown_draft.wire_role,
+        )
+        sink = CanonicalItemSink(
+            case.saver, session_id=case.session, thread_id=case.thread,
+            checkpoint_ns="",
+        )
+        await sink.append((call, result))
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        committed_call, committed_result = case.saver._context_reader.read_canonical_items(
+            snapshot, item_ids=(call.item_id, result.item_id),
+        )
+    assert committed_call.status == committed_result.status == "completed"
+    assert committed_result.payload["tool_outcome"] == "unknown"
+    assert committed_result.payload["execution_confirmed"] is False
+    assert committed_result.payload == result.payload
+    assert _sealed_contract_rows(case) == before
+    assert _latest_contract_assembly(case).seal_binding == first.seal_binding
+    counts = {"sources": 0, "rebuild": 0, "seal": 0}
+
+    def count_call(name, method):
+        def counted(*args, **kwargs):
+            counts[name] += 1
+            return method(*args, **kwargs)
+        return counted
+
+    monkeypatch.setattr(
+        case.manager, "prepare_sources", count_call("sources", case.manager.prepare_sources),
+    )
+    monkeypatch.setattr(
+        case.manager, "prepare_rebuild_sources",
+        count_call("rebuild", case.manager.prepare_rebuild_sources),
+    )
+    monkeypatch.setattr(
+        case.saver, "seal_context_plan", count_call("seal", case.saver.seal_context_plan),
+    )
+    projected_tool_results = []
+    projected_message_lists = []
+    original_projection = case.bridge._prepare_projection
+
+    def record_projection(request):
+        actual = original_projection(request)
+        projected_message_lists.append(list(actual[1]))
+        projected_tool_results.extend(
+            message for message in actual[1] if isinstance(message, ToolMessage)
+        )
+        return actual
+
+    monkeypatch.setattr(case.bridge, "_prepare_projection", record_projection)
+    changed = await case.dispatch("toolset-completed-unknown-next")
+    projected_tool_result, = projected_tool_results
+    projected_messages, = projected_message_lists
+    assert projected_tool_result.status == "error"
+    assert projected_tool_result.tool_call_id == provider_call_id
+    assert projected_tool_result.response_metadata["canonical_item_status"] == "completed"
+    assert projected_tool_result.response_metadata["tool_outcome"] == "unknown"
+    assert projected_tool_result.response_metadata["execution_confirmed"] is False
+    # 真实 Bridge 返回值经唯一 codec 回写，终态与执行知识仍分别保留。
+    codec = LangChainMessageCodec()
+    assert committed_result.projection_identity is not None
+    result_message_index = projected_messages.index(projected_tool_result)
+    inferred_model_call_id = codec.tool_message_model_call_id(
+        projected_tool_result, projected_messages[:result_message_index],
+    )
+    assert inferred_model_call_id == model_call_id
+    recoded_result, = codec.items_for_message(
+        projected_tool_result,
+        item_sequence=committed_result.item_sequence,
+        message_id=codec.message_id(projected_tool_result, 0),
+        turn_id=committed_result.turn_id,
+        execution_id=admission.execution_id,
+        timestamp=committed_result.created_at,
+        model_call_id=inferred_model_call_id,
+    )
+    assert recoded_result.status == "completed"
+    assert recoded_result.payload["tool_outcome"] == "unknown"
+    assert recoded_result.payload["execution_confirmed"] is False
+    assert recoded_result.payload["content"] == committed_result.payload["content"] == content
+    assert recoded_result.projection_identity is not None
+    assert recoded_result.projection_identity.model_call_id == model_call_id
+    assert counts == {"sources": 1, "rebuild": 0, "seal": 1}
+    assert len(case.state.requests) == 2
+    assert changed.seal_binding.selection_revision == desired.revision
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert _contract_wire_tool_names(case, case.state.requests[-1]["body"]) == ("inspect_folder",)
+    assert {committed_call.item_id, committed_result.item_id} <= {
+        entry.ref.ref_id for entry in changed.selection if entry.included
+    }
+    assert _sealed_contract_rows(case)[0] == before[0]
+    assert _latest_contract_assembly(case).seal_binding == changed.seal_binding
+    with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
+        assert case.saver._context_reader.read_canonical_items(
+            snapshot, item_ids=(committed_result.item_id,),
+        ) == [committed_result]
+    body = case.state.requests[-1]["body"]
+    if case.target_format == "responses":
+        wire_call, = (entry for entry in body["input"] if entry.get("type") == "function_call")
+        wire_result, = (entry for entry in body["input"] if entry.get("type") == "function_call_output")
+        assert wire_call["call_id"] == wire_result["call_id"] == provider_call_id
+        assert wire_call["name"] == "inspect_file"
+        assert wire_result["output"] == content
+        assert body["input"].index(wire_call) < body["input"].index(wire_result)
+    else:
+        wire_call, = (
+            call for message in body["messages"] for call in message.get("tool_calls", ())
+        )
+        wire_result, = (message for message in body["messages"] if message.get("role") == "tool")
+        assert wire_call["id"] == wire_result["tool_call_id"] == provider_call_id
+        assert wire_call["function"]["name"] == "inspect_file"
+        assert wire_result["content"] == content
+    projected_result = LangChainMessageCodec().project_message((committed_result,))
+    assert projected_result["type"] == "tool"
+    assert projected_result["data"]["status"] == "error"
+    projected_knowledge = projected_result["data"]["response_metadata"]
+    assert projected_knowledge["canonical_item_status"] == "completed"
+    assert projected_knowledge["tool_outcome"] == "unknown"
+    assert projected_knowledge["execution_confirmed"] is False
+    # canonical 与真实 codec/Bridge 传输知识分别落证，完整终态仍可闭合。
+    (case.state.artifacts / f"completed-unknown-terminal-{case.target_format}.json").write_text(
+        json.dumps({
+            "canonical_status": committed_result.status,
+            "tool_outcome": committed_result.payload["tool_outcome"],
+            "execution_confirmed": committed_result.payload["execution_confirmed"],
+            "checkpoint_tool_message_status": projected_result["data"]["status"],
+            "provider_wire_result": wire_result,
+            "provider_tool_message_status": projected_tool_result.status,
+            "provider_tool_outcome": projected_tool_result.response_metadata["tool_outcome"],
+            "provider_execution_confirmed": projected_tool_result.response_metadata["execution_confirmed"],
+            "checkpoint_inferred_model_call_id": inferred_model_call_id,
+            "checkpoint_inverse_status": recoded_result.status,
+            "checkpoint_inverse_tool_outcome": recoded_result.payload["tool_outcome"],
+            "checkpoint_inverse_execution_confirmed": recoded_result.payload["execution_confirmed"],
+            "source_prepare_calls": counts,
+            "previous_assembly_id": first.assembly_id,
+            "assembly_id": changed.assembly_id,
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

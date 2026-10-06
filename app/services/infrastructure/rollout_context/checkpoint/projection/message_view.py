@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 
 from app.domain.itemized.errors import FormatDispatchError
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -56,112 +58,16 @@ class RolloutMessageViewMixin:
         session_id: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> list[int]:
-        view_id = strict_text(view_id, field="context_views.view_id")
         if connection is None:
             if session_id is None:
-                raise ValueError(
-                    "读取 context view message sequences 必须显式提供 session_id"
-                )
+                raise ValueError("读取 context view message sequences 必须显式提供 session_id")
             with self._connect(
                 thread_id, checkpoint_ns, session_id=session_id
             ) as owned_connection:
-                return self._view_message_sequences(
-                    thread_id,
-                    checkpoint_ns,
-                    view_id,
-                    visited,
-                    session_id=session_id,
-                    connection=owned_connection,
+                return self._view_message_sequences_from_connection(
+                    owned_connection, view_id, visited,
                 )
-        if view_id in visited:
-            raise RuntimeError(f"context view 引用形成循环: {view_id}")
-        visited.add(view_id)
-        ranges = connection.execute(
-            "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
-            (view_id,),
-        ).fetchall()
-        view_row = connection.execute(
-            "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
-            (view_id,),
-        ).fetchone()
-        if view_row is None:
-            raise RuntimeError(f"context view 不存在: {view_id}")
-        view_kind = strict_text(view_row[0], field=f"context_views.view_kind: {view_id}")
-        parent_view_id = strict_optional_text(
-            view_row[1], field=f"context_views.parent_view_id: {view_id}"
-        )
-        result: list[int] = []
-        has_parent_range = False
-        for source_kind, source_view, start, end in ranges:
-            source_kind = strict_text(
-                source_kind, field=f"context_view_ranges.source_kind: {view_id}"
-            )
-            if source_kind == "view":
-                source_view = strict_text(
-                    source_view,
-                    field=f"context_view_ranges.source_view_id: {view_id}",
-                )
-                result.extend(
-                    self._view_message_sequences(
-                        thread_id,
-                        checkpoint_ns,
-                        source_view,
-                        visited.copy(),
-                        session_id=session_id,
-                        connection=connection,
-                    )
-                )
-                if (
-                    view_row is not None
-                    and parent_view_id is not None
-                    and source_view == parent_view_id
-                ):
-                    has_parent_range = True
-            elif source_kind == "messages":
-                start_value = strict_non_negative_int(
-                    start,
-                    field=f"context view range start: {view_id}",
-                )
-                end_value = strict_non_negative_int(
-                    end,
-                    field=f"context view range end: {view_id}",
-                )
-                if start_value == 0 or end_value == 0 or end_value < start_value:
-                    raise RuntimeError(
-                        f"context view range 不能反向: view={view_id}, "
-                        f"start={start_value}, end={end_value}"
-                    )
-                rows = connection.execute(
-                    "SELECT message_sequence FROM messages WHERE message_sequence BETWEEN ? AND ? ORDER BY message_sequence",
-                    (start_value, end_value),
-                ).fetchall()
-                expected_count = end_value - start_value + 1
-                if len(rows) != expected_count:
-                    raise RuntimeError(
-                        "context view range 引用不存在完整消息范围: "
-                        f"view={view_id}, start={start_value}, end={end_value}"
-                    )
-                result.extend(
-                    strict_non_negative_int(
-                        row[0], field="messages.message_sequence"
-                    )
-                    for row in rows
-                )
-            else:
-                raise RuntimeError(
-                    f"context view range source_kind 非法: view={view_id}, "
-                    f"source_kind={source_kind}"
-                )
-        if (
-            view_kind == "checkpoint"
-            and parent_view_id is not None
-            and not has_parent_range
-        ):
-            raise FormatDispatchError(
-                "v2_migration_required: checkpoint view 缺少显式 parent range: "
-                f"view_id={view_id}"
-            )
-        return self._include_tool_call_declarations(connection, result)
+        return self._view_message_sequences_from_connection(connection, view_id, visited)
 
 
     @staticmethod
@@ -220,16 +126,12 @@ class RolloutMessageViewMixin:
         view_id: str,
         visited: set[str] | None = None,
     ) -> list[int]:
-        """在单个 SQLite snapshot 中解析 view，供离线 compaction 使用。"""
+        """canonical membership 是唯一选择根；range 只校验既有 view 结构。"""
         view_id = strict_text(view_id, field="context_views.view_id")
         seen = set(visited or ())
         if view_id in seen:
             raise RuntimeError(f"context view 引用形成循环: {view_id}")
         seen.add(view_id)
-        ranges = connection.execute(
-            "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
-            (view_id,),
-        ).fetchall()
         view_row = connection.execute(
             "SELECT view_kind, parent_view_id FROM context_views WHERE view_id = ?",
             (view_id,),
@@ -240,7 +142,11 @@ class RolloutMessageViewMixin:
         parent_view_id = strict_optional_text(
             view_row[1], field=f"context_views.parent_view_id: {view_id}"
         )
-        result: list[int] = []
+        ranges = connection.execute(
+            "SELECT source_kind, source_view_id, start_message_sequence, end_message_sequence "
+            "FROM context_view_ranges WHERE view_id = ? ORDER BY range_index",
+            (view_id,),
+        ).fetchall()
         has_parent_range = False
         for source_kind, source_view, start, end in ranges:
             source_kind = strict_text(
@@ -248,62 +154,58 @@ class RolloutMessageViewMixin:
             )
             if source_kind == "view":
                 source_view = strict_text(
-                    source_view,
-                    field=f"context_view_ranges.source_view_id: {view_id}",
+                    source_view, field=f"context_view_ranges.source_view_id: {view_id}"
                 )
-                result.extend(
-                    self._view_message_sequences_from_connection(
-                        connection, source_view, seen
-                    )
-                )
-                if (
-                    view_row is not None
-                    and parent_view_id is not None
-                    and source_view == parent_view_id
-                ):
-                    has_parent_range = True
+                self._view_message_sequences_from_connection(connection, source_view, seen)
+                has_parent_range |= source_view == parent_view_id
             elif source_kind == "messages":
                 start_value = strict_non_negative_int(
-                    start,
-                    field=f"context view range start: {view_id}",
+                    start, field=f"context view range start: {view_id}"
                 )
                 end_value = strict_non_negative_int(
-                    end,
-                    field=f"context view range end: {view_id}",
+                    end, field=f"context view range end: {view_id}"
                 )
                 if start_value == 0 or end_value == 0 or end_value < start_value:
                     raise RuntimeError(
                         f"context view range 不能反向: view={view_id}, "
                         f"start={start_value}, end={end_value}"
                     )
-                rows = connection.execute(
-                    "SELECT message_sequence FROM messages WHERE message_sequence BETWEEN ? AND ? ORDER BY message_sequence",
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM messages WHERE message_sequence BETWEEN ? AND ?",
                     (start_value, end_value),
-                ).fetchall()
-                expected_count = end_value - start_value + 1
-                if len(rows) != expected_count:
+                ).fetchone()[0]
+                if count != end_value - start_value + 1:
                     raise RuntimeError(
-                        "context view range 引用不存在完整消息范围: "
-                        f"view={view_id}, start={start_value}, end={end_value}"
+                        f"context view range 引用不存在完整消息范围: view={view_id}, "
+                        f"start={start_value}, end={end_value}"
                     )
-                result.extend(
-                    strict_non_negative_int(
-                        row[0], field="messages.message_sequence"
-                    )
-                    for row in rows
-                )
             else:
                 raise RuntimeError(
-                    f"context view range source_kind 非法: view={view_id}, "
-                    f"source_kind={source_kind}"
+                    f"context view range source_kind 非法: view={view_id}, source_kind={source_kind}"
                 )
-        if (
-            view_kind == "checkpoint"
-            and parent_view_id is not None
-            and not has_parent_range
-        ):
+        if view_kind == "checkpoint" and parent_view_id is not None and not has_parent_range:
             raise FormatDispatchError(
-                "v2_migration_required: checkpoint view 缺少显式 parent range: "
-                f"view_id={view_id}"
+                f"v2_migration_required: checkpoint view 缺少显式 parent range: view_id={view_id}"
             )
-        return self._include_tool_call_declarations(connection, result)
+        rows = connection.execute(
+            "SELECT member.item_id, item.semantic_kind, item.projection_manifest_json, "
+            "message.message_sequence FROM context_view_items AS member "
+            "JOIN item_catalog AS item ON item.item_id = member.item_id "
+            "LEFT JOIN messages AS message ON message.jsonl_offset = item.jsonl_offset "
+            "AND message.jsonl_length = item.jsonl_length "
+            "WHERE member.view_id = ? AND member.visible = 1 ORDER BY member.logical_item_ordinal",
+            (view_id,),
+        ).fetchall()
+        sequences: list[int] = []
+        for item_id, semantic_kind, projection_manifest, sequence in rows:
+            if sequence is None:
+                if semantic_kind not in {"user_input", "assistant_output", "tool_call", "tool_result"}:
+                    continue
+                group = parse_item_projection_manifest(json.loads(projection_manifest))["projection_group"]
+                if group is not None and group["ordinal"] < group["size"] - 1:
+                    continue
+                raise RuntimeError(
+                    f"context view canonical item 缺少已提交 message projection: view={view_id}, item={item_id}"
+                )
+            sequences.append(strict_non_negative_int(sequence, field="messages.message_sequence"))
+        return self._include_tool_call_declarations(connection, list(dict.fromkeys(sequences)))

@@ -10,14 +10,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import (
-    TEST_THREAD_GRAPH_BINDING,
-    TEST_THREAD_GRAPH_BINDING_JSON,
-)
 
 from app.core.session_control_store import (
     SessionControlStore,
@@ -33,6 +30,10 @@ from tests.support.canonical_id_at import (
     session_id_at,
     thread_id_at,
     thread_id_for_name_at,
+)
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
 )
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
@@ -74,11 +75,8 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     created = SessionControlStore(target)
     try:
         version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
-        # B1/B2：SCHEMA_VERSION 4→5（session_operation_leases）→6（
-        # thread_owner_bindings owner 字段槽）→7（D5 communication
-        # outbox/inbox ledger）；thread_execution_intents 稳定 identity
-        # 由 R23 落地。
-        assert version == SessionControlStore.SCHEMA_VERSION == 8
+        # fresh schema 9 不再维护 SessionControl 的第二套 ToolSet 镜像。
+        assert version == SessionControlStore.SCHEMA_VERSION == 9
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -173,8 +171,8 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         row = second.get_main_thread()
         assert str(row["kind"]) == "main"
         version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
-        # D5→8.14：schema 加入 thread_catalog GraphBinding 四字段。
-        assert version == 8
+        # 当前 schema 重开保持完整 GraphBinding，不升级旧生成数据。
+        assert version == 9
     finally:
         second.close()
 
@@ -188,27 +186,31 @@ def test_wal_mode_enabled(tmp_path: Path) -> None:
         created.close()
 
 
+def _assert_unsupported_schema_unchanged(target: Path, version: int) -> None:
+    """拒绝旧库时不改数据库字节，也不产生 journal/WAL/shm 副作用。"""
+    paths = tuple(target.with_name(target.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
+    before = {path.name: path.read_bytes() for path in paths if path.exists()}
+    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=9"):
+        SessionControlStore(target)
+    after = {path.name: path.read_bytes() for path in paths if path.exists()}
+    assert after == before
+
+
 def test_unknown_user_version_fails_closed(tmp_path: Path) -> None:
     target = tmp_path / "session-control.sqlite"
     created = SessionControlStore(target)
     created.close()
     outside = sqlite3.connect(target)
     try:
-        # 8 已是受支持版本，未知版本样本顺延为 9。
-        outside.execute("PRAGMA user_version = 9")
+        outside.execute("PRAGMA user_version = 10")
         outside.commit()
     finally:
         outside.close()
-    with pytest.raises(RuntimeError, match="schema 版本未知"):
-        SessionControlStore(target)
+    _assert_unsupported_schema_unchanged(target, 10)
 
 
-def test_v6_database_upgrades_additively_to_v8(tmp_path: Path) -> None:
-    """v6 库加法升级到 v8：通信表与 GraphBinding 列补建，旧行保持未绑定。
-
-    模拟真实 v6 库：先建入其它当前表和生命周期行，再重建旧形态
-    thread_catalog 并删除 D5 通信表；重开时 selector 列补为 NULL，绝不推断。
-    """
+def test_v6_database_is_rejected_without_creating_missing_tables(tmp_path: Path) -> None:
+    """真实旧 v6 表与既有行保持原样，不补通信表或 GraphBinding 列。"""
     target = tmp_path / "session-control.sqlite"
     main_thread_id = make_thread_id()
     first = SessionControlStore(target)
@@ -240,26 +242,21 @@ def test_v6_database_upgrades_additively_to_v8(tmp_path: Path) -> None:
         outside.commit()
     finally:
         outside.close()
-    second = SessionControlStore(target)
+    _assert_unsupported_schema_unchanged(target, 6)
+    outside = sqlite3.connect(target)
     try:
-        version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
-        assert version == 8
-        tables = {
-            str(row[0])
-            for row in second.connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+        tables = {str(row[0]) for row in outside.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert "communication_outbox" not in tables
+        assert "communication_inbox" not in tables
+        assert outside.execute("SELECT thread_id, kind, created_at FROM thread_catalog").fetchone() == (
+            main_thread_id, "main", DEFAULT_CREATED_AT.isoformat(),
+        )
+        assert outside.execute("SELECT state, generation FROM lifecycle_fence").fetchone() == ("active", 1)
+        assert {str(row[1]) for row in outside.execute("PRAGMA table_info(thread_catalog)")} == {
+            "thread_id", "kind", "created_at",
         }
-        assert {"communication_outbox", "communication_inbox"} <= tables
-        # 生命周期既有行零丢失，缺失 selector 不从旧 JSON/registry 回填。
-        row = second.get_main_thread()
-        assert str(row["thread_id"]) == main_thread_id
-        assert second.get_thread_graph_binding(main_thread_id) is None
-        assert second.get_fence() == ("active", 1)
-        # 升级后 communication 表可用：状态索引查询正常返回空集合
-        assert second.list_target_accepted_communication_inboxes() == ()
     finally:
-        second.close()
+        outside.close()
 
 
 # ----------------------------------------------------------------------
@@ -722,54 +719,72 @@ def build_v1_database(path: Path, thread_id: str) -> None:
         connection.close()
 
 
-def test_v1_database_upgrades_preserving_main_row(tmp_path: Path) -> None:
-    """v1 库原地升级：main row 数据零丢失、selector 不回填、child 可插。"""
+def test_v1_database_is_rejected_preserving_main_row_and_fence(tmp_path: Path) -> None:
+    """旧 v1 的 main row 与 fence 不因拒绝打开而变化。"""
     target = tmp_path / "nested" / "session-control.sqlite"
     main_thread_id = make_thread_id()
     build_v1_database(target, main_thread_id)
-    store = SessionControlStore(target)
+    _assert_unsupported_schema_unchanged(target, 1)
+    outside = sqlite3.connect(target)
     try:
-        version = int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-        assert version == 8
-        # main row 数据零丢失（thread_id/created_at 逐字段保留）
-        row = store.get_main_thread()
-        assert str(row["thread_id"]) == main_thread_id
-        assert str(row["kind"]) == "main"
-        assert str(row["created_at"]) == DEFAULT_CREATED_AT.isoformat()
-        assert store.get_fence() == ("active", 1)
-        # 升级后 kind='child' 可插入（CHECK 扩为 ('main', 'child')）
-        child_id = make_thread_id()
-        raw_execute(
-            store,
-            "INSERT INTO thread_catalog (thread_id, kind, created_at) "
-            "VALUES (?, 'child', ?)",
-            (child_id, DEFAULT_CREATED_AT.isoformat()),
+        assert outside.execute("SELECT thread_id, kind, created_at FROM thread_catalog").fetchone() == (
+            main_thread_id, "main", DEFAULT_CREATED_AT.isoformat(),
         )
-        # main row 读取不受 child row 影响
-        assert str(store.get_main_thread()["thread_id"]) == main_thread_id
+        assert outside.execute("SELECT state, generation FROM lifecycle_fence").fetchone() == ("active", 1)
+        with pytest.raises(sqlite3.IntegrityError):
+            outside.execute(
+                "INSERT INTO thread_catalog (thread_id, kind, created_at) VALUES (?, 'child', ?)",
+                (make_thread_id(), DEFAULT_CREATED_AT.isoformat()),
+            )
     finally:
-        store.close()
+        outside.close()
 
 
-def test_v1_upgrade_reopens_idempotently(tmp_path: Path) -> None:
-    """升级后的库重开是幂等 no-op（DDL IF NOT EXISTS，user_version 保持 8）。"""
+def test_v1_database_repeated_rejection_is_byte_preserving(tmp_path: Path) -> None:
+    """旧库每次打开都明确拒绝，不变成可重开的当前库。"""
     target = tmp_path / "session-control.sqlite"
-    main_thread_id = make_thread_id()
-    build_v1_database(target, main_thread_id)
-    first = SessionControlStore(target)
-    first.close()
-    second = SessionControlStore(target)
+    build_v1_database(target, make_thread_id())
+    _assert_unsupported_schema_unchanged(target, 1)
+    _assert_unsupported_schema_unchanged(target, 1)
+
+
+@pytest.mark.parametrize("version", range(1, 9))
+def test_old_generated_schema_versions_reject_before_wal_and_keep_bytes(tmp_path: Path, version: int) -> None:
+    """所有旧生成版本 1–8 都在初始化与 journal/WAL 设置前拒绝。"""
+    target = tmp_path / "session-control.sqlite"
+    build_v1_database(target, make_thread_id())
+    outside = sqlite3.connect(target)
     try:
-        assert str(second.get_main_thread()["thread_id"]) == main_thread_id
-        assert second.get_thread_graph_binding(main_thread_id) is None
-        version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
-        assert version == 8
-        rows = second.connection.execute(
-            "SELECT COUNT(*) FROM thread_creation_records"
-        ).fetchone()
-        assert int(rows[0]) == 0
+        outside.execute(f"PRAGMA user_version = {version}")
+        outside.commit()
     finally:
-        second.close()
+        outside.close()
+    assert not target.with_name(target.name + "-wal").exists()
+    assert not target.with_name(target.name + "-shm").exists()
+    _assert_unsupported_schema_unchanged(target, version)
+    assert not target.with_name(target.name + "-wal").exists()
+    assert not target.with_name(target.name + "-shm").exists()
+
+
+def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path: Path) -> None:
+    """版本号正确也不能把受外部改动的 catalog 当作待升级旧库。"""
+    target = tmp_path / "session-control.sqlite"
+    build_v1_database(target, make_thread_id())
+    outside = sqlite3.connect(target)
+    try:
+        outside.execute("PRAGMA user_version = 9")
+        outside.commit()
+    finally:
+        outside.close()
+    with pytest.raises(RuntimeError, match="GraphBinding 列不完整"):
+        SessionControlStore(target)
+    outside = sqlite3.connect(target)
+    try:
+        assert {str(row[1]) for row in outside.execute("PRAGMA table_info(thread_catalog)")} == {
+            "thread_id", "kind", "created_at",
+        }
+    finally:
+        outside.close()
 
 
 def test_thread_catalog_child_kind_accepted(store: SessionControlStore) -> None:
@@ -837,8 +852,8 @@ def test_get_main_thread_returns_main_with_children(
     assert str(store.get_main_thread()["thread_id"]) == main_id
 
 
-def test_v1_upgrade_temp_table_conflict_fails_closed(tmp_path: Path) -> None:
-    """v1 库被外部塞入同名临时表时升级 fail closed（不静默覆盖）。"""
+def test_v1_database_with_old_upgrade_table_is_rejected_unchanged(tmp_path: Path) -> None:
+    """旧临时升级表不是迁移入口，仍按不受支持版本拒绝。"""
     target = tmp_path / "session-control.sqlite"
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
@@ -850,8 +865,7 @@ def test_v1_upgrade_temp_table_conflict_fails_closed(tmp_path: Path) -> None:
         outside.commit()
     finally:
         outside.close()
-    with pytest.raises(sqlite3.OperationalError):
-        SessionControlStore(target)
+    _assert_unsupported_schema_unchanged(target, 1)
 
 
 # ----------------------------------------------------------------------
@@ -1967,65 +1981,67 @@ def insert_v2_intent(
     return resolved_session, resolved_thread
 
 
-def test_v2_database_upgrades_to_v3_with_stable_identity(
-    tmp_path: Path,
-) -> None:
-    """v2 pending 行升级：确定性补齐 identity/preimage，时间戳零丢失。"""
+def test_v2_pending_intent_database_is_rejected_with_original_row_unchanged(tmp_path: Path) -> None:
+    """旧 v2 pending 行不回填 identity，原字段与时间戳保持原样。"""
     target = tmp_path / "session-control.sqlite"
     build_v2_database(target, make_thread_id())
     session_id, thread_id = insert_v2_intent(target)
+    _assert_unsupported_schema_unchanged(target, 2)
+    outside = sqlite3.connect(target)
+    try:
+        assert outside.execute(
+            "SELECT session_id, thread_id, state, intent_created_at, intent_updated_at "
+            "FROM thread_execution_intents WHERE admission_idempotency_key = 'key-1'"
+        ).fetchone() == (
+            session_id, thread_id, "pending", _V2_INTENT_CREATED_AT, _V2_INTENT_UPDATED_AT,
+        )
+        assert "execution_binding_id" not in {
+            str(row[1]) for row in outside.execute("PRAGMA table_info(thread_execution_intents)")
+        }
+    finally:
+        outside.close()
+
+
+def test_current_pending_intent_freezes_stable_identity_and_preimage(tmp_path: Path) -> None:
+    """稳定 identity 的业务合同通过当前真实发布事务验证。"""
+    target = tmp_path / "session-control.sqlite"
     store = SessionControlStore(target)
     try:
-        version = int(store.connection.execute("PRAGMA user_version").fetchone()[0])
-        assert version == 8
-        intent = store.get_initial_execution_intent("key-1")
+        intent = prepare_published_intent(store)
         binding_id, job_id = derive_initial_execution_identity("key-1")
         assert intent.state == "pending"
         assert intent.execution_binding_id == binding_id
         assert intent.job_id == job_id
-        assert intent.binding_preimage_hash == (
-            compute_initial_execution_binding_preimage_hash(
-                admission_idempotency_key="key-1",
-                session_id=session_id,
-                thread_id=thread_id,
-                creation_idempotency_key="key-1",
-                initial_state="running",
-                execution_binding_id=binding_id,
-                job_id=job_id,
-            )
+        assert intent.binding_preimage_hash == compute_initial_execution_binding_preimage_hash(
+            admission_idempotency_key="key-1", session_id=intent.session_id,
+            thread_id=intent.thread_id, creation_idempotency_key="key-1",
+            initial_state="running", execution_binding_id=binding_id, job_id=job_id,
         )
-        # v2 无 claim/错误语义：迁移为 NULL（等待 worker 领取）。
         assert intent.claim_owner is None
         assert intent.claim_generation is None
         assert intent.last_error is None
-        # 迁移零丢失：原时间戳逐字段保留。
-        assert intent.intent_created_at == _V2_INTENT_CREATED_AT
-        assert intent.intent_updated_at == _V2_INTENT_UPDATED_AT
     finally:
         store.close()
+    reopened = SessionControlStore(target)
+    try:
+        assert reopened.get_initial_execution_intent("key-1") == intent
+    finally:
+        reopened.close()
 
 
-def test_v3_migration_identity_is_deterministic_across_databases(
-    tmp_path: Path,
-) -> None:
-    """同 identity 的 v2 库在不同路径升级得到同一稳定 identity；重开幂等。"""
-    session_id = make_session_id()
-    thread_id = make_thread_id()
+def test_current_intent_identity_is_deterministic_across_databases(tmp_path: Path) -> None:
+    """当前库同 admission key 的真实发布得到同一稳定 identity，重开保持不变。"""
     identities: list[tuple[str, str]] = []
     for index in range(2):
         target = tmp_path / f"db-{index}" / "session-control.sqlite"
-        build_v2_database(target, make_thread_id())
-        insert_v2_intent(target, session_id=session_id, thread_id=thread_id)
         store = SessionControlStore(target)
         try:
-            intent = store.get_initial_execution_intent("key-1")
+            intent = prepare_published_intent(store)
             identities.append((intent.execution_binding_id, intent.job_id))
         finally:
             store.close()
     assert identities[0] == identities[1]
-    # 重开幂等：identity 不再变化。
-    target = tmp_path / "db-0" / "session-control.sqlite"
-    reopened = SessionControlStore(target)
+    reopened = SessionControlStore(tmp_path / "db-0" / "session-control.sqlite")
     try:
         intent = reopened.get_initial_execution_intent("key-1")
         assert (intent.execution_binding_id, intent.job_id) == identities[0]
@@ -2033,13 +2049,12 @@ def test_v3_migration_identity_is_deterministic_across_databases(
         reopened.close()
 
 
-def test_v2_migration_rejects_bound_row_fail_closed(tmp_path: Path) -> None:
-    """v2 库存在 state='bound' 行（从未被合法写入）→ 迁移 fail closed。"""
+def test_v2_bound_intent_database_is_rejected_without_rewriting_row(tmp_path: Path) -> None:
+    """旧 v2 非法 bound 行同样按版本拒绝，不进入迁移或状态修复。"""
     target = tmp_path / "session-control.sqlite"
     build_v2_database(target, make_thread_id())
     insert_v2_intent(target, state="bound")
-    with pytest.raises(RuntimeError, match="非 pending 行"):
-        SessionControlStore(target)
+    _assert_unsupported_schema_unchanged(target, 2)
 
 
 def prepare_published_intent(
@@ -2582,10 +2597,6 @@ def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
             prefix_epoch_reason="compaction",
             stable_prefix_hash=_sha("prefix"),
             stable_prefix_length=128,
-            desired_toolset_revision=3,
-            applied_toolset_revision=2,
-            toolset_compatibility_key="toolset-compat:v7",
-            policy_compatibility_key="policy-compat:v1",
             resource_activation_snapshot_ref="activation:rev-11",
             assembly_parent_ref="assembly:parent-rev-4",
             mutation_provenance={
@@ -2602,8 +2613,6 @@ def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
         )
         assert (updated.prefix_epoch, updated.prefix_epoch_reason) == (2, "compaction")
         assert updated.stable_prefix_length == 128
-        assert updated.desired_toolset_revision == 3
-        assert updated.applied_toolset_revision == 2
         assert updated.resource_activation_snapshot_ref == "activation:rev-11"
         assert updated.mutation_provenance is not None
         assert updated.mutation_provenance["actor_kind"] == "execution"
@@ -2613,7 +2622,7 @@ def test_owner_binding_update_scalar_and_append(tmp_path: Path) -> None:
         # CAS：旧 revision 拒绝
         with pytest.raises(RuntimeError, match="revision CAS 失败"):
             store.update_thread_owner_binding(
-                thread_id, expected_revision=1, applied_toolset_revision=9
+                thread_id, expected_revision=1, assembly_parent_ref="assembly:next-rev-9"
             )
         # 成对约束
         with pytest.raises(ValueError, match="成对提供"):
@@ -2643,7 +2652,7 @@ def test_owner_binding_negative_contract(tmp_path: Path) -> None:
             )
         with pytest.raises(ValueError, match="相对路径片段"):
             store.update_thread_owner_binding(
-                thread_id, toolset_compatibility_key="a/../b"
+                thread_id, assembly_parent_ref="a/../b"
             )
         with pytest.raises(ValueError, match="凭据形态"):
             store.update_thread_owner_binding(
@@ -2693,7 +2702,7 @@ def test_owner_binding_ref_and_parameter_guards(tmp_path: Path) -> None:
         thread_id = make_thread_id()
         store.ensure_thread_owner_binding(thread_id=thread_id)
         with pytest.raises(ValueError, match="必须是非空字符串"):
-            store.update_thread_owner_binding(thread_id, toolset_compatibility_key="")
+            store.update_thread_owner_binding(thread_id, assembly_parent_ref="")
         with pytest.raises(ValueError, match="含 NUL"):
             store.update_thread_owner_binding(
                 thread_id, assembly_parent_ref="assembly\x00parent"
@@ -2710,8 +2719,6 @@ def test_owner_binding_ref_and_parameter_guards(tmp_path: Path) -> None:
                 stable_prefix_hash=_sha("prefix"),
                 stable_prefix_length=-1,
             )
-        with pytest.raises(ValueError, match="desired_toolset_revision 必须是"):
-            store.update_thread_owner_binding(thread_id, desired_toolset_revision=0)
         with pytest.raises(ValueError, match="需要至少一个字段"):
             store.update_thread_owner_binding(thread_id)
     finally:
@@ -3919,3 +3926,92 @@ def test_fresh_database_intent_claim_check_constraints(tmp_path: Path) -> None:
             )
     finally:
         store.close()
+
+
+def test_current_owner_binding_has_no_desired_or_applied_toolset_slots(store: SessionControlStore) -> None:
+    """当前 owner 表、行投影与更新端口不保存第二套 ToolSet 状态。"""
+    retired = {
+        "desired_toolset_revision", "applied_toolset_revision",
+        "toolset_compatibility_key", "policy_compatibility_key",
+    }
+    columns = {str(row[1]) for row in store.connection.execute("PRAGMA table_info(thread_owner_bindings)")}
+    assert not retired & columns
+    binding = store.ensure_thread_owner_binding(thread_id=make_thread_id())
+    assert not retired & {field.name for field in fields(binding)}
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("desired_toolset_revision", 0), ("applied_toolset_revision", 9),
+    ("toolset_compatibility_key", "tool-set:retired"), ("policy_compatibility_key", "policy:retired"),
+])
+def test_owner_binding_rejects_retired_toolset_update_parameters(
+    store: SessionControlStore, field: str, value: object,
+) -> None:
+    """旧 ToolSet 参数显式 TypeError，不能由兼容更新偷偷恢复镜像。"""
+    thread_id = make_thread_id()
+    before = store.ensure_thread_owner_binding(thread_id=thread_id)
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        store.update_thread_owner_binding(thread_id, **{field: value})
+    assert store.get_thread_owner_binding(thread_id) == before
+
+
+def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -> None:
+    """原有空 SQLite 文件与不存在的 fresh 文件都可初始化 schema 9。"""
+    target = tmp_path / "session-control.sqlite"
+    empty = sqlite3.connect(target)
+    try:
+        assert empty.execute("PRAGMA user_version").fetchone() == (0,)
+        assert empty.execute("SELECT name FROM sqlite_schema").fetchall() == []
+    finally:
+        empty.close()
+    created = SessionControlStore(target)
+    try:
+        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert created.connection.execute("SELECT name FROM sqlite_schema WHERE name = 'thread_catalog'").fetchone() is not None
+    finally:
+        created.close()
+
+
+@pytest.mark.parametrize("shape", ["old_catalog", "unrelated_table"])
+def test_nonempty_v0_database_rejects_before_journal_or_ddl_and_keeps_bytes(
+    tmp_path: Path, shape: str,
+) -> None:
+    """非空 v0 不是 fresh 库；拒绝保留原 schema、行、journal 和物理字节。"""
+    target = tmp_path / "session-control.sqlite"
+    if shape == "old_catalog":
+        build_v1_database(target, make_thread_id())
+    outside = sqlite3.connect(target)
+    try:
+        if shape == "unrelated_table":
+            outside.execute("CREATE TABLE unrelated (value TEXT NOT NULL)")
+            outside.execute("INSERT INTO unrelated VALUES ('原始非空数据')")
+        outside.execute("PRAGMA user_version = 0")
+        outside.commit()
+        before_schema = outside.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name"
+        ).fetchall()
+        before_journal = outside.execute("PRAGMA journal_mode").fetchone()
+        before_rows = outside.execute(
+            "SELECT * FROM thread_catalog" if shape == "old_catalog" else "SELECT * FROM unrelated"
+        ).fetchall()
+    finally:
+        outside.close()
+    before_bytes = target.read_bytes()
+    assert not target.with_name(target.name + "-wal").exists()
+    assert not target.with_name(target.name + "-shm").exists()
+    _assert_unsupported_schema_unchanged(target, 0)
+    assert target.read_bytes() == before_bytes
+    assert not target.with_name(target.name + "-wal").exists()
+    assert not target.with_name(target.name + "-shm").exists()
+    outside = sqlite3.connect(target)
+    try:
+        assert outside.execute("PRAGMA journal_mode").fetchone() == before_journal
+        assert outside.execute("PRAGMA user_version").fetchone() == (0,)
+        assert outside.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name"
+        ).fetchall() == before_schema
+        assert outside.execute(
+            "SELECT * FROM thread_catalog" if shape == "old_catalog" else "SELECT * FROM unrelated"
+        ).fetchall() == before_rows
+    finally:
+        outside.close()

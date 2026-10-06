@@ -1,7 +1,7 @@
 """SessionThread 唯一 mutation owner 的 typed intent 端口（B4 第一阶段）。
 
 OpenSpec add-context-injection-lifecycle 2.3：一个 SessionThread 的所有
-canonical append、source lifecycle decision、ToolSet switch 和 epoch rebuild
+canonical append、source lifecycle decision 与 epoch rebuild
 都必须表达为 domain 层定义的 ContextMutationIntent，由唯一
 RolloutCheckpointSaver/ContextStore owner 消费。本模块只提供该端口的 typed
 合同与 facade：owner 校验、幂等键去重和 failure outcome 显式化；不新建第二套

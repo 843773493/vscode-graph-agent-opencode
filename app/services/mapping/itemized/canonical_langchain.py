@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.mapping.itemized.carrier_dedup import (
     projection_message_group_id as _projection_message_group_id,
@@ -24,6 +25,14 @@ def _message_id(item: CanonicalItemRecord) -> str:
     return value if isinstance(value, str) and value else item.item_id
 
 
+def _model_call_metadata(item: CanonicalItemRecord) -> dict[str, object]:
+    """按 codec 合同镜像已提交的 typed model-call 归属。"""
+    identity = item.projection_identity
+    if identity is None or identity.model_call_id is None:
+        return {}
+    return {"model_call_id": identity.model_call_id}
+
+
 def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:
     payload = item.payload if isinstance(item.payload, Mapping) else {}
     raw_calls = payload.get("tool_calls")
@@ -34,7 +43,10 @@ def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:
             continue
         result.append(
             {
-                "id": str(call.get("id") or call.get("tool_call_id") or item.item_id),
+                "id": provider_tool_call_id(
+                    item.projection_identity,
+                    str(call.get("id") or call.get("tool_call_id") or item.item_id),
+                ),
                 "name": str(call.get("name") or "tool"),
                 "args": dict(call.get("args") or {})
                 if isinstance(call.get("args"), Mapping)
@@ -74,6 +86,27 @@ def _message_content(value: object) -> object:
     return str(value)
 
 
+def project_tool_result(item: CanonicalItemRecord) -> ToolMessage:
+    """投影真实工具知识；传输 error 同时承载失败与未知，核心事实保持分离。"""
+    payload = item.payload if isinstance(item.payload, Mapping) else {}
+    evidence = item.tool_result_evidence
+    confirmed = evidence.execution_confirmed if evidence is not None else payload["execution_confirmed"]
+    outcome = payload.get("tool_outcome", "success" if confirmed else "unknown")
+    return ToolMessage(
+        content=_message_content(payload.get("content", item.payload)),
+        id=_message_id(item),
+        tool_call_id=evidence.tool_call_id if evidence is not None else payload["tool_call_id"],
+        name=str(payload.get("name") or "tool"),
+        status="error" if outcome in {"failure", "cancelled", "unknown"} else "success",
+        response_metadata={
+            **_model_call_metadata(item),
+            "canonical_item_status": item.status,
+            "tool_outcome": outcome,
+            "execution_confirmed": confirmed,
+        },
+    )
+
+
 def project_canonical_items(
     items: Sequence[CanonicalItemRecord],
     *,
@@ -109,21 +142,10 @@ def project_canonical_items(
             )
             continue
         if item.semantic_kind == SemanticKind.TOOL_RESULT:
-            payload = item.payload if isinstance(item.payload, Mapping) else {}
-            tool_status = (
-                "error"
-                if payload.get("tool_outcome") in {"failure", "cancelled"}
-                else "success"
-            )
-            messages.append(
-                ToolMessage(
-                    content=_message_content(payload.get("content", item.payload)),
-                    id=_message_id(item),
-                    tool_call_id=item.tool_result_evidence.tool_call_id if item.tool_result_evidence is not None else payload["tool_call_id"],
-                    name=str(payload.get("name") or "tool"),
-                    status=tool_status,
-                )
-            )
+            message = project_tool_result(item)
+            messages.append(message.model_copy(update={
+                "tool_call_id": provider_tool_call_id(item.projection_identity, message.tool_call_id),
+            }))
             continue
         if item.semantic_kind == SemanticKind.RUNTIME_NOTICE:
             if not include_runtime_notices:
@@ -177,7 +199,10 @@ def project_canonical_items(
             else:
                 message_groups[group] = len(messages)
                 messages.append(
-                    AIMessage(content="", id=_message_id(item), tool_calls=calls)
+                    AIMessage(
+                        content="", id=_message_id(item), tool_calls=calls,
+                        response_metadata=_model_call_metadata(item),
+                    )
                 )
             continue
         if item.semantic_kind not in {
@@ -198,7 +223,10 @@ def project_canonical_items(
             or not isinstance(messages[current_index], AIMessage)
         ):
             message_groups[group] = len(messages)
-            messages.append(AIMessage(content=content, id=_message_id(item)))
+            messages.append(AIMessage(
+                content=content, id=_message_id(item),
+                response_metadata=_model_call_metadata(item),
+            ))
             continue
         current = messages[current_index]
         current_content = current.content

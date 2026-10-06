@@ -1,19 +1,11 @@
-"""per-session ``session-control.sqlite`` 的 schema 初始化与版本升级链路。
+"""per-session session-control.sqlite 的当前 schema 初始化 owner。
 
-承载 ``SessionControlStore._initialize``、历史 v1/v2 schema 加法升级与
-thread_catalog GraphBinding 列升级；各表 DDL 的唯一定义点仍在对应垂直链路
-模块，本模块只负责编排事务与版本推进。
-
-历史 thread_catalog 行在升级时 selector 保持 NULL，不读取旧 JSON，也不从
-当前 registry 推断；runtime 读取会 fail closed。
-
-错误分类沿用宿主约定：``TypeError`` 输入类型错误、``ValueError`` 输入形态
-非法、``KeyError`` 目标行不存在、``RuntimeError`` 语义冲突。
+只接受全新库与当前 schema；旧生成数据在任何 journal/WAL 设置前拒绝，
+不提供升级或回填。各表 DDL 仍由对应垂直链路唯一维护，本模块只编排原子建表。
 """
 
 from __future__ import annotations
 
-from app.core.session_catalog_store import validate_session_id, validate_thread_id
 from app.core.session_control_communication_ledger.communication_ledger import (
     COMMUNICATION_INBOX_TABLE_DDL,
     COMMUNICATION_OUTBOX_TABLE_DDL,
@@ -23,7 +15,6 @@ from app.core.session_control_operation_lease.operation_lease import (
     IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL,
     SESSION_OPERATION_LEASES_TABLE_DDL,
 )
-from app.core.session_control_primitives import validate_thread_creation_key
 from app.core.session_control_store.collaboration import (
     _COLLABORATION_LEDGER_TABLE_DDL,
     _COLLABORATION_MEMBERS_TABLE_DDL,
@@ -31,16 +22,10 @@ from app.core.session_control_store.collaboration import (
 from app.core.session_control_store.execution_intent import (
     _IDX_THREAD_EXECUTION_INTENT_STATE_DDL,
     _IDX_THREAD_EXECUTION_INTENT_THREAD_DDL,
-    _THREAD_EXECUTION_INTENT_COLUMNS,
-    _THREAD_EXECUTION_INTENT_V2_COLUMNS,
     _THREAD_EXECUTION_INTENTS_TABLE_DDL,
-    _THREAD_EXECUTION_INTENTS_V3_UPGRADE_TABLE_DDL,
-    compute_initial_execution_binding_preimage_hash,
-    derive_initial_execution_identity,
 )
 from app.core.session_control_store.thread_creation_record import (
     _IDX_THREAD_CREATION_DELEGATION_DDL,
-    _INITIAL_STATE_VALUES,
     _THREAD_CREATION_RECORDS_TABLE_DDL,
 )
 from app.core.session_control_thread_catalog.thread_catalog import (
@@ -53,32 +38,18 @@ from app.core.session_control_thread_owner_binding.thread_owner_binding import (
 
 
 class SchemaInitMixin:
-    """session-control 库的幂等建表与版本升级方法族。"""
+    """session-control 库的当前 schema 幂等建表方法族。"""
 
     def _initialize(self) -> None:
-        """幂等建表并设置 user_version；未知版本 fail-closed 拒绝打开。
+        """只为全新库/当前 schema 幂等建表，单事务提交完整表结构。
 
-        支持 current=0（全新库）以及历史 1–7；历史行按各自版本在此单事务
-        内补齐 schema，thread_catalog 缺失的 GraphBinding 四字段保持 NULL。
-        current=8 是当前版本；未知版本 fail closed。
+        schema 版本已在连接设置 journal/WAL 前验证；不升级旧生成数据。
         """
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
-        if current not in (0, 1, 2, 3, 4, 5, 6, 7, self.SCHEMA_VERSION):
-            raise RuntimeError(
-                "session control schema 版本未知，fail-closed 拒绝打开: "
-                f"path={self.database_path}, user_version={current}, "
-                f"supported={self.SCHEMA_VERSION}"
-            )
         self._begin_immediate()
         try:
-            if current == 1:
-                self._upgrade_thread_catalog_kind_v1_to_v2()
-            if current == 2:
-                self._upgrade_thread_execution_intents_v2_to_v3()
             self._connection.execute(THREAD_CATALOG_TABLE_DDL)
-            self._upgrade_thread_catalog_graph_binding_columns(
-                allow_upgrade=current != self.SCHEMA_VERSION
-            )
+            self._require_thread_catalog_graph_binding_columns()
             self._connection.execute(LIFECYCLE_FENCE_TABLE_DDL)
             self._connection.execute(_THREAD_CREATION_RECORDS_TABLE_DDL)
             self._connection.execute(_IDX_THREAD_CREATION_DELEGATION_DDL)
@@ -103,93 +74,3 @@ class SchemaInitMixin:
             self._connection.execute("ROLLBACK")
             raise
         self._connection.execute("COMMIT")
-
-    def _upgrade_thread_execution_intents_v2_to_v3(self) -> None:
-        """v2→v3 加法升级：``thread_execution_intents`` 重建补齐稳定 identity。
-
-        任务书 §2.1：v2 pending 行迁移时确定性补齐软件生成的稳定
-        binding/job identity 与 preimage hash——identity 只由行内
-        admission 幂等键派生（:func:`derive_initial_execution_identity`），
-        不依赖当前时间或随机数，同库任意进程重复执行结果一致；preimage
-        hash 用与全新落库相同的口径复算。claim 字段迁移为 NULL（v2 无
-        消费语义）、``last_error`` 迁移为 NULL；``state`` 非
-        ``pending`` 的行在 v2 从未被合法写入（v2 没有 bound 推进接口），
-        fail closed 拒绝迁移。单事务内「建临时新表→确定性拷贝→行数校验
-        →删旧→改名」，任何失败随 ``_initialize`` 事务整体回滚
-        （``user_version`` 保持 2，库可原样重开）。
-        """
-        self._connection.execute(_THREAD_EXECUTION_INTENTS_V3_UPGRADE_TABLE_DDL)
-        rows = self._connection.execute(
-            f"SELECT {_THREAD_EXECUTION_INTENT_V2_COLUMNS} "
-            "FROM thread_execution_intents "
-            "ORDER BY admission_idempotency_key"
-        ).fetchall()
-        for row in rows:
-            state = str(row["state"])
-            if state != "pending":
-                raise RuntimeError(
-                    "thread_execution_intents v2→v3 升级发现非 pending 行"
-                    "（v2 从未提供 bound 推进接口，库被外部改动，fail "
-                    "closed）: admission_key="
-                    f"{row['admission_idempotency_key']!r}, state={state!r}"
-                )
-            admission_key = str(row["admission_idempotency_key"])
-            session_id = str(row["session_id"])
-            thread_id = str(row["thread_id"])
-            creation_key = str(row["creation_idempotency_key"])
-            initial_state = str(row["initial_state"])
-            # 行级身份复验（防绕过软件直改 v2 库）：与落库闸门同口径。
-            validate_session_id(session_id)
-            validate_thread_id(thread_id)
-            validate_thread_creation_key(admission_key)
-            validate_thread_creation_key(creation_key)
-            if initial_state not in _INITIAL_STATE_VALUES:
-                raise RuntimeError(
-                    "thread_execution_intents v2→v3 升级发现非法 "
-                    f"initial_state 行（fail closed）: admission_key="
-                    f"{admission_key!r}, initial_state={initial_state!r}"
-                )
-            binding_id, job_id = derive_initial_execution_identity(admission_key)
-            preimage_hash = compute_initial_execution_binding_preimage_hash(
-                admission_idempotency_key=admission_key,
-                session_id=session_id,
-                thread_id=thread_id,
-                creation_idempotency_key=creation_key,
-                initial_state=initial_state,
-                execution_binding_id=binding_id,
-                job_id=job_id,
-            )
-            self._connection.execute(
-                "INSERT INTO thread_execution_intents_v3_upgrade "
-                f"({_THREAD_EXECUTION_INTENT_COLUMNS}) VALUES "
-                "(?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL, NULL, ?, ?)",
-                (
-                    admission_key,
-                    session_id,
-                    thread_id,
-                    creation_key,
-                    initial_state,
-                    binding_id,
-                    job_id,
-                    preimage_hash,
-                    str(row["intent_created_at"]),
-                    str(row["intent_updated_at"]),
-                ),
-            )
-        before = len(rows)
-        after = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM thread_execution_intents_v3_upgrade"
-            ).fetchone()[0]
-        )
-        if before != after:
-            raise RuntimeError(
-                "thread_execution_intents v2→v3 升级拷贝行数不一致（数据零"
-                f"丢失保证被破坏，事务将回滚）: path={self.database_path}, "
-                f"before={before}, after={after}"
-            )
-        self._connection.execute("DROP TABLE thread_execution_intents")
-        self._connection.execute(
-            "ALTER TABLE thread_execution_intents_v3_upgrade "
-            "RENAME TO thread_execution_intents"
-        )

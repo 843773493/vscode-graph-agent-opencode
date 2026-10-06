@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
@@ -29,6 +28,7 @@ from app.core.session_lifecycle_gate import (
     SessionOperationLease,
     SessionReadGuard,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 
 def make_session_id() -> str:
@@ -560,11 +560,11 @@ def test_lease_missing_row_read_and_cas_diagnostics(
         control.takeover_lease(lease_id=missing, expected_fencing_token=1)
 
 
-def test_schema_v4_upgrades_to_current_schema_zero_loss(
+def test_schema_v4_is_rejected_without_recreating_lease_table_or_changing_rows(
     tmp_path: Path,
 ) -> None:
-    """v4 库打开时加法补建 lease 表；既有 main/fence 数据零丢失。"""
-    db_path = tmp_path / "upgrade.sqlite"
+    """旧 v4 必须拒绝，保留 main/fence 和缺 lease 表的原库字节。"""
+    db_path = tmp_path / "old-schema.sqlite"
     store = SessionControlStore(db_path)
     main_thread_id = make_thread_id()
     store.initialize_fence()
@@ -572,24 +572,30 @@ def test_schema_v4_upgrades_to_current_schema_zero_loss(
         main_thread_id, datetime.now(UTC), TEST_THREAD_GRAPH_BINDING
     )
     store.close()
-    # 模拟 v4 库：删除 v5 新表并回退 user_version。
     raw = sqlite3.connect(db_path)
-    raw.execute("DROP TABLE session_operation_leases")
-    raw.execute("DROP INDEX IF EXISTS idx_session_operation_leases_non_terminal")
-    raw.execute("PRAGMA user_version = 4")
-    raw.commit()
-    raw.close()
-    reopened = SessionControlStore(db_path)
     try:
-        version = int(reopened.connection.execute("PRAGMA user_version").fetchone()[0])
-        assert version == reopened.SCHEMA_VERSION == 8
-        main_row = reopened.get_main_thread()
-        assert str(main_row["thread_id"]) == main_thread_id
-        lease = reopened.create_or_get_lease(
-            operation_kind="thread_creation",
-            operation_identity="op-" + uuid.uuid4().hex,
-            preimage_hash=make_preimage(),
-        )
-        assert lease.state == "active"
+        raw.execute("DROP TABLE session_operation_leases")
+        raw.execute("DROP INDEX IF EXISTS idx_session_operation_leases_non_terminal")
+        raw.execute("PRAGMA user_version = 4")
+        raw.commit()
+        original_main = raw.execute("SELECT * FROM thread_catalog").fetchall()
+        original_fence = raw.execute("SELECT * FROM lifecycle_fence").fetchall()
+        original_journal = raw.execute("PRAGMA journal_mode").fetchone()
     finally:
-        reopened.close()
+        raw.close()
+    paths = tuple(db_path.with_name(db_path.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
+    before = {path.name: path.read_bytes() for path in paths if path.exists()}
+    with pytest.raises(RuntimeError, match="schema 版本不受支持.*user_version=4"):
+        SessionControlStore(db_path)
+    assert {path.name: path.read_bytes() for path in paths if path.exists()} == before
+    raw = sqlite3.connect(db_path)
+    try:
+        assert raw.execute("PRAGMA user_version").fetchone() == (4,)
+        assert raw.execute("PRAGMA journal_mode").fetchone() == original_journal
+        assert raw.execute("SELECT * FROM thread_catalog").fetchall() == original_main
+        assert raw.execute("SELECT * FROM lifecycle_fence").fetchall() == original_fence
+        assert raw.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_operation_leases'"
+        ).fetchone() is None
+    finally:
+        raw.close()

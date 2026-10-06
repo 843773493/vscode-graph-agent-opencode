@@ -15,8 +15,10 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
-from app.domain.itemized.execution_admission import ExecutionAdmission
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.execution_admission import (
+    ExecutionAdmission,
+    InternalExecutionIntent,
+)
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
@@ -227,14 +229,6 @@ def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_fina
     )
 
     internal_execution_id = "execution-internal-attribution"
-    internal_admission = saver.admit_internal_execution(
-        SESSION_ID,
-        thread_id=thread_id,
-        execution_id=internal_execution_id,
-        job_id="job-internal-attribution",
-        admission_idempotency_key="admission-internal-attribution",
-        payload_hash=sha256_jcs({"notice": "child completed"}),
-    )
     prompt = internal_message_factory.build(
         kind="generated_session_result",
         control="汇报已完成的内部子任务。",
@@ -244,12 +238,28 @@ def test_internal_notice_and_tool_outputs_remain_turnless_and_do_not_reopen_fina
         ),
         display_content="内部子任务已完成。",
     )
-    internal_messages = [
-        HumanMessage(
-            content=prompt.content,
-            id="internal-result-notice",
-            response_metadata=prompt.metadata,
+    internal_notice = HumanMessage(
+        content=prompt.content,
+        id="internal-result-notice",
+        response_metadata={
+            "message_id": "internal-result-notice",
+            "created_at": "2026-10-04T12:00:00+00:00",
+            "message_metadata": prompt.metadata,
+        },
+    )
+    internal_admission = saver.admit_internal_execution(
+        SESSION_ID,
+        thread_id=thread_id,
+        job_id="job-internal-attribution",
+        intent=InternalExecutionIntent(
+            message_id="internal-result-notice",
+            execution_id=internal_execution_id,
+            admission_idempotency_key="admission-internal-attribution",
         ),
+        message=internal_notice,
+    )
+    internal_messages = [
+        internal_notice,
         AIMessage(
             content="",
             id="internal-tool-call",
@@ -374,16 +384,45 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     storage, saver, thread_id = _make_saver(tmp_path, session_bundle_factory)
+    storage.initialize(SESSION_ID, thread_id=thread_id)
+    assert _query(
+        storage,
+        SESSION_ID,
+        thread_id,
+        "SELECT item_id, execution_id FROM item_catalog",
+    ) == []
+    internal_notice = HumanMessage(
+        content="准备验证 checkpoint 消息投影失败的事务回滚。",
+        id="rollback-admission-notice",
+        response_metadata={
+            "internal": True,
+            "message_id": "rollback-admission-notice",
+            "created_at": "2026-10-04T12:00:00+00:00",
+        },
+    )
     admission = saver.admit_internal_execution(
         SESSION_ID,
         thread_id=thread_id,
-        execution_id="execution-rollback-attribution",
         job_id="job-rollback-attribution",
-        admission_idempotency_key="admission-rollback-attribution",
-        payload_hash=sha256_jcs({"rollback": "projection"}),
+        intent=InternalExecutionIntent(
+            message_id="rollback-admission-notice",
+            execution_id="execution-rollback-attribution",
+            admission_idempotency_key="admission-rollback-attribution",
+        ),
+        message=internal_notice,
     )
     jsonl = storage.jsonl_path(SESSION_ID, thread_id=thread_id)
     original_jsonl = jsonl.read_bytes()
+    # admission notice 已提交；失败的 checkpoint 必须恢复这一真实前像。
+    original_attribution = _query(
+        storage,
+        SESSION_ID,
+        thread_id,
+        "SELECT item_id, execution_id FROM item_catalog",
+    )
+    assert original_attribution == [
+        ("item-rollback-admission-notice", "execution-rollback-attribution"),
+    ]
 
     def fail_projection(connection, sequence, value, timestamp) -> None:
         raise RuntimeError("message projection failure")
@@ -417,4 +456,4 @@ def test_checkpoint_append_rolls_back_jsonl_and_attribution_on_projection_failur
         SESSION_ID,
         thread_id,
         "SELECT item_id, execution_id FROM item_catalog",
-    ) == []
+    ) == original_attribution

@@ -330,6 +330,16 @@ class RolloutMessageProjectionMixin:
                 ),
             )
         if message_type == "tool" and isinstance(data, Mapping):
+            canonical_row = connection.execute(
+                "SELECT item.status FROM messages AS message JOIN item_catalog AS item "
+                "ON item.jsonl_offset = message.jsonl_offset AND item.jsonl_length = message.jsonl_length "
+                "WHERE message.message_sequence = ?",
+                (sequence,),
+            ).fetchone()
+            if canonical_row is None:
+                raise RuntimeError(f"tool message 缺少真实 canonical locator: {sequence}")
+            if canonical_row[0] != "completed":
+                return
             call_id = data.get("tool_call_id")
             if isinstance(call_id, str) and call_id:
                 result_blob = _json(data.get("content")).encode("utf-8")

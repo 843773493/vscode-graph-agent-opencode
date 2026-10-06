@@ -56,29 +56,7 @@ CREATE TABLE IF NOT EXISTS thread_execution_intents (
 )
 """
 
-# v2→v3 升级临时表（普通 CREATE，不带 IF NOT EXISTS；升级完成后 RENAME
-# 回 ``thread_execution_intents``，任何失败随 ``_initialize`` 事务整体
-# 回滚）。
-_THREAD_EXECUTION_INTENTS_V3_UPGRADE_TABLE_DDL = """
-CREATE TABLE thread_execution_intents_v3_upgrade (
-    admission_idempotency_key TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    creation_idempotency_key TEXT NOT NULL,
-    initial_state TEXT NOT NULL CHECK (initial_state IN ('running', 'idle')),
-    state TEXT NOT NULL CHECK (state IN ('pending', 'bound')),
-    execution_binding_id TEXT NOT NULL UNIQUE,
-    job_id TEXT NOT NULL UNIQUE,
-    binding_preimage_hash TEXT NOT NULL,
-    claim_owner TEXT,
-    claim_generation INTEGER,
-    last_error TEXT,
-    intent_created_at TEXT NOT NULL,
-    intent_updated_at TEXT NOT NULL,
-    CHECK ((claim_owner IS NULL) = (claim_generation IS NULL)),
-    CHECK (claim_generation IS NULL OR claim_generation >= 1)
-)
-"""
+
 
 # 每个 child thread 至多一条初始 execution intent（崩溃不能留下重复初始
 # Job 的持久侧保证）。
@@ -101,12 +79,7 @@ _THREAD_EXECUTION_INTENT_COLUMNS = (
     "intent_created_at, intent_updated_at"
 )
 
-# v2 表列清单（仅 v2→v3 升级路径读取旧表使用）。
-_THREAD_EXECUTION_INTENT_V2_COLUMNS = (
-    "admission_idempotency_key, session_id, thread_id, "
-    "creation_idempotency_key, initial_state, state, "
-    "intent_created_at, intent_updated_at"
-)
+
 
 
 def derive_initial_execution_identity(

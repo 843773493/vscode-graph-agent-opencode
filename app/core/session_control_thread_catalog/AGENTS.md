@@ -1,10 +1,10 @@
 # 目录用途
 
-`app/core/session_control_thread_catalog/` 承载 per-session `session-control.sqlite` 控制库中 thread catalog 与 lifecycle fence 一条垂直链路的唯一实现：`thread_catalog` 的 main/child 权威指针、`lifecycle_fence` 生命周期闸门、GraphBinding 四字段唯一运行时 authority、已发布 child thread 的冻结 locator 解析，以及 `thread_catalog` 的加法 schema 升级。
+`app/core/session_control_thread_catalog/` 承载 per-session `session-control.sqlite` 控制库中 thread catalog 与 lifecycle fence 一条垂直链路的唯一实现：`thread_catalog` 的 main/child 权威指针、`lifecycle_fence` 生命周期闸门、GraphBinding 四字段唯一运行时 authority、已发布 child thread 的冻结 locator 解析，以及 `thread_catalog` 当前 schema 的完整列校验。
 
 # 可修改内容
 
-- 可以维护 `thread_catalog.py` 中 `ThreadCatalogMixin` 的 thread catalog/fence 方法族（`_upgrade_thread_catalog_kind_v1_to_v2`、`_upgrade_thread_catalog_graph_binding_columns`、`initialize_main_thread`、`get_thread_graph_binding`、`initialize_fence`、`cas_fence_transition`、`get_main_thread`、`get_fence`、`verify_matches_catalog_main_thread`、`get_published_child_thread_locator`、`get_thread_catalog_revision`、`list_child_thread_rows`）。
+- 可以维护 `thread_catalog.py` 中 `ThreadCatalogMixin` 的 thread catalog/fence 方法族（`_require_thread_catalog_graph_binding_columns`、`initialize_main_thread`、`get_thread_graph_binding`、`initialize_fence`、`cas_fence_transition`、`get_main_thread`、`get_fence`、`verify_matches_catalog_main_thread`、`get_published_child_thread_locator`、`get_thread_catalog_revision`、`list_child_thread_rows`）。
 - 可以维护本模块自有的 `thread_catalog`/`lifecycle_fence` DDL 常量、`ChildThreadRow` 投影与 `validate_thread_relative_locator` 校验器。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/` 下。
 
@@ -22,5 +22,5 @@
 - child thread 的物理定位必须继续读取同一发布事务冻结的 `thread_creation_records`，交叉校验失败即 fail closed。
 - main 与 child 的 GraphBinding selector 四字段仅写入 `thread_catalog`；旧 JSON 不迁移、不读取，历史空行不得按当前 registry 回填。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动或语义冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
-- 修改本目录后运行 `uv run ruff check` 与 `uv run pytest tests/unit/core/test_session_control_store.py`。
+- 修改本目录后运行 `uv run ruff check` 与带进程外保护的 `uv run pytest tests/unit/core/test_session_control_store.py`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

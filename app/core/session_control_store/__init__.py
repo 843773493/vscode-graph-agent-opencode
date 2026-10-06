@@ -3,7 +3,7 @@
 原先的单文件 ``session_control_store.py`` 已按垂直链路拆入本包：thread creation
 record（``thread_creation_record.py``）、创建发布与终结（``thread_creation_
 publish.py``）、初始 execution intent（``execution_intent.py``）、collaboration
-成员账本（``collaboration.py``）、schema 初始化与版本升级（``_schema.py``），
+成员账本（``collaboration.py``）、当前 schema 初始化（``_schema.py``），
 共用 SQL 常量收敛在 ``sql.py``，GraphBinding 行投影位于 ``contracts.py``。
 
 本 facade 只保留 ``SessionControlStore`` 的类声明（四个既有 mixin + 五个新
@@ -24,10 +24,6 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-
-from app.core.session_control_store.contracts import (
-    ThreadGraphBindingRecord as ThreadGraphBindingRecord,
-)
 
 from app.core.session_catalog_store import validate_thread_id as validate_thread_id
 from app.core.session_control_communication_ledger.communication_ledger import (
@@ -51,6 +47,9 @@ from app.core.session_control_store.collaboration import (
 )
 from app.core.session_control_store.collaboration import (
     CollaborationMixin,
+)
+from app.core.session_control_store.contracts import (
+    ThreadGraphBindingRecord as ThreadGraphBindingRecord,
 )
 from app.core.session_control_store.execution_intent import (
     ExecutionIntentMixin,
@@ -112,13 +111,12 @@ class SessionControlStore(
     + thread creation record / execution intent journal / 通用 operation
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
-    构造时创建 database_path 父目录并幂等建表；``user_version`` 0–7
-    按单事务升级，8 是当前版本。升级增加 thread_catalog GraphBinding
-    列时历史行保持未绑定，运行时读取 fail closed，不从旧 JSON 或当前
-    registry 推断。
+    构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
+    全新库0与当前版本9。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 8
+    SCHEMA_VERSION = 9
 
     def __init__(self, database_path: Path) -> None:
         if not isinstance(database_path, Path):
@@ -215,6 +213,25 @@ class SessionControlStore(
             isolation_level=None,
             check_same_thread=False,
         )
+        current = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if current not in (0, self.SCHEMA_VERSION):
+            connection.close()
+            raise RuntimeError(
+                "session control schema 版本不受支持，fail-closed 拒绝打开（旧生成数据不迁移）: "
+                f"path={self.database_path}, user_version={current}, "
+                f"supported={self.SCHEMA_VERSION}"
+            )
+        if current == 0:
+            existing = connection.execute(
+                "SELECT name FROM sqlite_schema ORDER BY name LIMIT 1"
+            ).fetchone()
+            if existing is not None:
+                connection.close()
+                raise RuntimeError(
+                    "session control schema 版本不受支持，fail-closed 拒绝非空 v0 库（不迁移或修复）: "
+                    f"path={self.database_path}, user_version=0, supported={self.SCHEMA_VERSION}, "
+                    f"existing_schema_object={existing[0]!r}"
+                )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")

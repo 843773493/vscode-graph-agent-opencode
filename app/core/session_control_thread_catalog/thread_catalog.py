@@ -7,8 +7,7 @@
 - lifecycle_fence 的生命周期闸门（create-or-get、CAS 推进、读取）；
 - 已发布 child thread 的冻结 locator 解析（thread_catalog 与
   thread_creation_records 交叉校验，任何不一致 fail closed）；
-- ThreadCatalogMixin._upgrade_thread_catalog_kind_v1_to_v2 承载
-  thread_catalog 的 v1 到 v2 schema 加法升级。
+- 当前 thread_catalog GraphBinding 列完整性校验，不升级旧生成数据。
 
 ThreadCatalogMixin 由 app.core.session_control_store.SessionControlStore 继承
 装配；本模块不感知其余控制库职责（creation record / execution intent /
@@ -29,12 +28,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from app.core.session_control_store.contracts import ThreadGraphBindingRecord
-
 from app.core.session_catalog_store import (
     uuid7_embedded_utc_date,
     validate_thread_id,
 )
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 
 __all__ = [
     "FENCE_ROW_ID",
@@ -75,10 +73,7 @@ def read_fence_row(
     return row
 
 
-# thread_catalog（8.5-A 升级为 v2 形态）：kind CHECK 由 ``('main')`` 扩为
-# ``('main', 'child')``。SQLite 不支持原地修改 CHECK 约束，v1 库由
-# ``_initialize`` 在单事务内以「建临时新表→拷贝→校验→删旧→改名」原地
-# 升级（见 :meth:`_upgrade_thread_catalog_kind_v1_to_v2`）。
+# 当前 thread_catalog：main/child 共用唯一 catalog，旧生成数据不在此升级。
 THREAD_CATALOG_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS thread_catalog (
     thread_id TEXT PRIMARY KEY,
@@ -92,15 +87,6 @@ CREATE TABLE IF NOT EXISTS thread_catalog (
 """
 
 
-# v1→v2 升级临时表（普通 CREATE，不带 IF NOT EXISTS；升级完成后 RENAME
-# 回 ``thread_catalog``，任何失败随 ``_initialize`` 事务整体回滚）。
-_THREAD_CATALOG_KIND_UPGRADE_TABLE_DDL = """
-CREATE TABLE thread_catalog_kind_upgrade (
-    thread_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('main', 'child')),
-    created_at TEXT NOT NULL
-)
-"""
 
 
 LIFECYCLE_FENCE_TABLE_DDL = """
@@ -172,64 +158,8 @@ class ThreadCatalogMixin:
     依赖宿主类提供 database_path、_connection 与 _ensure_open()。
     """
 
-    def _upgrade_thread_catalog_kind_v1_to_v2(self) -> None:
-        """v1→v2 加法升级：``thread_catalog`` kind CHECK 原地重建。
-
-        SQLite 不支持修改既有列的 CHECK 约束，按任务书 §2.1-A 定死的
-        方式一在单事务内执行「``CREATE`` 临时新表 → ``INSERT…SELECT``
-        拷贝全部行 → 行数与 kind 合法性校验 → ``DROP`` 旧表 →
-        ``RENAME`` 回原名」；拷贝前后行数必须相等（既有 main row 数据
-        零丢失），任何失败随 ``_initialize`` 的事务整体回滚（
-        ``user_version`` 保持 1，库可原样重开，fail closed）。
-        """
-        self._connection.execute(_THREAD_CATALOG_KIND_UPGRADE_TABLE_DDL)
-        before = int(
-            self._connection.execute("SELECT COUNT(*) FROM thread_catalog").fetchone()[
-                0
-            ]
-        )
-        self._connection.execute(
-            "INSERT INTO thread_catalog_kind_upgrade "
-            "(thread_id, kind, created_at) "
-            "SELECT thread_id, kind, created_at FROM thread_catalog"
-        )
-        after = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM thread_catalog_kind_upgrade"
-            ).fetchone()[0]
-        )
-        if before != after:
-            raise RuntimeError(
-                "thread_catalog v1→v2 升级拷贝行数不一致（数据零丢失保证"
-                f"被破坏，事务将回滚）: path={self.database_path}, "
-                f"before={before}, after={after}"
-            )
-        invalid = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM thread_catalog_kind_upgrade "
-                "WHERE kind NOT IN ('main', 'child')"
-            ).fetchone()[0]
-        )
-        if invalid != 0:
-            raise RuntimeError(
-                "thread_catalog v1→v2 升级发现非法 kind 行（库被外部改动，"
-                f"fail closed）: path={self.database_path}, invalid={invalid}"
-            )
-        self._connection.execute("DROP TABLE thread_catalog")
-        self._connection.execute(
-            "ALTER TABLE thread_catalog_kind_upgrade RENAME TO thread_catalog"
-        )
-
-    def _upgrade_thread_catalog_graph_binding_columns(
-        self,
-        *,
-        allow_upgrade: bool,
-    ) -> None:
-        """为既有 thread_catalog 加四个 nullable selector 列。
-
-        历史行保持 NULL，运行时按 graph_binding_unavailable fail closed；升级不
-        读取旧 JSON，也不按当前 registry 补写 selector。
-        """
+    def _require_thread_catalog_graph_binding_columns(self) -> None:
+        """当前 catalog 必须完整携带 GraphBinding 列，不从旧数据补写。"""
         columns = {
             str(row["name"])
             for row in self._connection.execute(
@@ -243,22 +173,10 @@ class ThreadCatalogMixin:
             "capability_profile_hash",
         }
         present = columns & expected
-        if present == expected:
-            return
-        if present or not allow_upgrade:
+        if present != expected:
             raise RuntimeError(
                 "thread_catalog GraphBinding 列不完整（库被外部改动，fail closed）: "
-                f"path={self.database_path}, present={sorted(present)}, "
-                f"allow_upgrade={allow_upgrade}"
-            )
-        for column, column_type in (
-            ("graph_id", "TEXT"),
-            ("graph_revision", "INTEGER"),
-            ("graph_schema_hash", "TEXT"),
-            ("capability_profile_hash", "TEXT"),
-        ):
-            self._connection.execute(
-                f"ALTER TABLE thread_catalog ADD COLUMN {column} {column_type}"
+                f"path={self.database_path}, present={sorted(present)}"
             )
 
     def initialize_main_thread(

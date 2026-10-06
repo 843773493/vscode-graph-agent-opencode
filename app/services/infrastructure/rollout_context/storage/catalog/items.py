@@ -512,12 +512,58 @@ class RolloutItemsMixin:
                     + sha256_jcs([item.item_id for item in pending]),
                     begin_transaction=False,
                 )
+                message_meta = connection.execute(
+                    "SELECT last_message_sequence FROM database_meta WHERE singleton_id = 1"
+                ).fetchone()
+                if message_meta is None:
+                    raise RuntimeError("canonical append 缺少 message sequence 元数据")
+                previous_message_sequence = strict_non_negative_int(
+                    message_meta[0], field="database_meta.last_message_sequence"
+                )
+                next_message_sequence = previous_message_sequence + 1
+                new_message_sequences: list[int] = []
+                branch_id, _projection_epoch = self._namespace_state(connection, checkpoint_ns)
+                timestamp = _now()
                 for item in pending:
                     self._bind_canonical_item_execution(
                         connection,
                         item_id=item.item_id,
                         execution_id=execution_id,
                     )
+                    # 只协调现有 projection owner；canonical append 与真实配对索引
+                    # 同事务发布，避免下一 prepare 只看见旧 checkpoint 的消息范围。
+                    materialized = self._materialize_canonical_message_projection(
+                        connection, item, thread_id=thread_id, session_id=session_id,
+                        checkpoint_ns=checkpoint_ns, commit_id=commit_id,
+                        message_sequence=next_message_sequence, timestamp=timestamp,
+                    )
+                    if materialized is None:
+                        continue
+                    sequence, message_id, role = materialized
+                    if sequence > previous_message_sequence:
+                        new_message_sequences.append(sequence)
+                        next_message_sequence = sequence + 1
+                        if item.turn_id is not None:
+                            self._upsert_turn(
+                                connection, item.turn_id, sequence, message_id, role,
+                                branch_id, timestamp,
+                            )
+                if new_message_sequences:
+                    commit_update = connection.execute(
+                        "UPDATE storage_commits SET first_message_sequence = ?, "
+                        "last_message_sequence = ? WHERE commit_id = ?",
+                        (min(new_message_sequences), max(new_message_sequences), commit_id),
+                    )
+                    if commit_update.rowcount != 1:
+                        raise RuntimeError("canonical append commit message sequence 更新失败")
+                    meta_update = connection.execute(
+                        "UPDATE database_meta SET last_message_sequence = ?, "
+                        "history_view_revision = history_view_revision + 1, updated_at = ? "
+                        "WHERE singleton_id = 1",
+                        (max(new_message_sequences), timestamp),
+                    )
+                    if meta_update.rowcount != 1:
+                        raise RuntimeError("canonical append message sequence 元数据更新失败")
                 # canonical sink 可能在 LangGraph 创建下一条 checkpoint view
                 # 之前提交（尤其是 tool_result）。当前 active view 的 item
                 # membership 必须在同一 SQLite 事务内立即可见，否则下一次

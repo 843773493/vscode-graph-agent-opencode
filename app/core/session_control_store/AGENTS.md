@@ -9,7 +9,7 @@ mixin + 五个本包 mixin）、连接生命周期方法（`__init__`/`connectio
 
 本包承载的族：thread creation record（`thread_creation_record.py`）、创建发布与终结
 （`thread_creation_publish.py`）、初始 execution intent（`execution_intent.py`）、
-collaboration 成员账本（`collaboration.py`）、schema 初始化与版本升级
+collaboration 成员账本（`collaboration.py`）、当前 schema 初始化
 （`_schema.py`）、共享 SQL 常量 `sql.py`，以及稳定的 `ThreadGraphBindingRecord`
 值对象（`contracts.py`）。thread catalog/fence、operation lease、
 owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承载，不在本包重复实现。

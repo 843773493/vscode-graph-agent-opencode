@@ -1,22 +1,25 @@
-"""统一 ContextMutationIntent 合同：四分支 mutation 的唯一领域入口。
+"""统一 ContextMutationIntent 合同：三分支 mutation 的唯一领域入口。
 
 OpenSpec add-context-injection-lifecycle 1.1：一个 SessionThread 的所有
-影响 canonical history、active view、source control state、ToolSet binding
-和 sealed assembly 的变更都必须表达为语义互斥的 mutation intent，由唯一的
+影响 canonical history、active view 与 source control state 的变更
+必须表达为语义互斥的 mutation intent，由唯一的
 RolloutCheckpointSaver/ContextStore owner 在同一 read snapshot 与 owner
 transaction 中消费。本模块只定义纯值对象合同；事务边界、锁和持久化由
 infrastructure 侧 owner 实现，本模块不得反向导入它们。
 
-四分支的 domain owner：
+三分支的 domain owner：
 - AppendCanonicalItemIntent —— Turn/model stream/tool execution 等
   canonical 事实 producer；
 - ApplySourceLifecycleDecision —— ContextSourceManager（CSM）；
-- SwitchToolSetIntent —— ToolSelectionStore/ToolService 控制面；
 - RebuildContextEpochIntent —— rewind/compaction rebuild owner。
 
 每支都携带稳定的幂等键（由稳定字段确定性派生）与明确的 failure outcome
 （失败时保证不推进的持久状态集合）；owner 消费失败必须保持该 outcome，
 不得产生半 item、半 revision 或半 transition。
+
+ToolSet desired 由 ToolSelectionStore/ToolService 控制；新 model-call prepare
+取得完整 ToolSetSnapshot，只有成功 assembly seal binding 确立 applied，
+不经独立 mutation intent 推进第二套 applied 状态。
 """
 
 from __future__ import annotations
@@ -35,14 +38,12 @@ from app.domain.itemized.schema import validate_extensions
 IntentFailureOutcome = Literal[
     "reject_atomic",
     "keep_pending",
-    "keep_applied_toolset",
     "keep_old_view",
 ]
 """intent 失败时的持久状态保证（failure outcome 闭合集）。
 
 - reject_atomic：整个 owner transaction 拒绝，不产生任何新 item。
 - keep_pending：source 保持 pending/applied 不变，不推进 diff 基准。
-- keep_applied_toolset：applied ToolSet revision 与 prefix epoch 不变。
 - keep_old_view：旧 active view 不变；已提交的 pending transition 保留
   且不可 dispatch，等待重试。
 """
@@ -82,8 +83,8 @@ SourceItemTurnScope = Literal["ambient", "pending_next_turn"]
 EpochRebuildReason = Literal["compaction", "rewind"]
 """可提交 RebuildContextEpochIntent 的重建原因。
 
-首次 assembly 由 owner 直接初始化 epoch；ToolSet hard rebase 属
-SwitchToolSetIntent 的安全边界语义，不使用本 intent。
+首次 assembly 由 owner 直接初始化 epoch；ToolSet hard rebase 在安全
+model-call prepare 后由成功 seal binding 确立，不使用本 intent。
 """
 
 
@@ -320,45 +321,6 @@ class ApplySourceLifecycleDecision:
 
 
 @dataclass(frozen=True, slots=True)
-class SwitchToolSetIntent:
-    """应用模型可见工具与 policy 的新 desired revision 并触发 hard rebase。
-
-    不变量：desired revision 与 snapshot identity 非空；outstanding tool
-    call 未收敛时 owner 不得 seal 使用新 ToolSet 的请求；同 Turn 允许多个
-    epoch，但 applied 历史不可覆盖。
-    """
-
-    owner: MutationIntentOwner
-    desired_revision: str
-    tool_set_snapshot_id: str
-    tool_policy_version: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_non_empty(
-            self.desired_revision, "SwitchToolSetIntent.desired_revision"
-        )
-        _require_non_empty(
-            self.tool_set_snapshot_id, "SwitchToolSetIntent.tool_set_snapshot_id"
-        )
-        if self.tool_policy_version is not None:
-            _require_non_empty(
-                self.tool_policy_version,
-                "SwitchToolSetIntent.tool_policy_version",
-            )
-
-    @property
-    def idempotency_key(self) -> str:
-        return (
-            f"toolset-switch:{self.owner.session_id}:{self.owner.thread_id}:"
-            f"{self.desired_revision}"
-        )
-
-    @property
-    def failure_outcome(self) -> IntentFailureOutcome:
-        return "keep_applied_toolset"
-
-
-@dataclass(frozen=True, slots=True)
 class RebuildContextEpochIntent:
     """compaction/rewind 提交 active view、版本化 CSM control state 和
     PendingPrefixEpochTransition。
@@ -410,7 +372,6 @@ class RebuildContextEpochIntent:
 ContextMutationIntent = (
     AppendCanonicalItemIntent
     | ApplySourceLifecycleDecision
-    | SwitchToolSetIntent
     | RebuildContextEpochIntent
 )
 """语义互斥的 mutation intent union；owner 按 discriminator 分派消费。"""
@@ -422,8 +383,6 @@ def intent_kind(intent: ContextMutationIntent) -> str:
         return "append_canonical_item"
     if isinstance(intent, ApplySourceLifecycleDecision):
         return "apply_source_lifecycle_decision"
-    if isinstance(intent, SwitchToolSetIntent):
-        return "switch_tool_set"
     if isinstance(intent, RebuildContextEpochIntent):
         return "rebuild_context_epoch"
     raise TypeError(f"未知 ContextMutationIntent 分支: {type(intent).__name__}")
@@ -441,6 +400,5 @@ __all__ = [
     "SourceActivationBoundary",
     "SourceDecisionKind",
     "SourceItemTurnScope",
-    "SwitchToolSetIntent",
     "intent_kind",
 ]

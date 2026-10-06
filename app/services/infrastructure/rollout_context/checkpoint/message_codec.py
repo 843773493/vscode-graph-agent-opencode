@@ -57,6 +57,7 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     project_annotations,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import MessageCodec
+from app.services.mapping.itemized.canonical_langchain import project_tool_result
 from app.services.mapping.itemized.provider_history import (
     reasoning_projection_rows,
 )
@@ -306,6 +307,7 @@ class LangChainMessageCodec:
         internal = self.is_internal(message)
         content = data_mapping.get("content")
         response_metadata = self._metadata(message)
+        item_status = CanonicalItemStatus.COMPLETED
         display_payload = (
             _runtime_notice_payload(content, response_metadata)
             if (
@@ -380,17 +382,19 @@ class LangChainMessageCodec:
             if not isinstance(tool_call_id, str) or not tool_call_id:
                 raise ValueError("ToolMessage 缺少真实 tool_call_id")
             tool_status = data_mapping.get("status")
-            tool_outcome = {
+            tool_outcome = response_metadata.get("tool_outcome", {
                 "success": "success",
                 "error": "failure",
-            }.get(tool_status, "unknown")
+            }.get(tool_status, "unknown"))
+            confirmed = response_metadata.get("execution_confirmed", tool_outcome != "unknown")
+            item_status = response_metadata.get("canonical_item_status", CanonicalItemStatus.COMPLETED)
             payload = {
                 "tool_call_id": tool_call_id,
                 "result_id": message_id,
                 "name": str(data_mapping.get("name") or "tool"),
                 "content": data_mapping.get("content"),
                 "tool_outcome": tool_outcome,
-                "execution_confirmed": tool_outcome != "unknown",
+                "execution_confirmed": confirmed,
             }
             item_turn_id = turn_id
             turn_scope = TurnScope.TURN_MEMBER if turn_id is not None else None
@@ -440,7 +444,7 @@ class LangChainMessageCodec:
             item_id=f"item-{message_id}",
             semantic_kind=semantic_kind,
             payload_kind=payload_kind,
-            status=CanonicalItemStatus.COMPLETED,
+            status=item_status,
             producer_ref={
                 "producer_kind": producer_kind,
                 "producer_id": message_id,
@@ -524,21 +528,7 @@ class LangChainMessageCodec:
                     response_metadata={"internal": True},
                 )
         elif item.semantic_kind == SemanticKind.TOOL_RESULT:
-            payload = item.payload if isinstance(item.payload, Mapping) else {}
-            tool_status = (
-                "error"
-                if payload.get("tool_outcome") in {"failure", "cancelled"}
-                else "success"
-            )
-            message = ToolMessage(
-                content=_message_content_value(payload.get("content", item.payload)),
-                id=message_id,
-                tool_call_id=item.tool_result_evidence.tool_call_id
-                if item.tool_result_evidence is not None
-                else payload["tool_call_id"],
-                name=str(payload.get("name") or "tool"),
-                status=tool_status,
-            )
+            message = project_tool_result(item)
         elif item.semantic_kind == SemanticKind.TOOL_CALL:
             tool_calls: list[dict[str, object]] = []
             for group_item in items:

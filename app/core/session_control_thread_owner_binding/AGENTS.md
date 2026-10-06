@@ -13,7 +13,7 @@
 - 不得在本目录实现 thread catalog/fence、creation record、execution intent、operation lease 或跨 Session 通信账本等其它控制库职责。
 - 不得保留 `app/core/session_control_store.py` 的转发 shim、兼容别名或双套实现；公开符号必须只在本模块定义一处。
 - 不得在别处复制 `thread_owner_bindings` 的插入 SQL 行形状；发布事务与 `ensure_thread_owner_binding` 必须共用 `_insert_thread_owner_binding_row`。
-- 不得把 owner 侧记录槽当作权威解释：prefix epoch 与 ToolSet revision 的语义仍属 ContextStore/ToolSet domain owner，本表不构成第二 writer。
+- 不得把 owner 侧记录槽当作权威解释：prefix epoch 的语义仍属 ContextStore domain owner；本表不得保存 ToolSet desired/applied revision 或 compatibility mirror，ToolSet applied 唯一权威为 sealed assembly binding，不构成第二 writer。
 
 # 规范
 
@@ -21,5 +21,5 @@
 - `SHA256_HEX_PATTERN` 已提升到中立位置 `app/core/session_control_primitives.py`（session-control 各族的共同形态约束：owner binding stable prefix、lease preimage、artifact manifest、通信 payload），本模块只从该处导入使用，不再自行定义也不再列入本模块 `__all__`；禁止在任何子包内复制该正则。
 - 引用槽与列表槽必须走 2.1 负面合同：拒绝绝对路径、相对路径片段、NUL 与凭据形态键名。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动或 CAS 冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
-- 修改本目录后运行 `uv run ruff check` 与 `uv run pytest tests/unit/core/test_session_control_store.py`。
+- 修改本目录后运行 `uv run ruff check` 与带进程外保护的 `uv run pytest tests/unit/core/test_session_control_store.py`。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

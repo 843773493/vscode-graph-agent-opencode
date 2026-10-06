@@ -1,12 +1,17 @@
-"""A1 合同单测：ContextMutationIntent 四分支与 typed source_ordinal 链路。"""
+"""A1 合同单测：ContextMutationIntent 三分支与 typed source_ordinal 链路。"""
 
 from __future__ import annotations
 
 import pytest
 
 from app.domain.itemized.enums import PayloadKind, SelectionKind, SemanticKind
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hash.plan_hash import context_plan_hash
-from app.domain.itemized.hashing import canonical_json_bytes, contribution_content_hash
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.mutation_intents import (
@@ -14,7 +19,6 @@ from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
     MutationIntentOwner,
     RebuildContextEpochIntent,
-    SwitchToolSetIntent,
     intent_kind,
 )
 from app.domain.itemized.request_plan import ContextContribution, ContextRequestPlan
@@ -166,23 +170,26 @@ class TestApplySourceLifecycleDecision:
         assert base.failure_outcome == "keep_pending"
 
 
-class TestSwitchToolSetIntent:
-    def test_idempotency_key_and_outcome(self) -> None:
-        intent = SwitchToolSetIntent(
-            owner=_owner(),
-            desired_revision="ts-2",
-            tool_set_snapshot_id="snapshot-2",
+class TestToolSetDesiredSnapshotContract:
+    def test_manifest_identity_is_stable_across_owner_and_selection_revision(self) -> None:
+        """退役 intent 的幂等身份迁到完整快照；applied 提交由真实 seal 测试验证。"""
+        tools = ({"type": "function", "function": {"name": "read_file", "parameters": {}}},)
+        desired = ToolSetSnapshot(selection_revision=sha256_jcs({"visible": True}), tools=tools)
+        changed_selection = ToolSetSnapshot(
+            selection_revision=sha256_jcs({"visible": True, "hidden": False}), tools=tools,
         )
-        assert "ts-2" in intent.idempotency_key
-        assert intent.failure_outcome == "keep_applied_toolset"
+        parent = desired.bind(session_id=_owner().session_id, thread_id=_owner().thread_id, plan_id="plan:parent")
+        child = desired.bind(session_id=_owner().session_id, thread_id="thr_" + "c" * 32, plan_id="plan:child")
+        assert desired.snapshot_id == "tool-set:" + desired.revision
+        assert changed_selection.selection_revision != desired.selection_revision
+        assert changed_selection.revision == desired.revision
+        assert changed_selection.snapshot_id == desired.snapshot_id
+        assert parent.ref_id == child.ref_id == desired.snapshot_id
+        assert desired.compatibility_key(parent) == desired.compatibility_key(child)
 
-    def test_empty_desired_revision_rejected(self) -> None:
-        with pytest.raises(ValueError, match="desired_revision"):
-            SwitchToolSetIntent(
-                owner=_owner(),
-                desired_revision="",
-                tool_set_snapshot_id="snapshot-2",
-            )
+    def test_empty_selection_revision_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="selection_revision"):
+            ToolSetSnapshot(selection_revision="", tools=())
 
 
 class TestRebuildContextEpochIntent:
@@ -232,10 +239,6 @@ class TestIntentDispatch:
                 name="alpha", decision_kind="base", revision="r",
                 content="base", item_id="item-src",
             ),
-            SwitchToolSetIntent(
-                owner=_owner(), desired_revision="ts",
-                tool_set_snapshot_id="snap",
-            ),
             RebuildContextEpochIntent(
                 owner=_owner(), epoch_reason="compaction",
                 view_revision=1, control_revision=1,
@@ -246,7 +249,6 @@ class TestIntentDispatch:
         assert kinds == {
             "append_canonical_item",
             "apply_source_lifecycle_decision",
-            "switch_tool_set",
             "rebuild_context_epoch",
         }
 

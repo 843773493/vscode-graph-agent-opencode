@@ -28,9 +28,9 @@ CAS 冲突、ValueError 输入形态非法、TypeError 输入类型错误。
    ``stable_prefix_length`` 与 hash 的成对性、``revision`` 单调性、
    ``final_relative_locator`` 的 main/child 语义——这些只在写入路径校验，
    直改后读回不报错。这是有意为之：它们只是 owner 侧记录槽，权威解释属对应
-   domain owner；当前唯一生产读者（rollout saver）只取
-   ``toolset_compatibility_key``，与期望值不等时自然触发一次新 intent 自愈，
-   不存在会被静默利用的路径。按「严禁过度防御」不在此处补读时校验；若将来
+   domain owner；ToolSet applied 只存在于成功封存的 assembly binding，
+   本表不维护 desired/applied ToolSet 镜像。按「严禁过度防御」不在此处
+   补读时校验；若将来
    出现依赖这些标量做安全裁决的读者，应在那个读者侧按需校验，而不是在本表
    无条件加固。
 """
@@ -58,11 +58,11 @@ __all__ = [
 
 # thread owner binding 字段槽（2.1，B1/B3）：单 thread 的 owner 侧事实
 # 记录（locator/provenance/attachment/variant/resource/activation/
-# tracking/prefix epoch/assembly parent/stable prefix/ToolSet revision/
-# compatibility key/selection provenance）。引用槽按 2.1 负面合同校验：
+# tracking/prefix epoch/assembly parent/stable prefix/selection provenance）。
+# 引用槽按 2.1 负面合同校验：
 # 不收物理路径、相对路径片段与凭据形态字段；列表槽存 canonical JSON。
-# prefix epoch 与 ToolSet revision 在此只是 owner 侧记录槽，权威解释仍
-# 属 ContextStore/ToolSet domain owner（不构成第二 writer）。
+# prefix epoch 在此只是 owner 侧记录槽，权威解释仍属 ContextStore；
+# ToolSet applied 只由成功封存的 assembly binding 承载。
 THREAD_OWNER_BINDINGS_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS thread_owner_bindings (
     thread_id TEXT PRIMARY KEY,
@@ -73,10 +73,6 @@ CREATE TABLE IF NOT EXISTS thread_owner_bindings (
         'toolset_changed')),
     stable_prefix_hash TEXT,
     stable_prefix_length INTEGER,
-    desired_toolset_revision INTEGER,
-    applied_toolset_revision INTEGER,
-    toolset_compatibility_key TEXT,
-    policy_compatibility_key TEXT,
     resource_activation_snapshot_ref TEXT,
     assembly_parent_ref TEXT,
     mutation_provenance TEXT,
@@ -112,8 +108,8 @@ class ThreadOwnerBinding:
 
     列表槽以 canonical JSON 落盘、以 dict 元组投影；标量引用槽经
     _validate_ref_text 校验（拒绝物理路径/相对路径片段/NUL）；凭据形态
-    键名一律拒绝落盘。prefix epoch 与 ToolSet revision 是 owner 侧记录
-    槽，权威解释仍属对应 domain owner。
+    键名一律拒绝落盘。prefix epoch 是 owner 侧记录槽，权威解释仍属
+    对应 domain owner；本表不拥有 ToolSet desired/applied 状态。
     """
 
     thread_id: str
@@ -122,10 +118,6 @@ class ThreadOwnerBinding:
     prefix_epoch_reason: str
     stable_prefix_hash: str | None
     stable_prefix_length: int | None
-    desired_toolset_revision: int | None
-    applied_toolset_revision: int | None
-    toolset_compatibility_key: str | None
-    policy_compatibility_key: str | None
     resource_activation_snapshot_ref: str | None
     assembly_parent_ref: str | None
     mutation_provenance: dict[str, object] | None
@@ -224,22 +216,6 @@ def _owner_binding_from_row(row: sqlite3.Row) -> ThreadOwnerBinding:
         stable_prefix_length=(
             None if row["stable_prefix_length"] is None
             else int(row["stable_prefix_length"])
-        ),
-        desired_toolset_revision=(
-            None if row["desired_toolset_revision"] is None
-            else int(row["desired_toolset_revision"])
-        ),
-        applied_toolset_revision=(
-            None if row["applied_toolset_revision"] is None
-            else int(row["applied_toolset_revision"])
-        ),
-        toolset_compatibility_key=(
-            None if row["toolset_compatibility_key"] is None
-            else str(row["toolset_compatibility_key"])
-        ),
-        policy_compatibility_key=(
-            None if row["policy_compatibility_key"] is None
-            else str(row["policy_compatibility_key"])
         ),
         resource_activation_snapshot_ref=(
             None if row["resource_activation_snapshot_ref"] is None
@@ -372,10 +348,6 @@ class ThreadOwnerBindingMixin:
         prefix_epoch_reason: str | None = None,
         stable_prefix_hash: str | None = None,
         stable_prefix_length: int | None = None,
-        desired_toolset_revision: int | None = None,
-        applied_toolset_revision: int | None = None,
-        toolset_compatibility_key: str | None = None,
-        policy_compatibility_key: str | None = None,
         resource_activation_snapshot_ref: str | None = None,
         assembly_parent_ref: str | None = None,
         mutation_provenance: dict[str, object] | None = None,
@@ -429,16 +401,6 @@ class ThreadOwnerBindingMixin:
             updates["stable_prefix_hash"] = stable_prefix_hash
             updates["stable_prefix_length"] = stable_prefix_length
         for field, value in (
-            ("desired_toolset_revision", desired_toolset_revision),
-            ("applied_toolset_revision", applied_toolset_revision),
-        ):
-            if value is not None:
-                if not isinstance(value, int) or value < 1:
-                    raise ValueError(f"{field} 必须是 >=1 整数: {value!r}")
-                updates[field] = value
-        for field, value in (
-            ("toolset_compatibility_key", toolset_compatibility_key),
-            ("policy_compatibility_key", policy_compatibility_key),
             ("resource_activation_snapshot_ref",
              resource_activation_snapshot_ref),
             ("assembly_parent_ref", assembly_parent_ref),

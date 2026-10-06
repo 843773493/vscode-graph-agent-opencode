@@ -1398,6 +1398,8 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ContextRequestPlan MUST先完成tool协议收敛：assistant同一group声明的全部tool call都存在同一causal execution内匹配的terminal result之前，期间已提交的Skill/team/runtime source只能作为pending事实，不得进入可dispatch selection或插在call/result之间。收敛后的plan顺序 MUST为assistant tool-call group、全部paired result、再到期间pending source；物理`item_sequence`、JSONL offset或提交时间只作存储坐标，不能替代协议因果。
 
+协议闭合所需的 terminal result MUST 是 `CanonicalItemRecord.status=completed` 的完整结果记录；记录完成与执行 outcome MUST 分开表达。`completed` 记录可以携带 `success|failure|cancelled|unknown` outcome，其中 `unknown` MUST 保留 `execution_confirmed=false`，不得被 checkpoint/Provider 投影成执行成功或自动 replay 输入。`partial|failed` 的结果记录不是协议闭合证据，即使已提交、具备显式 call ID 和部分正文也 MUST 在 source preparation/assembly seal/Provider dispatch 前明确拒绝，保留既有 sealed binding、prefix 与 pending source。配对检查 MUST 消费当前 canonical active-view membership 对应的同事务派生索引，不得只读取尚未覆盖新 append 的旧 message ranges。
+
 系统 SHALL 为 model-declared tool call、实际 tool execution 和 tool result 保存独立的 item identity，并使用 `tool_invocation_id`、`tool_call_id` 和 `tool_attempt_id` 表达逻辑调用、实际 call attempt 与执行 attempt。一个 logical invocation 可以有多个按序 call attempt；每个 call attempt 至多启动一个 tool attempt；每个 tool attempt 至多有一个已提交 `tool_result` item，缺少 result 只能表示未完成或 unknown。三种identity在`(session_id, thread_id)`owner内唯一，tool attempt的执行幂等键必须绑定`tool_attempt_id`和输入payload hash；同key相同payload重试只返回原outcome，不同payload必须报冲突。retry/resume必须创建新的call/attempt identity，并以`retry_of`/`resumes`关系连接旧identity，旧item不可变。只有当前active view/lineage中`status=completed`且工具outcome成功的result，才可通过`replay_input`关系作为自动replay输入；superseded、failed、partial或unknown result默认不可作为replay输入。reasoning的可读文本、provider summary、encrypted/opaque payload和本地展示策略 MUST 保持可区分；受保护payload默认不得进入用户历史响应或普通assistant文本。
 
 #### Scenario: tool call 与 result 成对恢复
@@ -1409,6 +1411,16 @@ ContextRequestPlan MUST先完成tool协议收敛：assistant同一group声明的
 
 - **WHEN**模型并行声明多个tool call，其中`skill_load`先产生activation source而其它调用或本调用的tool result尚未全部terminal
 - **THEN**activation保持pending；下一次可dispatch request先包含完整assistant call group和全部paired result，再包含独立user-role activation，任何物理append交错都不得改变该顺序
+
+#### Scenario: 部分工具结果不得提前闭合
+
+- **WHEN**真实 canonical sink 已提交配对 call 和 `status=partial|failed`、`tool_outcome=unknown`、`execution_confirmed=false` 的结果，随后 desired ToolSet 或 source 发生变化
+- **THEN**下一次 preparation 在来源冻结、rebuild、seal 和 HTTP 前返回明确工具协议冲突；完整旧 binding/prefix、pending source 和已提交 canonical 记录保持不变，不创建新的 applied ToolSet 或 epoch
+
+#### Scenario: 未确认执行的完整终态通知
+
+- **WHEN**原工具 owner 提交 `status=completed`、`tool_outcome=unknown`、`execution_confirmed=false` 的配对终态通知
+- **THEN**该完整记录允许闭合协议组，但 checkpoint 投影不得标记 success，canonical 执行知识与正文原样保留；Chat 和 Responses 都使用同一规范 provider call ID 并保持 call 在 result 之前，不按当前 ToolSet membership 拒绝合法历史工具
 
 #### Scenario: encrypted reasoning 默认隐藏
 

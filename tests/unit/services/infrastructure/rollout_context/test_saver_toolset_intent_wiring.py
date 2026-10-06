@@ -1,9 +1,11 @@
-"""5.4 切片：ToolSet desired/applied producer + owner 消费 focused 测试。"""
+"""5.4：真实 Saver seal 是 thread applied ToolSet 的唯一提交边界。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -15,13 +17,7 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.mutation_intents import (
-    MutationIntentOwner,
-    SwitchToolSetIntent,
-)
-from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_intents import (
-    MutationIntentConsumptionRejected,
-)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -52,43 +48,70 @@ def saver(tmp_path: Path, session_bundle_factory) -> RolloutCheckpointSaver:
     return RolloutCheckpointSaver(sessions_dir=tmp_path)
 
 
-def _binding_state(saver: RolloutCheckpointSaver):
-    control_path, main_thread_id = saver._resolve_main_thread_control(SESSION_ID)
-    store = SessionControlStore(control_path)
-    try:
-        try:
-            return store.get_thread_owner_binding(main_thread_id)
-        except KeyError:
-            return None
-    finally:
-        store.close()
-
-
 def _main_thread_id(saver: RolloutCheckpointSaver) -> str:
     return saver._storage._resolve_thread_identity(SESSION_ID, None)
 
 
-def test_producer_applies_and_increments_only_on_change(
-    saver: RolloutCheckpointSaver,
-) -> None:
-    thread_id = _main_thread_id(saver)
-    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_A)
-    binding = _binding_state(saver)
-    assert binding is not None
-    assert binding.desired_toolset_revision == 1
-    assert binding.applied_toolset_revision == 1
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
+@pytest.fixture
+def sealed_toolset_context(saver, frozen_provider_wire):
+    """只包装真实 ingress/admission/prepare，不代写 owner 或 assembly。"""
+    @contextmanager
+    def enter(*, thread_id=None, name="toolset-contract", accepted=None):
+        thread = thread_id or _main_thread_id(saver)
+        if accepted is None:
+            accepted = saver.accept_turn(
+                SESSION_ID, thread_id=thread, accepted_ingress_id=f"{name}-ingress",
+                acceptance_idempotency_key=f"{name}-root", job_id=f"{name}-job",
+                admission_idempotency_key=f"{name}-admission", payload="工具集边界", payload_kind="text",
+            )
+        manager = ContextSourceManager(
+            owner=ContextSourceOwnerKey(SESSION_ID, thread), control_state_port=saver,
+        )
+        admission = saver.execution_admission(
+            SESSION_ID, thread_id=thread, execution_id=accepted["initial_execution_id"],
+        )
 
-    # 同一 desired 不重复消费，也不产生新 revision。
-    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_A)
-    assert _binding_state(saver).applied_toolset_revision == 1
+        def prepare(tool_set, *, key, supplier=None):
+            result = saver.prepare_context_for_provider(
+                SESSION_ID, thread, turn_id=accepted["turn_id"],
+                execution_id=accepted["initial_execution_id"],
+                **frozen_provider_wire("toolset-provider", "responses"),
+                context_source_manager=manager,
+                tool_set_supplier=supplier if supplier is not None else lambda: tool_set,
+                plan_creation_idempotency_key=f"{name}-create-{key}",
+                seal_idempotency_key=f"{name}-seal-{key}",
+            )
+            return result, saver.get_context_assembly(SESSION_ID, thread, assembly_id=result["assembly_id"])
 
-    # desired 变化 → 新 intent → revision 递增。
-    saver._switch_tool_set_if_needed(SESSION_ID, thread_id, tool_snapshot=TOOLS_B)
-    binding = _binding_state(saver)
-    assert binding.applied_toolset_revision == 2
-    assert binding.desired_toolset_revision == 2
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_B)
+        with (
+            session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            yield thread, accepted, prepare, manager
+
+    return enter
+
+
+def test_successful_seal_advances_only_manifest_changes(sealed_toolset_context, saver) -> None:
+    """新 call 的同 manifest 复用 epoch，变化只在成功 seal 后 applied。"""
+    tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
+    same_manifest = ToolSetSnapshot(selection_revision=sha256_jcs({"hidden": False}), tools=TOOLS_A)
+    tools_b = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_B), tools=TOOLS_B)
+    with sealed_toolset_context() as (thread, accepted, prepare, _manager):
+        _, first = prepare(tools_a, key="a")
+        _, unchanged = prepare(same_manifest, key="same")
+        assert first.seal_binding.applied_toolset_revision == tools_a.revision
+        assert first.seal_binding.tool_set_snapshot_id == tools_a.snapshot_id
+        assert unchanged.seal_binding.applied_toolset_revision == tools_a.revision
+        assert unchanged.seal_binding.selection_revision == same_manifest.selection_revision
+        assert unchanged.seal_binding.prefix.state.epoch.ordinal == 1
+        _, changed = prepare(tools_b, key="b")
+        assert changed.seal_binding.applied_toolset_revision == tools_b.revision
+        assert changed.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
+        assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+        assert changed.seal_binding.previous_assembly_id == unchanged.assembly_id
+        assert first.turn_id == unchanged.turn_id == changed.turn_id == accepted["turn_id"]
+        assert saver.list_context_assemblies(SESSION_ID, thread) == (first, unchanged, changed)
 
 
 def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
@@ -171,40 +194,64 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
     assert latest.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
 
 
-def test_unregistered_thread_cannot_receive_toolset_binding(
-    saver: RolloutCheckpointSaver,
+def test_unregistered_thread_cannot_prepare_or_receive_applied_toolset(
+    saver, sealed_toolset_context,
 ) -> None:
-    intent = SwitchToolSetIntent(
-        owner=MutationIntentOwner(session_id=SESSION_ID, thread_id="child-1"),
-        desired_revision="rev-x",
-        tool_set_snapshot_id="tool-set:rev-x",
-    )
-    with pytest.raises(RuntimeError, match="thread_id"):
-        saver.consume_mutation_intent(intent)
-    assert _binding_state(saver) is None
+    """canonical 但未发布的 child 不能绕过 catalog 获得 applied binding。"""
+    missing = create_prefixed_id("thr")
+    with (
+        pytest.raises(KeyError, match="thread catalog"),
+        sealed_toolset_context(thread_id=missing),
+    ):
+        pytest.fail("未注册 thread 不应建立 execution admission")
+    assert saver.list_context_assemblies(SESSION_ID, _main_thread_id(saver)) == ()
+    session_dir = saver._storage._path_resolver.resolve_session_node(SESSION_ID)
+    control = SessionControlStore(session_dir / "session-control.sqlite")
+    try:
+        with pytest.raises(KeyError):
+            control.get_thread_owner_binding(missing)
+    finally:
+        control.close()
 
 
-def test_switch_tool_set_intent_replay_keeps_revision(
-    saver: RolloutCheckpointSaver,
+def test_sealed_retry_after_saver_restart_keeps_revision_and_bytes(
+    sealed_toolset_context, saver, frozen_provider_wire,
 ) -> None:
-    intent = SwitchToolSetIntent(
-        owner=MutationIntentOwner(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(saver),
-        ),
-        desired_revision="rev-1",
-        tool_set_snapshot_id="tool-set:rev-1",
-    )
-    saver.consume_mutation_intent(intent)
-    # 跨进程同 identity 重放（直连端口）：applied 历史不可覆盖。
-    saver.consume_mutation_intent(intent)
-    binding = _binding_state(saver)
-    assert binding.applied_toolset_revision == 1
-    assert binding.toolset_compatibility_key == "rev-1"
+    tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
+    with sealed_toolset_context(name="restart") as (thread, accepted, prepare, _manager):
+        first_result, first = prepare(tools_a, key="a")
+        frozen = first.to_dict()
+        with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+            admission = restarted.execution_admission(
+                SESSION_ID, thread_id=thread, execution_id=accepted["initial_execution_id"],
+            )
+            manager = ContextSourceManager(
+                owner=ContextSourceOwnerKey(SESSION_ID, thread), control_state_port=restarted,
+            )
+
+            def refuse_supplier():
+                pytest.fail("跨进程 sealed retry 不得读取新的 ToolSet desired")
+
+            with (
+                session_thread_owner_scope(MutationIntentOwner(SESSION_ID, thread), langgraph_thread_id=thread),
+                execution_admission_scope(admission, langgraph_thread_id=thread),
+            ):
+                replay = restarted.prepare_context_for_provider(
+                    SESSION_ID, thread, turn_id=accepted["turn_id"],
+                    execution_id=accepted["initial_execution_id"],
+                    **frozen_provider_wire("toolset-provider", "responses"),
+                    context_source_manager=manager, tool_set_supplier=refuse_supplier,
+                    plan_creation_idempotency_key="restart-create-a", seal_idempotency_key="restart-seal-a",
+                )
+            restored = restarted.get_context_assembly(SESSION_ID, thread, assembly_id=replay["assembly_id"])
+            assert replay["assembly_id"] == first_result["assembly_id"]
+            assert restored.to_dict() == frozen
+            assert restored.seal_binding.applied_toolset_revision == tools_a.revision
+            assert restarted.list_context_assemblies(SESSION_ID, thread) == (first,)
 
 
-def test_producer_applies_toolset_to_explicit_child_thread(
-    saver: RolloutCheckpointSaver,
+def test_successful_seal_applies_toolset_to_published_child_thread(
+    saver, sealed_toolset_context,
 ) -> None:
     child_thread_id = create_prefixed_id("thr")
     session_dir = saver._storage._path_resolver.resolve_session_node(SESSION_ID)
@@ -239,48 +286,80 @@ def test_producer_applies_toolset_to_explicit_child_thread(
     finally:
         control.close()
 
-    saver._switch_tool_set_if_needed(
-        SESSION_ID,
-        child_thread_id,
-        tool_snapshot=TOOLS_A,
-    )
-
+    tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
+    with sealed_toolset_context(thread_id=child_thread_id, name="child") as (thread, _accepted, prepare, _manager):
+        _, child = prepare(tools_a, key="a")
+    assert child.thread_id == child_thread_id == thread
+    assert child.seal_binding.applied_toolset_revision == tools_a.revision
+    assert child.seal_binding.tool_set_snapshot_id == tools_a.snapshot_id
+    assert child.seal_binding.prefix.state.epoch.ordinal == 1
+    assert saver.list_context_assemblies(SESSION_ID, _main_thread_id(saver)) == ()
     store = SessionControlStore(session_dir / "session-control.sqlite")
     try:
-        binding = store.get_thread_owner_binding(child_thread_id)
+        owner = store.get_thread_owner_binding(child_thread_id)
+        assert not hasattr(owner, "applied_toolset_revision")
+        assert not hasattr(owner, "toolset_compatibility_key")
     finally:
         store.close()
-    assert binding.applied_toolset_revision == 1
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
 
 
-def test_producer_failure_keeps_zero_half_state_and_retry(
-    saver: RolloutCheckpointSaver,
-    monkeypatch: pytest.MonkeyPatch,
+def test_failed_seal_keeps_previous_applied_and_retries_atomically(
+    saver, sealed_toolset_context,
 ) -> None:
-    def _fail(*args: object, **kwargs: object) -> None:
-        raise OSError("owner 事务失败")
+    """真实 SQLite seal 事务失败不推进 applied，重试成功才进入新 epoch。"""
+    tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
+    tools_b = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_B), tools=TOOLS_B)
+    with sealed_toolset_context(name="failure") as (thread, _accepted, prepare, manager):
+        _, first = prepare(tools_a, key="a")
+        before = first.to_dict()
+        pending = manager.prepare_pending()
+        with saver._storage._connect(thread, "", session_id=SESSION_ID) as connection:
+            connection.execute(
+                "CREATE TRIGGER refuse_toolset_seal BEFORE INSERT ON context_assemblies "
+                "BEGIN SELECT RAISE(ABORT, 'toolset-seal-injected'); END"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="toolset-seal-injected"):
+            prepare(tools_b, key="b")
+        assert saver.list_context_assemblies(SESSION_ID, thread) == (first,)
+        assert saver.get_context_assembly(SESSION_ID, thread, assembly_id=first.assembly_id).to_dict() == before
+        assert manager.prepare_pending() == pending
+        with saver._context_reader.open_snapshot(SESSION_ID, thread) as snapshot:
+            latest = saver._storage.latest_context_assembly(snapshot)
+            assert latest.assembly_id == first.assembly_id
+            assert latest.seal_binding.applied_toolset_revision == tools_a.revision
+            assert snapshot.connection.execute(
+                "SELECT count(*) FROM storage_commits WHERE commit_kind = 'assembly_sealed' AND status = 'committed'"
+            ).fetchone()[0] == 1
+        with saver._storage._connect(thread, "", session_id=SESSION_ID) as connection:
+            connection.execute("DROP TRIGGER refuse_toolset_seal")
+        _, changed = prepare(tools_b, key="b")
+        assert changed.seal_binding.applied_toolset_revision == tools_b.revision
+        assert changed.seal_binding.tool_set_snapshot_id == tools_b.snapshot_id
+        assert changed.seal_binding.previous_assembly_id == first.assembly_id
+        assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+        assert saver.list_context_assemblies(SESSION_ID, thread) == (first, changed)
 
-    monkeypatch.setattr(SessionControlStore, "update_thread_owner_binding", _fail)
-    with pytest.raises(MutationIntentConsumptionRejected) as exc_info:
-        saver._switch_tool_set_if_needed(
-            SESSION_ID,
-            _main_thread_id(saver),
-            tool_snapshot=TOOLS_A,
-        )
-    assert exc_info.value.code == "mutation-intent-rejected"
-    assert exc_info.value.failure_outcome == "keep_applied_toolset"
-    monkeypatch.undo()
 
-    # 失败零半状态：owner binding 行可能由 ensure 建立，但 toolset 槽位未推进。
-    binding = _binding_state(saver)
-    assert binding is None or binding.toolset_compatibility_key is None
-
-    saver._switch_tool_set_if_needed(
-        SESSION_ID,
-        _main_thread_id(saver),
-        tool_snapshot=TOOLS_A,
+@pytest.mark.parametrize("change", ["policy_keys", "policy_version", "wire_tool_order"])
+def test_complete_toolset_manifest_changes_rebase_after_real_seal(
+    sealed_toolset_context, change,
+) -> None:
+    """仅验证完整 snapshot→Saver→seal；不声称控制面已生产 policy/order 变更。"""
+    tools = (*TOOLS_A, *TOOLS_B)
+    first_set = ToolSetSnapshot(selection_revision=_desired_key(tools), tools=tools)
+    changed_set = ToolSetSnapshot(
+        selection_revision=first_set.selection_revision,
+        tools=tuple(reversed(tools)) if change == "wire_tool_order" else tools,
+        policy_keys=("filesystem_rules",) if change == "policy_keys" else (),
+        policy_version="v2" if change == "policy_version" else "v1",
     )
-    binding = _binding_state(saver)
-    assert binding.applied_toolset_revision == 1
-    assert binding.toolset_compatibility_key == _desired_key(TOOLS_A)
+    with sealed_toolset_context(name=change) as (_thread, accepted, prepare, _manager):
+        _, first = prepare(first_set, key="before")
+        _, changed = prepare(changed_set, key="after")
+    assert changed_set.revision != first_set.revision
+    assert first.seal_binding.applied_toolset_revision == first_set.revision
+    assert changed.seal_binding.applied_toolset_revision == changed_set.revision
+    assert changed.seal_binding.tool_set_snapshot_id == changed_set.snapshot_id
+    assert changed.seal_binding.prefix.state.epoch.ordinal == 2
+    assert changed.seal_binding.previous_assembly_id == first.assembly_id
+    assert first.turn_id == changed.turn_id == accepted["turn_id"]

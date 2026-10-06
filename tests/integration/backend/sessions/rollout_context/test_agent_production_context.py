@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 from langchain.agents.factory import _chain_model_call_handlers
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.runtime import ExecutionInfo, Runtime
@@ -18,6 +17,7 @@ from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
 from app.agents.policy import ToolPolicyResolver
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
@@ -57,7 +57,12 @@ def factory_context(registry_db, request, monkeypatch):
         return original_create(*args, **kwargs)
 
     monkeypatch.setattr(agent_factory, "create_agent", capture_create)
-    model = FakeListChatModel(responses=["集成桩响应"])
+    # 使用正式 Provider 的真实 bind_tools；回答仍由下方显式集成桩提供。
+    model = BoxteamLiteLLMChatModel(
+        model="openai/gpt-4.1", api_key="factory-fixture-key",
+        api_base="http://127.0.0.1:1/v1", custom_llm_provider="openai",
+        streaming=False, max_retries=0,
+    )
     tools = [StructuredTool.from_function(
         lambda value: value, name=name, description="受信注册工具",
     ) for name in ("create_team", "send_session_message")]
@@ -146,13 +151,13 @@ def test_runtime_selection_hard_rebase_preserves_retry_and_graph_registration(fa
     original = saver._storage.list_context_assemblies(session, thread)[-1]
     selection.apply_changes(agent_id="default", changes={"write_todos": (False, False)})
 
-    def no_live_desired():
+    def no_live_desired(*_args: object, **_kwargs: object):
         raise AssertionError("sealed retry 不得重读 source/ToolSet desired")
 
     bridge = captured["middleware"][-1]
     with monkeypatch.context() as retry_patch:
         retry_patch.setattr(manager, "prepare_sources", no_live_desired)
-        retry_patch.setattr(bridge, "_tool_set_supplier", no_live_desired)
+        retry_patch.setattr(bridge._tool_set_producer, "snapshot", no_live_desired)
         retry = dispatch("first")
     assert retry.messages == first.messages and retry.tools == first.tools
     second = dispatch("second")

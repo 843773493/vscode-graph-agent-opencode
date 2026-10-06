@@ -291,9 +291,6 @@ class RolloutCheckpointPersistenceMixin:
                             timestamp,
                         ),
                     )
-                    self._insert_message_projection(
-                        connection, sequence, message_value, timestamp
-                    )
                     if turn_id is not None:
                         self._upsert_turn(
                             connection,
@@ -355,6 +352,9 @@ class RolloutCheckpointPersistenceMixin:
                                 branch_id=active_branch,
                                 timestamp=timestamp,
                             )
+                    self._insert_message_projection(
+                        connection, sequence, message_value, timestamp
+                    )
                 active_view_row = connection.execute(
                     "SELECT head_view_id, head_checkpoint_id FROM branches WHERE branch_id = ? AND status = 'active'",
                     (active_branch,),
