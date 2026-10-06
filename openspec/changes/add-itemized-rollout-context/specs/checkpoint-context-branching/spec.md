@@ -211,12 +211,28 @@ Thread-owned Node调试方案是额外的可移植业务资源，不属于canoni
 
 ### Requirement: rewind、compaction、fork 与 delegated thread 的边界不可混同
 
-rewind、compaction、history replay 与 checkpoint branch MUST 只重建其 selected `SessionThread` 的 active view、source state、ToolSet applied binding 和 graph checkpoint；不得影响同一 Session 的 sibling thread。`context_fork`、`history_prefix_fork` 和 `full_rollout_copy` 仍然创建新的 target Session 与其新的 main thread，并以 thread-qualified `GlobalEntityRef` 保存 source/target mapping。新 delegated execution 则在 parent Session 创建 child SessionThread，不得用 context fork 或新的 product Session 伪装。
+rewind、compaction 与 checkpoint branch MUST 只重建其 selected `SessionThread` 的 execution active view、source state、ToolSet applied binding 和 graph checkpoint；不得影响同一 Session 的 sibling thread。`history_replay` 是同 owner 的只读历史投影，遵守下述历史 view 合同，不属于 execution active view 重建。`context_fork`、`history_prefix_fork` 和 `full_rollout_copy` 仍然创建新的 target Session 与其新的 main thread，并以 thread-qualified `GlobalEntityRef` 保存 source/target mapping。新 delegated execution 则在 parent Session 创建 child SessionThread，不得用 context fork 或新的 product Session 伪装。
 
 #### Scenario: child thread rewind 不影响 main thread
 
 - **WHEN** delegated child thread 从某个 item anchor rewind
 - **THEN** 只有该 child thread 新建或切换 active view；main thread 的 canonical prefix、assembly、ToolSet binding、checkpoint 和 Turn ordinal 保持不变
+
+### Requirement: history replay 使用只读 view selector，不替换 execution head
+
+`history_replay` MUST 在所选 `(session_id, thread_id, checkpoint_ns)` owner 下创建不可变历史 view，并返回显式 `history_view_id`。它复用所选 source Turn、root 和 ordinal；不得创建 execution、切换 namespace 的 active branch、改变 branch status/head 或恢复当前 CSM/source、ToolSet/applied epoch。历史 view 和其 control snapshot 归现有 view owner，不维护第二个 execution head。
+
+`get_tuple` 使用该 selector 时 MUST 校验 owner 和 `history_replay` view 类型后只读投影；`put` 或其它执行写入使用历史 selector 时 MUST 在任何持久化前明确拒绝。普通执行调用仍解析唯一 execution active branch/head。已有 rewind/compaction pending transition 的 target view、branch 和完整 payload 不得因历史读取改变或被重绑；后续真实新输入或 `replay_as_new_turn` 创建新 Turn/execution 后，按原 owner guard 在首个成功新 epoch seal 原子消费该 pending transition。
+
+#### Scenario: 历史读取不替换当前执行状态
+
+- **WHEN** 同 owner 已有 rewind/compaction pending transition，调用方创建 `history_replay` 并用返回的 `history_view_id` 执行 `get_tuple`
+- **THEN** 返回所选历史 projection，原 Turn/root/ordinal 复用且不新增 execution/model-call/dispatch；execution active branch/head、当前 CSM、ToolSet/applied epoch 和 pending transition 的完整状态保持不变
+
+#### Scenario: 历史 selector 拒绝写入而新 Turn 可以继续
+
+- **WHEN** 调用方对历史 selector 执行 `put`，或随后通过正式 acceptance 创建新的真实 Turn
+- **THEN** 历史写入明确失败且没有持久化副作用；新 Turn 使用原 execution branch 的独立 root/acceptance/execution identity，在正确 branch seal/reopen 后只消费一次原 pending transition，不复用旧 Turn/execution 或放宽 branch guard
 
 ### Requirement: Checkpoint 区分 canonical view 与 request-only assembly
 
