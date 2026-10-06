@@ -20,9 +20,9 @@
 
 实际HEAD与恢复index以外部 `A/current-recovery-receipt.json` 为准。发送前窄闭包已以 **4a9b88b2** 集成固定c0d7554c的171路径，原141 accepted-owned已全部消费，不再重放旧队列。封存snapshot、实际wire/profile/hash与唯一临时binding联校；Agent默认缺binding拒绝，非Agent工具测试由真实builder显式标记用途；结构化ToolSet、identity-only omitted恢复、认证wrapper、checkpoint namespace及必要caller均收口。完整导出/重建/audit actual0（43个作者外差异，42个独立文档/Web/后续fixture精确defer），ROOT128个Python静态0，ROOT9项实际验收0且927源码/SQL/fixture与已测WT相同，guard/双祖先/共享index SHA全部核通过。旧55 outside失败保留，不能倒改为通过。
 
-persistent 5.4/5.5最终17路径tree **340dcbd74a9051584a20b730d8f90525e84800ca** 已以 **1b6305d7** 串行集成；guard/双祖先及共享index精确SHA c77082e3通过。关闭生产十一路径/Sol、六测试/主；7unit（含未登记child清理故障）actual0，生产未变的48caller及真实三个PGID成员关闭1项复用627f收据。5.5目标端两HTTP竞争、Node15/client17及P08静态0aec复用；P07最终4f6fd4ac接受、旧P2保留历史。tasks正式23/23（本轮规划strict待验后独立提交），不代表原Goal完成。
+persistent 5.4/5.5最终17路径tree **340dcbd74a9051584a20b730d8f90525e84800ca** 已以 **1b6305d7** 串行集成；guard/双祖先及共享index精确SHA c77082e3通过。关闭生产十一路径/Sol、六测试/主；7unit（含未登记child清理故障）actual0，生产未变的48caller及真实三个PGID成员关闭1项复用627f收据。5.5目标端两HTTP竞争、Node15/client17及P08静态0aec复用；P07最终4f6fd4ac接受、旧P2保留历史。tasks正式23/23，strict有效；技能与任务说明已以e12f8982独立提交，不代表原Goal完成。
 
-Sol下一R Chat最终消息identity两生产已固定 **5b4da9a9**，ROOT未同步；真实provenance guard未改，fork同步source→target模型身份。作者正在三regression，P08两生产早审；主将补正式Chat/Responses真实Job验收。生产修复未行为接受，不宣称Chat已修。WT CSM旧WIP仍defer至后续R，itemized50/87及完整R/epoch/CSM/view、activation等待验。协作记忆按北京时间移动10/07、规则修订待本轮独立提交；17目录/文件工具规划未变、strict41/0复用、新文件工具0/22未实施。主补生产0，测试/机械/协调成本单列。
+Chat最终消息身份已以 **a4b19e0b** 集成六路径tree **6d2184cb**；两生产/Sol、三unit/Sol、一正式integration/主。codec首次与重放消费同一消息model-call身份，fork同步source→target模型身份；真实provenance guard未改。最终reasoning17pass actual0/11.145s、真实Chat/Responses Job与整组关闭2pass actual0/69.031s，1458运行依赖未变；模型为明确TCP回放替身，不称完整模型E2E。原三文件70pass1fail和fork5pass按未变生产/测试范围复用，失败保留；最终机械6路径/7outside精确defer actual0/10.976s，Ruff0，guard/双祖先/共享index不变。P08生产早审4d83、P07最终测试窄审8117接受；证据 `r-chat-provenance-focused-dispatch/ROOT-integration-final/integration-receipt.json`。WT CSM旧WIP仅留后续R，itemized50/87及完整R/epoch/CSM/view、activation等待验。协作记忆10/07已集成；17目录/文件工具规划未变、strict41/0复用，新文件工具0/22未实施。主补生产0，测试/机械/协调成本单列。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -54,7 +54,7 @@ Sol下一R Chat最终消息identity两生产已固定 **5b4da9a9**，ROOT未同�
 ## 当前执行与后续顺序
 
 发送前binding/purpose本轮已集成；旧候选和失败按历史查收据，下一轮不重复检查未变范围。
-1. **已完成persistent 5.4/5.5**。17路径340dc以1b6305d7集成，23/23；5.2 Web和5.3崩溃证据按未变范围复用，6.1仅规范验收。当前同Sol修真实Chat最终消息model-call身份不一致，再接后续R，不重复整组关闭。
+1. **已完成persistent 5.4/5.5**。17路径340dc以1b6305d7集成，23/23；5.2 Web和5.3崩溃证据按未变范围复用，6.1仅规范验收。Chat最终消息model-call身份修复已以a4b19e0b验收集成；同Sol接后续R，不重复整组关闭。
 2. **R epoch/CSM/view事务及R01–R07**。公共合同8ac、封存事务39509和语义revision0e423已集成；原固定0b064的退休、reader/terminal/checkpoint、display与history/Gateway caller已随171路径集成；实际R producer/epoch事务仍待闭合。真实dispatch/API35及Chat双协议正文11项只归原固定包，不代完整Provider/E2E；不复做已集成caller迁移，不重放已消费的141 owned或其它陈旧清单。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
 3. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
@@ -82,6 +82,13 @@ Sol下一R Chat最终消息identity两生产已固定 **5b4da9a9**，ROOT未同�
 - ROOT共享index当前观察98850fa4…；WT默认index当前4f4eba12…（此前e1cb50fd…）。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
 - R完整对象早审在生产大包前发现两个P2，forward/protected候选独审与ROOT95绿已验证规则效果；机械完整仍不代联合业务约束。审查中的封存后脱敏假workflow、猜测transition previous字段/source-selected旁路已按实际caller/type及低层合同撤回，计主/审查成本，无作者业务返工，不要求旧算法兼容。e4d scoped pass不代尚未接的生产投影。技能入口规则简短修订，原报告保留。
 - 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
+
+## Chat 身份闭包本轮改进（已验证）
+
+- 原codec首次final省略`model_call_id`，checkpoint再次prepare从消息取到真实值，typed group严格比较后拒绝。同Sol在唯一codec收口读取、显式冲突拒绝及fork身份重映射；最初生产真实Chat失败原Trace保留，修后真实双协议Job通过。未放宽guard或加旧数据兼容。
+- 作者三unit首轮70pass1fail：新回归均通过，旧compose caller漏必填ToolSetSnapshot。同作者窄迁caller，拒绝前deepcopy后完整比较checkpoint/config/metadata，原JSONL字节及全量canonical断言保留；更正版17pass。P07旧P2保历史，最终8117窄审闭合。
+- 主真实Job首轮Responses通过、Chat请求前一已停替身，原因是module业务active snapshot跨参数复用。只修本正式fixture，在每个协议初始化前重置Gateway状态和工作区`.boxteam`；更正版2pass。主fixture返工与69.031s验收单列，不计Sol生产返工或模型速度倍率。
+- 当前Chat参数的原始服务Trace及日志已保存在 `r-chat-provenance-focused-dispatch/ROOT-chat-responses-real-fixed-attempt-2/service-evidence/`，双参数完整pytest raw保留；参数重建清除了本轮Responses服务文件，未补造它的Trace。旧Responses已过范围保留原收据。比较仍缺同起点计时，未宣布永久默认或总体提速。
 
 ## 当前 R 候选的验证边界
 
