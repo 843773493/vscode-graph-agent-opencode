@@ -4,7 +4,7 @@
 
 ## 授权与恢复坐标
 
-- 唯一生产源码实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；当前只读审查者为 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer`，沿已核 **gpt-6-luna/max** 会话复用。前者已完成验收缺口、新增非流式及normalizer caller窄审，当前只审固定Responses三路径；后者G1/G2静态审已交，当前只审G3真实非Agent测试，SDK探针限定结论已保留。persistent_web_closure_reviewer 的fixedf29222/task5.2与P61报告已完成保留；整组关闭9989f604与七文件更正版f2b527b7已主核，完整wire仍未验收。两个原wire报告保留在TEMP同名任务的artifacts/wire-preimage-contract/report.md，观察index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。注册已达15，不新增agent。
+- 唯一生产源码实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；当前只读审查者为 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer`，沿已核 **gpt-6-luna/max** 会话复用。前者已完成验收缺口、新增非流式及normalizer caller窄审，Responses固定三路径窄审已交c8d5c498接受，当前常驻待派；后者G1/G2与G3真实非Agent测试静态审已交，当前只读清点固定G1/drift测试的Saver/profile调用签名供主迁移；G3报告123151e6接受真实默认builder/TCP范围，显式purpose未验，SDK探针限定结论已保留。persistent_web_closure_reviewer 的fixedf29222/task5.2与P61报告已完成保留；整组关闭9989f604与七文件更正版f2b527b7已主核，完整wire仍未验收。两个原wire报告保留在TEMP同名任务的artifacts/wire-preimage-contract/report.md，观察index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。注册已达15，不新增agent。
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
@@ -18,7 +18,7 @@
 
 ## 当前主树与真实运行
 
-实际HEAD、owned组合与观察index以外部收据 `A/current-recovery-receipt.json` 为恢复入口，本维护前锚点为45e23e0c。Chat转换owner五路径已集成，ROOT58pass实际0/20.419秒、providers/mapping/agents及相关测试指纹不变，Ruff0、独审与guard/双祖先通过；完整wire/profile/binding尚未闭合。剩余owned **142**（103现存与39删除），本维护前组合 **65d0ced55d5cfed7aa45f66596f4dfe78efcd2e0**，收据 `chat-finalize-owner-migration-integration/post-integration-composition-receipt.json`，142个blob均保留且未吸收Sol新增量或主WIP。R退休＋reader/terminal/checkpoint＋display固定0b064、history固定fc518、Gateway三caller固定1c377仍待R闭合。normalizer候选1fa245f4未接受：27case绿、真实包装schema入口仍红，原1338domain绿不外推当前组合。导航两测试46453e8a、崩溃测试及persistent tasks aea3cc22、privacy9b45239b、四领域caller/golden a0b2b3c2和Web固定f29222/a759cf49均已集成；persistent21/23，仅5.4/5.5待实施，6.1只归规范验收。17规划文件逐SHA/HEAD仍全同，strict41/0复用、新文件工具0/22未实施。主独占两测试 `test_plan_contract.py`/`test_itemized_dispatch_contract.py` 和技能文档仍为WIP；两个provider测试已随Chat包集成。主未手写生产源码，测试迁移、机械集成与协调成本另计。
+实际HEAD、owned组合与观察index以外部收据 `A/current-recovery-receipt.json` 为恢复入口。Chat转换owner五路径45e23e0c与Responses三路径ae53fc8a已集成；前者ROOT58项通过，后者复用匹配指纹的WT84项并补ROOT/WT native scope对照两组均通过，均有Ruff/独审/guard/双祖先证据；完整wire/profile/binding尚未闭合。剩余owned **141**（102现存与39删除），native_request原已审R prefix前镜像随Responses集成后从pending队列移除，其余141个blob不变；当前组合见 `responses-finalize-focused-dispatch/root-integration/post-commit-composition.json`。不吸收作者其它wire增量或主测试WIP，不把原142旧清单覆盖回已集成native owner。R退休＋reader/terminal/checkpoint＋display固定0b064、history固定fc518、Gateway三caller固定1c377仍待R闭合。normalizer候选1fa245f4未接受：27case绿、真实包装schema入口仍红，原1338domain绿不外推当前组合。导航两测试46453e8a、崩溃测试及persistent tasks aea3cc22、privacy9b45239b、四领域caller/golden a0b2b3c2和Web固定f29222/a759cf49均已集成；persistent21/23，仅5.4/5.5待实施，6.1只归规范验收。17规划文件逐SHA/HEAD仍全同，strict41/0复用、新文件工具0/22未实施。主独占两测试 `test_plan_contract.py`/`test_itemized_dispatch_contract.py` 仍为WIP；技能文档按本轮证据维护并单独提交；两个provider测试已随Chat包集成。主未手写生产源码，测试迁移、机械集成与协调成本另计。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -48,7 +48,7 @@
 
 ## 当前执行与后续顺序
 
-1. **当前：完整 wire/profile**。Chat转换owner五路径已以45e23e0c集成，ROOT相关58项实际0、指纹未变。Responses finalize三路径已交固定3c2c0c76、相关WT84项实际0且指纹未变，独审后待ROOT窄集成；Sol已接同一WT的Saver/profile下一段，随后封存/发送binding及非Agent真实caller。不重复审主独占测试，不实施新增文件工具。固定合同见TEMP/wire_contract_reviewer/artifacts/wire-preimage-contract/report.md §2.2/2.3，SHA25aaa65c；14项新增G1/G2/drift仅collection通过，真实HTTP行为待生产闭合，不能勾完整wire。
+1. **当前：完整 wire/profile**。Chat转换owner五路径已以45e23e0c集成，ROOT相关58项实际0、指纹未变。Responses finalize三路径固定3c2c0c76已以ae53fc8a窄集成，相关WT84项实际0且指纹未变，主另ROOT/WT native scope两组对照实际0且正文全等；Sol已接同一WT的Saver/profile下一段，随后封存/发送binding及非Agent真实caller。不重复审主独占测试，不实施新增文件工具。固定合同见TEMP/wire_contract_reviewer/artifacts/wire-preimage-contract/report.md §2.2/2.3，SHA25aaa65c；14项新增G1/G2/drift仅collection通过，真实HTTP行为待生产闭合，不能勾完整wire。
 2. **随后：persistent 5.4/5.5**。整组关闭先完成backend owner收尾再停辅助服务；已删除Browser迟到grant须为确定拒绝，不能重新污染verified终态。5.2固定f29222的完整Web验收已以a759cf49集成，6.1仅规范验收，当前21/23；复用未变场景，按新增差异和目标race验证。
 3. **R epoch/CSM/view事务及R01–R07**。公共合同8ac、封存事务39509和语义revision0e423已集成；固定0b064的退休、reader/terminal/checkpoint、display以及history/Gateway caller组合仍待完整R闭合。真实dispatch/API35及Chat双协议正文11项只归原固定包，不代完整Provider/E2E；不复做已集成caller迁移，不将历史138owned当当前142的清单。
    R01–R07须从真实 producer→CSM→composition/Saver/compiler→Provider正向接通 typed SourceObservation/provenance/intent；不从最终request反推。首次/fork首root，合法compaction/rewind/toolset_changed新PrefixEpoch；tail_only独立user；并行工具先pending，下一request assistant calls→全部paired results→source。desired/applied ToolSet在安全边界切换。对应 context1.5/1.6剩余、4.6、5.1/5.2/5.4、6.7/7.1及itemized1.5/1.6生产证据；无固定交付前不勾整项。
@@ -211,3 +211,6 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 - Sol在固定合同后持续展开Saver/purpose全链调查、Responses三个路径截至09:58UTC未变；主确认会话仍running后显式中断，再同一gpt-6.1-sol/max会话派三路径具体转换任务，完整wire目标保留。10:12后公开fileChange与实际wire_finalize差异已确认，adapter正接通，未冻结/验证前不称正确或整体提速。preimage收据responses-finalize-focused-dispatch/dispatch-preimage.json；入口以此实证收窄调查规则，不按观察超时自动换模型，注册15不新增。
 
 - Responses收窄派单已兑现三路径完整增量：最终3c2c0c76与早审53b4仅注释变化，三AST全等；相关WT84pass实际0/29.853秒、源码指纹未变，主Ruff0，旧绑定及两个adapter清洗方法已物理删除。ROOT三路径前镜像逐字等于固定基线0fe67950，84收据中其它依赖逐SHA也与ROOT一致；窄独审仍在运行，不能按测试绿灯代完整wire验收。同Sol已接Saver/profile，不等待这轮审查或重复检查主独占测试。17规划与当前HEAD逐SHA再核无差异，strict41/0复用，新文件工具仍0/22；本次恢复未修改或启动该范围。
+
+- Responses窄审多次“证据已足/马上报告”后仍追加行号与边界检索，主在明确催交未兑现后显式interrupt，同一Luna会话只派既有证据报告，236秒后实际交13行c8d5c498并保留native执行覆盖未知。主补native scope探针：ROOT2组实际0/10.372秒、WT2组实际0/10.585秒，input/tools优先级、reasoning清洗、chatgpt归并、五项覆盖拒绝与stop保原行为，正文hash逐组全同，指纹未变；仅adapter边界，不代HTTP/Saver。三生产已ae53fc8a串行提交，guard/双祖先/共享index通过，四主WIP未吞入；strict-export重建3c2c树完全相同。报告专派兑现只证明这次收口，不给整体效率结论。
+- 主曾把Saver/profile四路径相对旧候选的差异说成本轮开始写代码，核公开turn与mtime05:22–07:20UTC后已更正：属于先前WIP，本turn新增未证；现场观测与本轮作者产出须有前镜像/时间依据，不归Sol提速或返工。
