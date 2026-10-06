@@ -28,9 +28,18 @@ R epoch 本轮：两份旧 `SourceSealCase` fixture 补必填 `frozen_provider_w
 
 Sol首段durable五路径 **407bc9ce** 早审发现history_replay被错当rewind、倒改tracking并登记伪pending；同Sol两路径修正、补真实compaction checkpoint.put，严格重建为 **25a172ff**，P07报告SHA **577ff175** 确认静态闭合。首段含Schema11、checkpoint完整control snapshot及空集合、view/tracking/pending同事务；prepare/seal、真实失败重开及compiled行为仍未验，未集成生产。现50个精确现有路径及4个可新增文件的preimage/归属见 `r-epoch-csm-focused-dispatch/dispatch-preimage.json`；published snapshot/CAS及必要旧helper/schema caller由同作者迁，不读盘。首冻因live字节演进被hash guard拒绝、未改source/index，第二次固定稳定字节，计主协调。P08真实rewind验收缺口报告SHA `c1433414` 保留。
 
+
+本轮后续consumer：16稳定生产双读/标准patch严格重建 **b5ce90ec**（前置P07 durable5移到当前HEAD、无旧docs回带），P08报告SHA **e0c24968**：typed pending、closure、source CAS/transition同seal事务静态成立；P1为仅tracked batch丢目标cutoff前仍有效的snapshot/untracked正文。作者同owner补checkpoint source assembly锚点、pending期间因果继承、只读旧detail/selection，六生产固定 **6b9f7e19**，12场景组合 **7dc19770**；P08增量及P07测试审在进行，尚未行为接受，fork/remap、真实intent与旧helper caller闭包仍待交。
+
+主将完整21生产+4测试严格固定 **73d90e3** 并ROOT精确overlay，25path Ruff0；首9case actual1/15.806秒、1460依赖未变，全setup v2 Turn root ID/sequence冲突。真实default acceptance无root ID时projection给canonical item-root ID，checkpoint codec再加item前缀；默认生产链缺口保留后续，不能用新fixture宣称已修。作者新同名正式epoch_db显式root item对齐真实codec并增加身份断言，单测试固定 **1b5dc1a4**；第二同9 actual1/27.604秒、1460依赖未变，history replay/不可用/协议cutoff三项通过，六项因publisher给body而不是完整Skill文件触真实frontmatter parser。合法raw源fixture待同作者修，生产guard不放宽。原失败收据保留 `first-real-nine-attempt-1/` 与 `first-real-nine-fixture-fixed-attempt-2/`。
+
+相关5文件70case actual1/35.098秒、1464依赖未变，62pass4fail4error：旧手造pending两个节点及synthetic Session登记触新rebuild端口待作者闭合；wire_tool_order保护fixture四error及compatibility golden一fail属继承期望遗漏、未归本轮epoch生产。raw在 `epoch-typed-and-existing-seal-attempt-1/`。新Skill条款明确目标可见非tracked事实携带、来源raw/body边界，cutoff6修正和合法fixture效果仍待真实验；history零CSM/pending/epoch的本次单场景通过仅归该范围。
+
+主第一次fresh read-tree后diff-files stat清单假列大量修改；未据此派缺陷或改源码，改用实际mode/blob全量比较，真实app除21交付一致。作者外差异为已登记旧docs/独立E2E/后续测试，修正清单在consumer-early-fixed-attempt-1/author-live-blob-inventory.json，旧stat产物明确作废。P08一次未隔离只读status披露，主现场共享index精确SHA仍c77082e3，未见写入；复用既有路径/index规则，不追加同义要求。主机械/测试/协调成本单列，主手写生产0，无同起点计时，不报模型倍率。
+
 本轮仅在入口CSM条款窄补“历史projection不得带执行rebuild副作用”，原407缺陷报告保留，25a静态修正已验、行为效果待真实integration。另按itemized spec:862/945与context:52/74/90/560确认允许既有unsealed plan/compact registry准备事实；原子seal必须提交选定恢复正文/binding、observed/applied CAS、prefix与transition消费。未selected准备行不可dispatch，无需泛造globalambienttx或重构全部registry。精确合同与通知见 `r-epoch-csm-focused-dispatch/draft-selection-contract-note.json`；author fixture、主机械/测试与协调成本分列，不报模型倍率。
 
-主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
+主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。本轮为固定Schema11候选运行先停unit，actual0/2.545秒、MainPID0、inactive/dead，尚未重启；只证明停止，不称正常业务unload。证据 `r-epoch-csm-focused-dispatch/ROOT-service-stop-before-epoch-overlay/receipt.json`。ROOT当前仅精确候选overlay，未提交或完成产品验收。
 
 授权业务工作区只有 BOXTEAM_HOME/boxteam_workspace 与 `/data1/hyf/test_workspace/drive_bicicle`。typed-startup-attempt-3 整组启动实际0/25.811秒；通过既有 owner API重新登记并 start drive，两者均 managed/ready。从8027实际获取 health/workspaces 与两工作区 `/api/v1/workspace`，均200、响应头体 request_id 一致。证据 `root-product-verification/typed-startup-attempt-3/exit.json` 和 `frontend-api-acceptance-attempt-2.json`。这只证明启动/初始化，不代替后续完整 UI、R或activation验收。真实 Chromium 初始化亦通过（5.9秒、无page error/failed request），证据 `root-product-verification/typed-startup-attempt-3/browser-smoke-attempt-1/receipt.json`。
 
