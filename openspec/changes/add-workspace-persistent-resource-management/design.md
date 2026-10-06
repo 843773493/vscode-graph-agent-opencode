@@ -89,6 +89,15 @@ Thread unload 是独立的、立即执行的清理路径：对临时资源，own
 
 **边界**：本 change 只新增约束与引用，不扩大既有能力边界；具体字段改名、URI 化与投影清理的实现归属见 tasks 第 6 节，取值来源一律引 `add-unified-virtual-resource-addressing`。
 
+### 8. 验收中发现的关闭顺序与迟到授权缺口
+
+正式 Web 验收暴露两个现存实现缺口，不改变资源归属或引入第二个 owner：
+
+- Gateway 普通整组关闭同时向 backend 和辅助服务发 TERM，而 backend 的 Thread unload 仍需向辅助服务同步 owner revision。由现有 runtime owner 先等待 backend 完成 drain/unload，再关闭辅助服务；关闭失败保留原错误与精确 handle。不能把辅助服务不可达降级为资源已核实。证据为 `wire_http_acceptance_reviewer/artifacts/persistent-web-shutdown-order/report.md`（相对本轮团队 TEMP）；safe restart 保留辅助服务的路径只证明该路径，不代整组关闭。
+- 已核实删除的 Browser 仍进入传输 grant，目标端普通错误被包装为 HTTP 500，继而污染 owner 的确定终态。owner 先按已核状态拒绝非 running 目标；目标端同样在原状态/revision 边界提供确定拒绝，保留错误但不把确定拒绝当作未知停止/删除结果。响应丢失或无法核实的异常仍沿现有未知结果规则处理，不增加兼容分支或另一份授权账本。证据为正式 Web `attempt-16` 的 `local-backend-40647.log` 第 182 行起。
+
+这两个修复沿当前 wire 切片之后由同一实现者完成；tasks 5.4/5.5 分别要求真实整组关闭与迟到授权/目标竞争验收。既有 5.2 五项事实已通过，不代表上述缺口已修复。
+
 ## 风险与权衡
 
 - [列表、卸载或删除期间领域管理方不可用] → 返回明确的管理方错误；需要清理时保持卸载/删除处于 `pending` 状态，不得把资源显示为不存在或已成功停止。

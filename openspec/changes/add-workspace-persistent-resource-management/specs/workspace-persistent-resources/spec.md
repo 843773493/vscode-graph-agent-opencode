@@ -88,6 +88,11 @@ Thread runtime unload 或 Thread 删除 MUST 向领域 owner 发出带精确 `se
 - **WHEN** 来源 Thread 被卸载或删除，或其 Session 进入删除流程，而资源已提升为 `workspace` 范围
 - **THEN** owner 保留资源及其工作区记录，仅移除指向该 Thread/Session 的关联；用户仍可从工作区资源入口查询和管理该资源
 
+#### Scenario: 整组关闭保留 unload 所需的辅助服务
+
+- **WHEN** Gateway 普通关闭一个同时持有 Workspace backend 和资源辅助服务的托管运行时
+- **THEN** runtime owner MUST 等待 backend 的 drain/unload 完成后再终止该 backend 所依赖的辅助服务；失败 MUST 显式暴露，不得把辅助服务不可达当作领域资源已经核实或关闭
+
 ### Requirement: 无关联的 Thread 范围资源在 30 分钟后自动回收
 
 当 `thread` 范围资源的 Thread 关联数变为零时，领域 owner MUST 记录最后一次解除关联的时间并启动 30 分钟回收期限。若资源连续 30 分钟没有任何 Thread 关联，owner MUST 再次核实资源仍为 `thread` 范围、关联数为零且不存在有效 operation lease，然后停止并核实外部实例、删除资源记录。回收期限内资源 MUST 仍可通过 `resource_id` 或不可变来源 Thread 查询；API 投影 MUST 明确显示待回收状态和计划回收时间。到期前用户或来源 Thread 的工具重新 attach，或显式提升为 `workspace`，MUST 取消回收期限；仍有有效 lease 时 MUST 推迟删除，并在 lease 结束后重新核验。到期核验和删除 MUST 与 attach、提升操作串行化。`workspace` 范围资源即使长期没有 Thread 关联也 MUST NOT 自动过期。期限和回收状态 MUST 在后端重启后保持；停止或删除结果未知时 MUST 保留可发现的待核实记录，不得报告成功删除。该期限是临时资源孤儿清理策略，不是 Thread runtime 的 idle unload 阈值。
@@ -193,6 +198,11 @@ Workspace backend MUST 在 `/api/v1/resources` 提供工作区级资源列表和
 
 - **WHEN** 用户请求持久化、attach/detach、stop 或 delete
 - **THEN** API 将操作交给对应领域 owner；成功时返回完整更新对象或明确删除确认，失败时返回具体错误且没有部分变更
+
+#### Scenario: 已核实终态资源的迟到传输授权请求明确拒绝
+
+- **WHEN** 客户端向 owner 请求已核实非 running 资源的传输授权，或目标端按同一资源状态/revision 明确拒绝该授权
+- **THEN** 授权入口 MUST 返回明确拒绝，不签发 grant；确定拒绝 MUST NOT 把已核实终态改写为未知资源停止/删除结果，也不得伪报授权成功。响应丢失或无法核实的结果继续保持显式未知事实
 
 ### Requirement: Session 删除在完成前收敛 Thread 范围资源
 
