@@ -60,13 +60,16 @@ def validate_draft_privacy(plan: ContextRequestPlan) -> None:
     """写前/恢复前共用的纯校验；拒绝原始凭据，保留所有输入及其哈希含义。
 
     contribution body 的写前剥离、恢复拒绝及 typed owner 校验由 registry
-    owner 负责。本函数不扫描正文或工具 JSON Schema，也不以字段名猜测任意
-    文本的敏感度；producer 必须显式标记其余敏感值。
+    owner 负责。非决策 extension 的 value 与工具 policy 走同一条凭据/完整
+    marker 存储边界，envelope.protection 不构成放行条件。本函数不扫描正文或
+    工具 JSON Schema，也不以字段名猜测任意文本的敏感度；producer 必须显式
+    标记其余敏感值。
     """
     if not isinstance(plan, ContextRequestPlan):
         raise TypeError("validate_draft_privacy 必须接收 ContextRequestPlan")
     for contribution in plan.contributions:
         validate_extensions(contribution.extensions, field="contribution.extensions")
+        _validate_metadata(contribution.extensions, field="contribution.extensions")
     for tool_ref in plan.tool_set_refs:
         _validate_metadata(tool_ref.tool_policy, field="tool_policy")
 
