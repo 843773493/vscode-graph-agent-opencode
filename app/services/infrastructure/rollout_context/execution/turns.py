@@ -476,9 +476,10 @@ class RolloutTurnsMixin:
                     )
                     + 1
                 )
+                root_item_value = root_item_id or "item-root-" + uuid4().hex
                 root = CanonicalItemRecord.create(
                     item_sequence=item_sequence,
-                    item_id=root_item_id or "item-root-" + uuid4().hex,
+                    item_id=root_item_value,
                     semantic_kind=SemanticKind.USER_INPUT,
                     payload_kind=payload_kind,
                     status=CanonicalItemStatus.COMPLETED,
@@ -491,9 +492,7 @@ class RolloutTurnsMixin:
                     provenance_relations=provenance_relations,
                     extensions=extensions_value,
                     projection_identity=ItemProjectionIdentity(
-                        projection_message_id=root_item_id.removeprefix("item-")
-                        if root_item_id
-                        else None,
+                        projection_message_id=root_item_value.removeprefix("item-"),
                     ),
                     turn_id=turn_value,
                     turn_scope=TurnScope.TURN_ROOT,

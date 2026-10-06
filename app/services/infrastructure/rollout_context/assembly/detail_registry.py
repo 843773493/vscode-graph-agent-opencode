@@ -15,6 +15,7 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 from app.services.infrastructure.rollout_context.assembly.detail_retention import (
     DetailRetentionMixin,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
     detail_record_from_mapping,
@@ -105,28 +106,10 @@ def validate_assembly_details(
 
 class DetailRegistryMixin(DetailRetentionMixin):
     def register_context_plan_detail(self, detail: DetailRecord) -> None:
+        """独立 detail 写入端口；seal 使用显式的同 connection 端口。"""
         if not isinstance(detail, DetailRecord):
             raise TypeError("detail registry 只接受完整 DetailRecord")
         ref = detail.detail_ref
-        key = detail_ref_key(ref)
-        expected_path = detail_relative_path(ref)
-        if detail.relative_path != expected_path.as_posix():
-            raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
-        self._safe_session_relative_path(
-            self.root(
-                ref.session_id, detail.checkpoint_ns, thread_id=ref.thread_id
-            ).parent,
-            expected_path,
-        )
-        values = (
-            key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
-            detail.detail_kind, detail.retention_class, detail.visibility,
-            detail.relative_path, detail.content_hash, detail.source_revision,
-            detail.length, detail.redacted_stable_digest, detail.protection,
-            detail.availability, int(detail.required), int(detail.sensitive),
-            detail.status, datetime.now(UTC).isoformat(), detail.expires_at,
-        )
-        _detail_mapping(values)
         with self._lock(
             ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
         ):
@@ -136,24 +119,58 @@ class DetailRegistryMixin(DetailRetentionMixin):
             with self._connect(
                 ref.thread_id, detail.checkpoint_ns, session_id=ref.session_id
             ) as connection:
-                self._require_v2_runtime(connection)
-                existing = connection.execute(
-                    f"SELECT {','.join(_COLUMNS)} FROM context_plan_details WHERE detail_ref = ?",
-                    (key,),
-                ).fetchone()
-                if existing is not None:
-                    _detail_mapping(tuple(existing))
-                    # created_at 属于首次 registry 提交；其余 manifest 均不可覆盖。
-                    if tuple(existing[:18]) != values[:18] or existing[19] != values[19]:
-                        raise ValueError("source-mismatch: detail_ref 已存在但 manifest 冲突")
-                    return
-                result = connection.execute(
-                    f"INSERT INTO context_plan_details ({','.join(_COLUMNS)}) "
-                    f"VALUES ({','.join('?' for _ in _COLUMNS)})", values,
+                connection.execute("BEGIN IMMEDIATE")
+                self._register_context_plan_detail(
+                    connection, detail, session_id=ref.session_id,
+                    thread_id=ref.thread_id, checkpoint_ns=detail.checkpoint_ns,
                 )
-                if result.rowcount != 1:
-                    raise RuntimeError("context detail manifest 未写入")
                 connection.commit()
+
+    def _register_context_plan_detail(
+        self, connection: sqlite3.Connection, detail: DetailRecord, *,
+        session_id: str, thread_id: str, checkpoint_ns: str,
+    ) -> None:
+        """唯一 manifest writer；不初始化、不另开 connection、不提交事务。"""
+        if not connection.in_transaction:
+            raise RuntimeError("detail manifest 登记需要调用方的活动事务")
+        self._require_v2_runtime(connection)
+        if not isinstance(detail, DetailRecord):
+            raise TypeError("detail registry 只接受完整 DetailRecord")
+        ref = detail.detail_ref
+        ref.require_owner(session_id, thread_id)
+        if detail.checkpoint_ns != checkpoint_ns:
+            raise ValueError("source-mismatch: detail manifest namespace 不一致")
+        key = detail_ref_key(ref)
+        expected_path = detail_relative_path(ref)
+        if detail.relative_path != expected_path.as_posix():
+            raise ValueError("detail locator 必须严格等于 typed owner 的 assembly/detail_id 路径")
+        # 使用正文唯一 path owner 校验既存路径；尚未发布的父目录可不存在。
+        DetailFiles(self._path_resolver).path(ref)
+        values = (
+            key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
+            detail.detail_kind, detail.retention_class, detail.visibility,
+            detail.relative_path, detail.content_hash, detail.source_revision,
+            detail.length, detail.redacted_stable_digest, detail.protection,
+            detail.availability, int(detail.required), int(detail.sensitive),
+            detail.status, datetime.now(UTC).isoformat(), detail.expires_at,
+        )
+        _detail_mapping(values)
+        existing = connection.execute(
+            f"SELECT {','.join(_COLUMNS)} FROM context_plan_details WHERE detail_ref = ?",
+            (key,),
+        ).fetchone()
+        if existing is not None:
+            _detail_mapping(tuple(existing))
+            # created_at 属于首次 registry 提交；其余 manifest 均不可覆盖。
+            if tuple(existing[:19]) != values[:19] or tuple(existing[20:]) != values[20:]:
+                raise ValueError("source-mismatch: detail_ref 已存在但 manifest 冲突")
+            return
+        result = connection.execute(
+            f"INSERT INTO context_plan_details ({','.join(_COLUMNS)}) "
+            f"VALUES ({','.join('?' for _ in _COLUMNS)})", values,
+        )
+        if result.rowcount != 1:
+            raise RuntimeError("context detail manifest 未写入")
 
     def get_context_plan_detail(
         self,

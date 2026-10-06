@@ -10,8 +10,10 @@ from collections.abc import Callable
 
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceControlState,
     ContextSourceControlStatePort,
     ContextSourceOwnerKey,
+    ContextSourceRebuildState,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.delta import (
     SourceDeltaMixin,
@@ -27,6 +29,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.models 
     ContextSourceTrackingStateConflict,
     PendingContextSourceBatch,
     PendingSourceObservation,
+    PublishedContextSourceRevision,
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
     SkillCatalogSnapshotConflict,
@@ -85,6 +88,13 @@ class ContextSourceManager(
         self._pending: dict[str, ContextSourceDelta] = {}
         self._skill_activation_snapshot: SkillCatalogActivationSnapshot | None = None
         self._pending_observations: dict[str, PendingSourceObservation] = {}
+        self._rebuild_transition_id: str | None = None
+        self._rebuild_source_batch: PendingContextSourceBatch | None = None
+        self._rebuild_control_states: dict[str, ContextSourceControlState] = {}
+        self._published_source_revisions: dict[str, PublishedContextSourceRevision] = {}
+        self._published_revision_supplier: Callable[
+            [tuple[ContextSourceDescriptor, ...]], tuple[PublishedContextSourceRevision, ...]
+        ] | None = None
         if owner is not None and control_state_port is not None:
             self._restore_control_states(owner, control_state_port)
 
@@ -93,6 +103,48 @@ class ContextSourceManager(
         if status not in {"tracked", "untracked"}:
             raise ValueError(f"非法 tracking_status: {status!r}")
         state.tracking_status = status
+
+    def bind_published_revision_supplier(
+        self,
+        supplier: Callable[
+            [tuple[ContextSourceDescriptor, ...]], tuple[PublishedContextSourceRevision, ...]
+        ],
+    ) -> None:
+        """绑定 source owner 的纯内存冻结出口，CSM 不解析文件或 provider。"""
+        self._published_revision_supplier = supplier
+
+    def refresh_context_rebuild_state(
+        self,
+        rebuild: ContextSourceRebuildState | None = None,
+        *,
+        checkpoint_ns: str = "",
+    ) -> ContextSourceRebuildState | None:
+        """对齐已提交的目标 tracking/CAS；只回放控制状态，不恢复正文或消费 epoch。"""
+        owner, port = self._owner, self._control_state_port
+        if owner is None or port is None:
+            return None
+        if rebuild is None:
+            rebuild = port.load_context_source_rebuild_state(owner, checkpoint_ns=checkpoint_ns)
+        if rebuild is None or rebuild.transition.transition_id == self._rebuild_transition_id:
+            return rebuild
+        self._pending.clear()
+        self._pending_observations.clear()
+        for stored in rebuild.states:
+            if stored.owner != owner:
+                raise RuntimeError("context-source-rebuild-conflict: 目标控制状态 owner 不一致")
+            old = self._sources.get(stored.source_id)
+            if old is not None and old.latest_revision is not None and old.latest_content is not None:
+                self._published_source_revisions[stored.source_id] = PublishedContextSourceRevision(
+                    stored.source_id, old.latest_revision, old.latest_content,
+                )
+            state = SourceState.from_control_state(stored)
+            if old is not None and old.descriptor is not None:
+                state.bind_descriptor(old.descriptor)
+            self._sources[stored.source_id] = state
+        self._last_model_call_receipt = None
+        self._rebuild_source_batch = None
+        self._rebuild_transition_id = rebuild.transition.transition_id
+        return rebuild
 
 
 __all__ = [

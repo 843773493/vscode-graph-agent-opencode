@@ -17,7 +17,11 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
     MutationIntentConsumptionRejected,
     MutationIntentDuplicateConsumption,
     MutationIntentOwnerMismatch,
+    MutationIntentPortError,
     SessionThreadMutationIntents,
+)
+from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
+    RolloutMutationIntentPortMixin,
 )
 
 OWNER = MutationIntentOwner(session_id="session-1", thread_id="MAIN")
@@ -44,6 +48,7 @@ def _four_branch_intents() -> tuple[ContextMutationIntent, ...]:
             item_id="item-1",
             item_kind="user_message",
             origin_turn_id="turn-1",
+            execution_id="execution-1",
         ),
         ApplySourceLifecycleDecision(
             owner=OWNER,
@@ -65,14 +70,15 @@ def _four_branch_intents() -> tuple[ContextMutationIntent, ...]:
             epoch_reason="rewind",
             view_revision=1,
             control_revision=1,
+            checkpoint_ns="", source_checkpoint_id="checkpoint-1", target_view_id="view-1",
         ),
     )
 
 
 @pytest.mark.parametrize(
     "intent",
-    _four_branch_intents(),
-    ids=[type(intent).__name__ for intent in _four_branch_intents()],
+    _four_branch_intents()[:-1],
+    ids=[type(intent).__name__ for intent in _four_branch_intents()[:-1]],
 )
 def test_receipt_matches_domain_contract(intent: ContextMutationIntent) -> None:
     port = _RecordingPort()
@@ -86,6 +92,28 @@ def test_receipt_matches_domain_contract(intent: ContextMutationIntent) -> None:
     assert facade.consumed_keys == (intent.idempotency_key,)
 
 
+@pytest.fixture
+def saver_epoch_port():
+    return RolloutMutationIntentPortMixin()
+
+
+def test_epoch_rebuild_requires_real_boundary_connection(saver_epoch_port) -> None:
+    intent = _four_branch_intents()[-1]
+    with pytest.raises(MutationIntentPortError, match="epoch-rebuild-transaction-required"):
+        saver_epoch_port.consume_mutation_intent(intent)
+
+
+def test_epoch_rebuild_never_enters_facade_success_cache() -> None:
+    port = _RecordingPort()
+    facade = SessionThreadMutationIntents(owner=OWNER, port=port)
+    intent = _four_branch_intents()[-1]
+    for _attempt in range(2):
+        with pytest.raises(MutationIntentPortError, match="epoch-rebuild-transaction-required"):
+            facade.consume(intent)
+        assert port.consumed == []
+        assert facade.consumed_keys == ()
+
+
 def test_wrong_owner_rejected_without_port_call() -> None:
     port = _RecordingPort()
     facade = SessionThreadMutationIntents(owner=OWNER, port=port)
@@ -95,6 +123,7 @@ def test_wrong_owner_rejected_without_port_call() -> None:
         item_id="item-x",
         item_kind="user_message",
         origin_turn_id="turn-1",
+        execution_id="execution-1",
     )
     with pytest.raises(MutationIntentOwnerMismatch) as exc_info:
         facade.consume(intent)
@@ -113,6 +142,7 @@ def test_duplicate_intent_rejected_and_port_called_once() -> None:
         item_id="item-1",
         item_kind="user_message",
         origin_turn_id="turn-1",
+        execution_id="execution-1",
     )
     with pytest.raises(MutationIntentDuplicateConsumption) as exc_info:
         facade.consume(duplicate)

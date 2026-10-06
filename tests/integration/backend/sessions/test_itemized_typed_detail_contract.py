@@ -208,7 +208,7 @@ def test_corrupt_typed_selection_binding_is_rejected_after_restart(
 
 
 @pytest.mark.parametrize("port", ["seal", "prepare"])
-def test_seal_failure_tombstones_source_details_before_removing_files(
+def test_seal_failure_keeps_prepared_details_out_of_durable_storage(
     frozen_provider_wire, projection_saver, monkeypatch, port
 ) -> None:
     saver, session_id, session = projection_saver
@@ -233,25 +233,51 @@ def test_seal_failure_tombstones_source_details_before_removing_files(
     ), tracking_status="tracked")
     manager.observe("agents:cleanup-source", json.dumps(body), revision="source-v1")
     selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
-    removed = []
-    original_remove = saver._detail_store.remove
+    tables = (
+        "item_catalog", "item_projections", "context_source_control_states", "context_epoch_transitions",
+        "context_plan_details", "context_assemblies", "assembly_item_refs",
+        "context_assembly_contributions", "context_assembly_selections", "storage_commits",
+        "database_meta", "model_calls", "checkpoint_context_source_snapshots", "checkpoint_context_source_states",
+    )
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        contribution_ids = tuple(row[0] for row in connection.execute(
+            "SELECT contribution_id FROM context_contributions ORDER BY contribution_id"
+        ).fetchall())
+        plan_ids = tuple(row[0] for row in connection.execute(
+            "SELECT plan_id FROM context_plans ORDER BY plan_id"
+        ).fetchall())
+    contribution_placeholders = ",".join("?" for _ in contribution_ids)
+    plan_placeholders = ",".join("?" for _ in plan_ids)
+
+    def durable_facts():
+        with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+            return (
+                tuple(connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() for table in tables),
+                connection.execute(
+                    f"SELECT * FROM context_contributions WHERE contribution_id IN ({contribution_placeholders}) "
+                    "ORDER BY contribution_id", contribution_ids,
+                ).fetchall(),
+                tuple(connection.execute(
+                    f"SELECT * FROM {table} WHERE plan_id IN ({plan_placeholders}) ORDER BY rowid", plan_ids,
+                ).fetchall() for table in (
+                    "context_plans", "context_plan_refs", "context_plan_contributions", "tool_set_snapshots",
+                )),
+                tuple((key, tuple(item["assembly_id"] for item in queue))
+                      for key, queue in sorted(saver._prepared_dispatches.items())),
+                tuple((path.relative_to(session).as_posix(), path.read_bytes())
+                      for path in sorted(session.rglob("*")) if path.is_file() and (
+                          path.name == ".context-redaction-key" or "context-plan-details" in path.parts
+                          or "context-plan-details-protected" in path.parts
+                      )),
+            )
+
+    before = durable_facts()
 
     def fail_seal(*args, **kwargs):
         raise RuntimeError("injected assembly commit failure")
 
-    def check_tombstone(*, session_id, thread_id, record):
-        with sqlite3.connect(session / "rollout/index.sqlite") as connection:
-            row = connection.execute(
-                "SELECT status, availability FROM context_plan_details WHERE detail_ref = ?",
-                (detail_ref_key(record.detail_ref),),
-            ).fetchone()
-        assert row == ("unavailable", "unavailable")
-        removed.append(record.detail_ref)
-        return original_remove(session_id=session_id, thread_id=thread_id, record=record)
-
     with monkeypatch.context() as patch:
         patch.setattr(saver._storage, "seal_context_assembly", fail_seal)
-        patch.setattr(saver._detail_store, "remove", check_tombstone)
         arguments = {
             "turn_id": "turn-1",
             "provider_version": "typed-contract",
@@ -280,6 +306,24 @@ def test_seal_failure_tombstones_source_details_before_removing_files(
                     **frozen_provider_wire("typed-contract", "responses"),
 
                 )
-    assert len(removed) == 1
-    assert not (session / detail_relative_path(removed[0])).exists()
+    assert durable_facts() == before
     assert saver.list_context_assemblies(session_id, saver._storage.main_thread_id(session_id)) == ()
+    assert manager.prepare_pending() is not None
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        plans = connection.execute(
+            f"SELECT plan_id, plan_state, assembly_id, seal_idempotency_key, seal_hash, seal_input_hash "
+            f"FROM context_plans WHERE plan_id NOT IN ({plan_placeholders}) ORDER BY plan_id", plan_ids,
+        ).fetchall()
+        assert len(plans) == 1
+        assert plans[0][1:] == ("unsealed", None, None, None, None)
+        assert connection.execute(
+            "SELECT assembly_id FROM tool_set_snapshots WHERE plan_id=?", (plans[0][0],),
+        ).fetchall() == [(None,)]
+        additions = connection.execute(
+            f"SELECT request_only, assembly_id, contribution_ordinal, binding_manifest_json "
+            f"FROM context_contributions WHERE contribution_id NOT IN ({contribution_placeholders})",
+            contribution_ids,
+        ).fetchall()
+        for request_only, assembly_id, contribution_ordinal, manifest in additions:
+            assert (request_only, assembly_id, contribution_ordinal) == (1, None, None)
+            assert set(json.loads(manifest)) == {"root_placement", "source_binding", "extensions"}

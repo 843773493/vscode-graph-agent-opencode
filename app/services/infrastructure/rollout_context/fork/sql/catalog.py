@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from app.domain.itemized.serde.epoch import (
+    context_seal_binding_from_dict,
+    context_seal_binding_to_dict,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
 )
 from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
+    localize_full_copy_seal_bindings,
 )
 from app.services.infrastructure.rollout_context.fork.sql.common import (
     rewrite_column,
@@ -30,8 +35,41 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
     connection = state.connection
+    if not connection.in_transaction:
+        raise RuntimeError("full_rollout_copy catalog remap 必须参加已有显式事务")
+    # view/checkpoint 主键与新 CSM 子表引用在同一事务内一起本地化，
+    # 延迟只持续到已有 fork commit；不关闭外键，也不提前清除待校验引用。
+    connection.execute("PRAGMA defer_foreign_keys = ON")
     target_session_id = state.target_session_id
     target_thread_id = state.target_thread_id
+    source_owner = (state.source_session_id, state.source_thread_id)
+    for table in (
+        "checkpoint_context_source_snapshots",
+        "checkpoint_context_source_states",
+    ):
+        owners = connection.execute(
+            f"SELECT session_id, thread_id, count(*) FROM {table} "
+            "GROUP BY session_id, thread_id"
+        ).fetchall()
+        if any(row[:2] != source_owner for row in owners):
+            raise RuntimeError(
+                "full_rollout_copy checkpoint CSM 版本不属于唯一 source SessionThread: "
+                f"table={table}"
+            )
+        expected = sum(
+            non_negative_int(row[2], field=f"{table}.source_owner_count")
+            for row in owners
+        )
+        result = connection.execute(
+            f"UPDATE {table} SET session_id = ?, thread_id = ? "
+            "WHERE session_id = ? AND thread_id = ?",
+            (target_session_id, target_thread_id, *source_owner),
+        )
+        if result.rowcount != expected:
+            raise RuntimeError(
+                "full_rollout_copy checkpoint CSM owner remap 行数不一致: "
+                f"table={table}, expected={expected}, actual={result.rowcount}"
+            )
     maps = state.maps
     item_rows = state.item_rows
     part_maps = state.part_maps
@@ -290,8 +328,19 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
         )
 
     assembly_rows = connection.execute(
-        "SELECT assembly_id, plan_id, detail_ref, snapshot_json FROM context_assemblies"
+        "SELECT assembly_id, plan_id, detail_ref, snapshot_json FROM context_assemblies ORDER BY rowid"
     ).fetchall()
+    assembly_values = {}
+    source_bindings = {}
+    for assembly_id, _plan_id, _detail_ref, snapshot_json in assembly_rows:
+        assembly_id = required_text(assembly_id, field="context_assemblies.assembly_id")
+        value = json.loads(required_text(snapshot_json, field="context_assemblies.snapshot_json"))
+        if not isinstance(value, Mapping):
+            raise TypeError(f"full_rollout_copy assembly snapshot 非 object: {assembly_id}")
+        assembly_values[assembly_id] = value
+        if value["seal_binding"] is not None:
+            source_bindings[assembly_id] = context_seal_binding_from_dict(value["seal_binding"])
+    target_bindings = localize_full_copy_seal_bindings(state, source_bindings)
 
     for (
         old_assembly_id,
@@ -306,18 +355,15 @@ def rewrite_full_copy_fast_columns(state: FullCopyRemapState) -> None:
         old_detail_ref = optional_text(
             old_detail_ref, field="context_assemblies.detail_ref"
         )
-        snapshot_text = required_text(
-            snapshot_json, field="context_assemblies.snapshot_json"
-        )
-        value = json.loads(snapshot_text)
-        if not isinstance(value, Mapping):
-            raise TypeError(
-                f"full_rollout_copy assembly snapshot 非 object: {old_assembly_id}"
-            )
-        remapped_value = remap_json(value)
+        value = assembly_values[old_assembly_id]
+        remapped_value = remap_json({key: child for key, child in value.items() if key != "seal_binding"})
         if not isinstance(remapped_value, dict):
             raise TypeError("full_rollout_copy assembly snapshot remap 非 object")
         remapped_value["session_id"] = target_session_id
+        binding = target_bindings.get(old_assembly_id)
+        remapped_value["seal_binding"] = (
+            context_seal_binding_to_dict(binding) if binding is not None else None
+        )
         result = connection.execute(
             "UPDATE context_assemblies SET plan_id = ?, detail_ref = ?, snapshot_json = ? WHERE assembly_id = ?",
             (

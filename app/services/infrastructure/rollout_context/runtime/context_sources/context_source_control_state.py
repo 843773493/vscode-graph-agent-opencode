@@ -16,6 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.epoch.prefix_epoch import PendingPrefixEpochTransition
+
 ContextSourceTrackingStatus = Literal["tracked", "untracked"]
 """``untracked`` 即 OpenSpec 的 frozen 状态：停止消费 revision 且不再恢复。"""
 
@@ -115,6 +118,16 @@ class ContextSourceControlState:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ContextSourceRebuildState:
+    """同一 read snapshot 中的未消费 transition、控制状态与既有 source selection。"""
+
+    transition: PendingPrefixEpochTransition
+    states: tuple[ContextSourceControlState, ...]
+    source_assembly: ContextAssemblySnapshot | None = None
+    retained_source_refs: frozenset[tuple[str, str]] = frozenset()
+
+
 class ContextSourceControlStatePort(Protocol):
     """CSM 控制状态在唯一 owner 上的读写端口；实现方拥有事务与锁。
 
@@ -129,6 +142,15 @@ class ContextSourceControlStatePort(Protocol):
         owner: ContextSourceOwnerKey,
     ) -> tuple[ContextSourceControlState, ...]:
         """读取该 owner 的全部控制状态；没有记录时返回空 tuple。"""
+        ...
+
+    def load_context_source_rebuild_state(
+        self,
+        owner: ContextSourceOwnerKey,
+        *,
+        checkpoint_ns: str = "",
+    ) -> ContextSourceRebuildState | None:
+        """只读已提交的 view rebuild；pending 不代表已应用的 prefix epoch。"""
         ...
 
     def save_context_source_control_state(

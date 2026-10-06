@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from uuid import uuid4
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
@@ -17,6 +17,13 @@ from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.mutation_intents import (
+    MutationIntentOwner,
+    RebuildContextEpochIntent,
+)
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    validate_tool_protocol_closure,
+)
 from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
     prepare_messages,
 )
@@ -54,6 +61,7 @@ class RolloutCheckpointPersistenceMixin:
         parent_checkpoint_id: str | None,
         current_messages: list[object],
         branch_id: str | None = None,
+        consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> None:
         owner = require_current_session_thread_owner(
             langgraph_thread_id=thread_id
@@ -432,6 +440,8 @@ class RolloutCheckpointPersistenceMixin:
                 checkpoint_kind = (
                     "compaction" if view_kind == "compaction" else "normal"
                 )
+                if view_kind == "compaction":
+                    validate_tool_protocol_closure(connection, visible_sequences, len(visible_sequences))
                 view_id = self._create_view(
                     connection,
                     active_branch,
@@ -479,6 +489,14 @@ class RolloutCheckpointPersistenceMixin:
                 )
                 self._insert_checkpoint_channels(
                     connection, checkpoint_id, checkpoint, view_id, timestamp
+                )
+                self._capture_checkpoint_context_sources(
+                    connection,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_ns=checkpoint_ns,
+                    session_id=owner.session_id,
+                    thread_id=owner.thread_id,
+                    timestamp=timestamp,
                 )
                 branch_cursor = connection.execute(
                     "UPDATE branches SET head_view_id = ?, head_checkpoint_id = ?, updated_at = ? WHERE branch_id = ?",
@@ -540,6 +558,23 @@ class RolloutCheckpointPersistenceMixin:
                         "checkpoint database_meta 更新行数异常: "
                         f"checkpoint_id={checkpoint_id}, rowcount={meta_cursor.rowcount}"
                     )
+                if view_kind == "compaction":
+                    revision = connection.execute(
+                        "SELECT history_view_revision FROM database_meta WHERE singleton_id=1"
+                    ).fetchone()
+                    intent = RebuildContextEpochIntent(
+                        owner=MutationIntentOwner(owner.session_id, owner.thread_id),
+                        epoch_reason="compaction",
+                        view_revision=strict_non_negative_int(
+                            revision[0], field="database_meta.history_view_revision",
+                        ),
+                        control_revision=control_sequence,
+                        checkpoint_ns=checkpoint_ns,
+                        source_checkpoint_id=checkpoint_id,
+                        target_view_id=view_id,
+                    )
+                    consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
+                    consumer(intent, connection)
                 self._commit_connection(connection)
 
     @staticmethod

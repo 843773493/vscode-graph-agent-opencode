@@ -23,7 +23,6 @@ from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
-    release_uncommitted_details,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     committed_retry,
@@ -138,9 +137,8 @@ def seal_registered_plan(
                 activation_snapshot, checkpoint_ns=checkpoint_ns
             )
         assembly_id = f"assembly-{uuid4().hex}"
-        records = ()
         try:
-            bound, records, detail_refs = owner._bind_request_detail_refs(
+            bound, prepared_details, detail_refs = owner._bind_request_detail_refs(
                 session_id,
                 thread_id,
                 checkpoint_ns,
@@ -177,6 +175,7 @@ def seal_registered_plan(
                 )
                 bodies = owner._request_content_for_plan(
                     session_id, thread_id, checkpoint_ns, sealed_plan, None,
+                    prepared_details=prepared_details,
                 )
                 if isinstance(wire_profile, ResponsesWireProfile):
                     native_request = project_native_request(
@@ -215,27 +214,17 @@ def seal_registered_plan(
                 checkpoint_ns,
                 error,
             )
-            release_uncommitted_details(
-                owner, session_id, thread_id, checkpoint_ns, records
-            )
             raise
-        try:
-            # 低层 owner 负责其 snapshot/header-detail 阶段的失败 control；
-            # 外层只释放自己分配的 request details，避免重复记录失败。
-            owner.seal_context_assembly(
-                session_id,
-                thread_id,
-                snapshot,
-                seal_idempotency_key=seal_idempotency_key,
-                seal_input_hash=input_hash,
-                checkpoint_ns=checkpoint_ns,
-                activation_binding=activation_binding,
-            )
-        except BaseException:
-            release_uncommitted_details(
-                owner, session_id, thread_id, checkpoint_ns, records
-            )
-            raise
+        owner.seal_context_assembly(
+            session_id,
+            thread_id,
+            snapshot,
+            seal_idempotency_key=seal_idempotency_key,
+            seal_input_hash=input_hash,
+            checkpoint_ns=checkpoint_ns,
+            activation_binding=activation_binding,
+            prepared_details=prepared_details,
+        )
         return owner._storage.get_context_assembly(
             session_id,
             thread_id,

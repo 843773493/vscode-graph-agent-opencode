@@ -56,6 +56,9 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
 from app.services.infrastructure.rollout_context.checkpoint.mutation.saver_mutation_intents import (
     RolloutMutationIntentPortMixin,
 )
+from app.services.infrastructure.rollout_context.checkpoint.owner.context_epoch_transition import (
+    ContextEpochTransitionOwnerMixin,
+)
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_owner import (
     ContextOwnerMixin,
 )
@@ -202,6 +205,7 @@ class RolloutCheckpointSaver(
     ContextOwnerMixin,
     ContextSourceOverlayMixin,
     ContextSourceControlOwnerMixin,
+    ContextEpochTransitionOwnerMixin,
     ContextReconciliationMixin,
     ContextReplayMixin,
     RolloutLangGraphAsyncMixin,

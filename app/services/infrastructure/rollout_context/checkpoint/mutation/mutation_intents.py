@@ -11,11 +11,13 @@ append 分支已由 RolloutCheckpointSaver.append_items 生产接线（intent �
 facade 消费 → owner 单事务提交整批）；source 分支由
 runtime reminder producer 提交 ApplySourceLifecycleDecision；CSM 来源的
 applied 只由真实 assembly seal 事务推进，CSM 在封存后确认批次。ToolSet
-applied 以同一 assembly binding 为唯一事实。epoch intent 分支仍显式拒绝。
+applied 以同一 assembly binding 为唯一事实。epoch intent 由 durable 边界
+构造后携同一 SQLite connection 直接交 owner，禁止记入提交前的 facade 缓存。
 """
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -23,6 +25,7 @@ from app.domain.itemized.mutation_intents import (
     ContextMutationIntent,
     IntentFailureOutcome,
     MutationIntentOwner,
+    RebuildContextEpochIntent,
     intent_kind,
 )
 
@@ -35,7 +38,9 @@ class SessionThreadMutationIntentPort(Protocol):
     不产生半 item、半 revision 或半 transition。
     """
 
-    def consume_mutation_intent(self, intent: ContextMutationIntent) -> None:
+    def consume_mutation_intent(
+        self, intent: ContextMutationIntent, connection: sqlite3.Connection | None = None,
+    ) -> None:
         """在 owner 事务内消费一个 typed intent；失败必须抛出异常。"""
         ...
 
@@ -133,6 +138,11 @@ class SessionThreadMutationIntents:
                 "mutation-intent-owner-mismatch: intent owner 与端口 owner 不一致: "
                 f"expected=({self._owner.session_id},{self._owner.thread_id}) "
                 f"actual=({intent.owner.session_id},{intent.owner.thread_id})"
+            )
+        if isinstance(intent, RebuildContextEpochIntent):
+            raise MutationIntentPortError(
+                "epoch-rebuild-transaction-required: rebuild 必须在真实 boundary 事务中"
+                "携同一 SQLite connection 直接交 owner；不能通过 facade 提前缓存成功"
             )
         key = intent.idempotency_key
         if key in self._consumed_keys:

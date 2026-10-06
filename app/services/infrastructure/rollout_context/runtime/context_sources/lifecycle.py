@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.services.infrastructure.events.channel_events import ContextSourceEvent
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+        ContextSourceRebuildState,
         ContextSourceTrackingStatus,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.delta import (
@@ -13,15 +14,18 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.delta i
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
         CommittedContextSourceBatch,
+        ContextSourceDelta,
         ContextSourceSnapshot,
         PendingContextSourceBatch,
         PendingSourceObservation,
+        PublishedContextSourceRevision,
 )
 
 
 class SourceLifecycleMixin:
         def observe(self, source_id: str, content: str, *, revision: str | None = None) -> bool:
             """接收已登记来源的新快照；未跟踪来源不会改变上下文。"""
+            self.refresh_context_rebuild_state()
             state = self._sources.get(source_id)
             if state is None:
                 raise KeyError(f"Context source 不存在: source_id={source_id}")
@@ -32,6 +36,9 @@ class SourceLifecycleMixin:
             if revision is not None and (not isinstance(revision, str) or not revision):
                 raise ValueError("ContextSourceManager.observe.revision 必须是非空字符串或 None")
             effective_revision = _revision(content) if revision is None else revision
+            self._published_source_revisions[source_id] = PublishedContextSourceRevision(
+                source_id, effective_revision, content,
+            )
             if state.latest_revision == effective_revision and state.latest_content == content:
                 return False
             if _adopt_restored_baseline(state, content, effective_revision):
@@ -140,27 +147,72 @@ class SourceLifecycleMixin:
                     return state.source_id
             return None
 
-        def restore_active_revision(self, source_id: str, active_revision: str | None) -> bool:
-            """rewind 后发现最新注入不在 active view 时重排当前有效正文。
-
-            TODO: OpenSpec 3.6 要求 rewind/compaction 按目标 checkpoint 恢复
-            tracking state（snapshot/untracked 不恢复）。当前 checkpoint 恢复路径
-            还没有调用本方法，也没有 checkpoint-versioned 控制状态回放；在接入
-            之前，rewind 只能依赖调用方显式传入 active revision。
-            """
-            state = self._sources.get(source_id)
-            if state is None:
-                raise KeyError(f"Context source 不存在: source_id={source_id}")
-            if not state.tracked or state.latest_revision is None:
-                return False
-            if active_revision == state.latest_revision:
-                return False
-            state.pending_kind = "rebuild"
-            self._queue_delta(state)
-            return True
+        def prepare_rebuild_sources(
+            self,
+            rebuild: ContextSourceRebuildState,
+        ) -> PendingContextSourceBatch:
+            """从来源 owner 冻结的已发布正文准备 tracked 完整状态；不写 durable applied。"""
+            self.refresh_context_rebuild_state(rebuild)
+            if self._rebuild_source_batch is not None:
+                return self._rebuild_source_batch
+            self._rebuild_control_states = {state.source_id: state for state in rebuild.states}
+            states = tuple(state for state in self._sources.values() if state.tracked)
+            if any(state.descriptor is None for state in states):
+                raise RuntimeError("tracked-source-unavailable: 目标 registration 缺少 source owner binding")
+            descriptors = tuple(state.descriptor for state in states)
+            supplier = self._published_revision_supplier
+            resource_descriptors = tuple(
+                descriptor for descriptor in descriptors if descriptor.resource_uri is not None
+            )
+            frozen_resources = () if supplier is None else supplier(resource_descriptors)
+            published = {source.source_id: source for source in frozen_resources}
+            if len(published) != len(frozen_resources):
+                raise RuntimeError("context-source-rebuild-conflict: published snapshot 重复 source identity")
+            sources, deltas = [], []
+            for state in states:
+                descriptor = state.descriptor
+                frozen = published.get(state.source_id)
+                if frozen is None and (supplier is None or descriptor.resource_uri is None):
+                    if descriptor.source_kind == "skill":
+                        snapshot = self._skill_activation_snapshot
+                        binding = snapshot.entries.get(state.name) if snapshot is not None else None
+                        if binding is not None and (
+                            descriptor.resource_uri is None or descriptor.resource_uri == binding.display_uri
+                        ):
+                            frozen = PublishedContextSourceRevision(
+                                state.source_id, binding.activation_revision, binding.body,
+                            )
+                    elif descriptor.resource_uri is None:
+                        frozen = self._published_source_revisions.get(state.source_id)
+                if frozen is None:
+                    raise RuntimeError("tracked-source-unavailable: 已发布快照缺少 tracked source: " + state.source_id)
+                if not isinstance(frozen, PublishedContextSourceRevision) or frozen.source_id != state.source_id:
+                    raise RuntimeError("context-source-rebuild-conflict: published snapshot source identity 不一致")
+                sources.append(ContextSourceSnapshot(
+                    descriptor=descriptor, revision=frozen.revision, content=frozen.content,
+                    applied_revision=state.latest_visible_committed_revision, tracked=True,
+                    expected_control_revision=state.persisted_state_revision,
+                ))
+                if frozen.revision != state.latest_visible_committed_revision:
+                    deltas.append(ContextSourceDelta(
+                        source_id=state.source_id, source_name=state.name, source_kind=state.source_kind,
+                        revision=frozen.revision, previous_revision=state.latest_visible_committed_revision,
+                        content=frozen.content, content_hash=_revision(frozen.content), kind="rebuild",
+                    ))
+            batch = PendingContextSourceBatch(deltas=tuple(deltas), sources=tuple(sources))
+            # 全部来源成功冻结后才安装候选正文，失败不能留下局部内存推进。
+            for source in batch.sources:
+                state = self._sources[source.descriptor.source_id]
+                state.latest_revision = source.revision
+                state.latest_content = source.content
+            self._rebuild_source_batch = batch
+            return batch
 
         def prepare_sources(self) -> PendingContextSourceBatch:
             """冻结完整有效来源与最终 delta；不写 applied 或消费任何 intent。"""
+            rebuild = self.refresh_context_rebuild_state()
+            if rebuild is not None:
+                return self.prepare_rebuild_sources(rebuild)
             sources = []
             for state in self._sources.values():
                 if state.latest_revision is None or state.latest_content is None:
@@ -181,6 +233,9 @@ class SourceLifecycleMixin:
             )
 
         def prepare_pending(self) -> PendingContextSourceBatch | None:
+            rebuild = self.refresh_context_rebuild_state()
+            if rebuild is not None:
+                return self.prepare_rebuild_sources(rebuild)
             if not self._pending:
                 return None
             return self.prepare_sources()
@@ -254,6 +309,13 @@ class SourceLifecycleMixin:
                 deltas=batch.deltas, assembly_id=binding.prefix.assembly_id,
             )
             self._last_model_call_receipt = receipt
+            for source in batch.sources:
+                state = self._sources[source.descriptor.source_id]
+                sealed = applied.get(source.descriptor.source_id)
+                if sealed is not None:
+                    state.latest_visible_committed_revision = sealed.revision
+                if state.latest_visible_committed_revision == source.revision:
+                    state.latest_visible_committed_content = source.content
             for delta in batch.deltas:
                 self._publish_lifecycle_event(
                     source_id=delta.source_id,

@@ -6,11 +6,14 @@ import sqlite3
 from dataclasses import replace
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.base import empty_checkpoint
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
     EpochReason,
-    PendingPrefixEpochTransition,
     ProviderProfileItemFrame,
     append_items,
     initial_epoch_state,
@@ -25,8 +28,18 @@ from app.domain.itemized.epoch.seal_binding import (
     ContextSealPreparation,
 )
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
-from app.domain.itemized.hashing import sha256_jcs
-from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    payload_content_length,
+    sha256_jcs,
+)
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.request_plan import (
+    ContextContribution,
+    ContextRequestPlan,
+    SourceBinding,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -34,42 +47,89 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceControlState,
     ContextSourceOwnerKey,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - fixture 产物按当前测试路径隔离
+from app.services.mapping.itemized.prefix_frames import project_canonical_prefix_frames
+from tests.integration.backend.sessions.rollout_context.test_context_epoch_transition import (
+    epoch_db as registry_db,
 )
+
+__all__ = ["registry_db"]
 
 
 @pytest.fixture
 def seal_inputs(registry_db):
-    saver, session, _connection, _accepted = registry_db
+    saver, session, _connection, accepted = registry_db
     thread = saver._storage.main_thread_id(session)
     tools = ToolSetSnapshot(
         selection_revision=sha256_jcs({"read_file": True}),
         tools=({"type": "function", "function": {"name": "read_file", "description": "读文件"}},),
         policy_keys=("filesystem_rules",),
     )
-    sources = tuple(
-        RootCandidateSource(
-            source_identity=identity, source_kind=kind, name=name,
-            revision=sha256_jcs(content), content=content, source_ordinal=ordinal,
-            root_placement="root_eligible", included_reason="initial",
-        )
-        for ordinal, (identity, kind, name, content) in enumerate((
-            ("instruction:R01", "agent_instructions", "Agent 说明", "本地编码助手"),
-            ("instruction:R02", "runtime_identity", "运行身份", "当前用户的本地工作区"),
-        ))
+    source_specs = (
+        ("instruction:R01", "agent_instructions", "Agent 说明", "本地编码助手"),
+        ("instruction:R02", "runtime_identity", "运行身份", "当前用户的本地工作区"),
     )
     owner = ContextSourceOwnerKey(session, thread)
-    for source in sources:
+    for identity, kind, name, content in source_specs:
+        revision = sha256_jcs(content)
+        saver.register_context_contribution(session, thread, ContextContribution(
+            contribution_id="source-root:" + identity, source_kind=kind,
+            source_revision=revision, body=content,
+            content_hash=contribution_content_hash("prompt", content),
+            content_length=payload_content_length("structured_content", content),
+            source_binding=SourceBinding(source_ref=identity), root_placement="root_eligible",
+        ), request_content=content)
         saver.save_context_source_control_state(ContextSourceControlState(
-            owner=owner, source_id=source.source_identity, source_kind=source.source_kind,
-            name=source.name, binding_revision=None, tracking_status="tracked",
-            latest_visible_committed_revision=None, latest_revision=source.revision,
+            owner=owner, source_id=identity, source_kind=kind,
+            name=name, binding_revision=None, tracking_status="tracked",
+            latest_visible_committed_revision=None, latest_revision=revision,
         ))
 
     def build(name, *, previous=None, reason=None, selected_tools=tools):
-        ref = selected_tools.bind(session_id=session, thread_id=thread, plan_id=name)
         transition = None
+        if previous is not None and reason in {None, EpochReason.COMPACTION, EpochReason.REWIND}:
+            checkpoint = empty_checkpoint()
+            checkpoint["id"] = "checkpoint:" + name
+            messages = [HumanMessage(
+                content="真实用户输入", id=str(accepted["root_input_item_id"]).removeprefix("item-"),
+            )]
+            if reason is None:
+                messages.append(AIMessage(content="下一次请求前的真实回答", id="seal-input:" + name))
+            checkpoint["channel_values"] = {"messages": messages}
+            checkpoint["channel_versions"] = {"messages": checkpoint["id"]}
+            admission = saver.execution_admission(
+                session, thread_id=thread, execution_id=str(accepted["initial_execution_id"]),
+            )
+            with (
+                session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+                execution_admission_scope(admission, langgraph_thread_id=thread),
+            ):
+                config = saver.put(
+                    {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}, checkpoint,
+                    {"source": "compaction" if reason == EpochReason.COMPACTION else "loop", "step": 1},
+                    checkpoint["channel_versions"],
+                )
+                if reason == EpochReason.REWIND:
+                    saver.rewind(config, checkpoint_id=checkpoint["id"])
+            if reason is not None:
+                rebuild = saver.load_context_source_rebuild_state(owner)
+                assert rebuild is not None and rebuild.transition.reason == reason
+                transition = rebuild.transition
+        with saver._context_reader.open_snapshot(session, thread, "") as read_snapshot:
+            plan = saver.compose_committed_context_plan(
+                session, thread, plan_id=name, tool_set=selected_tools, read_snapshot=read_snapshot,
+            )
+            items = saver._storage.committed_context_items(read_snapshot)
+        by_id = {source.contribution_id: source for source in plan.contributions}
+        sources = tuple(
+            RootCandidateSource(
+                source_identity=identity, source_kind=kind, name=source_name,
+                revision=sha256_jcs(content), content=content,
+                source_ordinal=by_id["source-root:" + identity].source_ordinal,
+                root_placement="root_eligible", included_reason="initial",
+            )
+            for identity, kind, source_name, content in source_specs
+        )
+        ref = plan.tool_set_refs[0]
         if previous is None:
             state = initial_epoch_state(
                 provider_profile="openai-chat:v1",
@@ -80,8 +140,6 @@ def seal_inputs(registry_db):
                 source.source_identity, source.revision, "decision:" + source.source_identity,
             ) for source in sources)
         elif reason is not None:
-            if reason in {EpochReason.COMPACTION, EpochReason.REWIND}:
-                transition = PendingPrefixEpochTransition("transition:" + name, reason)
             state = open_rebuild_epoch(
                 previous.seal_binding.prefix.state, reason=reason, transition=transition,
                 provider_profile=previous.seal_binding.prefix.state.provider_profile,
@@ -93,18 +151,25 @@ def seal_inputs(registry_db):
             state = previous.seal_binding.prefix.state
             root = previous.seal_binding.root
             applied = ()
+        frames = []
+        inherited = set()
         if previous is None or reason is not None:
-            frame = ProviderProfileItemFrame(
+            frames.append(ProviderProfileItemFrame(
                 1, state.provider_profile, "system", "text", root.content,
                 AppendedItemRef("source_item", "root:" + name, "root:" + name, root.frame_hash(), "tracked"),
-            )
+            ))
         else:
-            frame = ProviderProfileItemFrame(
-                len(state.frames) + 1, state.provider_profile, "user", "text", "下一次请求",
-                AppendedItemRef("canonical_item", "user:" + name),
-            )
+            inherited = {
+                entry.ref.ref_id for entry in previous.selection
+                if entry.included and entry.ref.ref_type == "canonical_item"
+            }
+        canonical_frames, _selected_ids = project_canonical_prefix_frames(
+            tuple(item for item in items if item.item_id not in inherited),
+            provider_profile=state.provider_profile, start_ordinal=len(state.frames) + len(frames),
+        )
+        frames.extend(canonical_frames)
         state = append_items(
-            state, (frame,), desired_provider_profile=state.provider_profile,
+            state, frames, desired_provider_profile=state.provider_profile,
             desired_tool_compatibility_key=selected_tools.compatibility_key(ref),
         )
         preparation = ContextSealPreparation(
@@ -112,12 +177,9 @@ def seal_inputs(registry_db):
             previous_assembly_id=None if previous is None else previous.assembly_id,
             source_revisions=applied, transition=transition,
         )
-        plan = ContextRequestPlan(
-            session_id=session, thread_id=thread, plan_id=name, refs=(),
-            tool_set_refs=(ref,), tool_snapshot=selected_tools.tools,
-            plan_creation_idempotency_key="create:" + name,
-        )
-        registered = saver.create_context_plan(session, plan)
+        registered = saver.create_context_plan(session, replace(
+            plan, plan_creation_idempotency_key="create:" + name,
+        ))
         return registered.draft, preparation
 
     return build
@@ -139,6 +201,45 @@ def _source_rows(connection):
         "SELECT source_id, latest_revision, latest_visible_committed_revision, state_revision "
         "FROM context_source_control_states ORDER BY source_id"
     ).fetchall()
+
+
+def _sealed_facts(saver, connection):
+    """失败前后比较完整事实与全部 detail；合法 unsealed draft 与失败审计可保留。"""
+    queries = (
+        "SELECT * FROM item_catalog ORDER BY item_sequence",
+        "SELECT * FROM item_projections ORDER BY item_sequence",
+        "SELECT * FROM context_source_control_states ORDER BY source_id",
+        "SELECT * FROM context_epoch_transitions ORDER BY transition_id",
+        "SELECT * FROM context_assemblies ORDER BY assembly_id",
+        "SELECT * FROM assembly_item_refs ORDER BY assembly_id, ref_ordinal",
+        "SELECT * FROM context_assembly_contributions ORDER BY assembly_id, contribution_ordinal",
+        "SELECT * FROM context_assembly_selections ORDER BY assembly_id, plan_ordinal",
+        "SELECT * FROM context_plan_details ORDER BY detail_ref",
+        "SELECT * FROM context_contributions ORDER BY assembly_id, contribution_id",
+        "SELECT * FROM context_plans ORDER BY session_id, thread_id, plan_id",
+        "SELECT * FROM context_plan_refs ORDER BY session_id, thread_id, plan_id, ref_type, ref_id",
+        "SELECT * FROM context_plan_contributions ORDER BY session_id, thread_id, plan_id, contribution_id",
+        "SELECT * FROM tool_set_snapshots ORDER BY session_id, thread_id, plan_id, tool_set_snapshot_id",
+        "SELECT * FROM storage_commits ORDER BY commit_id",
+        "SELECT * FROM database_meta ORDER BY singleton_id",
+        "SELECT * FROM model_calls ORDER BY model_call_id",
+        "SELECT * FROM checkpoint_context_source_snapshots ORDER BY checkpoint_id",
+        "SELECT * FROM checkpoint_context_source_states ORDER BY checkpoint_id, source_id",
+    )
+    return (
+        tuple(connection.execute(query).fetchall() for query in queries),
+        tuple((key, tuple(item["assembly_id"] for item in queue))
+              for key, queue in sorted(saver._prepared_dispatches.items())),
+        tuple(
+            (path.relative_to(saver._storage.sessions_dir).as_posix(), path.read_bytes())
+            for path in sorted(saver._storage.sessions_dir.rglob("*"))
+            if path.is_file() and (
+                path.name == ".context-redaction-key"
+                or "context-plan-details" in path.parts
+                or "context-plan-details-protected" in path.parts
+            )
+        ),
+    )
 
 
 def _assert_unsealed(connection, plan, source_rows, before_commits):
@@ -184,6 +285,7 @@ def test_success_applies_sources_tools_epoch_once_and_restart_retry_reuses_them(
             refuse_allocation,
         )
         monkeypatch.setattr(restarted._detail_store, "write", refuse_allocation)
+        monkeypatch.setattr(restarted._detail_store, "prepare", refuse_allocation)
         monkeypatch.setattr(ContextSealPreparation, "bind", refuse_allocation)
         restored = restarted.get_context_plan_registration(
             session, thread_id=plan.thread_id, plan_id=plan.plan_id,
@@ -203,6 +305,7 @@ def test_failure_after_source_update_rolls_back_every_applied_fact(
     saver, _session, connection, _accepted = registry_db
     inputs = seal_inputs("rollback")
     before = _source_rows(connection)
+    committed_facts = _sealed_facts(saver, connection)
     before_commits = connection.execute(
         "SELECT commit_id FROM storage_commits WHERE commit_kind='assembly_sealed'"
     ).fetchall()
@@ -227,7 +330,60 @@ def test_failure_after_source_update_rolls_back_every_applied_fact(
     with pytest.raises((RuntimeError, sqlite3.IntegrityError), match="injected"):
         _seal(registry_db, inputs)
     _assert_unsealed(connection, inputs[0], before, before_commits)
+    assert _sealed_facts(saver, connection) == committed_facts
     assert not inputs[1].prefix_state.epoch_applied
+
+
+@pytest.mark.parametrize("failure", ["publish", "commit"])
+def test_first_sensitive_header_failure_leaves_no_detail_or_key(
+    registry_db, monkeypatch, failure,
+):
+    saver, session, connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    plan = saver.create_context_plan(session, ContextRequestPlan(
+        session_id=session, thread_id=thread, plan_id="sensitive-header",
+        refs=(), plan_creation_idempotency_key="sensitive-header:create",
+    )).draft
+    snapshot = saver._composer_for(session, thread, "").assembly(
+        plan=plan, session_id=session, thread_id=thread, assembly_id="sensitive-header:assembly",
+        turn_id=accepted["turn_id"], execution_id=accepted["initial_execution_id"],
+        provider_version="header-provider",
+    )
+    options = {
+        "seal_idempotency_key": "sensitive-header:seal",
+        "seal_input_hash": sha256_jcs("sensitive-header:input"),
+        "detail": {"secret": "只允许在成功 seal 后留下详情"},
+        "sensitive_detail": True,
+    }
+    before = _sealed_facts(saver, connection)
+    with monkeypatch.context() as injected:
+        if failure == "publish":
+            def refuse_publish(*_args, **_kwargs):
+                raise RuntimeError("injected detail publish failure")
+
+            injected.setattr(saver._detail_store._files, "publish", refuse_publish)
+        else:
+            original_commit = saver._storage._commit_connection
+
+            def refuse_commit(candidate):
+                if candidate.execute("SELECT count(*) FROM context_assemblies").fetchone() == (1,):
+                    raise RuntimeError("injected detail commit failure")
+                original_commit(candidate)
+
+            injected.setattr(saver._storage, "_commit_connection", refuse_commit)
+        with pytest.raises(RuntimeError, match="injected detail"):
+            saver.seal_context_assembly(session, thread, snapshot, **options)
+    assert _sealed_facts(saver, connection) == before
+    assert connection.execute(
+        "SELECT plan_state, assembly_id FROM context_plans WHERE plan_id=?", (plan.plan_id,),
+    ).fetchone() == ("unsealed", None)
+    saver.seal_context_assembly(session, thread, snapshot, **options)
+    assert saver._storage.get_context_assembly(
+        session, thread, assembly_id=snapshot.assembly_id,
+    ).to_dict() == snapshot.to_dict()
+    assert connection.execute(
+        "SELECT count(*) FROM context_plan_details WHERE assembly_id=?", (snapshot.assembly_id,),
+    ).fetchone() == (1,)
 
 
 @pytest.mark.parametrize("changed_revision", ["observed", "applied"])
@@ -296,7 +452,7 @@ def test_prepared_competing_assembly_uses_exact_predecessor_cas(registry_db, sea
 
 @pytest.mark.parametrize("reason", [EpochReason.COMPACTION, EpochReason.REWIND])
 def test_rebuild_consumes_transition_only_in_successful_seal(registry_db, seal_inputs, reason):
-    _saver, _session, connection, _accepted = registry_db
+    saver, session, connection, _accepted = registry_db
     first = _seal(registry_db, seal_inputs("first"))
     second = _seal(registry_db, seal_inputs("same-epoch", previous=first))
     assert second.seal_binding.root == first.seal_binding.root
@@ -305,25 +461,59 @@ def test_rebuild_consumes_transition_only_in_successful_seal(registry_db, seal_i
     inputs = seal_inputs("rebuild", previous=second, reason=reason)
     transition = inputs[1].transition
     before = _source_rows(connection)
+    pending = connection.execute("SELECT * FROM context_epoch_transitions").fetchall()
+    committed_facts = _sealed_facts(saver, connection)
+    old_snapshots = tuple(canonical_json_bytes(snapshot.to_dict()) for snapshot in (first, second))
+    connection.execute(
+        "CREATE TRIGGER refuse_epoch_consumption BEFORE UPDATE ON context_epoch_transitions "
+        "WHEN NEW.status='consumed' BEGIN SELECT RAISE(ABORT, 'injected transition failure'); END"
+    )
+    connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="injected transition failure"):
+        _seal(registry_db, inputs)
+    assert _source_rows(connection) == before
+    assert connection.execute("SELECT * FROM context_epoch_transitions").fetchall() == pending
+    assert _sealed_facts(saver, connection) == committed_facts
+    assert connection.execute("SELECT assembly_id FROM context_assemblies ORDER BY rowid").fetchall() == [
+        (first.assembly_id,), (second.assembly_id,),
+    ]
+    assert connection.execute("SELECT plan_state, assembly_id FROM context_plans WHERE plan_id='rebuild'").fetchone() == ("unsealed", None)
+    connection.execute("DROP TRIGGER refuse_epoch_consumption")
+    connection.commit()
     rebuilt = _seal(registry_db, inputs)
     assert rebuilt.seal_binding.prefix.state.epoch.ordinal == 2
     assert rebuilt.seal_binding.prefix.state.epoch.reason == reason
     assert rebuilt.seal_binding.prefix.consumed_transition.consumed
     assert not transition.consumed
     assert _source_rows(connection) == before
+    assert connection.execute(
+        "SELECT status, consumed_assembly_id FROM context_epoch_transitions WHERE transition_id=?",
+        (transition.transition_id,),
+    ).fetchone() == ("consumed", rebuilt.assembly_id)
+    assert tuple(canonical_json_bytes(saver.get_context_assembly(
+        session, snapshot.thread_id, assembly_id=snapshot.assembly_id,
+    ).to_dict()) for snapshot in (first, second)) == old_snapshots
 
 
 def test_tail_source_delta_applies_the_exact_prior_revision_with_same_root(registry_db, seal_inputs):
     saver, session, connection, _accepted = registry_db
     first = _seal(registry_db, seal_inputs("first"))
-    plan, preparation = seal_inputs("delta", previous=first)
-    owner = ContextSourceOwnerKey(session, plan.thread_id)
+    owner = ContextSourceOwnerKey(session, first.thread_id)
     stored = saver.load_context_source_control_states(owner)[0]
     revision = sha256_jcs("最新的 Agent 说明")
     saver.save_context_source_control_state(replace(stored, latest_revision=revision))
+    delta_content = "Agent 说明的新 delta"
+    saver.register_context_contribution(session, first.thread_id, ContextContribution(
+        contribution_id="source:delta", source_kind=stored.source_kind,
+        source_revision=revision, contribution_kind="notice", body=delta_content,
+        content_hash=contribution_content_hash("notice", delta_content),
+        content_length=payload_content_length("structured_content", delta_content),
+        source_binding=SourceBinding(source_ref=stored.source_id),
+    ), request_content=delta_content)
+    plan, preparation = seal_inputs("delta", previous=first)
     frame = ProviderProfileItemFrame(
         len(preparation.prefix_state.frames) + 1, preparation.prefix_state.provider_profile,
-        "user", "text", "Agent 说明的新 delta",
+        "user", "text", delta_content,
         AppendedItemRef("source_item", "source:delta", stored.source_id, revision, "tracked"),
     )
     state = append_items(

@@ -56,6 +56,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogActivationSnapshot,
     SkillCatalogBinding,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    PublishedContextSourceRevision,
+)
 
 WORKSPACE_AGENTS_FILE = "AGENTS.md"
 WORKSPACE_AGENTS_SOURCE_ID = "agents:workspace"
@@ -104,6 +107,24 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         self._source_registry = source_registry
         self._context_source_reactor = context_source_reactor
         self.system_prompt_template = system_prompt
+        if context_source_manager is not None and context_source_reactor is not None:
+            context_source_manager.bind_published_revision_supplier(self._freeze_published_sources)
+
+    def _freeze_published_sources(
+        self,
+        descriptors: tuple[ContextSourceDescriptor, ...],
+    ) -> tuple[PublishedContextSourceRevision, ...]:
+        """在真实 prepare 边界冻结 Registry 正文，再按来源语义提取完整注入载荷。"""
+        reactor = self._context_source_reactor
+        if reactor is None:
+            raise RuntimeError("tracked-source-unavailable: 未绑定 published Registry owner")
+        return tuple(
+            PublishedContextSourceRevision(
+                source.source_id, source.revision,
+                self._source_body(source.source_id, source.content),
+            )
+            for source in reactor.freeze_published_sources(descriptors)
+        )
 
     def _format_skills_list(self, skills: list[dict[str, Any]]) -> str:
         if not skills:
@@ -316,6 +337,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         del state, runtime
         if self._context_source_manager is None:
             return None
+        self._context_source_manager.refresh_context_rebuild_state()
         self._sync_source_bindings()
         if self._context_source_reactor is not None:
             self._observe_pending_sources()

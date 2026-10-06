@@ -82,7 +82,7 @@ def _merge_activity_items(
     canonical_tool_call_ids_by_raw_id: dict[tuple[str, str | None, str], str | None] = {}
     # 实时消息流的 tool-call 使用 model-call scoped ID；checkpoint shadow
     # 仍携带 provider 原始 ID。先建立 canonical 的 (模型调用, call index)
-    # 映射，后续所有兼容消息都通过这张表归一化。
+    # 映射，checkpoint carrier 通过这张表归一化。
     for (
         turn_id,
         _item_sequence,
@@ -117,6 +117,12 @@ def _merge_activity_items(
         canonical_tool_call_ids_by_model_call[
             (turn_id, model_call_id, block_index)
         ] = block_id
+
+    canonical_tool_call_keys = {
+        (turn_id, model_call_id, call_id)
+        for (turn_id, model_call_id, _call_index), call_id
+        in canonical_tool_call_ids_by_model_call.items()
+    }
 
     seen_activity: dict[str, set[tuple[object, ...]]] = {
         turn_id: set() for turn_id in result
@@ -190,97 +196,33 @@ def _merge_activity_items(
                     selected_tool = tool_by_model_call_index.get(
                         (turn_id, activity_model_call_id, block_ordinal)
                     )
-                canonical_tool_call_id: str | None = None
-                raw_id_alias = canonical_tool_call_ids_by_raw_id.get(
-                    (turn_id, activity_model_call_id, tool_call_id)
-                )
-                if raw_id_alias is not None:
-                    canonical_tool_call_id = raw_id_alias
-                if selected_tool is not None:
-                    # item 自投影的 tool_calls 行已携带 canonical call ID；
-                    # (model_call, call_index) 反查只服务 checkpoint shadow
-                    # （provider 原始 ID）。同一 model call 的并行工具各自
-                    # 物化独立 message，表内 call_index 恒为 0，直接反查会
-                    # 命中同位兄弟调用的 ID，导致并行工具互相覆盖丢失。
-                    canonical_tool_call_id = canonical_tool_call_id or (
-                        tool_call_id
-                        if selected_tool.get("tool_call_id") == tool_call_id
-                        else canonical_tool_call_ids_by_model_call.get(
-                            (
-                                turn_id,
-                                activity_model_call_id,
-                                strict_non_negative_int(
-                                    selected_tool.get("call_index"),
-                                    field="tool_calls.call_index",
-                                ),
-                            )
-                        )
+                call_index = (
+                    strict_non_negative_int(
+                        selected_tool.get("call_index"), field="tool_calls.call_index",
                     )
-                elif isinstance(block_id, str) and block_id:
-                    canonical_tool_call_id = block_id
-                if canonical_tool_call_id is not None:
-                    if selected_tool is None:
-                        if semantic_kind != "tool_call":
-                            raise RuntimeError(
-                                "canonical tool_result 缺少对应 tool_call: "
-                                f"{item_id}"
-                            )
-                        coordinates = _authoritative_tool_coordinates(
-                            tool_by_call_id, turn_id, identity, indexed_tool_call_id or block_id
-                        )
-                        selected_tool = {
-                            "tool_call_id": canonical_tool_call_id,
-                            "tool_name": strict_text(
-                                content,
-                                field=f"item_projections.content:{item_id}",
-                            ),
-                            "status": strict_text(
-                                item_status,
-                                field=f"item_catalog.status:{item_id}",
-                            ),
-                            "result_message_sequence": coordinates.get(
-                                "result_message_sequence"
-                            ),
-                            "assistant_message_sequence": coordinates.get(
-                                "assistant_message_sequence"
-                            ),
-                            "call_index": coordinates.get(
-                                "call_index", block_ordinal
-                            ),
-                        }
-                    else:
-                        selected_tool = {
-                            **selected_tool,
-                            "tool_call_id": canonical_tool_call_id,
-                        }
-                    selected_tool.setdefault("call_index", block_ordinal)
-                    if isinstance(block_id, str) and block_id:
-                        tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = (
-                            selected_tool
-                        )
-                        model_call_key = (
-                            turn_id,
-                            activity_model_call_id,
-                        )
-                        canonical_tools_by_model_call.setdefault(
-                            model_call_key,
-                            [],
-                        ).append(selected_tool)
+                    if selected_tool is not None else block_ordinal
+                )
+                # typed canonical ID 不受独立 message 的局部 call_index 影响；
+                # raw carrier 无论是否已有 message projection，都用同一模型
+                # 调用的稳定 index 归一化，不能把物理自投影当作逻辑身份。
+                tool_key = (turn_id, activity_model_call_id, tool_call_id)
+                canonical_tool_call_id = canonical_tool_call_ids_by_raw_id.get(tool_key) or (
+                    tool_call_id if tool_key in canonical_tool_call_keys else
+                    canonical_tool_call_ids_by_model_call.get(
+                        (turn_id, activity_model_call_id, call_index), tool_call_id,
+                    )
+                )
                 if selected_tool is None:
                     if semantic_kind != "tool_call":
                         raise RuntimeError(
                             "canonical tool_result 缺少对应 tool_call: "
                             f"{item_id}"
                         )
-                    # 实时 canonical tool_call 先于 LangChain message
-                    # projection 提交时，item 自身就是历史摘要的权威来源。
-                    # 后续 checkpoint shadow 通过 model-call provenance 和
-                    # tool_call_id 在本方法内合并，不能因派生表尚未存在而 500。
                     coordinates = _authoritative_tool_coordinates(
                         tool_by_call_id, turn_id, identity, indexed_tool_call_id or block_id
                     )
                     selected_tool = {
-                        "tool_call_id": tool_call_id,
+                        "tool_call_id": canonical_tool_call_id,
                         "tool_name": strict_text(
                             content,
                             field=f"item_projections.content:{item_id}",
@@ -299,13 +241,14 @@ def _merge_activity_items(
                             "call_index", block_ordinal
                         ),
                     }
-                    tool_by_call_id[(turn_id, activity_model_call_id, tool_call_id)] = selected_tool
-                    model_call_key = (
-                        turn_id,
-                        activity_model_call_id,
-                    )
+                else:
+                    selected_tool = {**selected_tool, "tool_call_id": canonical_tool_call_id}
+                selected_tool.setdefault("call_index", block_ordinal)
+                if semantic_kind == "tool_call":
+                    tool_by_call_id[tool_key] = selected_tool
+                    tool_by_call_id[(turn_id, activity_model_call_id, canonical_tool_call_id)] = selected_tool
                     canonical_tools_by_model_call.setdefault(
-                        model_call_key, []
+                        (turn_id, activity_model_call_id), []
                     ).append(selected_tool)
                 if semantic_kind == "tool_result":
                     selected_tool = {
@@ -319,12 +262,8 @@ def _merge_activity_items(
                         ),
                     }
                 activity_tools = [selected_tool]
-            elif semantic_kind == "assistant_output":
-                # assistant_output 正文 item 不携带工具身份，直接按单一
-                # text part 投影；工具 identity 归属 tool_call item。
-                pass
             elif matching_tools:
-                # 一个 assistant_output carrier 可以包含多个 tool_calls；
+                # 一个 checkpoint tool_call carrier 可以包含多个 tool_calls；
                 # 它们共享物理 item offset，但每个 call 都是独立逻辑 Item。
                 # checkpoint message 仍携带 provider 原始 call id，必须先
                 # 用同一 model-call 的 call_index 映射回 canonical identity，

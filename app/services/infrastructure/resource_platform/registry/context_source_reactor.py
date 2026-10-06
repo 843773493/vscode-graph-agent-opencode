@@ -28,6 +28,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    PublishedContextSourceRevision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +197,25 @@ class ContextSourceReactor:
                 resource_uri=resource_uri,
                 revision=revision,
             )
+
+    def freeze_published_sources(
+        self,
+        descriptors: tuple[ContextSourceDescriptor, ...],
+    ) -> tuple[PublishedContextSourceRevision, ...]:
+        """复制来源 owner 已发布的精确内存 revision/body，不解析 locator 或读源。"""
+        self._require_active()
+        frozen = []
+        for descriptor in descriptors:
+            uri = descriptor.resource_uri
+            if uri is None:
+                raise ValueError("published resource 冻结缺少 resource_uri: " + descriptor.source_id)
+            snapshot = self._sources.snapshot(uri)
+            if not snapshot.available or not snapshot.revision:
+                raise RuntimeError("tracked-source-unavailable: 已发布资源不可用: " + descriptor.source_id)
+            frozen.append(PublishedContextSourceRevision(
+                source_id=descriptor.source_id, revision=snapshot.revision, content=snapshot.content,
+            ))
+        return tuple(frozen)
 
     def content_for(self, observation: SourceObservation) -> str:
         """从来源 owner 的权威内存快照读取正文；不触发任何磁盘 I/O。"""

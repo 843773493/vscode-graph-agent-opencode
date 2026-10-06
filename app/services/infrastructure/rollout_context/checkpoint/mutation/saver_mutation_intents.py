@@ -1,11 +1,12 @@
 """RolloutCheckpointSaver 的 mutation intent owner 端口实现（由 Saver 组合）。
 
-consume_mutation_intent 及其 append/toolset 分支、facade registry 与 main-thread
-control 解析。方法体逐字平移，self 语义不变；仅供 RolloutCheckpointSaver 继承。
+consume_mutation_intent 的唯一 owner 端口、facade registry 与 main-thread
+control 解析；epoch rebuild 只消费边界显式传入的 SQLite 事务。
 """
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
     ContextMutationIntent,
     MutationIntentOwner,
+    RebuildContextEpochIntent,
     SwitchToolSetIntent,
 )
 from app.domain.itemized.records import CanonicalItemRecord
@@ -34,14 +36,22 @@ from app.services.infrastructure.rollout_context.checkpoint.mutation.mutation_in
 
 
 class RolloutMutationIntentPortMixin:
-    """SessionThreadMutationIntentPort 的 append/toolset 分支 owner 端口。"""
+    """SessionThreadMutationIntentPort 的唯一 owner 消费端口。"""
 
-    def consume_mutation_intent(self, intent: ContextMutationIntent) -> None:
-        """SessionThreadMutationIntentPort 的 append/toolset 分支生产实现。
-
-        TODO(OpenSpec 2.3-B4)：epoch 分支（rewind/compaction rebuild）的
-        生产接线属后续切片，当前显式拒绝，不静默降级。
-        """
+    def consume_mutation_intent(
+        self, intent: ContextMutationIntent, connection: sqlite3.Connection | None = None,
+    ) -> None:
+        """epoch rebuild 不另开事务、不经 facade 的提前成功缓存。"""
+        if isinstance(intent, RebuildContextEpochIntent):
+            if connection is None or not connection.in_transaction:
+                raise MutationIntentPortError(
+                    "epoch-rebuild-transaction-required: rewind/compaction 必须显式传入"
+                    "创建 view/control 的同一活动 SQLite connection"
+                )
+            self._storage.consume_context_epoch_rebuild_intent(intent, connection)
+            return
+        if connection is not None:
+            raise MutationIntentPortError("只有 epoch rebuild 可以消费边界传入的 SQLite connection")
         if isinstance(intent, AppendCanonicalItemIntent):
             self._consume_append_intent(intent)
             return

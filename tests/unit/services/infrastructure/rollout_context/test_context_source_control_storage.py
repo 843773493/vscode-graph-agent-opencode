@@ -37,6 +37,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
@@ -337,6 +340,10 @@ def test_synthetic_session_has_no_restorable_control_state(
         == ()
     )
     assert control_state_port.load_context_source_control_states(owner) == ()
+    assert rollout_storage.read_context_source_rebuild_rows(
+        owner.session_id, owner.thread_id, checkpoint_ns="",
+    ) is None
+    assert control_state_port.load_context_source_rebuild_state(owner) is None
     manager = ContextSourceManager(owner=owner, control_state_port=control_state_port)
     manager.register(_descriptor())
     assert manager.metadata() == ({"name": "debugging", "description": "调试工作流"},)
@@ -563,41 +570,79 @@ def test_write_does_not_take_rollout_file_lock(
     assert not holder.is_alive()
 
 
-def test_existing_rollout_without_control_table_is_upgraded_on_first_write(
+def test_previous_schema_without_checkpoint_source_assembly_is_rejected(
     rollout_storage: RolloutStorage,
     owner: ContextSourceOwnerKey,
 ) -> None:
-    """既有 v4 库缺少控制状态表时：读取视为空，首次写入按需补表。"""
+    """旧 Schema 11 在任何来源读写前拒绝，禁止按当前 DDL 隐式补列。"""
+    rollout_storage.initialize(owner.session_id, "", thread_id=owner.thread_id)
+    index_path = rollout_storage.index_path(owner.session_id, "", thread_id=owner.thread_id)
+    with closing(sqlite3.connect(index_path)) as connection, connection:
+        connection.execute("ALTER TABLE checkpoint_context_source_snapshots DROP COLUMN source_assembly_id")
+        connection.execute("UPDATE database_meta SET schema_version = 11")
+    before = index_path.read_bytes()
+    expected = f"current=11, target={ROLLOUT_SCHEMA_VERSION}"
+    with pytest.raises(RuntimeError, match="schema-incompatible") as read_error:
+        rollout_storage.read_context_source_control_states(owner.session_id, thread_id=owner.thread_id)
+    assert expected in str(read_error.value)
+    with pytest.raises(RuntimeError, match="schema-incompatible") as rebuild_error:
+        rollout_storage.read_context_source_rebuild_rows(owner.session_id, owner.thread_id, checkpoint_ns="")
+    assert expected in str(rebuild_error.value)
+    with pytest.raises(RuntimeError, match="schema-incompatible") as write_error:
+        rollout_storage.write_context_source_control_state(ContextSourceControlState(
+            owner=owner, source_id="skill:debugging", source_kind="skill", name="debugging",
+            binding_revision=None, tracking_status="tracked",
+            latest_visible_committed_revision=None, latest_revision="sha256:latest",
+        ))
+    assert expected in str(write_error.value)
+    assert index_path.read_bytes() == before
+    with closing(sqlite3.connect(index_path)) as connection:
+        assert connection.execute("SELECT schema_version FROM database_meta").fetchone() == (11,)
+        assert "source_assembly_id" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(checkpoint_context_source_snapshots)")
+        }
+
+
+def test_current_rollout_without_control_table_is_rejected_without_repair(
+    rollout_storage: RolloutStorage,
+    control_state_port: RolloutCheckpointSaver,
+    owner: ContextSourceOwnerKey,
+) -> None:
+    """当前版本缺少来源表是损坏，读写都必须失败且不能静默补表。"""
     rollout_storage.initialize(SESSION_ID, "")
     index_path = rollout_storage.index_path(SESSION_ID, "")
     with closing(sqlite3.connect(index_path)) as connection:
+        assert connection.execute("SELECT count(*) FROM context_epoch_transitions").fetchone() == (0,)
         connection.execute("DROP TABLE context_source_control_states")
         connection.commit()
 
-    assert (
+    before = index_path.read_bytes()
+    with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
         rollout_storage.read_context_source_control_states(
             SESSION_ID,
             thread_id=owner.thread_id,
         )
-        == ()
-    )
-
-    stored = rollout_storage.write_context_source_control_state(
-        ContextSourceControlState(
-            owner=owner,
-            source_id="skill:debugging",
-            source_kind="skill",
-            name="debugging",
-            binding_revision=None,
-            tracking_status="tracked",
-            latest_visible_committed_revision=None,
-            latest_revision="sha256:latest",
+    with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
+        rollout_storage.read_context_source_rebuild_rows(
+            SESSION_ID, owner.thread_id, checkpoint_ns="",
         )
-    )
-    (reloaded,) = rollout_storage.read_context_source_control_states(
-        SESSION_ID,
-        thread_id=owner.thread_id,
-    )
-
-    assert stored.state_revision == 1
-    assert reloaded == stored
+    with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
+        control_state_port.load_context_source_rebuild_state(owner)
+    with pytest.raises(sqlite3.OperationalError, match="no such table: context_source_control_states"):
+        rollout_storage.write_context_source_control_state(
+            ContextSourceControlState(
+                owner=owner,
+                source_id="skill:debugging",
+                source_kind="skill",
+                name="debugging",
+                binding_revision=None,
+                tracking_status="tracked",
+                latest_visible_committed_revision=None,
+                latest_revision="sha256:latest",
+            )
+        )
+    assert index_path.read_bytes() == before
+    with closing(sqlite3.connect(index_path)) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_source_control_states'"
+        ).fetchone() is None

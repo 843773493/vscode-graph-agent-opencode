@@ -26,6 +26,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
     runtime_draft,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
@@ -102,15 +105,6 @@ def prepare_registered_context(
             tool_set = tool_set_supplier()
             if not isinstance(tool_set, ToolSetSnapshot):
                 raise TypeError("Tool producer 必须返回正向 ToolSetSnapshot")
-            frozen = context_source_manager.prepare_sources()
-            allowed = {
-                source.descriptor.source_id for source in frozen.sources
-                if source.descriptor.policy_key is None or source.descriptor.policy_key in tool_set.policy_keys
-            }
-            batch = PendingContextSourceBatch(
-                deltas=tuple(delta for delta in frozen.deltas if delta.source_id in allowed),
-                sources=tuple(source for source in frozen.sources if source.descriptor.source_id in allowed),
-            )
             if turn_id is not None:
                 owner._storage.ensure_active_view_contains_turn_root(
                     session_id, thread_id, turn_id=turn_id, checkpoint_ns=checkpoint_ns,
@@ -118,6 +112,26 @@ def prepare_registered_context(
             owner._storage.ensure_request_items(
                 session_id, thread_id, turn_id=turn_id, execution_id=execution_id,
                 messages=request_messages, checkpoint_ns=checkpoint_ns,
+            )
+            # 先收敛真实 call/result group；未闭合时不得冻结或登记恢复 source。
+            with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
+                view_id = owner._storage.active_view_id(read_snapshot)
+                sequences = owner._storage._view_message_sequences_from_connection(read_snapshot.connection, view_id)
+                validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
+            rebuild = owner.load_context_source_rebuild_state(
+                ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,
+            )
+            frozen = (
+                context_source_manager.prepare_rebuild_sources(rebuild)
+                if rebuild is not None else context_source_manager.prepare_sources()
+            )
+            allowed = {
+                source.descriptor.source_id for source in frozen.sources
+                if source.descriptor.policy_key is None or source.descriptor.policy_key in tool_set.policy_keys
+            }
+            batch = PendingContextSourceBatch(
+                deltas=tuple(delta for delta in frozen.deltas if delta.source_id in allowed),
+                sources=tuple(source for source in frozen.sources if source.descriptor.source_id in allowed),
             )
             bodies = {}
             for contribution in source_contributions(batch):
@@ -148,9 +162,21 @@ def prepare_registered_context(
                 contribution = resolve_contribution_for_ref(ref, full_plan.contributions)
                 overlay_bodies[ref.ref_id] = body
                 bodies[contribution.contribution_id] = body
+            retained = rebuild.source_assembly if rebuild is not None else None
+            retained_refs = rebuild.retained_source_refs if rebuild is not None else frozenset()
+            retained_bodies = {}
+            if retained is not None and retained_refs:
+                retained_bodies = owner._request_content_for_plan(
+                    session_id, thread_id, checkpoint_ns, retained.as_sealed_plan(), None,
+                )
+                bodies.update(retained_bodies)
             plan, preparation = compile_prefix_context(
                 full_plan, items, batch, tool_set, overlay_bodies=overlay_bodies,
                 previous=previous,
+                transition=rebuild.transition if rebuild is not None else None,
+                retained_source_assembly=retained,
+                retained_source_refs=retained_refs,
+                retained_source_bodies=retained_bodies,
                 provider_profile=f"{target_format}:{provider_version}", turn_id=turn_id,
             )
             if previous is not None:

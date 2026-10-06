@@ -1,4 +1,4 @@
-"""正式 fresh schema10 的 Saver seal 生命周期；不安装手工 DDL、不伪造 draft。"""
+"""正式当前 fresh schema 的 Saver seal 生命周期；不安装手工 DDL、不伪造 draft。"""
 
 from __future__ import annotations
 
@@ -30,6 +30,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
+)
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
 )
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     invoke_provider_dispatch,
@@ -104,6 +107,7 @@ def test_unregistered_plan_is_rejected_without_allocating(
 ):
     saver, session, connection, accepted = registry_db
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     before = _state(saver, session, connection)
     with pytest.raises(KeyError, match="context plan 不存在"):
         _seal(saver, session, draft, accepted)
@@ -227,6 +231,7 @@ def test_seal_restart_and_retry_reuse_committed_identity(
     before = _state(saver, session, connection)
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
+        monkeypatch.setattr(restarted._detail_store, "prepare", _no_allocation)
         monkeypatch.setattr(
             "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.uuid4",
             _no_allocation,
@@ -265,6 +270,7 @@ def test_retry_input_conflict_precedes_random_allocation(
     _seal(saver, session, plan, accepted)
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     monkeypatch.setattr(
         "app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle.uuid4",
         _no_allocation,
@@ -280,6 +286,23 @@ def test_failure_records_control_and_keeps_draft_correctable(
     saver, session, connection, accepted = registry_db
     plan = saver.create_context_plan(session, draft).draft
     canonical = (saver._storage.root(session) / "rollout.jsonl").read_bytes()
+    detail_root = saver._storage.root(session)
+    before_detail_rows = connection.execute(
+        "SELECT * FROM context_plan_details ORDER BY detail_ref"
+    ).fetchall()
+
+    def detail_files():
+        return tuple(
+            (path.relative_to(detail_root).as_posix(), path.read_bytes())
+            for path in sorted(detail_root.rglob("*"))
+            if path.is_file() and (
+                path.name == ".context-redaction-key"
+                or "context-plan-details" in path.parts
+                or "context-plan-details-protected" in path.parts
+            )
+        )
+
+    before_detail_files = detail_files()
     original = saver._storage.seal_context_assembly
 
     def reject(*_args, **_kwargs):
@@ -301,8 +324,9 @@ def test_failure_records_control_and_keeps_draft_correctable(
         "SELECT error_code FROM context_plan_seal_failures"
     ).fetchall() == [("seal-storage-failure",)]
     assert connection.execute(
-        "SELECT status,availability FROM context_plan_details"
-    ).fetchall() == [("unavailable", "unavailable")]
+        "SELECT * FROM context_plan_details ORDER BY detail_ref"
+    ).fetchall() == before_detail_rows
+    assert detail_files() == before_detail_files
     assert (saver._storage.root(session) / "rollout.jsonl").read_bytes() == canonical
     monkeypatch.setattr(saver._storage, "seal_context_assembly", original)
     assert _seal(saver, session, plan, accepted).plan_id == plan.plan_id
@@ -345,6 +369,7 @@ def test_lost_response_never_removes_committed_source_detail(
     )
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     assert _seal(saver, session, plan, accepted).to_dict() == snapshot.to_dict()
     assert _state(saver, session, connection) == before
 
@@ -406,6 +431,7 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(
     with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
         monkeypatch.setattr(restarted, "compose_committed_context_plan", _no_allocation)
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
+        monkeypatch.setattr(restarted._detail_store, "prepare", _no_allocation)
         retry = restarted.prepare_context_for_provider(
             session, restarted._storage.main_thread_id(session), **options
         )
@@ -435,6 +461,7 @@ def test_dispatch_attempt_identity_reuses_registered_source(
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver, "compose_committed_context_plan", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     retry = saver.prepare_context_for_provider(session, thread, **options)
     assert retry["assembly_id"] == first["assembly_id"]
     assert retry["plan"].selection == first["plan"].selection
@@ -477,6 +504,7 @@ def test_low_level_header_detail_retry_does_not_allocate(registry_db, monkeypatc
     )
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     assert (
         saver.seal_context_assembly(
             session, saver._storage.main_thread_id(session), snapshot, **options
@@ -539,6 +567,7 @@ def test_prepare_rejects_different_input_without_source_side_effects(
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver, "compose_committed_context_plan", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
+    monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
     with pytest.raises(
         (RuntimeError, ValueError), match="admission|assembly-idempotency-conflict"
     ):
@@ -636,7 +665,7 @@ async def test_real_middleware_registers_current_schema_before_native_http(
     assert registration.seal_input_hash.startswith("sha256:jcs:v1:")
     assert connection.execute(
         "SELECT schema_version FROM database_meta"
-    ).fetchone() == (10,)
+    ).fetchone() == (ROLLOUT_SCHEMA_VERSION,)
     native = saver.project_context_plan_to_native(
         session, snapshot.thread_id, snapshot.as_sealed_plan()
     )

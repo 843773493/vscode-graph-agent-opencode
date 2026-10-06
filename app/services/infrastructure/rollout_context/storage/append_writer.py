@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import sqlite3
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
+from app.domain.itemized.mutation_intents import RebuildContextEpochIntent
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 
 
@@ -36,6 +38,7 @@ class RolloutAppendWriter:
         parent_checkpoint_id: str | None,
         current_messages: list[object],
         branch_id: str | None = None,
+        consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> None:
         self._storage.append_checkpoint(
             thread_id=thread_id,
@@ -45,6 +48,7 @@ class RolloutAppendWriter:
             parent_checkpoint_id=parent_checkpoint_id,
             current_messages=current_messages,
             branch_id=branch_id,
+            consume_epoch_intent=consume_epoch_intent,
         )
 
     def append_writes(

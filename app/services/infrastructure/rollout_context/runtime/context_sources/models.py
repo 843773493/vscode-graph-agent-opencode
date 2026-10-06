@@ -17,6 +17,23 @@ SkillLoadMode = Literal["snapshot", "tracked", "untrack"]
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedContextSourceRevision:
+    """来源 owner 在准备边界冻结的已发布完整 revision；没有 locator 或控制状态。"""
+
+    source_id: str
+    revision: str
+    content: str
+
+    def __post_init__(self) -> None:
+        for name in ("source_id", "revision"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"PublishedContextSourceRevision.{name} 必须是非空字符串")
+        if not isinstance(self.content, str):
+            raise TypeError("PublishedContextSourceRevision.content 必须是字符串")
+
+
+@dataclass(frozen=True, slots=True)
 class ContextSourceDescriptor:
     """来源的内部描述；locator 只存在于服务端。"""
 
@@ -227,6 +244,7 @@ class ContextSourceSnapshot:
     content: str
     applied_revision: str | None
     tracked: bool
+    expected_control_revision: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.descriptor, ContextSourceDescriptor):
@@ -241,6 +259,10 @@ class ContextSourceSnapshot:
             raise ValueError("ContextSourceSnapshot.applied_revision 必须是非空字符串或 None")
         if not isinstance(self.tracked, bool):
             raise TypeError("ContextSourceSnapshot.tracked 必须是 boolean")
+        if self.expected_control_revision is not None and (
+            type(self.expected_control_revision) is not int or self.expected_control_revision < 1
+        ):
+            raise ValueError("ContextSourceSnapshot.expected_control_revision 必须是正整数或 None")
 
 
 @dataclass(frozen=True, slots=True)

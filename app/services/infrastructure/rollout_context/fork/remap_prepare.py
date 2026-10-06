@@ -210,6 +210,7 @@ def prepare_full_copy_remap(
     collect("view", rows("view_id", "context_views"))
     collect("branch", rows("branch_id", "branches"))
     collect("checkpoint", rows("checkpoint_id", "checkpoints"))
+    collect("epoch_transition", rows("transition_id", "context_epoch_transitions"))
     collect("anchor", rows("anchor_id", "operation_anchors"))
     collect(
         "relation",
@@ -271,6 +272,11 @@ def prepare_full_copy_remap(
         source_thread_id=source_thread_id,
         collect=collect,
     )
+    # 逻辑资源键按字段语义保留；不能依赖 request-ref 收集的先后顺序。
+    context_source_ids = frozenset(source_id for (source_id,) in connection.execute(
+        "SELECT source_id FROM context_source_control_states "
+        "UNION SELECT source_id FROM checkpoint_context_source_states"
+    ).fetchall())
     collect(
         "tool_set",
         (
@@ -320,6 +326,12 @@ def prepare_full_copy_remap(
                 maps["context_contribution"][source_contribution_id] = (
                     target_contribution_id
                 )
+
+    # 普通 request-only ref 可以直接以 contribution_id 作为 ref_id 和
+    # source_ref；这是一条 provenance identity，不能分别分配两个目标 ID。
+    for source_id, target_id in maps.get("context_contribution", {}).items():
+        if source_id in maps.get("request_ref", {}):
+            maps["request_ref"][source_id] = target_id
 
     content_part_rows = tuple(
         connection.execute(
@@ -447,8 +459,12 @@ def prepare_full_copy_remap(
                     child = mapped("execution", child)
                 elif key_text in {"model_call_id", "retry_of_model_call_id"}:
                     child = mapped("model_call", child)
-                elif key_text in {"assembly_id"}:
+                elif key_text in {"assembly_id", "previous_assembly_id"}:
                     child = mapped("assembly", child)
+                elif key_text == "transition_id":
+                    child = mapped("epoch_transition", child)
+                elif key_text == "tool_set_snapshot_id":
+                    child = mapped("tool_set", child)
                 elif key_text in {
                     "view_id",
                     "active_view_id",
@@ -489,6 +505,9 @@ def prepare_full_copy_remap(
                     continue
                 elif key_text in {"contribution_id"}:
                     child = mapped("context_contribution", child)
+                elif key_text == "source_ref" and isinstance(child, str) and child in context_source_ids:
+                    # SourceBinding 指向 owner 内的逻辑 CSM source，而非 request item。
+                    pass
                 elif key_text in {
                     "overlay_id",
                     "supersedes_overlay_id",
@@ -643,6 +662,7 @@ def prepare_full_copy_remap(
     # v2 tool call/result identity 通常只存在 item payload，而不一定有
     # 独立 tool_calls 行。先从已校验的 source JSONL 收集这些 identity，
     # 使 full copy 的 payload remap 不会把 source tool_call_id 留在 target。
+    source_items: dict[str, CanonicalItemRecord] = {}
     for (
         sequence,
         old_item_id,
@@ -662,6 +682,7 @@ def prepare_full_copy_remap(
             )
         )
         source_item = CanonicalItemRecord.from_dict(envelope)
+        source_items[source_item.item_id] = source_item
         if source_item.projection_identity is not None:
             collect("model_call", (source_item.projection_identity.model_call_id,))
             collect("message", (source_item.projection_identity.projection_message_id,))
@@ -804,6 +825,7 @@ def prepare_full_copy_remap(
         old_positions=old_positions,
         new_positions=new_positions,
         new_items=new_items,
+        source_items=source_items,
         new_lines=new_lines,
         new_lines_by_sequence=new_lines_by_sequence,
         mapped=mapped,

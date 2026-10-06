@@ -48,6 +48,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.mapping.itemized.canonical_langchain import project_canonical_items
+from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
@@ -78,7 +80,10 @@ def execution_scope():
     return activate
 
 
-def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]:
+def _accept(
+    saver: RolloutCheckpointSaver, session_id: str,
+    *, initial_execution_id: str = "execution-user-1",
+) -> dict[str, object]:
     return saver.accept_turn(
         session_id,
         thread_id=saver._storage.main_thread_id(session_id),
@@ -90,7 +95,7 @@ def _accept(saver: RolloutCheckpointSaver, session_id: str) -> dict[str, object]
         payload_kind=PayloadKind.TEXT,
         turn_id="turn-user-1",
         root_item_id="item-user-1",
-        initial_execution_id="execution-user-1",
+        initial_execution_id=initial_execution_id,
     )
 
 
@@ -183,13 +188,15 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, SESSION_ID)
+    accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
     rollout_path = saver._storage.jsonl_path(SESSION_ID)
     before = rollout_path.read_bytes()
 
     with pytest.raises(ItemSchemaError, match="source_revision|block_id|block_index"):
         saver._storage.append_item(
             SESSION_ID,
+            thread,
             _assistant_item(
                 "item-invalid-storage-metadata",
                 source_manifest=ItemSourceManifest.from_dict(
@@ -203,6 +210,7 @@ def test_item_commit_rejects_non_canonical_locator_metadata(
                 if "source_revision" not in invalid_manifest
                 else None,
             ),
+            execution_id=str(accepted["initial_execution_id"]),
         )
 
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
@@ -223,7 +231,8 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, SESSION_ID)
+    accepted = _accept(saver, SESSION_ID)
+    thread = saver._storage.main_thread_id(SESSION_ID)
 
     item = _assistant_item(
         "item-block-projection",
@@ -231,7 +240,10 @@ def test_item_commit_uses_canonical_writer_for_block_part_projection(
             model_call_id="model-call-1", block_id="block-1", block_index=0
         ),
     )
-    commit_id = saver._storage.append_item(SESSION_ID, item)
+    commit_id = saver._storage.append_item(
+        SESSION_ID, thread, item,
+        execution_id=str(accepted["initial_execution_id"]),
+    )
     db_path = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(db_path) as connection:
         part = connection.execute(
@@ -374,11 +386,12 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
 def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, SESSION_ID)
+    accepted = _accept(saver, SESSION_ID)
     common = {
         "turn_id": "turn-user-1",
         "turn_scope": TurnScope.TURN_MEMBER,
@@ -401,7 +414,8 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "args": {},
         },
         projection_identity=ItemProjectionIdentity(
-            block_id="model-call-1:tool-call:call-1", block_index=0
+            model_call_id="model-call-1",
+            block_id="model-call-1:tool-call:call-1", block_index=0,
         ),
         message_group_id="message-model-call-1",
         **common,
@@ -418,7 +432,7 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
         },
         payload={"tool_calls": [{"id": "call-1", "name": "get_goal", "args": {}}]},
         projection_identity=ItemProjectionIdentity(
-            projection_message_id="lc_run--model-call-1"
+            projection_message_id="lc_run--model-call-1", model_call_id="model-call-1",
         ),
         message_group_id="message-lc_run--model-call-1",
         **common,
@@ -442,16 +456,18 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
             "execution_confirmed": True,
         },
         extensions={},
+        projection_identity=ItemProjectionIdentity(model_call_id="model-call-1"),
         message_group_id="message-result-1",
         wire_role="tool",
         turn_id="turn-user-1",
         turn_scope=TurnScope.TURN_MEMBER,
         status=CanonicalItemStatus.COMPLETED,
     )
-    saver.append_items(SESSION_ID, (live_call,))
-    saver.append_items(SESSION_ID, (checkpoint_shadow, result))
+    with execution_scope(saver, accepted) as (thread, _manager):
+        saver.append_items(SESSION_ID, (live_call,), thread_id=thread)
+        saver.append_items(SESSION_ID, (checkpoint_shadow, result), thread_id=thread)
 
-    with saver._storage.open_read_snapshot(SESSION_ID) as snapshot:
+    with saver._storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
         projection = saver._storage.read_turn_projections(snapshot, ("turn-user-1",))[
             "turn-user-1"
         ]
@@ -469,19 +485,28 @@ def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
 def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
-    """实时 canonical tool_call 只有 scoped block_id 时，也必须回填权威坐标。
+    """实时 canonical tool_call 用 typed scope 回填权威坐标。
 
     SQLite ``tool_calls`` 派生表按 provider 原始 call ID 保存
     ``assistant_message_sequence`` / ``call_index`` / ``result_message_sequence``。
-    实时 canonical tool_call 只携带 model-call scoped ``block_id``，查不到派生表
-    行；若不从 scoped ID 反解原始 call ID 回查，坐标会退化为
+    实时 canonical tool_call 显式携带 model-call scope 与 ``block_id``，
+    必须在同一 scope 中回查 provider 原始 call ID，否则坐标会退化为
     ``assistant_message_sequence=None``，后续定点详情只能依赖“原始 call ID 全局
     唯一”的脆弱匹配，遇到 ID 复用就会静默丢参数。
     """
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
+    accepted = saver.accept_turn(
+        SESSION_ID,
+        accepted_ingress_id="ingress-tool-coordinate",
+        acceptance_idempotency_key="acceptance-tool-coordinate",
+        job_id="job-tool-coordinate", admission_idempotency_key="admission-tool-coordinate",
+        payload="请检查状态", turn_id="turn-tool-call",
+        root_item_id="item-user-tool-call",
+    )
 
     # 先提交带 tool_calls 的 assistant 消息，建立 SQLite tool_calls 派生表。
     checkpoint = empty_checkpoint()
@@ -506,18 +531,22 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
                         "id": "call-shared",
                     }
                 ],
-                response_metadata={"message_metadata": {"turn_id": "turn-tool-call"}},
+                response_metadata={
+                    "model_call_id": "model-call-2",
+                    "message_metadata": {"turn_id": "turn-tool-call"},
+                },
             ),
         ]
     }
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        checkpoint,
-        {"source": "canonical-coordinate-test", "step": 1},
-        {"messages": "1"},
-    )
+    with execution_scope(saver, accepted) as (thread, _manager):
+        saver.put(
+            build_checkpoint_config(thread),
+            checkpoint,
+            {"source": "canonical-coordinate-test", "step": 1},
+            {"messages": "1"},
+        )
 
     common = {
         "turn_id": "turn-tool-call",
@@ -541,14 +570,16 @@ def test_canonical_tool_call_recovers_coordinates_from_scoped_block_id(
             "args": {"path": "fixture.json"},
         },
         projection_identity=ItemProjectionIdentity(
-            block_id="model-call-2:tool-call:call-shared", block_index=0
+            model_call_id="model-call-2",
+            block_id="model-call-2:tool-call:call-shared", block_index=0,
         ),
         message_group_id="message-model-call-2",
         **common,
     )
-    saver.append_items(SESSION_ID, (live_call,))
+    with execution_scope(saver, accepted):
+        saver.append_items(SESSION_ID, (live_call,), thread_id=thread)
 
-    with saver._storage.open_read_snapshot(SESSION_ID) as snapshot:
+    with saver._storage.open_read_snapshot(SESSION_ID, thread) as snapshot:
         projection = saver._storage.read_turn_projections(
             snapshot, ("turn-tool-call",)
         )["turn-tool-call"]
@@ -572,7 +603,10 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
     _accept(saver, SESSION_ID)
 
     with pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"):
-        saver._storage.read_items(SESSION_ID, item_ids=("item-does-not-exist",))
+        saver._storage.read_items(
+            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+            item_ids=("item-does-not-exist",),
+        )
 
     rollout_db = _rollout_db(sessions_dir, SESSION_ID)
     with sqlite3.connect(rollout_db) as connection:
@@ -596,7 +630,9 @@ def test_item_catalog_reads_fail_closed_on_missing_item_and_view_reference(
         connection.commit()
 
     with (
-        saver._storage.open_read_snapshot(SESSION_ID) as snapshot,
+        saver._storage.open_read_snapshot(
+            SESSION_ID, saver._storage.main_thread_id(SESSION_ID),
+        ) as snapshot,
         pytest.raises(KeyError, match="canonical item catalog 缺少请求的 item"),
     ):
         saver._storage.read_items_for_view(snapshot, view_id)
@@ -625,7 +661,7 @@ def test_index_validation_rejects_catalog_sequence_gaps_even_when_jsonl_matches(
         connection.commit()
 
     with pytest.raises(RuntimeError, match="item_sequence 不连续"):
-        saver._storage.validate_index(SESSION_ID)
+        saver._storage.validate_index(SESSION_ID, saver._storage.main_thread_id(SESSION_ID))
 
 
 def test_item_projection_read_rejects_catalog_hash_drift(
@@ -831,12 +867,15 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
 async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
+    frozen_provider_wire,
 ) -> None:
     """真实 stream/runtime 写入的 partial item 与定位 anchor 可跨进程恢复。"""
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    _accept(saver, SESSION_ID)
+    accepted = _accept(saver, SESSION_ID, initial_execution_id="model-call-partial")
+    thread = saver._storage.main_thread_id(SESSION_ID)
     resolver = get_session_path_resolver(sessions_dir)
     stream_store = MessageStreamStore(path_resolver=resolver)
     writer = await stream_store.open(
@@ -846,49 +885,65 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     item_sink = CanonicalItemSink(
         saver,
         session_id=SESSION_ID,
+        thread_id=thread,
         checkpoint_ns="",
+    )
+    model_calls = StepModelCallAdapter(
+        checkpointer=saver, session_id=SESSION_ID, thread_id=thread,
+        job_id=str(accepted["job_id"]), checkpoint_ns="",
     )
     runtime = MessageStreamRuntime(
         writer,
         canonical_item_sink=item_sink.append,
         canonical_turn_id="turn-user-1",
+        model_call_registrar=model_calls.register,
+        model_call_outcome_sink=model_calls.update_outcome,
     )
-    await runtime.start_model("model-call-partial", "test-provider")
-    await runtime.accept_message_chunk(
-        AIMessageChunk(
-            content=[
-                {
-                    "id": "answer-partial",
-                    "index": 0,
-                    "type": "text",
-                    "text": "流式前半",
-                }
-            ]
+    with execution_scope(saver, accepted) as (_, manager):
+        saver.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id="turn-user-1",
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="partial-stream:create",
+            seal_idempotency_key="partial-stream:seal",
+            context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **frozen_provider_wire("test-provider", "chat_completions"),
         )
-    )
-    await runtime.accept_message_chunk(
-        AIMessageChunk(
-            content=[
-                {
-                    "id": "answer-partial",
-                    "index": 0,
-                    "type": "text",
-                    "text": "流式后半",
-                }
-            ]
+        await runtime.start_model("model-call-partial", "test-provider")
+        await runtime.accept_message_chunk(
+            AIMessageChunk(
+                content=[
+                    {
+                        "id": "answer-partial",
+                        "index": 0,
+                        "type": "text",
+                        "text": "流式前半",
+                    }
+                ]
+            )
         )
-    )
-    await runtime.fail_model(
-        code="user_interrupt",
-        message="用户在 provider 输出中断开流",
-        outcome="user_interrupt",
-        retryable=False,
-    )
-    await writer.close_interrupted("interrupt-partial-restart")
+        await runtime.accept_message_chunk(
+            AIMessageChunk(
+                content=[
+                    {
+                        "id": "answer-partial",
+                        "index": 0,
+                        "type": "text",
+                        "text": "流式后半",
+                    }
+                ]
+            )
+        )
+        await runtime.fail_model(
+            code="user_interrupt",
+            message="用户在 provider 输出中断开流",
+            outcome="user_interrupt",
+            retryable=False,
+        )
+        await writer.close_interrupted("interrupt-partial-restart")
 
     partial_items = [
         item
-        for item in saver._storage.read_items(SESSION_ID)
+        for item in saver._storage.read_items(SESSION_ID, thread)
         if item.status == CanonicalItemStatus.PARTIAL.value
     ]
     assert len(partial_items) == 1
@@ -950,7 +1005,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     )
 
     restarted_saver = RolloutCheckpointSaver(sessions_dir)
-    restarted_items = restarted_saver._storage.read_items(SESSION_ID)
+    restarted_items = restarted_saver._storage.read_items(SESSION_ID, thread)
     restored_item = next(
         item for item in restarted_items if item.item_id == partial_item.item_id
     )
@@ -1013,9 +1068,147 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     }
 
 
+@pytest.mark.parametrize(
+    "root_options",
+    [{}, {"root_item_id": "item-explicit-root"}],
+    ids=["default", "explicit"],
+)
+def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(
+    frozen_provider_wire,
+    tmp_path: Path,
+    session_bundle_factory,
+    execution_scope,
+    root_options: dict[str, str],
+) -> None:
+    """真实投影往返不能再分配 root；接受重试和封存重试只读既存身份。"""
+    sessions_dir = tmp_path / "sessions"
+    session_bundle_factory(sessions_dir, SESSION_ID)
+    saver = RolloutCheckpointSaver(sessions_dir)
+    thread = saver._storage.main_thread_id(SESSION_ID)
+    payload = "接受根项的真实投影"
+
+    def accept(checkpoint_saver: RolloutCheckpointSaver) -> dict[str, object]:
+        return checkpoint_saver.accept_turn(
+            SESSION_ID,
+            thread_id=thread,
+            accepted_ingress_id="ingress-root-roundtrip",
+            acceptance_idempotency_key="acceptance-root-roundtrip",
+            job_id="job-root-roundtrip",
+            admission_idempotency_key="admission-root-roundtrip",
+            payload=payload,
+            payload_kind=PayloadKind.TEXT,
+            **root_options,
+        )
+
+    accepted = accept(saver)
+    assert accepted["idempotent"] is False
+    root_id = str(accepted["root_input_item_id"])
+    if root_options:
+        assert root_id == root_options["root_item_id"]
+    else:
+        assert root_id.startswith("item-root-")
+    jsonl_path = saver._storage.jsonl_path(SESSION_ID, thread_id=thread)
+    accepted_jsonl = jsonl_path.read_bytes()
+    database_path = _rollout_db(sessions_dir, SESSION_ID)
+    with sqlite3.connect(database_path) as connection:
+        accepted_dump = tuple(connection.iterdump())
+    retry = accept(saver)
+    assert {key: retry[key] for key in accepted} == {
+        **accepted, "idempotent": True,
+    }
+    with sqlite3.connect(database_path) as connection:
+        assert tuple(connection.iterdump()) == accepted_dump
+    assert jsonl_path.read_bytes() == accepted_jsonl
+
+    roots = saver._storage.read_items(SESSION_ID, thread)
+    assert len(roots) == 1
+    root = roots[0]
+    assert root.item_id == root_id
+    assert root.turn_id == accepted["turn_id"]
+    assert root.projection_identity is not None
+    message_id = root.projection_identity.projection_message_id
+    assert message_id == root_id.removeprefix("item-")
+    projected = project_canonical_items(roots)
+    assert len(projected) == 1
+    assert isinstance(projected[0], HumanMessage)
+    assert (projected[0].id, projected[0].content) == (message_id, payload)
+
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = "checkpoint-root-roundtrip"
+    checkpoint["channel_values"] = {"messages": projected}
+    checkpoint["channel_versions"] = {"messages": "1"}
+    checkpoint["updated_channels"] = ["messages"]
+    wire = frozen_provider_wire("root-provider", "chat_completions")
+    with execution_scope(saver, accepted) as (owner_thread, manager):
+        assert owner_thread == thread
+        config = saver.put(
+            build_checkpoint_config(thread), checkpoint,
+            {"source": "loop", "step": 1}, {"messages": "1"},
+        )
+        saved = saver.get_tuple(config)
+        assert saved is not None
+        saved_messages = saved.checkpoint["channel_values"]["messages"]
+        assert [(message.id, message.content) for message in saved_messages] == [
+            (message_id, payload),
+        ]
+        assert saved_messages[0].response_metadata["canonical_item_manifests"] == [
+            {"item_id": root_id, **root.projection_manifest()},
+        ]
+        prepared = saver.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id=str(accepted["turn_id"]),
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="root-roundtrip:create",
+            seal_idempotency_key="root-roundtrip:seal",
+            context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            **wire,
+        )
+    assert prepared["messages"] == projected
+    assembly_id = str(prepared["assembly_id"])
+    snapshot_bytes = canonical_json_bytes(
+        saver.get_context_assembly(SESSION_ID, thread, assembly_id=assembly_id).to_dict()
+    )
+    assert saver._storage.read_items(SESSION_ID, thread) == roots
+    assert jsonl_path.read_bytes() == accepted_jsonl
+    with sqlite3.connect(database_path) as connection:
+        sealed_dump = tuple(connection.iterdump())
+
+    restarted = RolloutCheckpointSaver(sessions_dir)
+    restarted_acceptance = accept(restarted)
+    assert {key: restarted_acceptance[key] for key in accepted} == {
+        **accepted, "idempotent": True,
+    }
+    assert restarted._storage.read_items(SESSION_ID, thread) == roots
+
+    def refuse_live_supplier(*_args):
+        pytest.fail("已封存的 root 重启重试不得重新读取 ToolSet 或 published source")
+
+    with execution_scope(restarted, restarted_acceptance) as (_, manager):
+        restored = restarted.get_tuple(config)
+        assert restored is not None
+        assert restored.checkpoint["channel_values"]["messages"] == saved_messages
+        manager.bind_published_revision_supplier(refuse_live_supplier)
+        sealed_retry = restarted.prepare_context_for_provider(
+            SESSION_ID, thread, turn_id=str(accepted["turn_id"]),
+            execution_id=str(accepted["initial_execution_id"]),
+            plan_creation_idempotency_key="root-roundtrip:create",
+            seal_idempotency_key="root-roundtrip:seal",
+            context_source_manager=manager, tool_set_supplier=refuse_live_supplier,
+            **wire,
+        )
+    assert sealed_retry["assembly_id"] == assembly_id
+    assert sealed_retry["messages"] == projected
+    assert canonical_json_bytes(restarted.get_context_assembly(
+        SESSION_ID, thread, assembly_id=assembly_id,
+    ).to_dict()) == snapshot_bytes
+    with sqlite3.connect(database_path) as connection:
+        assert tuple(connection.iterdump()) == sealed_dump
+    assert jsonl_path.read_bytes() == accepted_jsonl
+
+
 def test_checkpoint_root_projection_preserves_acceptance_turn_ordinal(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
     """LangGraph root projection 复用 acceptance-time 的真实 Turn lineage。"""
     sessions_dir = tmp_path / "sessions"
@@ -1049,12 +1242,13 @@ def test_checkpoint_root_projection_preserves_acceptance_turn_ordinal(
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
 
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        checkpoint,
-        {"source": "checkpoint-first-test", "step": 1},
-        {"messages": "1"},
-    )
+    with execution_scope(saver, accepted) as (thread, _manager):
+        saver.put(
+            build_checkpoint_config(thread),
+            checkpoint,
+            {"source": "checkpoint-first-test", "step": 1},
+            {"messages": "1"},
+        )
 
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         turn = connection.execute(
@@ -1313,11 +1507,18 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
             "invocation_id": execution_id,
         },
         payload="没有对应 message projection",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="output-without-projection",
+        ),
         turn_id="turn-user-1",
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id="message-group-1",
         wire_role="assistant",
     )
+    with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM messages WHERE message_id='output-without-projection'"
+        ).fetchone() == (0,)
     commit_id = saver.converge_execution(
         SESSION_ID,
         turn_id="turn-user-1",
@@ -1329,7 +1530,9 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items(SESSION_ID)] == [
+    assert [item.item_id for item in restarted._storage.read_items(
+        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+    )] == [
         "item-user-1",
         output.item_id,
     ]
@@ -1373,7 +1576,9 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
     ]
     assert projected_turn == (1, 2, 1, 2, "output-without-projection", "completed")
     assert view_turn == (1, 2)
-    latest, cursor, projection_epoch = restarted._history_reader.bootstrap(SESSION_ID)
+    latest, cursor, projection_epoch = restarted._history_reader.bootstrap(
+        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+    )
     assert latest is not None
     assert latest.turn_id == "turn-user-1"
     assert latest.response_preview == "没有对应 message projection"
@@ -1403,6 +1608,9 @@ def test_item_bearing_terminal_convergence_materializes_output_and_restart(
             "invocation_id": execution_id,
         },
         payload="另一个终态正文",
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="output-without-projection",
+        ),
         turn_id="turn-user-1",
         turn_scope=TurnScope.TURN_MEMBER,
         message_group_id="message-group-1",
@@ -1458,7 +1666,9 @@ def test_item_bearing_terminal_projection_failure_rolls_back_jsonl_and_sqlite(
         )
 
     restarted = RolloutCheckpointSaver(sessions_dir)
-    assert [item.item_id for item in restarted._storage.read_items(SESSION_ID)] == [
+    assert [item.item_id for item in restarted._storage.read_items(
+        SESSION_ID, restarted._storage.main_thread_id(SESSION_ID),
+    )] == [
         "item-user-1"
     ]
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
@@ -1663,6 +1873,7 @@ def test_replay_as_new_turn_is_idempotent_after_saver_restart(
 def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_view(
     tmp_path: Path,
     session_bundle_factory,
+    execution_scope,
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
@@ -1694,12 +1905,13 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
     }
     checkpoint["channel_versions"] = {"messages": "1"}
     checkpoint["updated_channels"] = ["messages"]
-    saver.put(
-        build_checkpoint_config(SESSION_ID),
-        checkpoint,
-        {"source": "anchor-test", "step": 1, "parents": {}},
-        {"messages": "1"},
-    )
+    with execution_scope(saver, accepted) as (thread, _manager):
+        saver.put(
+            build_checkpoint_config(thread),
+            checkpoint,
+            {"source": "anchor-test", "step": 1, "parents": {}},
+            {"messages": "1"},
+        )
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
         view_id, branch_id = connection.execute(
             "SELECT v.view_id, v.branch_id FROM context_views AS v "
@@ -1744,7 +1956,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         == hashlib.sha256(raw_line[item_offset : item_offset + item_length]).hexdigest()
     )
     assert (
-        restarted._storage.read_items(SESSION_ID)[0].item_id
+        restarted._storage.read_items(SESSION_ID, thread)[0].item_id
         == accepted["root_input_item_id"]
     )
 

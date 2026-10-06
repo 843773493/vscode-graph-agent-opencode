@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.lifecycle import LifetimeScope
 from app.domain.itemized.epoch.prefix_epoch import (
     AppendedItemRef,
     EpochReason,
@@ -27,10 +28,13 @@ from app.domain.itemized.epoch.prefix_epoch import (
     stable_prefix_bytes,
     stable_prefix_hash,
 )
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.plan_hash import context_plan_hash
 from app.domain.itemized.hashing import (
+    canonical_json_bytes,
     contribution_content_hash,
+    sha256_jcs,
 )
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.item_projection import (
@@ -43,6 +47,12 @@ from app.domain.itemized.request_plan import (
     validate_included_overlay_chain,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
+from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
+    ContextSourceReactor,
+)
+from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
+    WorkspaceFileResourceRegistry,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -63,7 +73,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.source_
 from app.services.infrastructure.rollout_context.runtime.ledger import (
     RuntimeContextLedger,
 )
+from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileWatchService,
+)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 from tests.unit.services.infrastructure.test_context_source_reactor import (
     _write_skill,
 )
@@ -136,6 +150,45 @@ def saver(sessions_root: Path):
     return RolloutCheckpointSaver(sessions_root)
 
 
+@pytest.fixture
+def empty_tool_set() -> ToolSetSnapshot:
+    """联合来源场景显式冻结空工具集合，不依赖生产接口补默认值。"""
+    return ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
+
+
+@pytest.fixture
+def source_seal_owner(saver: RolloutCheckpointSaver, frozen_provider_wire) -> SourceSealCase:
+    owner = ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID))
+    accepted = saver.accept_turn(
+        owner.session_id, thread_id=owner.thread_id,
+        accepted_ingress_id="joint-ingress", acceptance_idempotency_key="joint-accept",
+        job_id="joint-job", admission_idempotency_key="joint-admission",
+        payload="联合来源真实 seal 合同", root_item_id="item-joint-ingress",
+    )
+    return SourceSealCase(saver, owner, accepted, frozen_provider_wire)
+
+
+@pytest.fixture
+def source_reactor(tmp_path: Path, source_seal_owner: SourceSealCase):
+    workspace = tmp_path / "workspace"
+    skill_path = _write_skill(workspace, "v1\n")
+    watch_service = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace, watch_service=watch_service, project_root=tmp_path,
+    )
+    registry.register_file(uri="boxteam://workspace/skill/demo", path=skill_path)
+    manager = source_seal_owner.manager()
+    manager.register(ContextSourceDescriptor(
+        source_id="skill:demo", source_kind="skill", name="demo", description="事件驱动测试 Skill",
+        internal_locator="/.boxteam/skills/demo/SKILL.md", resource_uri="boxteam://workspace/skill/demo",
+    ))
+    lifetime_scope = LifetimeScope("joint-source-reactor")
+    reactor = ContextSourceReactor(
+        sources=registry, context_sources=manager, lifetime_scope=lifetime_scope, reactor_id="joint-source-reactor",
+    )
+    return manager, registry, watch_service, reactor, lifetime_scope
+
+
 def _restarted(sessions_root: Path) -> RolloutCheckpointSaver:
     """模拟进程重启：全新 Saver/Storage 实例，状态只来自 SQLite。"""
     return RolloutCheckpointSaver(sessions_root)
@@ -198,6 +251,7 @@ class TestAdversarialControlKeys:
         self,
         saver: RolloutCheckpointSaver,
         sessions_root: Path,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         clean = _contribution("contribution-clean", annotations={}, source_binding=SourceBinding(source_ref='c'))
         adversarial = _contribution(
@@ -208,7 +262,7 @@ class TestAdversarialControlKeys:
         assert ordinal_clean == 0
         plan_clean = saver.compose_committed_context_plan(
             MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-1",
+            plan_id="plan-1", tool_set=empty_tool_set,
         )
 
         # 同一 session 内只换 metadata：SQL 清理后经全新 owner（重启等价）
@@ -231,7 +285,7 @@ class TestAdversarialControlKeys:
         assert ordinal_adversarial == ordinal_clean
         plan_adversarial = restarted.compose_committed_context_plan(
             MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-1",
+            plan_id="plan-1", tool_set=empty_tool_set,
         )
         # metadata 是开放 provenance，不进入 plan hash preimage；typed 事实
         # 相同则 hash、selection、ordinal binding 全部一致。
@@ -247,6 +301,7 @@ class TestAdversarialControlKeys:
     def test_selection_only_flag_has_no_role_power(
         self,
         saver: RolloutCheckpointSaver,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         # typed selection_role=direct 说它可独立候选：metadata 的 selection_only
         # 键不能把它降级为 manifest backing。
@@ -267,7 +322,7 @@ class TestAdversarialControlKeys:
 
         plan = saver.compose_committed_context_plan(
             MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-2",
+            plan_id="plan-2", tool_set=empty_tool_set,
         )
         ref_ids = {ref.ref_id for ref in plan.refs if ref.ref_type == "request_only"}
         assert "full-with-flag" in ref_ids
@@ -365,6 +420,7 @@ class TestMissingTypedFieldsFailClosed:
         self,
         saver: RolloutCheckpointSaver,
         sessions_root: Path,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         _register(saver, MAIN_SESSION_ID, _contribution("null-ordinal"))
         with saver._storage._connect(
@@ -386,7 +442,7 @@ class TestMissingTypedFieldsFailClosed:
         with pytest.raises((ValueError, RuntimeError), match="source_ordinal"):
             restarted.compose_committed_context_plan(
                 MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
-                plan_id="plan-3",
+                plan_id="plan-3", tool_set=empty_tool_set,
             )
 
     def test_contribution_requires_identity_and_revision(self) -> None:
@@ -399,6 +455,7 @@ class TestMissingTypedFieldsFailClosed:
         self,
         saver: RolloutCheckpointSaver,
         sessions_root: Path,
+        source_seal_owner: SourceSealCase,
     ) -> None:
         owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
@@ -419,7 +476,8 @@ class TestMissingTypedFieldsFailClosed:
         manager.load_skill("demo", mode="tracked")
         batch = manager.prepare_pending()
         assert batch is not None
-        manager.commit_model_call_pending(batch)
+        committed, _binding = source_seal_owner.seal(manager)
+        assert committed.deltas == batch.deltas
         with saver._storage._connect(
             saver._storage.main_thread_id(MAIN_SESSION_ID),
             "",
@@ -672,6 +730,7 @@ class TestComposerThreadIdentity:
     def test_request_only_refs_carry_catalog_main_thread_id(
         self,
         saver: RolloutCheckpointSaver,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         # composer 不持有 resolver，thread identity 只能由唯一 owner 从权威
         # catalog 解析后显式传入；request-only ref 必须携带该 main_thread_id，
@@ -680,7 +739,7 @@ class TestComposerThreadIdentity:
         expected_thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
         plan = saver.compose_committed_context_plan(
             MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-thread",
+            plan_id="plan-thread", tool_set=empty_tool_set,
         )
         request_only_refs = [ref for ref in plan.refs if ref.ref_type == "request_only"]
         assert request_only_refs
@@ -689,6 +748,7 @@ class TestComposerThreadIdentity:
     def test_canonical_refs_carry_catalog_main_thread_id(
         self,
         saver: RolloutCheckpointSaver,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         # committed_context_refs 从已提交 item 生成 canonical ref 时，thread 半
         # 必须取 catalog 权威 main_thread_id，不能把承载 session 定位的
@@ -742,7 +802,7 @@ class TestComposerThreadIdentity:
             saver.append_items(MAIN_SESSION_ID, (item,), thread_id=expected_thread_id)
         plan = saver.compose_committed_context_plan(
             MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-canonical-thread",
+            plan_id="plan-canonical-thread", tool_set=empty_tool_set,
             include_pending_notices=False,
         )
         canonical_refs = [ref for ref in plan.refs if ref.ref_type == "canonical_item"]
@@ -758,9 +818,10 @@ class TestSealedTypedFieldConsumption:
         self,
         saver: RolloutCheckpointSaver,
         sessions_root: Path,
+        source_seal_owner: SourceSealCase,
     ) -> None:
-        """6.2-B：显式 tracked rebind 在同一 owner 事务冻结旧 registration、
-        追加当前 effective entry 的完整 activation；旧 source item 逐字节不变。"""
+        """6.2-B：显式 tracked rebind 冻结旧 registration，真实 seal 追加
+        当前 effective entry 的完整 activation；旧 source frame/detail 逐字节不变。"""
         owner = ContextSourceOwnerKey(
             session_id=MAIN_SESSION_ID,
             thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
@@ -811,7 +872,18 @@ class TestSealedTypedFieldConsumption:
         assert first.status == "loaded"
         batch = manager.prepare_pending()
         assert batch is not None
-        manager.commit_model_call_pending(batch)
+        committed, first_binding = source_seal_owner.seal(manager)
+        assert committed.deltas == batch.deltas
+        first_snapshot = saver.get_context_assembly(
+            owner.session_id, owner.thread_id, assembly_id=first_binding.prefix.assembly_id,
+        )
+        old_snapshot_bytes = canonical_json_bytes(first_snapshot.to_dict())
+        old_bodies = saver._request_content_for_plan(
+            owner.session_id, owner.thread_id, "", first_snapshot.as_sealed_plan(), None,
+        )
+        (old_frame,) = tuple(frame for frame in first_binding.prefix.state.frames
+                             if frame.item_ref.source_identity == "skill:gateway:demo")
+        assert old_frame.content == old_bodies[old_frame.item_ref.ref_id] == "gateway body\n"
 
         with saver._storage._connect(
             saver._storage.main_thread_id(MAIN_SESSION_ID),
@@ -822,18 +894,12 @@ class TestSealedTypedFieldConsumption:
         conn = sqlite3.connect(database_path)
         try:
             old_rows = conn.execute(
-                "SELECT item_id, content_hash, payload_length FROM item_catalog "
-                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
-            ).fetchall()
-            old_projection = conn.execute(
-                "SELECT item_id, content_hash, content FROM item_projections "
-                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+                "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
+                (first_snapshot.assembly_id, old_frame.item_ref.ref_id),
             ).fetchall()
         finally:
             conn.close()
         assert len(old_rows) == 1
-        # 真断言：旧 item 的正文与 hash 逐字节冻结。
-        assert old_projection == [(old_rows[0][0], old_rows[0][1], "gateway body\n")]
 
         # 同名 workspace 高优先级 effective entry 出现（不同 source identity）。
         manager.register(
@@ -859,28 +925,39 @@ class TestSealedTypedFieldConsumption:
         assert rebound.display_uri == new_binding.display_uri
         rebound_batch = manager.prepare_pending()
         assert rebound_batch is not None
-        manager.commit_model_call_pending(rebound_batch)
+        committed, rebound_binding = source_seal_owner.seal(manager)
+        assert committed.deltas == rebound_batch.deltas
+        rebound_snapshot = saver.get_context_assembly(
+            owner.session_id, owner.thread_id, assembly_id=rebound_binding.prefix.assembly_id,
+        )
+        (new_frame,) = tuple(frame for frame in rebound_binding.prefix.state.frames
+                             if frame.item_ref.source_identity == "skill:workspace:demo")
+        new_bodies = saver._request_content_for_plan(
+            owner.session_id, owner.thread_id, "", rebound_snapshot.as_sealed_plan(), None,
+        )
+        assert new_frame.content == new_bodies[new_frame.item_ref.ref_id] == "workspace body\n"
 
         conn = sqlite3.connect(database_path)
         try:
             after_old_rows = conn.execute(
-                "SELECT item_id, content_hash, payload_length FROM item_catalog "
-                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
-            ).fetchall()
-            after_old_projection = conn.execute(
-                "SELECT item_id, content_hash, content FROM item_projections "
-                "WHERE item_id LIKE 'item-context-source:skill:gateway:demo:%'"
+                "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
+                (first_snapshot.assembly_id, old_frame.item_ref.ref_id),
             ).fetchall()
             new_rows = conn.execute(
-                "SELECT item_id, content_hash, payload_length FROM item_catalog "
-                "WHERE item_id LIKE 'item-context-source:skill:workspace:demo:%'"
+                "SELECT * FROM assembly_item_refs WHERE assembly_id=? AND ref_id=?",
+                (rebound_snapshot.assembly_id, new_frame.item_ref.ref_id),
             ).fetchall()
         finally:
             conn.close()
-        # 旧 item 逐字节不变，且未被删除。
+        # 旧 selected 行与冻结 detail 逐字节不变，且未被删除。
         assert after_old_rows == old_rows
-        assert after_old_projection == old_projection
-        # 新 effective entry 追加完整 activation item。
+        restored = saver.get_context_assembly(owner.session_id, owner.thread_id, assembly_id=first_snapshot.assembly_id)
+        assert canonical_json_bytes(restored.to_dict()) == old_snapshot_bytes
+        assert saver._request_content_for_plan(
+            owner.session_id, owner.thread_id, "", restored.as_sealed_plan(), None,
+        ) == old_bodies
+        assert old_frame in rebound_binding.prefix.state.frames
+        # 新 effective entry 追加完整 activation frame 与真实 selection。
         assert len(new_rows) == 1
         # 旧 registration 冻结为 untracked；新 registration tracked。
         states = {
@@ -889,48 +966,7 @@ class TestSealedTypedFieldConsumption:
         }
         assert states["skill:gateway:demo"].tracking_status == "untracked"
         assert states["skill:workspace:demo"].tracking_status == "tracked"
-
-    def test_rewind_reconciles_only_from_frozen_control_state(
-        self,
-        saver: RolloutCheckpointSaver,
-    ) -> None:
-        owner = ContextSourceOwnerKey(
-            session_id=MAIN_SESSION_ID,
-            thread_id=saver._storage.main_thread_id(MAIN_SESSION_ID),
-        )
-        manager = ContextSourceManager(owner=owner, control_state_port=saver)
-        manager.register(
-            ContextSourceDescriptor(
-                source_id="skill:demo",
-                source_kind="skill",
-                name="demo",
-                description="联合合同",
-                internal_locator="/x",
-            )
-        )
-        manager.activate_skill_content("demo", "v1\n")
-        _install_demo_snapshot(manager, "v1\n")
-        manager.load_skill("demo", mode="tracked")
-        batch = manager.prepare_pending()
-        assert batch is not None
-        manager.commit_model_call_pending(batch)
-
-        # rewind：目标 view 的 active revision 回到旧值。rebuild 决策只
-        # 消费控制状态的 applied/latest typed 事实，不读取来源正文以外
-        # 的当前文件或事件。
-        assert manager.restore_active_revision("skill:demo", "rev-stale-view") is True
-        rebuild = manager.prepare_pending()
-        assert rebuild is not None
-        assert [delta.kind for delta in rebuild.deltas] == ["rebuild"]
-        assert rebuild.deltas[0].content == "v1\n"
-        manager.commit_model_call_pending(rebuild)
-        (stored,) = saver.load_context_source_control_states(owner)
-        assert stored.latest_visible_committed_revision == stored.latest_revision
-
-        # untrack(frozen) 后 rewind 不恢复：snapshot/untracked 不重建 item。
-        manager.load_skill("demo", mode="untrack")
-        assert manager.restore_active_revision("skill:demo", "rev-older") is False
-        assert manager.prepare_pending() is None
+        assert states["skill:workspace:demo"].latest_visible_committed_revision == new_binding.activation_revision
 
     def test_rewind_epoch_transition_is_consumed_once(self) -> None:
         """rewind/compaction 的 pending transition 无 wire bytes，只能被
@@ -967,6 +1003,7 @@ class TestSealedTypedFieldConsumption:
         self,
         saver: RolloutCheckpointSaver,
         sessions_root: Path,
+        empty_tool_set: ToolSetSnapshot,
     ) -> None:
         _register(
             saver,
@@ -978,14 +1015,14 @@ class TestSealedTypedFieldConsumption:
         )
         before = saver.compose_committed_context_plan(
             MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-6",
+            plan_id="plan-6", tool_set=empty_tool_set,
         )
         before_hash = context_plan_hash(before)
 
         restarted = _restarted(sessions_root)
         after = restarted.compose_committed_context_plan(
             MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="plan-6",
+            plan_id="plan-6", tool_set=empty_tool_set,
         )
         # 恢复只消费 registry 封存 typed 字段：metadata 中的旧 ordinal 键与
         # 对抗 selection_only/selection_role/replacement_policy 键均为 inert，
@@ -1002,14 +1039,10 @@ class TestSealedTypedFieldConsumption:
     async def test_out_of_order_watch_consumes_authoritative_revision(
         self,
         tmp_path: Path,
+        source_seal_owner: SourceSealCase,
+        source_reactor,
     ) -> None:
-        from tests.unit.services.infrastructure.test_context_source_reactor import (
-            _reactor_fixture,
-        )
-
-        manager, registry, watch_service, reactor, _lifetime_scope = _reactor_fixture(
-            tmp_path,
-        )
+        manager, registry, watch_service, reactor, lifetime_scope = source_reactor
         try:
             registration = registry.snapshot(
                 "boxteam://workspace/skill/demo",
@@ -1019,7 +1052,8 @@ class TestSealedTypedFieldConsumption:
             manager.load_skill("demo", mode="tracked")
             baseline = manager.prepare_pending()
             assert baseline is not None
-            manager.commit_model_call_pending(baseline)
+            committed, _binding = source_seal_owner.seal(manager)
+            assert committed.deltas == baseline.deltas
             reactor.sync_sources()
 
             # 乱序：v2 的事件晚于 v3 到达，标记被回写为旧 revision；
@@ -1071,19 +1105,22 @@ class TestSealedTypedFieldConsumption:
             assert batch is not None
             assert [delta.revision for delta in batch.deltas] == [fresh_revision]
             assert [delta.kind for delta in batch.deltas] == ["delta"]
-            manager.commit_model_call_pending(batch)
-            # reactor fixture 的 CSM 无持久化端口（纯内存）；applied 推进
-            # 以 latest revision 收敛为证。
+            committed, binding = source_seal_owner.seal(manager)
+            assert committed.deltas == batch.deltas
             assert manager.source_observation_state("skill:demo") == (
                 "tracked",
                 fresh_revision,
             )
+            (stored,) = source_seal_owner.saver.load_context_source_control_states(source_seal_owner.owner)
+            assert stored.latest_visible_committed_revision == fresh_revision
+            assert binding.source_revisions[0].revision == fresh_revision
         finally:
+            await lifetime_scope.close()
             await watch_service.shutdown()
 
 
 class TestTypedBindingRegistryBoundary:
-    def test_restart_preserves_unknown_extensions_and_explicit_root(self, saver, sessions_root):
+    def test_restart_preserves_unknown_extensions_and_explicit_root(self, saver, sessions_root, empty_tool_set):
         contribution = replace(
             _contribution(
                 "opaque-restart",
@@ -1101,7 +1138,7 @@ class TestTypedBindingRegistryBoundary:
         restarted = _restarted(sessions_root)
         plan = restarted.compose_committed_context_plan(
             MAIN_SESSION_ID, restarted._storage.main_thread_id(MAIN_SESSION_ID),
-            plan_id="opaque-restart-plan",
+            plan_id="opaque-restart-plan", tool_set=empty_tool_set,
         )
         (restored,) = plan.contributions
         assert restored.extensions == contribution.extensions
@@ -1141,7 +1178,7 @@ class TestTypedBindingRegistryBoundary:
                 "SELECT source_ordinal FROM context_contributions"
             ).fetchone() == (0,)
 
-    def test_restore_rejects_missing_binding_even_if_sql_check_is_bypassed(self, saver, sessions_root):
+    def test_restore_rejects_missing_binding_even_if_sql_check_is_bypassed(self, saver, sessions_root, empty_tool_set):
         contribution = _contribution("restore-required-binding")
         _register(saver, MAIN_SESSION_ID, contribution)
         invalid = contribution.binding_manifest()
@@ -1156,10 +1193,10 @@ class TestTypedBindingRegistryBoundary:
         restarted = _restarted(sessions_root)
         with pytest.raises(ItemSchemaError, match="binding manifest"):
             restarted.compose_committed_context_plan(
-                MAIN_SESSION_ID, thread_id, plan_id="missing-binding-plan",
+                MAIN_SESSION_ID, thread_id, plan_id="missing-binding-plan", tool_set=empty_tool_set,
             )
 
-    def test_old_experimental_schema_is_rejected_and_preserved(self, saver, sessions_root):
+    def test_old_experimental_schema_is_rejected_and_preserved(self, saver, sessions_root, empty_tool_set):
         _register(saver, MAIN_SESSION_ID, _contribution("old-schema-source"))
         thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
         with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
@@ -1167,7 +1204,7 @@ class TestTypedBindingRegistryBoundary:
         restarted = _restarted(sessions_root)
         with pytest.raises(RuntimeError, match="schema-incompatible"):
             restarted.compose_committed_context_plan(
-                MAIN_SESSION_ID, thread_id, plan_id="old-schema-plan",
+                MAIN_SESSION_ID, thread_id, plan_id="old-schema-plan", tool_set=empty_tool_set,
             )
         with saver._storage._connect(thread_id, "", session_id=MAIN_SESSION_ID) as connection:
             assert connection.execute("SELECT schema_version FROM database_meta").fetchone() == (9,)
@@ -1273,7 +1310,7 @@ def test_source_observation_rejects_unversioned_extension(saver):
         )
 
 
-def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(saver):
+def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(saver, empty_tool_set):
     thread_id = saver._storage.main_thread_id(MAIN_SESSION_ID)
     accepted = saver.accept_turn(
         MAIN_SESSION_ID, thread_id=thread_id,
@@ -1283,7 +1320,7 @@ def test_real_sealed_assembly_rejects_registry_cas_without_mutating_owner_state(
     original = _contribution("real-sealed-cas", replacement_policy="replaceable")
     ordinal = _register(saver, MAIN_SESSION_ID, original)
     draft = saver.compose_committed_context_plan(
-        MAIN_SESSION_ID, thread_id, plan_id="plan-real-sealed-cas",
+        MAIN_SESSION_ID, thread_id, plan_id="plan-real-sealed-cas", tool_set=empty_tool_set,
     )
     registered = saver.create_context_plan(MAIN_SESSION_ID, replace(draft, plan_creation_idempotency_key="real-sealed-cas:create"))
     snapshot = saver.seal_context_plan(

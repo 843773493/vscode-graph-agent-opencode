@@ -25,10 +25,12 @@ from app.core.path_utils import (
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.enums import SemanticKind
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     user_turn_admission_payload_hash,
 )
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.node_debug import (
@@ -118,6 +120,11 @@ def fork_context(
         saver=saver,
         forks=SessionContextForkService(session_service=sessions, checkpointer=saver),
     )
+
+
+@pytest.fixture
+def tool_set() -> ToolSetSnapshot:
+    return ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
 
 
 @pytest.fixture
@@ -930,6 +937,7 @@ async def test_all_fork_modes_materialize_independent_rollouts(
 @pytest.mark.asyncio
 async def test_full_copy_localizes_detail_and_source_overlay_lineage(
     fork_context: ForkIntegrationContext,
+    tool_set: ToolSetSnapshot,
 ) -> None:
     source = await _seed_source(fork_context)
     source_overlay = SimpleNamespace(
@@ -1024,11 +1032,13 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
         source.session_id,
         source_thread_id,
         plan_id="plan-source-overlay",
+        tool_set=tool_set,
     )
     target_plan = fork_context.saver.compose_committed_context_plan(
         child.session_id,
         target_thread_id,
         plan_id="plan-target-overlay",
+        tool_set=tool_set,
     )
     source_overlay_refs = {
         ref.source_ref: ref for ref in source_plan.refs if ref.source_ref is not None
@@ -1097,6 +1107,7 @@ async def test_history_replay_reuses_turn_root_without_execution(
             "SELECT turn_id, turn_ordinal, root_input_item_id, source_branch_id "
             "FROM turn_records WHERE turn_id = 'turn-1'"
         ).fetchone()
+        before_branches = connection.execute("SELECT * FROM branches ORDER BY branch_id").fetchall()
 
     latest = await _get_tuple(fork_context, source.session_id)
     assert latest is not None
@@ -1105,6 +1116,49 @@ async def test_history_replay_reuses_turn_root_without_execution(
         replay_config = fork_context.saver.history_replay(
             latest.config, turn_id="turn-1", anchor_mode="inclusive",
         )
+        history_tuple = fork_context.saver.get_tuple(replay_config)
+        assert history_tuple is not None
+        assert history_tuple.config["configurable"]["history_view_id"] == replay_config["configurable"]["history_view_id"]
+        assert [message.id for message in history_tuple.checkpoint["channel_values"]["messages"]] == ["u1", "a1"]
+        with sqlite3.connect(source_root / "rollout" / "index.sqlite") as connection:
+            history_dump = tuple(connection.iterdump())
+        history_jsonl = (source_root / "rollout" / "rollout.jsonl").read_bytes()
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            fork_context.saver.put(
+                replay_config, _checkpoint("history-write-must-not-exist", []),
+                {"source": "loop", "step": 1}, {"messages": "history-write"},
+            )
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            await fork_context.saver.aput(
+                history_tuple.config,
+                _checkpoint("history-async-write-must-not-exist", []),
+                {"source": "loop", "step": 1}, {"messages": "history-write"},
+            )
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            fork_context.saver.put_writes(
+                replay_config, [("messages", "历史投影禁止写入执行结果")],
+                "history-write-task", "history/write",
+            )
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            await fork_context.saver.aput_writes(
+                history_tuple.config, [("messages", "异步历史投影禁止写入执行结果")],
+                "history-async-write-task", "history/async-write",
+            )
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            fork_context.saver.rewind(replay_config, checkpoint_id="cp1")
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            await fork_context.saver.arewind(history_tuple.config, checkpoint_id="cp1")
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            fork_context.saver.rewind_to_turn(replay_config, turn_id="turn-1")
+        with pytest.raises(ValueError, match="history-projection-read-only"):
+            await fork_context.saver.arewind_to_turn(history_tuple.config, turn_id="turn-1")
+        readonly_tuple = await fork_context.saver.aget_tuple(history_tuple.config)
+        assert readonly_tuple is not None
+        assert readonly_tuple.config == history_tuple.config
+        assert readonly_tuple.checkpoint == history_tuple.checkpoint
+        with sqlite3.connect(source_root / "rollout" / "index.sqlite") as connection:
+            assert tuple(connection.iterdump()) == history_dump
+        assert (source_root / "rollout" / "rollout.jsonl").read_bytes() == history_jsonl
     assert replay_config["configurable"]["thread_id"] == source_owner.thread_id
     assert replay_config["configurable"]["checkpoint_id"] == "cp3"
 
@@ -1116,13 +1170,17 @@ async def test_history_replay_reuses_turn_root_without_execution(
             "SELECT v.view_id, v.view_kind, cvt.turn_id, cvt.root_input_item_id, "
             "cvt.logical_turn_ordinal FROM context_views AS v "
             "JOIN context_view_turns AS cvt ON cvt.view_id = v.view_id "
-            "JOIN branches AS b ON b.head_view_id = v.view_id "
-            "WHERE b.status = 'active'"
+            "WHERE v.view_id = ?",
+            (replay_config["configurable"]["history_view_id"],),
         ).fetchone()
         copied_turn = connection.execute(
             "SELECT turn_id, turn_ordinal, root_input_item_id, source_branch_id "
             "FROM turn_records WHERE turn_id = 'turn-1'"
         ).fetchone()
+        assert connection.execute("SELECT * FROM branches ORDER BY branch_id").fetchall() == before_branches
+        assert connection.execute(
+            "SELECT count(*) FROM checkpoints WHERE checkpoint_id='history-write-must-not-exist'"
+        ).fetchone() == (0,)
 
     assert after_executions == before_executions
     assert copied_turn == (turn_id, turn_ordinal, root_item_id, source_branch_id)

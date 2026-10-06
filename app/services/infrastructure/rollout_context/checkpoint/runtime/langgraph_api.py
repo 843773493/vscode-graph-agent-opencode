@@ -27,7 +27,9 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
 )
 
 
-def _checkpoint_identity(config: RunnableConfig) -> tuple[str, str]:
+def _checkpoint_identity(
+    config: RunnableConfig, *, for_write: bool = False,
+) -> tuple[str, str]:
     configurable = config.get("configurable")
     if not isinstance(configurable, dict):
         raise TypeError("checkpoint config 缺少 configurable")
@@ -37,6 +39,8 @@ def _checkpoint_identity(config: RunnableConfig) -> tuple[str, str]:
     checkpoint_ns = configurable.get("checkpoint_ns", "")
     if not isinstance(checkpoint_ns, str):
         raise TypeError("checkpoint config checkpoint_ns 必须是字符串")
+    if for_write and "history_view_id" in configurable:
+        raise ValueError("history-projection-read-only: 历史 selector 不能用于 checkpoint/execution 写入")
     return thread_id, checkpoint_ns
 
 
@@ -63,13 +67,28 @@ class RolloutLangGraphCheckpointMixin:
             thread_id,
             checkpoint_ns,
         ) as snapshot:
+            history_view_id = config["configurable"].get("history_view_id")
+            if "history_view_id" in config["configurable"]:
+                if not isinstance(history_view_id, str) or not history_view_id:
+                    raise ValueError("history-projection-unavailable: history_view_id 必须是非空 selector")
+                connection = self._storage._snapshot_connection(snapshot)
+                history = connection.execute(
+                    "SELECT v.view_kind, e.control_kind, e.view_id, e.branch_id, v.branch_id, c.checkpoint_ns "
+                    "FROM context_views AS v JOIN control_events AS e ON e.control_sequence=v.control_sequence "
+                    "JOIN checkpoints AS c ON c.checkpoint_id=e.checkpoint_id WHERE v.view_id=?",
+                    (history_view_id,),
+                ).fetchone()
+                if history is None or history[:3] != ("history_replay", "history_replay", history_view_id) or (
+                    history[3] != history[4] or history[5] != checkpoint_ns
+                ):
+                    raise ValueError("history-projection-unavailable: selector 不属于同一 owner/namespace 的历史 view")
             checkpoint_index = self._context_reader.latest_checkpoint(
                 snapshot,
                 get_checkpoint_id(config),
             )
             if checkpoint_index is None:
                 return None
-            active_view_id = (
+            active_view_id = history_view_id if history_view_id is not None else (
                 self._storage.active_view_id(snapshot)
                 if get_checkpoint_id(config) is None
                 else None
@@ -88,6 +107,7 @@ class RolloutLangGraphCheckpointMixin:
                         "thread_id": thread_id,
                         "checkpoint_ns": checkpoint_ns,
                         "checkpoint_id": checkpoint_index.checkpoint_id,
+                        **({"history_view_id": history_view_id} if history_view_id is not None else {}),
                     }
                 },
                 checkpoint=checkpoint,
@@ -173,7 +193,7 @@ class RolloutLangGraphCheckpointMixin:
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        thread_id, checkpoint_ns = _checkpoint_identity(config)
+        thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
         channel_values = checkpoint.get("channel_values", {})
         if not isinstance(channel_values, dict):
             raise TypeError("checkpoint.channel_values 必须是 dict")
@@ -252,6 +272,7 @@ class RolloutLangGraphCheckpointMixin:
             metadata=effective_metadata,
             parent_checkpoint_id=parent_checkpoint_id,
             current_messages=current_messages,
+            consume_epoch_intent=self.consume_mutation_intent,
         )
         return {
             "configurable": {
@@ -284,7 +305,7 @@ class RolloutLangGraphCheckpointMixin:
         task_id: str,
         task_path: str = "",
     ) -> None:
-        thread_id, checkpoint_ns = _checkpoint_identity(config)
+        thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
         checkpoint_id = config["configurable"].get("checkpoint_id")
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
             raise ValueError("put_writes 缺少 checkpoint_id")
@@ -453,13 +474,14 @@ class RolloutLangGraphCheckpointMixin:
         source_anchor: str | None = None,
         anchor_mode: str = "inclusive",
     ) -> RunnableConfig:
-        thread_id, checkpoint_ns = _checkpoint_identity(config)
+        thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
         manifest = self._storage.rewind_to_checkpoint(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             checkpoint_id=checkpoint_id,
             source_anchor=source_anchor,
             anchor_mode=anchor_mode,
+            consume_epoch_intent=self.consume_mutation_intent,
         )
         self.reconcile_context(
             require_current_session_thread_owner(
@@ -548,12 +570,13 @@ class RolloutLangGraphCheckpointMixin:
         turn_id: str,
         anchor_mode: str = "inclusive",
     ) -> RunnableConfig:
-        thread_id, checkpoint_ns = _checkpoint_identity(config)
+        thread_id, checkpoint_ns = _checkpoint_identity(config, for_write=True)
         manifest = self._storage.rewind_to_turn(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             turn_id=turn_id,
             anchor_mode=anchor_mode,
+            consume_epoch_intent=self.consume_mutation_intent,
         )
         self.reconcile_context(
             require_current_session_thread_owner(
@@ -581,7 +604,7 @@ class RolloutLangGraphCheckpointMixin:
     ) -> RunnableConfig:
         """只创建同一 owner namespace 的历史 view，不调度原 Turn。"""
         thread_id, checkpoint_ns = _checkpoint_identity(config)
-        manifest = self._storage.history_replay_to_turn(
+        manifest, history_view_id = self._storage.history_replay_to_turn(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             turn_id=turn_id,
@@ -601,6 +624,7 @@ class RolloutLangGraphCheckpointMixin:
                 "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "checkpoint_id": manifest.latest_checkpoint_id,
+                "history_view_id": history_view_id,
             }
         }
 

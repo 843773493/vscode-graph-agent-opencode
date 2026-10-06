@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle impor
     seal_registered_plan,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    PreparedDetail,
     detail_record_from_mapping,
 )
 
@@ -93,6 +94,7 @@ class ContextDetailOwnerMixin:
         sensitive_detail: bool = False,
         checkpoint_ns: str = "",
         activation_binding=None,
+        prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> int:
         """在 provider dispatch 前完成 snapshot 与可选详情的 sealed 提交。"""
         if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
@@ -109,6 +111,7 @@ class ContextDetailOwnerMixin:
             sensitive_detail=sensitive_detail,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
             activation_binding=activation_binding,
+            prepared_details=prepared_details,
         )
 
     def read_context_plan_detail(

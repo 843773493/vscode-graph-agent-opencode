@@ -29,6 +29,10 @@ from app.services.infrastructure.rollout_context.assembly.validation import (
     non_negative_int,
     required_text,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    ContextPlanDetailStore,
+    PreparedDetail,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_text as _json,
 )
@@ -55,6 +59,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         detail_ref: DetailRef | None = None,
         checkpoint_ns: str = "",
         activation_binding: Callable[[sqlite3.Connection], None] | None = None,
+        prepared_details: tuple[PreparedDetail, ...] = (),
+        detail_store: ContextPlanDetailStore | None = None,
     ) -> int:
         """在 dispatch 前持久化不可变 assembly snapshot。
 
@@ -64,6 +70,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
         activation 的调用方）不写 activation 行，行为与接入前一致。
         """
         detail_key = optional_detail_ref_key(detail_ref)
+        if prepared_details and detail_store is None:
+            raise ValueError("detail-unavailable: prepared detail 缺少发布 owner")
         if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
             raise ValueError("source-mismatch: assembly seal owner 不一致")
         if detail_ref is not None:
@@ -106,6 +114,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     (session_id, thread_id, snapshot.assembly_id),
                 ).fetchone()
                 if existing is not None:
+                    if prepared_details:
+                        raise ValueError("assembly-idempotency-conflict: 已提交重试不能发布新 detail")
                     # 损坏快照必须暴露解析错误，不能伪装成普通幂等键冲突。
                     existing_snapshot_matches = canonical_json_bytes(
                         json_text(existing[4], field="snapshot_json")
@@ -180,6 +190,20 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 ):
                     raise ValueError(
                         "assembly execution 不存在或不属于 snapshot session/thread/Turn"
+                    )
+                prepared_refs = set()
+                for prepared in prepared_details:
+                    if not isinstance(prepared, PreparedDetail):
+                        raise TypeError("assembly detail 必须是 PreparedDetail")
+                    prepared.record.detail_ref.require_owner(
+                        session_id, thread_id, snapshot.assembly_id,
+                    )
+                    if prepared.record.detail_ref in prepared_refs:
+                        raise ValueError("source-mismatch: prepared detail identity 重复")
+                    prepared_refs.add(prepared.record.detail_ref)
+                    self._register_context_plan_detail(
+                        connection, prepared.record, session_id=session_id,
+                        thread_id=thread_id, checkpoint_ns=checkpoint_ns,
                     )
                 validate_assembly_details(connection, snapshot, checkpoint_ns, detail_key)
                 commit_id, _offset = self._append_v2_records_transaction(
@@ -277,9 +301,12 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         ),
                     )
                     _assert_one_row(cursor, context="assembly contribution 写入")
+                source_frontiers = self._context_source_cut_frontiers(
+                    connection, snapshot, checkpoint_ns=checkpoint_ns,
+                )
                 for entry in snapshot.selection:
                     cursor = connection.execute(
-                        "INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, redacted_stable_digest, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, redacted_stable_digest, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             snapshot.assembly_id,
                             entry.plan_ordinal,
@@ -304,6 +331,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             optional_detail_ref_key(entry.detail_ref),
                             entry.contribution_id,
                             entry.contribution_ordinal,
+                            *source_frontiers.get(entry.ref.ref_id, (None, None)),
                         ),
                     )
                     _assert_one_row(cursor, context="assembly selection 写入")
@@ -320,9 +348,26 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     # provenance」或反之的半发布状态。
                     activation_binding(connection)
                 self._apply_sealed_context_sources(connection, snapshot)
+                self._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
                 self._validate_context_assembly_manifest(
                     connection, snapshot, header_detail_ref=detail_key,
                     checkpoint_ns=checkpoint_ns,
                 )
-                self._commit_connection(connection)
+                published = []
+                try:
+                    for prepared in prepared_details:
+                        published.extend(detail_store.publish(prepared))
+                    self._commit_connection(connection)
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    # commit 成功后返回路径抛错也必须保留已提交的正文。
+                    committed = connection.execute(
+                        "SELECT 1 FROM context_assemblies WHERE assembly_id = ? "
+                        "AND session_id = ? AND thread_id = ?",
+                        (snapshot.assembly_id, session_id, thread_id),
+                    ).fetchone()
+                    if committed is None and published:
+                        detail_store.discard_published(published)
+                    raise
                 return commit_id

@@ -105,15 +105,15 @@ V4_PREFIX_HASHES = (
     "sha256:bytes:v1:575c952661c00d7a84a9484f63e9c7ab13976e33fe56dff709f8a198c7736fe3",
 )
 
-# V6: 精确 ToolSetRef/policy compatibility key 的独立 golden。
+# V6: manifest 正文规范排序、policy 保留真实工具顺序的独立 JCS golden。
 V6_KEY1 = (
-    "sha256:jcs:v1:86a6c0391056ffd2143d5238d17b57eac64d8a948f0593179d7b34b6ac1eb51b"
+    "sha256:jcs:v1:8e5d4562a782a293f72c0d2801c9abc783e656731f2101317ad404607b0fefe3"
 )
 V6_KEY2 = (
-    "sha256:jcs:v1:f303a82fe78f31dd0946ed7ca79cfedf15b307f05773e9fad102b4c9509e35e2"
+    "sha256:jcs:v1:664bbcc1034bf0d86c1f7ac1bdf4363b12053126ad744146ff964fb803d94b82"
 )
 V6_KEY3 = (
-    "sha256:jcs:v1:889e6886395c2eb782a2cd5845f66799717637c95145c6d12ae5728ef8142d6f"
+    "sha256:jcs:v1:41b01e263b8be96bca1b2e672e31b7e7ca12025e27a435a1f461fbfe09ea6423"
 )
 
 # V7: initial -> append -> seal -> hard rebase 的前缀链 golden。

@@ -30,14 +30,19 @@ class AppliedSourceRevision:
     revision: str
     decision_id: str
     previous_revision: str | None = None
+    expected_control_revision: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("source_id", "revision", "decision_id"):
             _non_empty_string(getattr(self, name), f"AppliedSourceRevision.{name}")
         if self.previous_revision is not None:
             _non_empty_string(self.previous_revision, "AppliedSourceRevision.previous_revision")
-            if self.previous_revision == self.revision:
+            if self.previous_revision == self.revision and self.expected_control_revision is None:
                 raise ItemSchemaError("source seal 不得重复应用同一 revision")
+        if self.expected_control_revision is not None and (
+            type(self.expected_control_revision) is not int or self.expected_control_revision < 1
+        ):
+            raise ItemSchemaError("source rebuild 必须冻结合法 control revision")
 
 
 @dataclass(frozen=True, slots=True)

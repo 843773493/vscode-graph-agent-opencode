@@ -9,7 +9,7 @@ from app.services.infrastructure.rollout_context.storage.schema_plans import (
     TOOL_SET_SNAPSHOT_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 10
+ROLLOUT_SCHEMA_VERSION = 13
 MESSAGE_FORMAT_VERSION = 1
 ROLLOUT_FORMAT_VERSION = 2
 
@@ -46,6 +46,59 @@ CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL = "\n".join(
     CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS
 )
 
+CONTEXT_SOURCE_VERSION_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS checkpoint_context_source_snapshots (
+    checkpoint_id TEXT PRIMARY KEY,
+    checkpoint_ns TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    source_count INTEGER NOT NULL CHECK(source_count >= 0),
+    source_assembly_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS checkpoint_context_source_states (
+    checkpoint_id TEXT NOT NULL REFERENCES checkpoint_context_source_snapshots(checkpoint_id),
+    session_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    binding_revision TEXT,
+    tracking_status TEXT NOT NULL CHECK(tracking_status IN ('tracked','untracked')),
+    latest_visible_committed_revision TEXT,
+    latest_revision TEXT,
+    state_revision INTEGER NOT NULL CHECK(state_revision >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(checkpoint_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS context_epoch_transitions (
+    transition_id TEXT PRIMARY KEY,
+    checkpoint_ns TEXT NOT NULL,
+    source_checkpoint_id TEXT NOT NULL,
+    target_view_id TEXT NOT NULL REFERENCES context_views(view_id),
+    reason TEXT NOT NULL CHECK(reason IN ('rewind','compaction')),
+    control_sequence INTEGER NOT NULL CHECK(control_sequence > 0),
+    canonical_cut_kind TEXT NOT NULL CHECK(
+        canonical_cut_kind IN ('complete','before_canonical','after_canonical')
+    ),
+    canonical_cut_item_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('pending','consumed','superseded')),
+    consumed_assembly_id TEXT,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    CHECK((status = 'consumed') = (consumed_assembly_id IS NOT NULL)),
+    CHECK(
+        (canonical_cut_kind = 'complete' AND canonical_cut_item_id IS NULL)
+        OR (canonical_cut_kind IN ('before_canonical','after_canonical')
+            AND canonical_cut_item_id IS NOT NULL AND length(canonical_cut_item_id) > 0)
+    )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS context_epoch_pending_namespace
+    ON context_epoch_transitions(checkpoint_ns) WHERE status = 'pending';
+"""
+"""checkpoint 控制状态版本与未应用的真实 view rebuild 事实。"""
+
 
 def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
     """创建 v2 schema；不执行数据迁移或业务查询。"""
@@ -53,6 +106,7 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
         PLAN_REGISTRY_SCHEMA_SQL.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
         + TOOL_SET_SNAPSHOT_SCHEMA_SQL.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
         + CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL
+        + CONTEXT_SOURCE_VERSION_SCHEMA_SQL
         +
         """
         CREATE TABLE IF NOT EXISTS database_meta (
@@ -533,6 +587,16 @@ def initialize_rollout_schema(connection: sqlite3.Connection) -> None:
             detail_ref TEXT,
             contribution_id TEXT,
             contribution_ordinal INTEGER,
+            source_cut_position_kind TEXT,
+            source_cut_item_id TEXT,
+            CHECK (
+                (source_cut_position_kind IS NULL AND source_cut_item_id IS NULL)
+                OR (source_cut_position_kind IS 'start' AND source_cut_item_id IS NULL
+                    AND included = 1 AND ref_type = 'request_only')
+                OR (source_cut_position_kind IS 'after_canonical'
+                    AND source_cut_item_id IS NOT NULL AND length(source_cut_item_id) > 0
+                    AND included = 1 AND ref_type = 'request_only')
+            ),
             PRIMARY KEY(assembly_id, plan_ordinal),
             UNIQUE(assembly_id, ref_type, ref_id)
         );

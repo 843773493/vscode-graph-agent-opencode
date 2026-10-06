@@ -234,7 +234,10 @@ def test_validate_hashes_rechecks_toolset_cross_binding(snapshot, tampered_bindi
 def protected_snapshot(snapshot, request):
     """原 policy 非空；最终 registry 只保留合法非正文 manifest token。"""
     public_ref = snapshot.tool_set_refs[0]
-    assert public_ref.tool_policy == {"enabled_policy_keys": ["filesystem_rules"]}
+    assert public_ref.tool_policy == {
+        "enabled_policy_keys": ["filesystem_rules"],
+        "wire_tool_order": ["read_file"],
+    }
     protected_ref = replace(
         public_ref, protection=request.param, content_hash=None,
         redacted_stable_digest="hmac-sha256:session:v1:" + "7" * 64,

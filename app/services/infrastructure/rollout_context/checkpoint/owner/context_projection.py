@@ -21,6 +21,7 @@ from app.domain.itemized.request_plan import (
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailRecord,
     DetailUnavailableError,
+    PreparedDetail,
     detail_record_from_mapping,
 )
 from app.services.mapping.itemized.selection import VerifiedRequestBody
@@ -42,7 +43,8 @@ class ContextProjectionOwnerMixin:
             )
 
     def _validate_snapshot_sources(
-        self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str
+        self, snapshot: ContextAssemblySnapshot, checkpoint_ns: str, *,
+        prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> None:
         """在提交 assembly 前校验实际 canonical/source 正文，omitted 不解引用。"""
         from app.services.mapping.itemized.selection import resolve_selected_item
@@ -67,6 +69,7 @@ class ContextProjectionOwnerMixin:
             checkpoint_ns,
             snapshot.as_sealed_plan(),
             None,
+            prepared_details=prepared_details,
         )
 
     def project_context_plan_to_native(
@@ -135,13 +138,23 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str,
         plan: ContextRequestPlan,
         explicit_content: Mapping[str, object] | None,
+        *,
+        prepared_details: tuple[PreparedDetail, ...] = (),
     ) -> dict[str, object]:
-        """只从 assembly-bound detail 恢复正文，并校验显式输入的一致性。"""
+        """从 assembly-bound detail 恢复正文；seal 只读显式冻结的内存值。"""
         self._require_context_plan_owner(session_id, thread_id, plan)
         if plan.plan_state != "sealed" or plan.assembly_id is None:
             raise ValueError("context plan 未 sealed，不能解析 request-only 正文")
         # sealed identity 不再读取可能属于其它 plan/revision 的实时 source cache。
-        # 显式正文仅用于相等性校验，不能替代下方必须存在的最终 detail。
+        # 显式正文仅用于相等性校验，不能替代已提交或本次待提交的 detail。
+        prepared_by_ref = {}
+        for prepared in prepared_details:
+            prepared.record.detail_ref.require_owner(session_id, thread_id, plan.assembly_id)
+            if prepared.record.checkpoint_ns != checkpoint_ns:
+                raise ValueError("source-mismatch: prepared detail namespace 不一致")
+            if prepared.record.detail_ref in prepared_by_ref:
+                raise ValueError("source-mismatch: prepared detail identity 重复")
+            prepared_by_ref[prepared.record.detail_ref] = prepared
         result: dict[str, object] = {}
         for contribution in plan.contributions:
             if contribution.body is not None:
@@ -181,14 +194,18 @@ class ContextProjectionOwnerMixin:
                     f"detail-unavailable: sealed request-only 缺少 typed detail: {ref_id}"
                 )
             detail_ref.require_owner(session_id, thread_id, plan.assembly_id)
+            prepared = prepared_by_ref.get(detail_ref)
             detail_record = self._request_source_record(
-                session_id, thread_id, checkpoint_ns, detail_ref, ref
+                session_id, thread_id, checkpoint_ns, detail_ref, ref,
+                prepared=prepared,
             )
-            detail_envelope = self._detail_store.read(
-                session_id=session_id,
-                thread_id=thread_id,
-                record=detail_record,
-                include_sensitive=ref.protection == "protected",
+            detail_envelope = (
+                self._detail_store.read_prepared(
+                    prepared, include_sensitive=ref.protection == "protected",
+                ) if prepared is not None else self._detail_store.read(
+                    session_id=session_id, thread_id=thread_id, record=detail_record,
+                    include_sensitive=ref.protection == "protected",
+                )
             )
             detail_body = detail_envelope.get("detail")
             if (
@@ -295,10 +312,12 @@ class ContextProjectionOwnerMixin:
         checkpoint_ns: str,
         detail_ref: DetailRef,
         ref: ContextRef,
+        *,
+        prepared: PreparedDetail | None = None,
     ) -> DetailRecord:
         """request source 的 typed owner 与用途必须在读取正文前一致。"""
         detail_ref.require_owner(session_id, thread_id)
-        record = detail_record_from_mapping(
+        record = prepared.record if prepared is not None else detail_record_from_mapping(
             self._storage.get_context_plan_detail(
                 session_id,
                 thread_id,
@@ -308,6 +327,7 @@ class ContextProjectionOwnerMixin:
         )
         if (
             record.detail_ref != detail_ref
+            or record.checkpoint_ns != checkpoint_ns
             or record.detail_kind != "request_source"
             or record.retention_class != "request_replay"
             or record.visibility != ref.visibility
@@ -490,7 +510,7 @@ class ContextProjectionOwnerMixin:
         assembly_id: str,
         omitted_ref_ids: frozenset[str] = frozenset(),
         request_only_content: Mapping[str, object] | None = None,
-    ) -> tuple[ContextRequestPlan, tuple[DetailRecord, ...], dict[str, DetailRef]]:
+    ) -> tuple[ContextRequestPlan, tuple[PreparedDetail, ...], dict[str, DetailRef]]:
         """为本次 sealed assembly 建立 target-local request detail binding。
 
         `ContextRef.ref_id` 是 source/plan identity，不是 contribution identity，
@@ -505,7 +525,7 @@ class ContextProjectionOwnerMixin:
             raise ValueError(
                 "plan-order-integrity: 只能为 unsealed plan 分配 detail binding"
             )
-        records: list[DetailRecord] = []
+        prepared_details: list[PreparedDetail] = []
         pending: list[tuple[ContextRef, object]] = []
         for ref in plan.refs:
             if ref.ref_type != "request_only":
@@ -523,48 +543,37 @@ class ContextProjectionOwnerMixin:
                 request_only_content=request_only_content,
             )
             pending.append((ref, body))
-        registered: list[DetailRef] = []
         detail_by_ref: dict[str, DetailRef] = {}
-        try:
-            for ref, body in pending:
-                record = self._detail_store.write(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    assembly_id=assembly_id,
-                    detail_kind="request_source",
-                    retention_class="request_replay",
-                    visibility=ref.visibility,
-                    detail=body,
-                    required=True,
-                    sensitive=ref.protection != "public",
-                    protection=ref.protection,
-                    checkpoint_ns=checkpoint_ns,
-                    source_revision=ref.source_revision,
-                )
-                records.append(record)
-                if (
-                    ref.redacted_stable_digest is not None
-                    and record.redacted_stable_digest != ref.redacted_stable_digest
-                ):
-                    raise ValueError(
-                        f"source-mismatch: request-only protected digest: {ref.ref_id}"
-                    )
-                self._storage.register_context_plan_detail(record)
-                registered.append(record.detail_ref)
-                detail_by_ref[ref.ref_id] = record.detail_ref
-        except BaseException:
-            self._storage.mark_context_plan_details_unavailable(
-                session_id,
-                thread_id,
-                detail_refs=registered,
+        redaction_key = None
+        for ref, body in pending:
+            prepared = self._detail_store.prepare(
+                session_id=session_id,
+                thread_id=thread_id,
+                assembly_id=assembly_id,
+                detail_kind="request_source",
+                retention_class="request_replay",
+                visibility=ref.visibility,
+                detail=body,
+                required=True,
+                sensitive=ref.protection != "public",
+                protection=ref.protection,
                 checkpoint_ns=checkpoint_ns,
+                source_revision=ref.source_revision,
+                redaction_key=redaction_key,
             )
-            for record in records:
-                self._detail_store.remove(
-                    session_id=session_id, thread_id=thread_id, record=record
+            record = prepared.record
+            if (
+                ref.redacted_stable_digest is not None
+                and record.redacted_stable_digest != ref.redacted_stable_digest
+            ):
+                raise ValueError(
+                    f"source-mismatch: request-only protected digest: {ref.ref_id}"
                 )
-            raise
-        return plan, tuple(records), detail_by_ref
+            prepared_details.append(prepared)
+            if prepared.redaction_key is not None:
+                redaction_key = prepared.redaction_key
+            detail_by_ref[ref.ref_id] = record.detail_ref
+        return plan, tuple(prepared_details), detail_by_ref
 
 
 __all__ = ["ContextProjectionOwnerMixin"]

@@ -1,15 +1,21 @@
-"""v2 checkpoint boundary 与 rewind 操作 owner。
+"""v2 checkpoint boundary、rewind 与 active view/anchor 的持久化 owner。
 
-这里维护 active view/anchor 的 durable 操作；只调用 RolloutStorage 的
-transaction/domain port，不提供旧 v1 runtime fallback。
+这里在 RolloutStorage 的同一 SQLite 事务内提交 view、branch 与 control 状态，
+并委托唯一 tool protocol validator 判定闭合边界。
 """
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.mutation_intents import (
+    MutationIntentOwner,
+    RebuildContextEpochIntent,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
@@ -29,7 +35,7 @@ if TYPE_CHECKING:
 
 
 class RolloutCheckpointOperationsMixin:
-    """checkpoint boundary、rewind 与 view revision owner。"""
+    """checkpoint boundary、rewind 与 view revision 的持久化 owner。"""
 
     def create_context_boundary(
         self,
@@ -43,7 +49,8 @@ class RolloutCheckpointOperationsMixin:
         source_turn_id: str | None = None,
         base_message_sequence: int | None = None,
         anchor_mode: str = "inclusive",
-    ) -> RolloutManifest:
+        consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
+    ) -> tuple[RolloutManifest, str]:
         thread_id = strict_text(thread_id, field="context_boundary.thread_id")
         strict_text(
             checkpoint_ns, field="context_boundary.checkpoint_ns", allow_empty=True
@@ -83,6 +90,7 @@ class RolloutCheckpointOperationsMixin:
                 thread_id, checkpoint_ns, session_id=session_id
             ) as connection:
                 self._require_v2_runtime(connection)
+                connection.execute("BEGIN IMMEDIATE")
                 if source_turn_id is not None:
                     resolved = self._resolve_turn_anchor_connection(
                         connection,
@@ -94,17 +102,17 @@ class RolloutCheckpointOperationsMixin:
                     source_view_id = resolved.view_id
                     base_message_sequence = resolved.cutoff_message_sequence
                     source_anchor = None
-                source = (
-                    self._checkpoint_row(
-                        connection,
-                        checkpoint_ns,
-                        source_checkpoint_id,
-                    )
-                    if source_checkpoint_id
-                    else self._checkpoint_row(connection, checkpoint_ns, None)
+                source = self._checkpoint_row(
+                    connection,
+                    checkpoint_ns,
+                    source_checkpoint_id,
                 )
                 if source is None:
-                    return self._manifest_from_connection(connection, checkpoint_ns)
+                    raise KeyError(
+                        f"context-boundary-checkpoint-unavailable: {boundary} source checkpoint 不存在或不可用: "
+                        f"session_id={session_id}, thread_id={thread_id}, "
+                        f"checkpoint_ns={checkpoint_ns!r}, checkpoint_id={source_checkpoint_id!r}"
+                    )
                 source_checkpoint_value = strict_text(
                     source[0], field="checkpoints.checkpoint_id"
                 )
@@ -170,11 +178,12 @@ class RolloutCheckpointOperationsMixin:
                     source_sequences,
                     cutoff,
                 )
-                branch_id = "branch-" + uuid4().hex[:12]
                 timestamp = _now()
                 old_active_branch, _projection_epoch = self._namespace_state(
                     connection, checkpoint_ns
                 )
+                history_only = boundary == "history_replay"
+                branch_id = old_active_branch if history_only else "branch-" + uuid4().hex[:12]
                 view_id = self._create_view(
                     connection,
                     branch_id,
@@ -183,30 +192,32 @@ class RolloutCheckpointOperationsMixin:
                     timestamp,
                     view_kind=boundary,
                 )
-                cursor = connection.execute(
-                    "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)",
-                    (
-                        branch_id,
-                        boundary,
-                        view_id,
-                        source_checkpoint_value,
-                        old_active_branch,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
+                if history_only:
+                    # history view 是显式只读投影，不能替换 execution head。
+                    cursor = connection.execute(
+                        "UPDATE checkpoint_namespace_state SET projection_epoch = projection_epoch + 1, "
+                        "updated_at = ? WHERE checkpoint_ns = ?",
+                        (timestamp, checkpoint_ns),
+                    )
+                else:
+                    cursor = connection.execute(
+                        "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, parent_branch_id, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)",
+                        (branch_id, boundary, view_id, source_checkpoint_value, old_active_branch, timestamp, timestamp),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("context boundary 新 branch 未写入")
+                    cursor = connection.execute(
+                        "UPDATE branches SET status = 'inactive', updated_at = ? WHERE branch_id = ?",
+                        (timestamp, old_active_branch),
+                    )
+                    if cursor.rowcount != 1:
+                        raise RuntimeError("context boundary 旧 active branch 更新失败")
+                    cursor = connection.execute(
+                        "UPDATE checkpoint_namespace_state SET active_branch_id = ?, projection_epoch = projection_epoch + 1, updated_at = ? WHERE checkpoint_ns = ?",
+                        (branch_id, timestamp, checkpoint_ns),
+                    )
                 if cursor.rowcount != 1:
-                    raise RuntimeError("context boundary 新 branch 未写入")
-                cursor = connection.execute(
-                    "UPDATE branches SET status = 'inactive', updated_at = ? WHERE branch_id = ?",
-                    (timestamp, old_active_branch),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError("context boundary 旧 active branch 更新失败")
-                cursor = connection.execute(
-                    "UPDATE checkpoint_namespace_state SET active_branch_id = ?, projection_epoch = projection_epoch + 1, updated_at = ? WHERE checkpoint_ns = ?",
-                    (branch_id, timestamp, checkpoint_ns),
-                )
+                    raise RuntimeError("context boundary namespace state 更新失败")
                 control_payload: dict[str, object] = {
                     "source_checkpoint_id": source_checkpoint_id,
                     "source_anchor": source_anchor,
@@ -224,8 +235,8 @@ class RolloutCheckpointOperationsMixin:
                 control_sequence = self._insert_control(
                     connection,
                     boundary,
-                    "branch",
-                    branch_id,
+                    "view" if history_only else "branch",
+                    view_id if history_only else branch_id,
                     branch_id,
                     view_id,
                     source_checkpoint_value,
@@ -233,8 +244,6 @@ class RolloutCheckpointOperationsMixin:
                     uuid4().hex,
                     timestamp,
                 )
-                if cursor.rowcount != 1:
-                    raise RuntimeError("context boundary namespace state 更新失败")
                 cursor = connection.execute(
                     "UPDATE database_meta SET last_control_sequence = ?, history_view_revision = history_view_revision + 1, updated_at = ? WHERE singleton_id = 1",
                     (control_sequence, timestamp),
@@ -247,8 +256,25 @@ class RolloutCheckpointOperationsMixin:
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError("context boundary context view 更新失败")
+                if boundary in {"rewind", "compaction"}:
+                    revision = connection.execute(
+                        "SELECT history_view_revision FROM database_meta WHERE singleton_id=1"
+                    ).fetchone()
+                    intent = RebuildContextEpochIntent(
+                        owner=MutationIntentOwner(session_id, thread_id),
+                        epoch_reason="rewind" if boundary == "rewind" else "compaction",
+                        view_revision=strict_non_negative_int(
+                            revision[0], field="database_meta.history_view_revision",
+                        ),
+                        control_revision=control_sequence,
+                        checkpoint_ns=checkpoint_ns,
+                        source_checkpoint_id=source_checkpoint_value,
+                        target_view_id=view_id,
+                    )
+                    consumer = self.consume_context_epoch_rebuild_intent if consume_epoch_intent is None else consume_epoch_intent
+                    consumer(intent, connection)
                 connection.commit()
-                return self._manifest_from_connection(connection, checkpoint_ns)
+                return self._manifest_from_connection(connection, checkpoint_ns), view_id
 
     def rewind_to_checkpoint(
         self,
@@ -258,15 +284,18 @@ class RolloutCheckpointOperationsMixin:
         checkpoint_id: str,
         source_anchor: str | None = None,
         anchor_mode: str = "inclusive",
+        consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> RolloutManifest:
-        return self.create_context_boundary(
+        manifest, _view_id = self.create_context_boundary(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             boundary="rewind",
             source_checkpoint_id=checkpoint_id,
             source_anchor=source_anchor,
             anchor_mode=anchor_mode,
+            consume_epoch_intent=consume_epoch_intent,
         )
+        return manifest
 
     def rewind_to_turn(
         self,
@@ -275,9 +304,10 @@ class RolloutCheckpointOperationsMixin:
         checkpoint_ns: str = "",
         turn_id: str,
         anchor_mode: str = "inclusive",
+        consume_epoch_intent: Callable[[RebuildContextEpochIntent, sqlite3.Connection], None] | None = None,
     ) -> RolloutManifest:
         """只接受用户 Turn 锚点，内部解析实际 source view/checkpoint。"""
-        return self.create_context_boundary(
+        manifest, _view_id = self.create_context_boundary(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             boundary="rewind",
@@ -285,7 +315,9 @@ class RolloutCheckpointOperationsMixin:
             source_anchor=None,
             source_turn_id=turn_id,
             anchor_mode=anchor_mode,
+            consume_epoch_intent=consume_epoch_intent,
         )
+        return manifest
 
     def history_replay_to_turn(
         self,
@@ -294,9 +326,9 @@ class RolloutCheckpointOperationsMixin:
         checkpoint_ns: str = "",
         turn_id: str,
         anchor_mode: str = "inclusive",
-    ) -> RolloutManifest:
+    ) -> tuple[RolloutManifest, str]:
         """为历史投影建立新 view，但不创建 execution 或新的 Turn。"""
-        return self.create_context_boundary(
+        manifest, view_id = self.create_context_boundary(
             thread_id=thread_id,
             checkpoint_ns=checkpoint_ns,
             boundary="history_replay",
@@ -305,3 +337,4 @@ class RolloutCheckpointOperationsMixin:
             source_turn_id=turn_id,
             anchor_mode=anchor_mode,
         )
+        return manifest, view_id

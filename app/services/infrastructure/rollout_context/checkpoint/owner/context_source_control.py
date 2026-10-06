@@ -12,14 +12,8 @@ owner 粒度是精确 ``(session_id, thread_id)``：main 与 child thread 都使
 catalog 中的 canonical Thread ID，并落在对应 Thread 节点的 rollout 库；状态
 不共享、不互相覆盖。
 
-TODO: OpenSpec 2.4/3.6 要求 rewind/compaction 事务提交 checkpoint-versioned
-CSM 控制状态，并按目标 checkpoint 恢复 tracking state。当前实现只提供每个
-registration 的单调 ``state_revision`` 作为将来的绑定锚点，没有实现
-checkpoint → 控制状态版本的绑定或回放：现有 checkpoint 恢复入口
-（``ContextReconciliationMixin.reconcile_context(operation="checkpoint_restore")``
-与 fork/remap 路径）不携带 CSM 控制状态版本，CSM 的
-``restore_active_revision`` 也没有生产调用方。因此 rewind 后按 checkpoint
-回退 tracked/untracked 状态仍是不完整能力，本任务不猜测其事务语义。
+checkpoint 控制状态版本与 rewind/compaction view rebuild 由 durable owner
+在既有事务中提交；本模块只在唯一 assembly seal 内推进 source applied。
 """
 
 from __future__ import annotations
@@ -40,9 +34,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceControlState,
     ContextSourceOwnerKey,
     ContextSourceTrackingStatus,
-)
-from app.services.infrastructure.rollout_context.storage.schema import (
-    CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
@@ -201,7 +192,6 @@ class ContextSourceControlStorageMixin:
                 raise ItemSchemaError("context-seal-epoch-conflict: rebuild ordinal 必须连续")
         elif binding.prefix.state.epoch.ordinal != 1:
             raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
-        self._ensure_context_source_control_schema(connection)
         for source in binding.source_revisions:
             row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
@@ -213,9 +203,17 @@ class ContextSourceControlStorageMixin:
                     "context-source-seal-conflict: source 未由 owner 登记: " + source.source_id
                 )
             stored = _state_from_row(tuple(row))
+            rebuilding_source = source.expected_control_revision is not None
+            if rebuilding_source and binding.prefix.consumed_transition is None:
+                raise ItemSchemaError(
+                    "context-source-seal-conflict: rebuild CAS 缺少真实 consumed transition"
+                )
             if (
-                stored.latest_revision != source.revision
-                or stored.latest_visible_committed_revision != source.previous_revision
+                stored.latest_visible_committed_revision != source.previous_revision
+                or (
+                    (stored.state_revision != source.expected_control_revision or not stored.tracking_status == "tracked")
+                    if rebuilding_source else stored.latest_revision != source.revision
+                )
             ):
                 raise RuntimeError(
                     "context-source-seal-conflict: observed/applied revision 已变化: "
@@ -236,12 +234,13 @@ class ContextSourceControlStorageMixin:
                     + source.source_id
                 )
             cursor = connection.execute(
-                f"UPDATE {_TABLE_NAME} SET latest_visible_committed_revision = ?, "
+                f"UPDATE {_TABLE_NAME} SET latest_visible_committed_revision = ?, latest_revision = ?, "
                 "state_revision = state_revision + 1, updated_at = ? "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
                 "AND state_revision = ?",
                 (
-                    source.revision, _now(), snapshot.session_id, snapshot.thread_id,
+                    source.revision, source.revision if rebuilding_source else stored.latest_revision,
+                    _now(), snapshot.session_id, snapshot.thread_id,
                     source.source_id, stored.state_revision,
                 ),
             )
@@ -286,16 +285,6 @@ class ContextSourceControlStorageMixin:
             is not None
         )
 
-    @staticmethod
-    def _context_source_control_table_exists(connection: sqlite3.Connection) -> bool:
-        return (
-            connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (_TABLE_NAME,),
-            ).fetchone()
-            is not None
-        )
-
     @classmethod
     def _require_context_source_control_runtime(
         cls,
@@ -322,40 +311,6 @@ class ContextSourceControlStorageMixin:
         index_path = self.index_path(session_id, "", thread_id=thread_id)
         return index_path.is_file() and index_path.stat().st_size > 0
 
-    @staticmethod
-    def _ensure_context_source_control_schema(connection: sqlite3.Connection) -> None:
-        """为已存在的 rollout 库补齐控制状态表并执行显式列迁移。
-
-        该表是 add-context-injection-lifecycle 期间新增的对象：新库直接使用
-        schema owner 的当前 DDL；开发期建立的旧表按一次性显式
-        ALTER TABLE RENAME COLUMN 迁移到 latest_visible_committed_revision
-        命名，不保留双列读取。
-        """
-        table_exists = (
-            connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (_TABLE_NAME,),
-            ).fetchone()
-            is not None
-        )
-        if table_exists:
-            columns = {
-                row[0]
-                for row in connection.execute(
-                    f"PRAGMA table_info({_TABLE_NAME})"
-                ).fetchall()
-            }
-            if (
-                "applied_revision" in columns
-                and "latest_visible_committed_revision" not in columns
-            ):
-                connection.execute(
-                    f"ALTER TABLE {_TABLE_NAME} RENAME COLUMN applied_revision "
-                    "TO latest_visible_committed_revision"
-                )
-        for statement in CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_STATEMENTS:
-            connection.execute(statement)
-
     def read_context_source_control_states(
         self,
         session_id: str,
@@ -381,9 +336,6 @@ class ContextSourceControlStorageMixin:
         ) as connection:
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
-            if not self._context_source_control_table_exists(connection):
-                # 既有 v4 rollout 库可能还没有该表；没有表就等于没有控制状态。
-                return ()
             rows = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                 "WHERE session_id = ? AND thread_id = ? "
@@ -426,7 +378,6 @@ class ContextSourceControlStorageMixin:
         with self._connect(thread_id, "", session_id=owner.session_id) as connection:
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
-            self._ensure_context_source_control_schema(connection)
             existing_row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
@@ -555,7 +506,6 @@ class ContextSourceControlStorageMixin:
         ):
             self._require_context_source_control_runtime(connection)
             self._validate_schema_state(connection)
-            self._ensure_context_source_control_schema(connection)
             existing_row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ?",

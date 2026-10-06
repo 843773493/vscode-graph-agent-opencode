@@ -17,8 +17,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 
 
-def _manager():
-    manager = ContextSourceManager()
+def _manager(source_seal_case):
+    manager = source_seal_case.manager()
     manager.register(
         ContextSourceDescriptor(
             source_id="skill:debugging",
@@ -30,13 +30,6 @@ def _manager():
         )
     )
     return manager
-
-
-def _commit_model_call_pending(manager: ContextSourceManager):
-    batch = manager.prepare_pending()
-    assert batch is not None
-    manager.commit_model_call_pending(batch)
-    return batch.deltas
 
 
 def _install_snapshot(
@@ -64,14 +57,14 @@ def _install_snapshot(
     return binding
 
 
-def test_snapshot_load_reads_once_and_exposes_only_metadata():
-    manager = _manager()
+def test_snapshot_load_reads_once_and_exposes_only_metadata(source_seal_case):
+    manager = _manager(source_seal_case)
     # 冻结 snapshot 是唯一 content port:load 路径零 I/O,不读任何来源。
     _install_snapshot(manager, "debugging", "# Debugging\n\nUse the debugger.\n")
 
     first = manager.load_skill("debugging")
     second = manager.load_skill("debugging")
-    deltas = _commit_model_call_pending(manager)
+    deltas = source_seal_case.seal(manager)[0].deltas
 
     assert first.mode == "snapshot"
     assert first.queued is True
@@ -85,17 +78,17 @@ def test_snapshot_load_reads_once_and_exposes_only_metadata():
     assert not hasattr(first, "internal_locator")
 
 
-def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revision():
-    manager = _manager()
+def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revision(source_seal_case):
+    manager = _manager(source_seal_case)
     manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="snapshot")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
     manager.load_skill("debugging", mode="tracked")
 
     assert manager.observe("skill:debugging", "v2\n") is True
     assert manager.observe("skill:debugging", "v3\n") is True
-    deltas = _commit_model_call_pending(manager)
+    deltas = source_seal_case.seal(manager)[0].deltas
 
     assert len(deltas) == 1
     assert deltas[0].kind == "delta"
@@ -105,33 +98,18 @@ def test_tracked_changes_are_coalesced_from_last_latest_visible_committed_revisi
     assert manager.observe("skill:debugging", "v3\n") is False
 
 
-def test_untrack_stops_observation_without_removing_existing_context():
-    manager = _manager()
+def test_untrack_stops_observation_without_removing_existing_context(source_seal_case):
+    manager = _manager(source_seal_case)
     manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    activation = _commit_model_call_pending(manager)
+    activation = source_seal_case.seal(manager)[0].deltas
     receipt = manager.load_skill("debugging", mode="untrack")
 
     assert receipt.tracked is False
     assert manager.observe("skill:debugging", "v2\n") is False
     assert manager.prepare_pending() is None
     assert activation[0].content == "v1\n"
-
-
-def test_restore_after_rewind_reappends_full_current_revision():
-    manager = _manager()
-    manager.activate_skill_content("debugging", "v1\n")
-    _install_snapshot(manager, "debugging", "v1\n")
-    manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
-    manager.observe("skill:debugging", "v2\n")
-    _commit_model_call_pending(manager)
-
-    assert manager.restore_active_revision("skill:debugging", "sha256:rewound") is True
-    (delta,) = _commit_model_call_pending(manager)
-    assert delta.kind == "rebuild"
-    assert delta.content == "v2\n"
 
 
 _SKILL_LOAD_RESULT_KEYS = {
@@ -158,8 +136,8 @@ def _assert_no_locator_or_body(payload: dict, locator: str, body: str) -> None:
         assert ".boxteam" not in serialized, f"{key} 泄露物理路径"
 
 
-def test_skill_load_tool_resolves_only_from_frozen_snapshot():
-    manager = _manager()
+def test_skill_load_tool_resolves_only_from_frozen_snapshot(source_seal_case):
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "正文\n")
     skill_load = create_skill_load_tool(manager)
     first = json.loads(skill_load.invoke({"name": "debugging"}))
@@ -181,8 +159,8 @@ def test_skill_load_tool_resolves_only_from_frozen_snapshot():
         _assert_no_locator_or_body(payload, "/.boxteam/skills/debugging/SKILL.md", "正文")
 
 
-def test_skill_load_tool_rejects_unknown_arguments():
-    manager = _manager()
+def test_skill_load_tool_rejects_unknown_arguments(source_seal_case):
+    manager = _manager(source_seal_case)
     skill_load = create_skill_load_tool(manager)
 
     with pytest.raises(ValidationError, match="unexpected"):
@@ -214,13 +192,13 @@ def test_skill_load_receipt_exposes_safe_display_uri_and_hash():
     assert "/.boxteam" not in repr(receipt)
 
 
-def test_skill_load_repeat_snapshot_after_commit_is_already_active():
-    manager = _manager()
+def test_skill_load_repeat_snapshot_after_commit_is_already_active(source_seal_case):
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     first = manager.load_skill("debugging")
     assert first.status == "loaded"
     assert first.append_status == "appended"
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
     second = manager.load_skill("debugging")
     assert second.status == "already_active"
     assert second.append_status == "already_active"
@@ -230,8 +208,8 @@ def test_skill_load_repeat_snapshot_after_commit_is_already_active():
     assert manager.prepare_pending() is None
 
 
-def test_skill_load_tracked_mode_registers_tracking_and_appends():
-    manager = _manager()
+def test_skill_load_tracked_mode_registers_tracking_and_appends(source_seal_case):
+    manager = _manager(source_seal_case)
     binding = _install_snapshot(manager, "debugging", "v1\n")
     receipt = manager.load_skill("debugging", mode="tracked")
     assert receipt.tracked is True
@@ -240,8 +218,8 @@ def test_skill_load_tracked_mode_registers_tracking_and_appends():
     assert receipt.display_uri == binding.display_uri
 
 
-def test_skill_load_untrack_not_tracked_is_deterministic():
-    manager = _manager()
+def test_skill_load_untrack_not_tracked_is_deterministic(source_seal_case):
+    manager = _manager(source_seal_case)
     skill_load = create_skill_load_tool(manager)
     result = json.loads(skill_load.invoke({"name": "debugging", "mode": "untrack"}))
     assert result["status"] == "not_tracked"
@@ -252,8 +230,8 @@ def test_skill_load_untrack_not_tracked_is_deterministic():
     assert manager.prepare_pending() is None  # 不伪造 source item
 
 
-def test_skill_load_untrack_stops_tracking_without_reading_source():
-    manager = _manager()
+def test_skill_load_untrack_stops_tracking_without_reading_source(source_seal_case):
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
     skill_load = create_skill_load_tool(manager)
@@ -264,8 +242,8 @@ def test_skill_load_untrack_stops_tracking_without_reading_source():
     assert manager.observe("skill:debugging", "v2\n") is False
 
 
-def test_skill_load_unknown_name_returns_explicit_error():
-    manager = _manager()
+def test_skill_load_unknown_name_returns_explicit_error(source_seal_case):
+    manager = _manager(source_seal_case)
     skill_load = create_skill_load_tool(manager)
     result = json.loads(skill_load.invoke({"name": "missing"}))
     assert result["status"] == "error"
@@ -278,14 +256,14 @@ def _sha(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def test_pending_delta_carries_content_hash_and_merged_provenance():
+def test_pending_delta_carries_content_hash_and_merged_provenance(source_seal_case):
     """多个 pending observation 合并为唯一 delta:from 基准、载荷 hash、
     provenance 与提交后闭合全部显式(D1 构造合同)。"""
-    manager = _manager()
+    manager = _manager(source_seal_case)
     manager.activate_skill_content("debugging", "v1\n")
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
 
     assert manager.observe("skill:debugging", "v2\n") is True
     assert manager.observe("skill:debugging", "v3\n") is True
@@ -297,7 +275,7 @@ def test_pending_delta_carries_content_hash_and_merged_provenance():
     assert delta.content_hash == _sha(delta.content)
     assert delta.observation_provenance == (_sha("v2\n"), _sha("v3\n"))
 
-    manager.commit_model_call_pending(batch)
+    source_seal_case.seal(manager)
     assert manager.observe("skill:debugging", "v4\n") is True
     batch2 = manager.prepare_pending()
     assert batch2 is not None
@@ -306,13 +284,13 @@ def test_pending_delta_carries_content_hash_and_merged_provenance():
     assert delta2.observation_provenance == (_sha("v4\n"),)
 
 
-def test_same_normalized_name_register_overrides_index_and_untrack_stops_old():
+def test_same_normalized_name_register_overrides_index_and_untrack_stops_old(source_seal_case):
     """同名高优先级 entry 覆盖 catalog 名称索引但不自动改绑 active
     registration;untrack 按 active tracked registration 定位原 registration。"""
-    manager = _manager()
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
 
     manager.register(
         ContextSourceDescriptor(
@@ -335,16 +313,16 @@ def test_same_normalized_name_register_overrides_index_and_untrack_stops_old():
     assert again.status == "not_tracked"
 
 
-def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old():
+def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(source_seal_case):
     """6.2-B：effective entry identity 已变时显式 tracked 触发 rebind。
 
     冻结旧 registration、为当前 effective entry 追加完整 activation、建立新
     tracking，并返回独立成功态 rebound + source_rebound=true；旧 item 不变。
     """
-    manager = _manager()
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    (old_activation,) = _commit_model_call_pending(manager)
+    (old_activation,) = source_seal_case.seal(manager)[0].deltas
     assert old_activation.content == "v1\n"
     assert manager._source_ids_by_name["debugging"] == "skill:debugging"
 
@@ -388,12 +366,12 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old():
     assert old_activation.revision != rebound_delta.revision
 
 
-def test_load_tracked_same_effective_entry_is_idempotent_already_active():
+def test_load_tracked_same_effective_entry_is_idempotent_already_active(source_seal_case):
     """6.2-B：effective entry 未变时幂等复用，不追加第二个 item。"""
-    manager = _manager()
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
 
     again = manager.load_skill("debugging", mode="tracked")
 
@@ -403,7 +381,7 @@ def test_load_tracked_same_effective_entry_is_idempotent_already_active():
     assert manager.prepare_pending() is None
 
 
-def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions():
+def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(source_seal_case):
     """6.2-B 组合边界：rebind 成功、但新 entry 已在可见台账。
 
     两个正交事实维度必须同时如实承载：``status`` 只描述"本次是否追加了
@@ -411,10 +389,10 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
     ``source_rebound`` 只描述"是否发生了 rebind"（已发生，为 True）。此时 rebind
     仍须完成：旧 registration 冻结、新 registration 建立。
     """
-    manager = _manager()
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
 
     # 新 effective entry 出现。
     manager.register(
@@ -436,7 +414,7 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
     # 新 entry 的当前 revision 已在可见台账：source owner 已交付并提交其正文，
     # 但此时该 entry 仍未建立 tracked registration。
     manager.activate_skill_content("debugging", "v2\n")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
     # rebind 前：新 entry 已注册但尚未 tracked。
     assert manager._sources["skill:debugging-next"].tracked is False
 
@@ -458,17 +436,17 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
     assert manager.prepare_pending() is None
 
 
-def test_load_tracked_duplicate_same_effective_entry_fails_closed():
+def test_load_tracked_duplicate_same_effective_entry_fails_closed(source_seal_case):
     """反例守卫：同名同 effective entry 的重复 registration 不得被误判为 rebind。
 
     两个 source_id 解析到同一 resolved source identity（同一 display URI）时，
     effective entry 并未改变；必须 fail closed，绝不冻结旧 registration 或重复
     追加 context item。
     """
-    manager = _manager()
+    manager = _manager(source_seal_case)
     _install_snapshot(manager, "debugging", "v1\n")
     manager.load_skill("debugging", mode="tracked")
-    _commit_model_call_pending(manager)
+    source_seal_case.seal(manager)
 
     # 同一 effective entry 的别名 registration（同 display URI，不同 source_id）。
     manager.register(
@@ -525,9 +503,9 @@ def test_load_tracked_with_multiple_active_registrations_fails_closed():
     assert exc_info.value.code == "tracking-state-conflict"
 
 
-def test_register_tracked_source_consumes_event_observations():
+def test_register_tracked_source_consumes_event_observations(source_seal_case):
     # 受信来源（AGENTS）以 tracked 身份登记：首帧走 activation，重复注册不降级。
-    manager = ContextSourceManager()
+    manager = source_seal_case.manager()
     descriptor = ContextSourceDescriptor(
         source_id="agents:workspace",
         source_kind="workspace_agents",
@@ -544,7 +522,7 @@ def test_register_tracked_source_consumes_event_observations():
     delta = batch.deltas[0]
     assert delta.source_kind == "workspace_agents"
     assert delta.kind == "activation"
-    manager.commit_model_call_pending(batch)
+    source_seal_case.seal(manager)
 
     manager.register(descriptor)
     status, latest = manager.source_observation_state("agents:workspace")

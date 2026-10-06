@@ -73,6 +73,8 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("item_projections", "id"),
             ("item_catalog", "item_id"),
             ("context_view_items", "item_id"),
+            ("context_assembly_selections", "source_cut_item_id"),
+            ("context_epoch_transitions", "canonical_cut_item_id"),
             ("item_parts", "item_id"),
             ("operation_anchors", "item_id"),
             ("context_view_turns", "root_input_item_id"),
@@ -136,6 +138,8 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("context_assembly_selections", "assembly_id"),
             ("context_contributions", "assembly_id"),
             ("model_calls", "assembly_id"),
+            ("checkpoint_context_source_snapshots", "source_assembly_id"),
+            ("context_epoch_transitions", "consumed_assembly_id"),
         ):
             rewrite_column(table, column, old_id, new_id)
 
@@ -149,10 +153,12 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("context_view_jumps", "view_id"),
             ("context_view_jumps", "ancestor_view_id"),
             ("context_view_turns", "view_id"),
+            ("context_view_items", "view_id"),
             ("checkpoints", "view_id"),
             ("checkpoint_channels", "context_view_id"),
             ("operation_anchors", "view_id"),
             ("branches", "head_view_id"),
+            ("context_epoch_transitions", "target_view_id"),
         ):
             rewrite_column(table, column, old_id, new_id)
 
@@ -177,8 +183,14 @@ def rewrite_full_copy_reference_columns(state: FullCopyRemapState) -> None:
             ("pending_writes", "checkpoint_id"),
             ("control_events", "checkpoint_id"),
             ("branches", "head_checkpoint_id"),
+            ("checkpoint_context_source_snapshots", "checkpoint_id"),
+            ("checkpoint_context_source_states", "checkpoint_id"),
+            ("context_epoch_transitions", "source_checkpoint_id"),
         ):
             rewrite_column(table, column, old_id, new_id)
+
+    for old_id, new_id in maps.get("epoch_transition", {}).items():
+        rewrite_column("context_epoch_transitions", "transition_id", old_id, new_id)
 
     for old_id, new_id in maps.get("message", {}).items():
         rewrite_column("messages", "message_id", old_id, new_id)

@@ -34,7 +34,10 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_
 from app.services.infrastructure.rollout_context.checkpoint.boundary.fork_boundary import (
     RolloutForkBoundaryOwnerMixin,
 )
-from app.services.infrastructure.rollout_context.checkpoint.boundary.operations import (
+from app.services.infrastructure.rollout_context.checkpoint.durable.context_source_versions import (
+    ContextSourceVersionsStorageMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.durable.operations import (
     RolloutCheckpointOperationsMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.durable.persistence import (
@@ -211,6 +214,7 @@ class RolloutStorage(
     RolloutPartsMixin,
     ContextAssemblyStorageMixin,
     ContextSourceControlStorageMixin,
+    ContextSourceVersionsStorageMixin,
     RolloutSerializationMixin,
     RolloutTransactionProjectionMixin,
     RolloutMessageProjectionMixin,

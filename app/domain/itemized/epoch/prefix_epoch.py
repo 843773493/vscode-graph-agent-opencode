@@ -447,10 +447,16 @@ def initial_epoch_state(
     provider_profile: str,
     tool_compatibility_key: str,
     turn_id: str | None = None,
+    transition: PendingPrefixEpochTransition | None = None,
 ) -> PrefixEpochState:
-    """首次组装的 initial epoch;首个 assembly seal 成功后才 applied。"""
+    """首个 assembly 才 applied；此前真实 view rebuild 保留其 pending 原因。"""
+    if transition is not None and transition.consumed:
+        raise EpochContractError("首个 assembly 不能重复消费已应用 transition")
     return PrefixEpochState(
-        epoch=PrefixEpoch(ordinal=1, reason=EpochReason.INITIAL, turn_id=turn_id),
+        epoch=PrefixEpoch(
+            ordinal=1, reason=EpochReason.INITIAL if transition is None else transition.reason,
+            turn_id=turn_id,
+        ),
         provider_profile=provider_profile,
         tool_compatibility_key=tool_compatibility_key,
         epoch_applied=False,

@@ -37,6 +37,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.composer import (
     ContextPlanComposer,
 )
+from app.services.infrastructure.rollout_context.storage.schema import (
+    ROLLOUT_SCHEMA_VERSION,
+)
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -64,7 +67,7 @@ def registry_db(request, session_bundle_factory):
     connection.execute("PRAGMA foreign_keys = ON")
     assert connection.execute(
         "SELECT schema_version, database_state FROM database_meta"
-    ).fetchone() == (10, "active")
+    ).fetchone() == (ROLLOUT_SCHEMA_VERSION, "active")
     try:
         yield saver, session_id, connection, accepted
     finally:
@@ -523,7 +526,7 @@ def test_saver_registry_restarts_and_revises_through_one_owner(registry_db, draf
 
 
 def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft):
-    saver, session, _connection, _accepted = registry_db
+    saver, session, _connection, accepted = registry_db
     first = saver.create_context_plan(session, draft)
     second_body = {"instructions": "第二个 plan 的同名来源"}
     contribution = replace(
@@ -557,16 +560,23 @@ def test_saver_plan_body_cache_never_overwrites_another_plan(registry_db, draft)
         (first, draft.contributions[0].body),
         (second_registered, second_body),
     ):
-        _plan, _records, detail_refs = saver._bind_request_detail_refs(
+        snapshot = saver.seal_context_plan(
             session,
             draft.thread_id,
-            "",
             registered.draft,
-            assembly_id=f"assembly-{registered.draft.plan_id}",
+            turn_id=accepted["turn_id"],
+            execution_id=accepted["initial_execution_id"],
+            provider_version="registry-provider",
+            wire_profile=None, wire_params=None,
+            seal_idempotency_key=f"seal-{registered.draft.plan_id}",
+        )
+        detail_ref = next(
+            entry.detail_ref for entry in snapshot.selection
+            if entry.included and entry.ref.ref_id == "request-ref"
         )
         assert (
             saver.read_context_plan_detail(
-                session, draft.thread_id, detail_ref=detail_refs["request-ref"]
+                session, draft.thread_id, detail_ref=detail_ref
             )["detail"]
             == expected_body
         )

@@ -17,7 +17,6 @@ from app.services.infrastructure.rollout_context.assembly.seal_preflight import 
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
-    release_uncommitted_details,
 )
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
@@ -25,6 +24,7 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
 )
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
+    PreparedDetail,
     detail_record_from_mapping,
 )
 from app.services.mapping.itemized.projection import build_projection_evidence
@@ -118,6 +118,7 @@ def seal_snapshot(
     sensitive_detail: bool,
     checkpoint_ns: str,
     activation_binding: ActivationSealBinding | None = None,
+    prepared_details: tuple[PreparedDetail, ...] = (),
 ) -> int:
 
     if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
@@ -141,6 +142,8 @@ def seal_snapshot(
     )
     draft = runtime_draft(registered)
     if registered.plan_state == "sealed":
+        if prepared_details:
+            raise ValueError("assembly-idempotency-conflict: sealed retry 不能准备新 detail")
         if (
             registered.seal_idempotency_key != seal_idempotency_key
             or registered.seal_input_hash != seal_input_hash
@@ -207,10 +210,11 @@ def seal_snapshot(
             detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
         )
-    record = None
     try:
         validate_sealed_plan(draft, snapshot)
-        owner._validate_snapshot_sources(snapshot, checkpoint_ns)
+        owner._validate_snapshot_sources(
+            snapshot, checkpoint_ns, prepared_details=prepared_details,
+        )
         if required_detail and detail is None:
             raise DetailUnavailableError(
                 "detail-unavailable: required assembly detail missing"
@@ -225,8 +229,13 @@ def seal_snapshot(
             )
         if sensitive_detail and detail is None:
             raise ValueError("detail-unavailable: sensitive detail 必须提供正文")
+        header = None
         if detail is not None:
-            record = owner._detail_store.write(
+            redaction_key = next(
+                (prepared.redaction_key for prepared in prepared_details
+                 if prepared.redaction_key is not None), None,
+            )
+            header = owner._detail_store.prepare(
                 session_id=session_id,
                 thread_id=thread_id,
                 assembly_id=snapshot.assembly_id,
@@ -237,17 +246,19 @@ def seal_snapshot(
                 required=required_detail,
                 sensitive=sensitive_detail,
                 checkpoint_ns=checkpoint_ns,
+                redaction_key=redaction_key,
             )
-            owner._storage.register_context_plan_detail(record)
         return owner._storage.seal_context_assembly(
             session_id,
             thread_id,
             snapshot,
             seal_idempotency_key=seal_idempotency_key,
             seal_input_hash=seal_input_hash,
-            detail_ref=record.detail_ref if record else None,
+            detail_ref=header.record.detail_ref if header is not None else None,
             checkpoint_ns=checkpoint_ns,
             activation_binding=bind_activation,
+            prepared_details=prepared_details + ((header,) if header is not None else ()),
+            detail_store=owner._detail_store,
         )
     except BaseException as error:
         record_failed_seal(
@@ -259,12 +270,4 @@ def seal_snapshot(
             checkpoint_ns,
             error,
         )
-        if record is not None:
-            release_uncommitted_details(
-                owner,
-                session_id,
-                thread_id,
-                checkpoint_ns,
-                (record,),
-            )
         raise

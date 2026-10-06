@@ -88,6 +88,9 @@ def compile_prefix_context(
     provider_profile: str,
     turn_id: str | None,
     transition: PendingPrefixEpochTransition | None = None,
+    retained_source_assembly: ContextAssemblySnapshot | None = None,
+    retained_source_refs: frozenset[tuple[str, str]] = frozenset(),
+    retained_source_bodies: Mapping[str, object] | None = None,
 ) -> tuple[ContextRequestPlan, ContextSealPreparation]:
     """同 epoch 精确继承已封存 prefix，只在真实边界重编 root。"""
     tool_ref = plan.tool_set_refs[0]
@@ -98,7 +101,7 @@ def compile_prefix_context(
     if previous_binding is None:
         state = initial_epoch_state(
             provider_profile=provider_profile, tool_compatibility_key=compatibility_key,
-            turn_id=turn_id,
+            turn_id=turn_id, transition=transition,
         )
     elif transition is not None or compatibility_key != previous_binding.prefix.state.tool_compatibility_key:
         state = open_rebuild_epoch(
@@ -117,6 +120,40 @@ def compile_prefix_context(
     frames: list[ProviderProfileItemFrame] = []
     if rebuilding:
         candidates = []
+        if retained_source_assembly is not None:
+            retained_binding = retained_source_assembly.seal_binding
+            if retained_binding is None:
+                raise RuntimeError("checkpoint-context-state-conflict: retained source 缺少 immutable prefix")
+            for provenance in (() if retained_binding.root is None else retained_binding.root.sources):
+                matches = tuple(
+                    source for source in retained_source_assembly.contributions
+                    if source.source_binding is not None
+                    and source.source_binding.source_ref == provenance.source_identity
+                    and source.source_revision == provenance.revision
+                    and source.root_placement == "root_eligible"
+                )
+                if len(matches) != 1:
+                    raise RuntimeError("checkpoint-context-state-conflict: retained root 缺少唯一 selected source")
+                root_refs = tuple(
+                    entry.ref.ref_id for entry in retained_source_assembly.selection
+                    if entry.included and entry.ref.ref_type == "request_only"
+                    and entry.contribution_id == matches[0].contribution_id
+                )
+                if len(root_refs) != 1:
+                    raise RuntimeError("checkpoint-context-state-conflict: retained root 缺少唯一 source ref")
+                if (root_refs[0], matches[0].source_revision) not in retained_source_refs:
+                    continue
+                contribution = by_contribution[matches[0].contribution_id]
+                content = (retained_source_bodies or {}).get(contribution.contribution_id)
+                if not isinstance(content, str) or contribution.source_ordinal != provenance.source_ordinal:
+                    raise RuntimeError("checkpoint-context-state-conflict: retained root detail/ordinal 不一致")
+                candidates.append(RootCandidateSource(
+                    source_identity=provenance.source_identity, source_kind=provenance.source_kind,
+                    name=provenance.name, revision=provenance.revision, content=content,
+                    source_ordinal=contribution.source_ordinal, root_placement="root_eligible",
+                    included_reason="epoch_rebuild",
+                ))
+                selected_ids.append(root_refs[0])
         for source in batch.sources:
             if source.descriptor.root_placement != "root_eligible" or not source.content:
                 continue
@@ -132,7 +169,7 @@ def compile_prefix_context(
                 root_placement=source.descriptor.root_placement,
                 included_reason=(
                     "toolset_policy" if source.descriptor.policy_key is not None
-                    else "initial" if state.epoch.ordinal == 1 else "epoch_rebuild"
+                    else "initial" if state.epoch.reason == EpochReason.INITIAL else "epoch_rebuild"
                 ),
             ))
             selected_ids.append(contribution.contribution_id)
@@ -172,6 +209,20 @@ def compile_prefix_context(
     frames.extend(canonical_frames)
     selected_ids.extend(canonical_ids)
     ordinal = len(state.frames) + len(frames)
+    if rebuilding and retained_source_assembly is not None:
+        # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
+        for frame in retained_source_assembly.seal_binding.prefix.state.frames:
+            if (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs or frame.role != "user":
+                continue
+            ref_id = frame.item_ref.ref_id
+            if ref_id not in by_id:
+                raise RuntimeError("checkpoint-context-state-conflict: retained source ref 已丢失")
+            ordinal += 1
+            selected_ids.append(ref_id)
+            frames.append(replace(
+                frame, ordinal=ordinal, provider_profile=provider_profile,
+                item_ref=replace(frame.item_ref, tracking_state="not_tracked"),
+            ))
     source_by_id = {source.descriptor.source_id: source for source in batch.sources}
     tail_values = (
         [
@@ -234,11 +285,19 @@ def compile_prefix_context(
     preparation = ContextSealPreparation(
         prefix_state=state, root=root, tool_set=tool_set,
         previous_assembly_id=previous.assembly_id if previous is not None else None,
-        source_revisions=tuple(AppliedSourceRevision(
-            delta.source_id, delta.revision,
-            f"source-seal:{delta.source_id}:{delta.revision}:{delta.kind}",
-            delta.previous_revision,
-        ) for delta in batch.deltas),
+        source_revisions=(
+            tuple(AppliedSourceRevision(
+                source.descriptor.source_id, source.revision,
+                f"source-rebuild:{transition.transition_id}:{source.descriptor.source_id}",
+                source.applied_revision,
+                expected_control_revision=source.expected_control_revision,
+            ) for source in batch.sources)
+            if transition is not None else tuple(AppliedSourceRevision(
+                delta.source_id, delta.revision,
+                f"source-seal:{delta.source_id}:{delta.revision}:{delta.kind}",
+                delta.previous_revision,
+            ) for delta in batch.deltas)
+        ),
         transition=transition,
     )
     return selected_plan, preparation

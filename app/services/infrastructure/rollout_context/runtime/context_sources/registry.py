@@ -90,6 +90,7 @@ class SourceRegistryMixin:
                     "register.tracking_status 只能是 tracked 或 untracked: "
                     f"{tracking_status!r}"
                 )
+            self.refresh_context_rebuild_state()
             state = self._sources.get(descriptor.source_id)
             if state is None:
                 state = SourceState(
@@ -167,6 +168,23 @@ class SourceRegistryMixin:
                 before_seal = replace(
                     durable, latest_visible_committed_revision=state.latest_visible_committed_revision,
                 )
+                # 真实 rebuild seal 同时提交 frozen observed/applied；确认前晚到的
+                # observation 只吸收这一精确 receipt 的 CAS，不覆盖其它控制变化。
+                batch = self._rebuild_source_batch
+                frozen = next((
+                    source for source in (() if batch is None else batch.sources)
+                    if source.descriptor.source_id == state.source_id
+                ), None)
+                original = self._rebuild_control_states.get(state.source_id)
+                if frozen is not None and original is not None and (
+                    frozen.expected_control_revision is not None
+                    and durable.state_revision == frozen.expected_control_revision + 1
+                    and durable.latest_revision == frozen.revision
+                    and durable.latest_visible_committed_revision == frozen.revision
+                ):
+                    before_seal = replace(
+                        before_seal, latest_revision=original.latest_revision,
+                    )
                 if before_seal.durable_fields() != state.persisted_fields:
                     raise RuntimeError(
                         "context-source-control-state-conflict: observed/tracking 已被其它 writer 推进"
