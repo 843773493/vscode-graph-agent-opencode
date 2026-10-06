@@ -3,7 +3,7 @@
 - [x] 1.1 为 Browser、Terminal 等 Agent 资源创建工具显式提供 `retention_scope` 参数并默认设为 `thread`；支持用户或显式工具参数选择 `workspace` 创建，或将已有资源提升为工作区范围，提升前后 `resource_id` 不变。
 - [x] 1.2 将工作区资源权威记录存入该工作区 `.boxteam/` 下的领域 owner 存储，并持久化不可变来源 Thread、当前关联、`unattached_since` 和回收状态；实现关联去重、资源版本和 operation lease 冲突校验。目标工作区 MUST 由显式 `workspace_id` 经 `add-multi-workspace-backend-mounting` 的已挂载工作区注册表解析，MUST NOT 依赖「当前激活工作区」。
 - [x] 1.3 按已授权的旧开发数据清理策略只保留新格式 owner；物理删除旧 Node/Session 领域记录读写和历史工具输出反推入口，不新增升级、迁移、双读写或兼容逻辑。新格式同版本重启仍须保持资源身份、关联与原始孤儿期限。
-- [ ] 1.4 实现 backend 重启后的 owner 核实/恢复；外部资源或结果不可确认时持久暴露 unknown/reconcile_required 状态，不重复创建或盲目重放。
+- [x] 1.4 实现 backend 重启后的 owner 核实/恢复；外部资源或结果不可确认时持久暴露 unknown/reconcile_required 状态，不重复创建或盲目重放。
 
 ## 2. Thread unload、Session 删除和 owner 操作
 
@@ -29,7 +29,9 @@
 
 - [x] 5.1 为默认 Thread scope 与显式 Workspace scope 创建、Thread unload 即时 detach/delete、有效 lease、promotion/unload 并发、detach 冲突、Session 删除和 owner 重启增加 owner/API 验证；覆盖孤儿资源在 29:59 重新 attach 取消回收、满 30:00 自动回收、lease 阻止回收、attach/回收竞态和 Workspace scope 永不按期限回收。
 - [ ] 5.2 在 `tests/e2e/clients/web/test_basic_chat_tool_loop.py` 这一既有唯一 Web E2E owner 中增加用户持久化 Browser/Terminal 资源、unload 后保留、另一个 Thread attach/detach、Session 删除后仍可从 Workspace UI 访问及明确失败反馈的完整场景。
-- [ ] 5.3 用外置 process control 验证 owner 在外部操作结果未知时崩溃和重启；恢复孤儿期限时不得重置计时、重放未知副作用、伪报删除成功或遗留无权威记录的外部资源。
+- [x] 5.3 用外置 process control 验证 owner 在外部操作结果未知时崩溃和重启；恢复孤儿期限时不得重置计时、重放未知副作用、伪报删除成功或遗留无权威记录的外部资源。
+
+1.4/5.3 验收（2026-10-06）：`tests/integration/workspace_services/test_resource_owner_crash_recovery.py` 使用真实 Node 资源、外置 SIGKILL 与新 Python registry 重开；Thread/Workspace × Terminal/Browser × 已发生/未发生共 8 个 stop 场景通过，崩溃后且恢复前直接核持久 owner/lease 与 Node 同一身份；未知操作保持阻断且不重放，Workspace 资源在 Session 释放后保留。原始孤儿期限、29:59 重新关联与 30:00 回收的 4 场景未变，复用既有通过结果，不声称最终单轮 12 绿。固定测试 SHA `fdab7b1d49e50ce60e632d9e64ae96addff2587b389631879e512a8bd190538f`；8 stop 实际退出 0 / 344.113 秒，生产/支撑指纹未变。证据 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/persistent-crash-primary/post-sigkill-authority-attempt-1/`，独审 `wire_http_acceptance_reviewer/artifacts/persistent-crash-boundary/`。owner/ledger 已提交；fixture 的 storage 初始化确为间接依赖，当前 DDL/bootstrap 不变、旧 schema 拒绝收紧不改变本测试 fresh 输入，不以直接 owner blob 相同宣称全部依赖相同。5.2 完整 Web 验收仍独立未完成。
 
 ## 6. 持久化引用收紧为规范层义务（只新增约束与引用）
 
