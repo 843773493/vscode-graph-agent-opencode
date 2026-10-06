@@ -45,12 +45,15 @@ WIRE_EXCLUDED_KEYS = frozenset(
     }
 )
 
-# 封存正文的 wire 字段只能来自 Saver 已投影结果；模型实例参数携带同名字段
+# 封存正文的 wire 字段只能来自 Saver 已投影结果；模型实例参数携带这些字段
 # 必须显式拒绝，避免出现“发送一份、哈希另一份”。
 CHAT_SEALED_KEYS = frozenset({"messages", "tools"})
+# Responses 边界与迁移前 native 绑定校验（已物理下线）的 forbidden 集合逐字
+# 一致：input/tools/include/store 由封存投影显式传入并按 §2.2 覆盖参数
+# （native 覆盖 parameters），因此不能拒绝 LangChain bind_tools 经 kwargs
+# 转发的 tools；其余指令位置仍必须拒绝，不能放宽。
 RESPONSES_SEALED_KEYS = frozenset({
-    "input", "tools", "include", "store", "instructions",
-    "messages", "previous_response_id", "prompt",
+    "input", "messages", "instructions", "previous_response_id", "prompt",
 })
 
 
@@ -169,6 +172,101 @@ def finalize_chat_wire(
     return payload
 
 
+def strip_responses_reasoning_output(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """移除 Responses reasoning 输入项的输出态 content。
+
+    封存与发送共用这一份最终边界清洗，adapter 不再各自复制。
+    TODO: 等所有兼容 Responses provider 支持 reasoning.content 的历史输入后，
+    再删除这个最终边界清洗。
+    """
+    input_items = payload.get("input")
+    if not isinstance(input_items, list):
+        return dict(payload)
+    cleaned: list[Any] = []
+    changed = False
+    for item in input_items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "reasoning"
+            and "content" in item
+        ):
+            cleaned.append(
+                {key: value for key, value in item.items() if key != "content"}
+            )
+            changed = True
+            continue
+        cleaned.append(item)
+    if not changed:
+        return dict(payload)
+    return {**payload, "input": cleaned}
+
+
+def merge_system_messages_into_instructions(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """ChatGPT Codex endpoint 只接受 instructions，不接受 system input。
+
+    TODO: LiteLLM 的 chatgpt provider 原生把 system/developer input 合并进
+    instructions 后，删除此兼容转换。
+    """
+    input_items = payload.get("input")
+    if not isinstance(input_items, list):
+        return dict(payload)
+
+    instruction_parts: list[str] = []
+    remaining_items: list[Any] = []
+    for item in input_items:
+        if not isinstance(item, dict) or item.get("role") not in {
+            "system",
+            "developer",
+        }:
+            remaining_items.append(item)
+            continue
+
+        content = item.get("content")
+        if isinstance(content, str):
+            instruction_parts.append(content)
+            continue
+        if not isinstance(content, list):
+            raise TypeError(
+                "ChatGPT system message content 必须是字符串或内容块列表"
+            )
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") not in {
+                "text",
+                "input_text",
+            }:
+                raise TypeError("ChatGPT system message 只支持文本内容块")
+            text = block.get("text")
+            if not isinstance(text, str):
+                raise TypeError("ChatGPT system message 文本块缺少 text 字符串")
+            instruction_parts.append(text)
+
+    if not instruction_parts:
+        return dict(payload)
+    existing_instructions = payload.get("instructions")
+    if existing_instructions is not None:
+        if not isinstance(existing_instructions, str):
+            raise TypeError("Responses instructions 必须是字符串")
+        instruction_parts.insert(0, existing_instructions)
+
+    return {
+        **payload,
+        "input": remaining_items,
+        "instructions": "\n\n".join(instruction_parts),
+    }
+
+
+def finalize_responses_body(
+    payload: Mapping[str, Any],
+    *,
+    merge_system_to_instructions: bool = False,
+) -> dict[str, Any]:
+    """Responses 最终正文清洗：唯一纯转换，封存与发送共用。"""
+    body = strip_responses_reasoning_output(payload)
+    if merge_system_to_instructions:
+        body = merge_system_messages_into_instructions(body)
+    return body
+
+
 def finalize_responses_wire(
     *,
     input_items: Sequence[object],
@@ -177,8 +275,13 @@ def finalize_responses_wire(
     include: Sequence[str],
     store: bool,
     instructions: str | None = None,
+    merge_system_to_instructions: bool = False,
 ) -> dict[str, Any]:
-    """Responses 最终 wire：input/tools/include/store 与真实语义参数合并。"""
+    """Responses 最终 wire：input/tools/include/store 与真实语义参数合并。
+
+    最终正文清洗只在这里实现一次：reasoning 输出态 content 与 chatgpt 的
+    system/developer→instructions 属于同一转换，adapter 不得再复制一份。
+    """
     _reject_sealed_overrides(params, RESPONSES_SEALED_KEYS, protocol="Responses")
     payload: dict[str, Any] = {
         **params,
@@ -190,7 +293,10 @@ def finalize_responses_wire(
         payload["tools"] = [dict(tool) for tool in tools]
     if instructions is not None:
         payload["instructions"] = instructions
-    return payload
+    return finalize_responses_body(
+        payload,
+        merge_system_to_instructions=merge_system_to_instructions,
+    )
 
 
 def normalize_chat_history_content(content: Any) -> Any:
@@ -599,12 +705,15 @@ __all__ = [
     "chat_wire_profile",
     "finalize_chat_messages",
     "finalize_chat_wire",
+    "finalize_responses_body",
     "finalize_responses_wire",
+    "merge_system_messages_into_instructions",
     "normalize_chat_history_content",
     "provider_wire_params",
     "responses_send_params",
     "responses_wire_params",
     "responses_wire_profile",
+    "strip_responses_reasoning_output",
     "wire_profile_identity",
     "wire_request_params",
 ]

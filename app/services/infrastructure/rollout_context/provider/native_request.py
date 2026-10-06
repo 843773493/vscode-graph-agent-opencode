@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
@@ -13,6 +14,7 @@ from app.services.infrastructure.rollout_context.provider.toolset_request_bridge
     project_tool_set_ref,
 )
 from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
+from app.services.mapping.itemized.prefix_frames import project_sealed_prefix
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
     project_user_message_content,
@@ -74,10 +76,13 @@ def project_native_request(
     plan: ContextRequestPlan,
     items: Sequence[CanonicalItemRecord],
     request_only_content: Mapping[str, object],
+    *, seal_binding: ContextSealBinding | None = None,
 ) -> dict[str, object]:
     """selection 顺序和来源留在诊断中，request 只携带原生协议字段。"""
     if plan.plan_state != "sealed" or plan.assembly_id is None:
         raise ValueError("context plan 未 sealed，不能进入 projector")
+    if seal_binding is not None:
+        project_sealed_prefix(plan, seal_binding, items, request_only_content)
     by_id = {item.item_id: item for item in items}
     if len(by_id) != len(items):
         raise ValueError("plan-order-integrity: canonical item registry 重复")
@@ -89,7 +94,26 @@ def project_native_request(
     tools: list[dict[str, object]] = []
     losses: list[str] = []
     wire_sources: list[dict[str, object]] = []
-    for entry in validate_projection_selection(plan.selection):
+    entries = list(validate_projection_selection(plan.selection))
+    frame_by_ref = {}
+    root_source_refs: set[str] = set()
+    if seal_binding is not None:
+        for frame in seal_binding.prefix.state.frames:
+            if frame.role != "system":
+                ids = frame.content.get("item_ids", [frame.item_ref.ref_id]) if isinstance(frame.content, Mapping) and frame.item_ref.ref_type == "canonical_item" else [frame.item_ref.ref_id]
+                for ref_id in ids:
+                    frame_by_ref[ref_id] = frame
+        root_source_refs = {
+            entry.ref.ref_id for entry in entries
+            if entry.included and entry.ref.ref_type != "tool_set"
+            and entry.ref.ref_id not in frame_by_ref
+        }
+        if seal_binding.root is not None:
+            inputs.append({"role": "system", "content": _text_blocks(seal_binding.root.content, role="system")})
+        entries.sort(key=lambda entry: (
+            frame_by_ref[entry.ref.ref_id].ordinal if entry.ref.ref_id in frame_by_ref else -1
+        ))
+    for entry in entries:
         losses.extend(entry.loss)
         if not entry.included:
             if not entry.loss:
@@ -99,12 +123,13 @@ def project_native_request(
         if isinstance(ref, ToolSetRef):
             tools.extend(project_tool_set_ref(ref, target_format="responses"))
             continue
+        if ref.ref_id in root_source_refs:
+            continue
         start = len(inputs)
         if ref.ref_type == "request_only":
             body = resolve_selected_request_body(plan, entry, request_only_content)
-            inputs.append(
-                {"role": "system", "content": _text_blocks(body, role="system")}
-            )
+            role = "user" if seal_binding is not None else "system"
+            inputs.append({"role": role, "content": _text_blocks(body, role=role)})
         else:
             item = resolve_selected_item(entry, by_id)
             if item.item_id in superseded_ids:
@@ -210,22 +235,4 @@ def project_native_request(
     }
 
 
-def bind_native_request_payload(
-    projection: Mapping[str, object], parameters: Mapping[str, object]
-) -> dict[str, object]:
-    """Provider 配置不得覆盖已冻结的 input；工具只取同一 sealed manifest。"""
-    request = projection["request"]
-    if not isinstance(request, Mapping):
-        raise TypeError("source-mismatch: native request 必须是 object")
-    forbidden = {"input", "messages", "instructions", "previous_response_id", "prompt"}
-    if overridden := forbidden.intersection(parameters):
-        raise ValueError(
-            "source-mismatch: provider 参数覆盖 sealed context: "
-            + ",".join(sorted(overridden))
-        )
-    # LangChain bind_tools 仍为 tool execution/callback 提供工具定义；实际 wire
-    # 只使用 Saver ToolSetRef，不能再从 LangChain tools 反推一次选择。
-    return {**parameters, **request}
-
-
-__all__ = ["bind_native_request_payload", "project_native_request"]
+__all__ = ["project_native_request"]

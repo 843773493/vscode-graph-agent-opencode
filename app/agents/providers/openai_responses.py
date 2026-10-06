@@ -4,7 +4,7 @@ import asyncio
 import copy
 import logging
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
 import litellm
@@ -40,6 +40,11 @@ from app.agents.providers.openai_response_history import (
     _responses_usage_metadata,
     _without_server_state,
 )
+from app.agents.providers.wire_finalize import (
+    finalize_responses_body,
+    finalize_responses_wire,
+    responses_send_params,
+)
 from app.agents.sealed_assembly_dispatch import read_sealed_native_projection
 from app.agents.upstream_request_trace import (
     apply_upstream_call_details,
@@ -52,9 +57,6 @@ from app.core.model_delta_context import (
     resolve_model_run_id,
 )
 from app.core.turn_execution_scope import get_current_turn_execution_scope
-from app.services.infrastructure.rollout_context.provider.native_request import (
-    bind_native_request_payload,
-)
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
@@ -222,107 +224,48 @@ class BoxteamOpenAIResponsesModel(BoxteamLiteLLMChatModel):
     ) -> dict[str, Any]:
         if stop is not None:
             raise ValueError("Responses API 不支持 stop 参数")
-        payload = {
-            key: value
-            for key, value in self._client_params.items()
-            if value is not None
-        }
-        payload.update(kwargs)
-        payload.update(
-            {
-                "stream": True,
-                "include": list(self.responses_include),
-                "store": self.responses_store,
-            }
-        )
+        payload = responses_send_params(self, kwargs=kwargs)
+        payload.update({
+            "stream": True,
+            "include": list(self.responses_include),
+            "store": self.responses_store,
+        })
         native = read_sealed_native_projection()
-        responses_payload = (
-            bind_native_request_payload(native, payload)
-            if native is not None
-            else _construct_responses_api_payload(
-                self._history_messages(messages, deadline=deadline), payload
+        if native is not None:
+            request = native.get("request")
+            if not isinstance(request, Mapping):
+                raise TypeError("source-mismatch: native request 必须是 object")
+            if "input" not in request or "tools" not in request:
+                raise TypeError("source-mismatch: native request 缺少 input/tools")
+            # 封存正文（input/tools）与参数合并、reasoning 输出态清洗与 chatgpt
+            # instructions 归并都在唯一 finalize 内完成，adapter 不再复制转换。
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ResponsesPayloadBuildTimeoutError(
+                    "Responses 请求 payload 构造超过时间预算: "
+                    f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
+                )
+            return finalize_responses_wire(
+                input_items=request["input"],
+                tools=request["tools"],
+                params=payload,
+                include=payload["include"],
+                store=payload["store"],
+                merge_system_to_instructions=self.custom_llm_provider == "chatgpt",
             )
+        # 非 Agent 直连输入构造在本增量保持原行为；显式 purpose 在下一个
+        # 增量接入，不在这里新增兼容旁路。
+        constructed = _construct_responses_api_payload(
+            self._history_messages(messages, deadline=deadline), payload
         )
         if deadline is not None and time.monotonic() >= deadline:
             raise ResponsesPayloadBuildTimeoutError(
                 "Responses 请求 payload 构造超过时间预算: "
                 f"timeout_seconds={DEFAULT_RESPONSES_PAYLOAD_BUILD_TIMEOUT_SECONDS:g}"
             )
-        responses_payload = self._strip_reasoning_content_from_payload(
-            responses_payload
+        return finalize_responses_body(
+            constructed,
+            merge_system_to_instructions=self.custom_llm_provider == "chatgpt",
         )
-        # TODO: LiteLLM 的 chatgpt provider 原生把 system/developer input
-        # 合并进 instructions 后，删除此兼容转换。
-        if self.custom_llm_provider == "chatgpt":
-            return self._move_system_messages_to_instructions(responses_payload)
-        return responses_payload
-
-    @staticmethod
-    def _strip_reasoning_content_from_payload(
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """在最终请求边界移除 Responses reasoning 的输出态 content。"""
-        input_items = payload.get("input")
-        if not isinstance(input_items, list):
-            return payload
-        for item in input_items:
-            if isinstance(item, dict) and item.get("type") == "reasoning":
-                # TODO: 等所有兼容 Responses provider 支持 reasoning.content
-                # 的历史输入后，再删除这个最终边界清洗。
-                item.pop("content", None)
-        return payload
-
-    @staticmethod
-    def _move_system_messages_to_instructions(
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """ChatGPT Codex endpoint 只接受 instructions，不接受 system input。"""
-        input_items = payload.get("input")
-        if not isinstance(input_items, list):
-            return payload
-
-        instruction_parts: list[str] = []
-        remaining_items: list[Any] = []
-        for item in input_items:
-            if not isinstance(item, dict) or item.get("role") not in {
-                "system",
-                "developer",
-            }:
-                remaining_items.append(item)
-                continue
-
-            content = item.get("content")
-            if isinstance(content, str):
-                instruction_parts.append(content)
-                continue
-            if not isinstance(content, list):
-                raise TypeError(
-                    "ChatGPT system message content 必须是字符串或内容块列表"
-                )
-            for block in content:
-                if not isinstance(block, dict) or block.get("type") not in {
-                    "text",
-                    "input_text",
-                }:
-                    raise TypeError("ChatGPT system message 只支持文本内容块")
-                text = block.get("text")
-                if not isinstance(text, str):
-                    raise TypeError("ChatGPT system message 文本块缺少 text 字符串")
-                instruction_parts.append(text)
-
-        if not instruction_parts:
-            return payload
-        existing_instructions = payload.get("instructions")
-        if existing_instructions is not None:
-            if not isinstance(existing_instructions, str):
-                raise TypeError("Responses instructions 必须是字符串")
-            instruction_parts.insert(0, existing_instructions)
-
-        return {
-            **payload,
-            "input": remaining_items,
-            "instructions": "\n\n".join(instruction_parts),
-        }
 
     def _convert_response_event(
         self,
