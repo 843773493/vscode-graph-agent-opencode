@@ -237,6 +237,17 @@ class ForkItemCopyMixin:
             projection["data"]["response_metadata"] = producer_response_metadata(
                 projection["data"]["response_metadata"]
             )
+            target_model_call_id = (
+                source_model_call_map[anchor.projection_identity.model_call_id]
+                if anchor.projection_identity is not None
+                and anchor.projection_identity.model_call_id is not None
+                else None
+            )
+            projection["data"]["id"] = source_message_map[source_message_id]
+            if target_model_call_id is not None:
+                projection["data"]["response_metadata"]["model_call_id"] = (
+                    target_model_call_id
+                )
             projected = self._codec().from_dict(projection)
             target_group = self._codec().items_for_message(
                 projected,
@@ -247,11 +258,7 @@ class ForkItemCopyMixin:
                     source_execution_by_item[anchor.item_id]
                 ],
                 timestamp=anchor.created_at,
-                model_call_id=source_model_call_map.get(
-                    anchor.projection_identity.model_call_id
-                )
-                if anchor.projection_identity
-                else None,
+                model_call_id=target_model_call_id,
             )
             if len(group) != len(target_group):
                 raise RuntimeError(

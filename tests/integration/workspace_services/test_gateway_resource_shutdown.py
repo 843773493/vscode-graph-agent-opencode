@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import threading
 import time
 from collections.abc import Iterator
@@ -19,6 +20,7 @@ from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
     acquire_gateway_guest,
     close_gateway_process,
+    reset_gateway_persistent_state,
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
@@ -45,8 +47,26 @@ def _active_group_members(groups: set[int]) -> dict[int, tuple[int, str]]:
     return result
 
 
+@pytest.fixture(scope="module", params=["responses", "chat_completions"])
+def model_protocol(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+@pytest.fixture(scope="module")
+def integration_workspace_root_path(
+    integration_workspace_root_path: str, model_protocol: str,
+) -> str:
+    # 每种协议独立初始化业务状态，避免上个替身的 active 配置快照跨参数复用。
+    workspace = Path(integration_workspace_root_path)
+    reset_gateway_persistent_state(workspace_root=workspace)
+    state = workspace / ".boxteam"
+    if state.exists():
+        shutil.rmtree(state)
+    return str(workspace)
+
+
 @pytest.fixture
-def model_replay(integration_workspace_root_path: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
+def model_replay(integration_workspace_root_path: str, model_protocol: str) -> Iterator[tuple[str, list[dict[str, object]]]]:
     requests: list[dict[str, object]] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -56,11 +76,16 @@ def model_replay(integration_workspace_root_path: str) -> Iterator[tuple[str, li
         def do_POST(self) -> None:
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
-            assert self.path == "/v1/responses"
-            fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten/openai_responses/basic-text.json"
+            expected_path = "/v1/responses" if model_protocol == "responses" else "/v1/chat/completions"
+            assert self.path == expected_path
+            protocol_directory = "openai_responses" if model_protocol == "responses" else "openai_chat"
+            fixture = Path.cwd() / "tests/fixtures/model_stream/handwritten" / protocol_directory / "basic-text.json"
             frames = json.loads(fixture.read_text())["interactions"][0]["response"]["frames"]
             body = "".join(
-                f"event: {frame['event']}\ndata: {json.dumps(frame['payload'], ensure_ascii=False)}\n\n"
+                (f"event: {frame['event']}\n" if "event" in frame else "")
+                + "data: "
+                + (json.dumps(frame["payload"], ensure_ascii=False) if frame["encoding"] == "json" else frame["payload"])
+                + "\n\n"
                 for frame in frames
             ).encode()
             self.send_response(200)
@@ -87,16 +112,18 @@ def model_replay(integration_workspace_root_path: str) -> Iterator[tuple[str, li
 @pytest.fixture
 def shutdown_environment(
     integration_workspace_config_path: str, integration_workspace_root_path: str,
-    model_replay: tuple[str, list[dict[str, object]]],
+    model_replay: tuple[str, list[dict[str, object]]], model_protocol: str,
 ) -> Iterator[dict[str, str]]:
     config_path = Path(integration_workspace_config_path)
     before = config_path.read_bytes()
     config = read_jsonc_object(config_path)
     primary = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
-    responses = next(provider for provider in config["llm"]["providers"] if provider["id"] == "backup_3")
+    target = primary if model_protocol == "chat_completions" else next(
+        provider for provider in config["llm"]["providers"] if provider["id"] == "backup_3"
+    )
     primary.update({
-        "endpoint": model_replay[0], "model": responses["model"], "api_key": "fixture-key",
-        "api_mode": responses["api_mode"],
+        "endpoint": model_replay[0], "model": target["model"], "api_key": "fixture-key",
+        "api_mode": target["api_mode"],
     })
     config["agents"]["default"]["model"]["fallback_providers"] = []
     validate_config(config, config_path=config_path, schema_path=Path.cwd() / "configs/workspace_schema.jsonc")

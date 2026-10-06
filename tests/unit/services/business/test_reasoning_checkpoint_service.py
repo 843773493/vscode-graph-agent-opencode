@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -13,8 +14,9 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.execution_admission import InternalExecutionIntent
-from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ProjectionGroup,
@@ -28,6 +30,9 @@ from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.reasoning_checkpoint_service import (
     persist_standard_assistant_checkpoint,
     persist_user_message_checkpoint,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    producer_response_metadata,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -43,6 +48,7 @@ from app.services.infrastructure.rollout_history_reader import RolloutHistoryRea
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
+from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from tests.support.message_service import build_message_service
 
 MESSAGE_TIME = datetime(2026, 7, 14, tzinfo=UTC)
@@ -472,6 +478,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         session_id,
         thread_id=thread_id,
         plan_id="plan-standard-assistant",
+        tool_set=ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=()),
         include_pending_notices=False,
     )
     canonical_ref_ids = [ref.ref_id for ref in plan.refs]
@@ -533,6 +540,196 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         {"type": "reasoning", "reasoning": reasoning_text},
         {"type": "text", "text": final_text},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tamper", ["model_call_id", "provenance_relations", "extensions"])
+async def test_final_before_persist_convergence_replays_without_typed_provenance_conflict(
+    tmp_path,
+    session_bundle_factory,
+    tamper: str,
+) -> None:
+    session_id = "ses_019e8f046abe7813889184829fac0231"
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    thread_id = saver._storage.main_thread_id(session_id)
+    turn_id = "turn-final-provenance"
+    job_id = "job-final-provenance"
+    model_call_id = "model-call-final-provenance"
+    source_message_id = f"lc_run--{model_call_id}"
+    final_message_id = "msg_final_provenance"
+    admission = _accept_user_turn(
+        saver,
+        session_id=session_id,
+        thread_id=thread_id,
+        message_id="msg_provenance_user",
+        turn_id=turn_id,
+        job_id=job_id,
+        payload="请回答",
+    )
+    source_relation = {
+        "relation": "derived_from",
+        "target_kind": "projection_message",
+        "target_id": "msg_provider_source",
+        "target_model_call_id": model_call_id,
+    }
+    extension = {
+        "extension_version": "1",
+        "protection": "public",
+        "value": {"provider_fact": "不可丢弃的原始事实"},
+    }
+    config = build_checkpoint_config(thread_id)
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id),
+            langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        saver.put(
+            config,
+            {
+                "channel_values": {
+                    "messages": [
+                        HumanMessage(
+                            id="msg_provenance_user",
+                            content="请回答",
+                            response_metadata={"message_metadata": {"turn_id": turn_id}},
+                        ),
+                        AIMessage(
+                            id=source_message_id,
+                            content="最终回答",
+                            response_metadata={
+                                "context_revision": "context-final-provenance",
+                                "provenance_relations": [source_relation],
+                                "extensions": {"example.provider_fact": extension},
+                            },
+                        ),
+                    ]
+                },
+                "channel_versions": {"messages": "1"},
+                "updated_channels": ["messages"],
+                "id": "ckpt-provenance-source",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            {"messages": "1"},
+        )
+        adapter = StepModelCallAdapter(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            job_id=job_id,
+            checkpoint_ns="",
+        )
+        assert persist_standard_assistant_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            content_blocks=(
+                {"type": "text", "text": "最终回答", "id": "part_answer", "index": 0},
+            ),
+            final_text="最终回答",
+            message_id=final_message_id,
+            message_created_at=MESSAGE_TIME,
+            token_usage=ModelTokenUsagePayload(
+                input_tokens=11,
+                output_tokens=7,
+                total_tokens=18,
+                model_calls=1,
+                reported_model_calls=1,
+            ),
+            preserve_content_part_refs=True,
+            before_persist=adapter.converge_final_message,
+        )
+        await adapter.converge_final_checkpoint(final_message_id)
+        stored_items = saver._storage.read_items(session_id, thread_id)
+        by_id = {item.item_id: item for item in stored_items}
+        final_item = by_id[f"item-{final_message_id}"]
+        assert by_id[f"item-{source_message_id}"].projection_identity.model_call_id == (
+            final_item.projection_identity.model_call_id
+        ) == model_call_id
+        assert final_item.projection_identity.phase == "final_answer"
+        assert final_item.projection_identity.content_part_refs[0].id == "part_answer"
+        assert final_item.source_manifest.source_revision == "context-final-provenance"
+        assert final_item.extensions["example.provider_fact"] == extension
+        assert final_item.extensions["boxteam.checkpoint.annotations"]["value"][
+            "token_usage"
+        ]["total_tokens"] == 18
+        assert [relation.to_dict() for relation in final_item.provenance_relations] == [
+            source_relation,
+            {
+                "relation": "replaces",
+                "target_kind": "projection_message",
+                "target_id": source_message_id,
+                "target_model_call_id": model_call_id,
+            },
+        ]
+        assert final_item.turn_id == turn_id
+        assert final_item.producer_ref["invocation_id"] == admission.execution_id
+        canonical_before_replay = [item.to_dict() for item in stored_items]
+        latest = saver.get_tuple(config)
+        assert latest is not None
+        replay_checkpoint = {**latest.checkpoint, "id": "ckpt-provenance-replay"}
+        saver.put(
+            latest.config,
+            replay_checkpoint,
+            {"source": "test", "step": 2, "writes": {}},
+            {},
+        )
+        assert [
+            item.to_dict() for item in saver._storage.read_items(session_id, thread_id)
+        ] == canonical_before_replay
+        replayed = saver.get_tuple(config)
+        assert replayed is not None
+        checkpoint_before_failure = deepcopy(replayed.checkpoint)
+        config_before_failure = deepcopy(replayed.config)
+        metadata_before_failure = deepcopy(replayed.metadata)
+        replayed_messages = replayed.checkpoint["channel_values"]["messages"]
+        final_message = replayed_messages[-1]
+        assert isinstance(final_message, AIMessage)
+        assert final_message.id == final_message_id
+        response_metadata = producer_response_metadata(final_message.response_metadata)
+        if tamper == "model_call_id":
+            response_metadata["model_call_id"] = "model-conflicting"
+        elif tamper == "provenance_relations":
+            response_metadata["provenance_relations"][-1]["target_id"] = "msg-conflicting"
+        else:
+            response_metadata["extensions"]["example.provider_fact"]["value"][
+                "provider_fact"
+            ] = "篡改后的事实"
+        conflicting = final_message.model_copy(
+            update={"response_metadata": response_metadata}
+        )
+        conflicting_checkpoint = {
+            **replayed.checkpoint,
+            "id": "ckpt-provenance-conflicting",
+            "channel_values": {
+                **replayed.checkpoint["channel_values"],
+                "messages": [*replayed_messages[:-1], conflicting],
+            },
+        }
+        jsonl_path = saver._storage.jsonl_path(session_id, "", thread_id=thread_id)
+        jsonl_before_failure = jsonl_path.read_bytes()
+
+        with pytest.raises(ValueError, match="typed provenance/extensions 不一致"):
+            saver.put(
+                replayed.config,
+                conflicting_checkpoint,
+                {"source": "test", "step": 3, "writes": {}},
+                {},
+            )
+
+        assert jsonl_path.read_bytes() == jsonl_before_failure
+        assert [
+            item.to_dict() for item in saver._storage.read_items(session_id, thread_id)
+        ] == canonical_before_replay
+        latest_after_failure = saver.get_tuple(config)
+        assert latest_after_failure is not None
+        assert latest_after_failure.checkpoint["id"] == replayed.checkpoint["id"]
+        assert latest_after_failure.checkpoint == checkpoint_before_failure
+        assert latest_after_failure.config == config_before_failure
+        assert latest_after_failure.metadata == metadata_before_failure
 
 
 @pytest.mark.asyncio

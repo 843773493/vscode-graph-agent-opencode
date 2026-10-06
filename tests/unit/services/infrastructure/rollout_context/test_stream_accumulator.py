@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.domain.itemized.enums import CanonicalItemStatus, SemanticKind
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
@@ -14,6 +18,11 @@ def _accumulator() -> CanonicalBlockAccumulator:
         execution_id="execution-stream-contract",
         producer_id="model-call-stream-contract",
     )
+
+
+@pytest.fixture
+def codec() -> LangChainMessageCodec:
+    return LangChainMessageCodec()
 
 
 def test_partial_text_fragments_remain_partial_until_saver_commits_them() -> None:
@@ -208,3 +217,128 @@ def test_tool_call_name_may_arrive_in_a_later_delta_but_cannot_be_fabricated() -
     )
     item = accumulator.finalize(first_item_sequence=1)[0]
     assert item.payload["name"] == "read_file"
+
+
+def test_retry_stream_and_final_checkpoint_keep_the_same_current_model_scope(
+    codec: LangChainMessageCodec,
+) -> None:
+    failed = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-failed",
+        model_call_id="model-call-failed",
+    )
+    completed = CanonicalBlockAccumulator(
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        producer_id="model-call-current",
+        model_call_id="model-call-current",
+    )
+    for accumulator, text in ((failed, "失败片段"), (completed, "最终回答")):
+        accumulator.accept(
+            {
+                "block_id": "provider-text-0",
+                "carrier_type": "text",
+                "block_index": 0,
+                "text": text,
+            }
+        )
+    failed_item = failed.finalize(
+        first_item_sequence=1, status=CanonicalItemStatus.FAILED
+    )[0]
+    stream_item = completed.finalize(first_item_sequence=2)[0]
+    final = AIMessage(
+        id="msg_retry_final",
+        content="最终回答",
+        response_metadata={"model_call_id": "model-call-current"},
+    )
+    final_item = codec.items_for_message(
+        final,
+        item_sequence=3,
+        message_id=final.id,
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        timestamp=stream_item.created_at,
+    )[0]
+    replay = codec.from_dict(codec.project_message((final_item,)))
+    replayed_item = codec.items_for_message(
+        replay,
+        item_sequence=3,
+        message_id=final.id,
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        timestamp=stream_item.created_at,
+    )[0]
+
+    assert failed_item.message_group_id != stream_item.message_group_id
+    assert failed_item.item_id != stream_item.item_id
+    assert final_item.projection_identity.model_call_id == (
+        stream_item.projection_identity.model_call_id
+    ) == "model-call-current"
+    assert final_item.payload == stream_item.payload == "最终回答"
+    assert replayed_item.projection_manifest() == final_item.projection_manifest()
+    assert final_item.producer_ref["invocation_id"] == "execution-shared"
+
+
+@pytest.mark.parametrize(
+    "message_id, response_metadata",
+    [
+        ("msg_final", {"model_call_id": "model-current"}),
+        ("msg_final", {"message_metadata": {"model_call_id": "model-current"}}),
+        ("lc_run--model-current", {}),
+    ],
+)
+def test_checkpoint_rejects_caller_model_scope_that_conflicts_with_its_message(
+    codec: LangChainMessageCodec,
+    message_id: str,
+    response_metadata: dict[str, object],
+) -> None:
+    message = AIMessage(
+        id=message_id,
+        content="最终回答",
+        response_metadata=response_metadata,
+    )
+
+    with pytest.raises(ValueError, match="model_call_id 与消息自身身份不一致"):
+        codec.items_for_message(
+            message,
+            item_sequence=1,
+            message_id=message_id,
+            turn_id="turn-stream-contract",
+            execution_id="execution-shared",
+            timestamp="2026-10-04T00:00:00+00:00",
+            model_call_id="model-previous",
+        )
+
+
+def test_tool_checkpoint_uses_the_preceding_assistant_model_scope(
+    codec: LangChainMessageCodec,
+) -> None:
+    assistant = AIMessage(
+        id="lc_run--model-tool-call",
+        content="",
+        tool_calls=[
+            {"id": "call-1", "name": "read_file", "args": {"path": "README.md"}}
+        ],
+    )
+    tool = ToolMessage(
+        id="msg_tool_result",
+        tool_call_id="call-1",
+        name="read_file",
+        content="文件正文",
+    )
+    assert codec.model_call_id(tool) is None
+    binding = codec.tool_message_model_call_id(tool, (assistant,))
+    item = codec.items_for_message(
+        tool,
+        item_sequence=1,
+        message_id=tool.id,
+        turn_id="turn-stream-contract",
+        execution_id="execution-shared",
+        timestamp="2026-10-04T00:00:00+00:00",
+        model_call_id=binding,
+    )[0]
+
+    assert binding == item.projection_identity.model_call_id == "model-tool-call"
+    assert item.semantic_kind == SemanticKind.TOOL_RESULT
+    assert item.payload["tool_call_id"] == "call-1"

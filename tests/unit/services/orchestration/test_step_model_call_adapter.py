@@ -11,6 +11,12 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_commit.prepare import (
+    _compare_group,
+)
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 
 
@@ -333,3 +339,131 @@ async def test_internal_final_item_and_terminal_convergence_remain_turnless(
         assembly_id="assembly_1",
         checkpoint_ns="agent",
     )
+
+
+@pytest.mark.parametrize(
+    "message_id, scope_metadata",
+    [
+        ("msg_final_model", {"model_call_id": "model_current"}),
+        (
+            "msg_final_model",
+            {"message_metadata": {"model_call_id": "model_current"}},
+        ),
+        ("lc_run--model_current", {}),
+    ],
+)
+def test_final_convergence_matches_checkpoint_typed_identity_and_extensions(
+    adapter: StepModelCallAdapter,
+    saver: MagicMock,
+    message_id: str,
+    scope_metadata: dict[str, object],
+) -> None:
+    provenance = {
+        "relation": "derived_from",
+        "target_kind": "projection_message",
+        "target_id": "msg_original",
+        "target_model_call_id": "model_current",
+    }
+    extension = {
+        "extension_version": "1",
+        "protection": "public",
+        "value": {"provider_fact": "必须原样保留"},
+    }
+    message = AIMessage(
+        id=message_id,
+        content=[{"type": "text", "text": "最终回答"}],
+        response_metadata={
+            **scope_metadata,
+            "phase": "final_answer",
+            "completion_reason": "upstream_completed",
+            "context_revision": "context_revision_1",
+            "content_part_refs": [{"id": "part_answer", "index": 0, "type": "text"}],
+            "provenance_relations": [provenance],
+            "token_usage": {"total_tokens": 17},
+            "extensions": {"example.provider_fact": extension},
+        },
+    )
+
+    adapter.converge_final_message(message)
+
+    item = saver.converge_execution.call_args.kwargs["items"][0]
+    assert item.projection_identity.model_call_id == "model_current"
+    assert item.projection_identity.phase == "final_answer"
+    assert item.projection_identity.completion_reason == "upstream_completed"
+    assert item.projection_identity.content_part_refs[0].id == "part_answer"
+    assert item.source_manifest.source_revision == "context_revision_1"
+    assert [relation.to_dict() for relation in item.provenance_relations] == [provenance]
+    assert item.extensions["example.provider_fact"] == extension
+    assert item.extensions["boxteam.checkpoint.annotations"]["value"]["token_usage"] == {
+        "total_tokens": 17
+    }
+    assert item.producer_ref["invocation_id"] == "execution_1"
+    codec = LangChainMessageCodec()
+    checkpoint_items = codec.items_for_message(
+        message,
+        item_sequence=1,
+        message_id=message_id,
+        turn_id="turn_1",
+        execution_id="execution_1",
+        timestamp=item.created_at,
+        model_call_id=codec.model_call_id(message),
+    )
+    _compare_group(checkpoint_items, (item,))
+    replay = codec.from_dict(codec.project_message(checkpoint_items))
+    replayed_items = codec.items_for_message(
+        replay,
+        item_sequence=1,
+        message_id=message_id,
+        turn_id="turn_1",
+        execution_id="execution_1",
+        timestamp=item.created_at,
+    )
+    _compare_group(replayed_items, (item,))
+
+
+def test_conflicting_message_model_call_identity_fails_before_convergence(
+    adapter: StepModelCallAdapter,
+    saver: MagicMock,
+) -> None:
+    message = AIMessage(
+        id="msg_conflicting_model",
+        content="最终回答",
+        response_metadata={
+            "model_call_id": "model_current",
+            "message_metadata": {"model_call_id": "model_previous"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="model_call_id 身份不一致"):
+        adapter.converge_final_message(message)
+
+    saver.converge_execution.assert_not_called()
+    saver.append_items.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retry_final_item_keeps_current_model_call_and_shared_execution(
+    adapter: StepModelCallAdapter,
+    saver: MagicMock,
+) -> None:
+    await adapter.register("model_previous", 1, "provider_primary")
+    await adapter.update_outcome("model_previous", "failed")
+    saver.consume_prepared_context_for_dispatch.return_value = None
+    await adapter.register("model_current", 2, "provider_fallback")
+
+    adapter.converge_final_message(
+        AIMessage(
+            id="msg_retry_final",
+            content="重试成功",
+            response_metadata={"model_call_id": "model_current"},
+        )
+    )
+    await adapter.converge_final_checkpoint("msg_retry_final")
+
+    item = saver.converge_execution.call_args.kwargs["items"][0]
+    assert item.projection_identity.model_call_id == "model_current"
+    assert item.producer_ref["invocation_id"] == "execution_1"
+    assert saver.register_model_call.call_args.kwargs["retry_of_model_call_id"] == (
+        "model_previous"
+    )
+    saver.converge_execution.assert_called_once()

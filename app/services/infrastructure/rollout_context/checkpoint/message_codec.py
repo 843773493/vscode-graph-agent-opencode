@@ -221,12 +221,27 @@ class LangChainMessageCodec:
     def model_call_id(self, message: object) -> str | None:
         """从消息自身的持久 identity 读取所属模型调用。"""
         metadata = self._metadata(message)
-        for value in (
-            metadata.get("model_call_id"),
-            self._message_metadata(message).get("model_call_id"),
+        resolved: str | None = None
+        for field, value in (
+            ("response_metadata.model_call_id", metadata.get("model_call_id")),
+            (
+                "message_metadata.model_call_id",
+                self._message_metadata(message).get("model_call_id"),
+            ),
         ):
-            if isinstance(value, str) and value:
-                return value
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} 必须是非空字符串或 None: {value!r}")
+            if resolved is not None and value != resolved:
+                raise ValueError(
+                    "checkpoint message model_call_id 身份不一致: "
+                    f"message_id={getattr(message, 'id', None)!r}, "
+                    f"model_call_id={resolved!r}, {field}={value!r}"
+                )
+            resolved = value
+        if resolved is not None:
+            return resolved
         message_id = getattr(message, "id", None)
         if isinstance(message_id, str) and message_id.startswith("lc_run--"):
             return message_id.removeprefix("lc_run--") or None
@@ -274,6 +289,15 @@ class LangChainMessageCodec:
         if turn_id is None and execution_id is None:
             raise ValueError(
                 "Turn-less canonical message 必须带 admission 的 execution_id"
+            )
+        message_model_call_id = self.model_call_id(message)
+        if model_call_id is None:
+            model_call_id = message_model_call_id
+        elif message_model_call_id is not None and model_call_id != message_model_call_id:
+            raise ValueError(
+                "items_for_message.model_call_id 与消息自身身份不一致: "
+                f"message_id={message_id!r}, caller={model_call_id!r}, "
+                f"message={message_model_call_id!r}"
             )
         message_value = self.to_dict(message)
         data = message_value.get("data")
