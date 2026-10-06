@@ -4,11 +4,11 @@
 
 ## 授权与恢复坐标
 
-- 唯一实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；本轮另有 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer` 两个只读审查者，实际turn_context均为 **gpt-6-luna/max**，分别准备下一公共合同与真实HTTP验收，不改源码或重复当前包审查。其产物在TEMP同名任务的artifacts/wire-preimage-contract/report.md，index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。
+- 唯一实现者 `/root/sol_vertical_implementer`，实际模型已核为 **gpt-6.1-sol/max**。Luna 实现者停写；本轮另有 `wire_contract_reviewer` 与 `wire_http_acceptance_reviewer` 两个只读审查者，实际turn_context均为 **gpt-6-luna/max**。前者窄纠正下一wire合同职责；后者118行更正版已主核接受，不重复审查，转查下一epoch/CSM真实恢复入口，产物为TEMP/wire_http_acceptance_reviewer/artifacts/epoch-transition-boundary/report.md。两个原wire报告保留在TEMP同名任务的artifacts/wire-preimage-contract/report.md，观察index在同名git/fixed-0b064.idx。默认技能仍为无前缀 gpt-6-luna/max；本轮试验不等于永久默认，不为常驻数量制造重复实现。
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
-- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。当前历史迁移固定基线是 tree **0b0642393aee621ccec38a102991a2b3567633ee**；恢复观察 index=TEMP/coordinator/git/r-sol-history-resume-0b064.idx，主已初始化于该tree。作者只读此index；WT HEAD及观察index都不能代替live，差异显式给固定对象。R最初7f8dc、b086/209481索引仅为历史证据，不再作为恢复坐标。
+- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。当前历史迁移固定基线是 tree **0b0642393aee621ccec38a102991a2b3567633ee**；恢复观察 index=TEMP/coordinator/git/r-sol-history-focus-0b064.idx，主已初始化于该tree并恢复同Sol。8e9c113仅为签名早包，不是新baseline。作者只读此index；WT HEAD及观察index都不能代替live，差异显式给固定对象。R最初7f8dc、b086/209481及resume索引仅为历史证据，不再作为恢复坐标。
 - 主串行集成与机械冻结导出，作者仅编辑、定向静态分析和运行检查，不改 index/refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
 - 另一聊天草稿 `docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md` 按用户新授权只读参考，其原件仍不改写。
@@ -17,7 +17,7 @@
 
 ## 当前主树与真实运行
 
-本文更新前ROOT HEAD **9f59888e6bffd55ac487a2c7bb6fa81258ea3afe**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e/4fa只改交接与技能文档。本轮在326e重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
+本文更新前ROOT HEAD **530449e13c9047dc2ea71d885bcb378c78a0a15e**；最新已提交业务仍 **0e42364606f3c0ef5533de5e35970df82a2ece67**。主树在退休＋reader/terminal/checkpoint209481上再物化display固定tree **0b0642393aee621ccec38a102991a2b3567633ee**，累计owned138路径、业务未提交；最近组合证据基于8f647，tree=`005276b9179afc942f9ef5a68ecaa61055fcbee9`，326e/4fa及其后提交只改交接、规划与技能文档。此前在326e重核ROOT全部138owned内容、mode与删除均仍匹配0b064，两个默认index未变；原checkpoint43＋SQL6的ROOT49验收复用，display另一次ROOT22pass actual0/10.31秒、AST2/Ruff0，不把两次验收相加。主仅机械冻结、装配和独审，业务源码手写0。display原读取owner缺口已窄验，历史加载文件的必填owner/admission迁移另交同Sol，原R其余scope未完；下次恢复重新核HEAD/候选/preimage，不把本文值当live。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（本恢复轮未重新核服务），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -98,13 +98,14 @@ Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee
 
 ## 新增规划及技能调整效果
 
-- 新建议已纳四组：统一寻址拥有directory/file/domain_object、files/root、技能多层、分段编码、产物单文件模板和轻量访问；context拥有读取/skill_load分离；Session拥有send/read/wait归一；独立add-unified-resource-file-tools拥有七工具、目标端、条件写/部分/unknown与旧boxteam-session迁移。前次17文件与已验版逐字相同，复用strict41/0；本轮核现有parser/executor及正式add/delete、hints/move用例又发现规划误将既有文本删除/移动延期，已同步修订文件工具proposal/design/spec/tasks：保原Delete File/Move to、两端点preimage、逐路径部分结果，通用目录mutation仍延期。新增实施全未勾/未启动，未改生产或正式测试；恢复后17规划文件与已验9f59888e及当前HEAD逐字一致，复用验证，收据file-tools-openspec-plan/final-coherence-attestation-attempt-11/；本轮strict全量41/0、skill quick_validate及diff check均actual0；收据在 `file-tools-openspec-plan/text-patch-preservation-attempt-10/`。保原read_file媒体及original/thumbnail；终端/浏览器/团队保业务ID，其余mutation/watch/跨Gatewaycopy/generaloperation_id留后续。
+- 新建议已纳四组：统一寻址拥有directory/file/domain_object、files/root、技能多层、分段编码、产物单文件模板和轻量访问；context拥有读取/skill_load分离；Session拥有send/read/wait归一；独立add-unified-resource-file-tools拥有七工具、目标端、条件写/部分/unknown与旧boxteam-session迁移。两处旧规范已直接改写，不只加任务；保原read_file媒体及original/thumbnail、文本Delete File/Move to、两端点preimage及逐路径部分结果，通用目录mutation仍延期。恢复到530449后17规划文件逐项SHA及HEAD blob核验仍与已验9f59888e相同，复用strict41/0，不重复重测；新增22项实施任务全部未勾/未启动。既有收据file-tools-openspec-plan/final-coherence-attestation-attempt-11/及text-patch-preservation-attempt-10/；原strict、skill quick_validate及diff check均actual0。终端/浏览器/团队保业务ID，其余mutation/watch/跨Gatewaycopy/generaloperation_id留后续。
 - fixed/direct/helper/间接/deferred分列已发现漏caller；真实callee/MRO规则纠正不存在Saver.main_thread_id阻断28项，固定209481 ROOT49验证checkpoint迁移效果。named旧API归零不能代完整签名闭包。
 - 作者无超时rg扫`/`找日志，主核PID/cwd后只SIGTERM该rg，延迟534.29秒；恢复同Sol并重发绝对WT/index/A，入口限定根及外部超时。恢复replay通过，后续自主完整交付效果待证。证据 `sol-unbounded-search-correction/attempt-1/`。
 - 两退休reviewer容量错误无新报告，主独审增量并复用删除边界。主误把AGENTS owned路径当删除已撤；旧Gateway缺句柄假诊断、private index/旧tree混读、preload猜错等另计主成本，不归作者/模型。
 - Sol对固定tree跑git log/-S得到空结果，不能据此判断提交来源；已纠正为先核对象类型，仅commit核历史，入口原基线条款补一句，后续效果待证。cursor旧items为空断言又与active design:692的冻结include冲突；主独核合同，允许迁为精确轻量摘要/不读完整body，保分页完整性，其它断言仍保留，尚未验收。证据 `skill-object-type-correction/attempt-1/receipt.json`。
 - 再次上下文恢复后Sol用裸Git读到相对旧WT HEAD的1057路径及history既有67+/21-历史差异；重发坐标并初始化0b064私有观察index后，真实工具已确认当前history与base相同、display匹配已绿blob，尚未交新增候选。18测试/140断言基线清单在 `r-history-loading-primary-review/baseline-inventory-attempt-1/`；已调整顺序为先一次迁完已明确签名并验证代表入口，再闭合复杂fixture，完整验收不减。证据 `r-history-loading-primary-review/restore-state-index-attempt-1/receipt.json`；不因观察超时或没有shell进程重启活跃agent，不为这次重复问题新增同义技能规则。
 - 主用ROOT HEAD观察index跨WT diff误报conftest删除；直接固定blob逐字复核它未变后立即撤回，不要求作者恢复。source_manager测试确有live WIP117行迁移，旧_commit_model_call_pending已归零；固定0b064包仍不包含此WIP，不把两个状态混同。证据 `r-history-loading-primary-review/deferred-direct-blob-check-attempt-1/`。成本计主协调，入口补充对应比较规则，效果仅为此次纠错，后续交付待验。
+- 为纠正首增量顺序曾主动中断同Sol，核history SHA仍8b14f12a、无剩余测试进程、两个默认index未变后已恢复，不更换writer/model。证据 `r-history-loading-primary-review/caller-focus-recovery-attempt-1/`。先交已确定的五处user put准入迁移及Ruff，再处理internal-leading与typed dedup特殊fixture；原六处及全文验收范围不减，8e9早包未集成，不以工具观察间隔判agent停止。首批新候选仍待。
 - 比较只维护 `efficiency-comparison.json`；继承前置、作者返工、依赖等待、主机械导出和主错误分列。无同起点可比计时，不报倍率/永久最佳模型；继续一个Sol贯穿、独审和主串行集成。
 
 旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index观察ROOT=`98850fa4…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
