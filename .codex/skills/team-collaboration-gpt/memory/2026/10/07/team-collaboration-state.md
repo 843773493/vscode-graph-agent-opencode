@@ -8,7 +8,7 @@
 - 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
-- 主独占 history-loading、context_source_manager、Gateway context 三文件及导航 test_catalog_service/test_operations_queue；精确路径见各自 freeze.json。本轮另接手崩溃测试、四领域caller/golden、正式Web两文件、`tests/unit/domain/itemized/test_plan_contract.py` 的required键矩阵及 `tests/integration/backend/sessions/test_itemized_dispatch_contract.py` 的wire HTTP断言；生产writer不编辑这些主线程测试。四领域已以a0b2b3c2集成；Web固定f29222、attempt16完整1pass且112个现存运行依赖匹配，独审已接受并进入本次串行集成；required矩阵在匹配WT的领域上12case通过；本轮发送前binding/purpose已固定并集成，ROOT9项实际验收与927源码指纹匹配；新文件工具仍仅规划。Sol继续normalized wire/profile完整闭包，不实施新增文件工具。此次是核验后释放归属的范围纠正，不因观察超时另换writer；失败旧agent不重启制造重复工作。N01报告f73ba2f6、P06更正版85494965及P08整组关闭9989f604/七文件f2b527b7已主核；不能把直接owner blob相同扩大成全运行依赖相同。
+- 主独占 history-loading、context_source_manager、Gateway context 三文件及导航 test_catalog_service/test_operations_queue；精确路径见各自 freeze.json。本轮另接手崩溃测试、四领域caller/golden、正式Web两文件、`tests/unit/domain/itemized/test_plan_contract.py` 的required键矩阵及 `tests/integration/backend/sessions/test_itemized_dispatch_contract.py` 的wire HTTP断言；生产writer不编辑这些主线程测试。四领域已以a0b2b3c2集成；Web固定f29222、attempt16完整1pass且112个现存运行依赖匹配，独审已接受并进入本次串行集成；required矩阵在匹配WT的领域上12case通过；本轮发送前binding/purpose已固定并集成，ROOT9项实际验收与927源码指纹匹配；新文件工具仍仅规划。Sol继续真实rewind→checkpoint-versioned CSM/view/pending→prepare/seal闭包，随后同owner接compaction，不实施新增文件工具。此次是核验后释放归属的范围纠正，不因观察超时另换writer；失败旧agent不重启制造重复工作。N01报告f73ba2f6、P06更正版85494965及P08整组关闭9989f604/七文件f2b527b7已主核；不能把直接owner blob相同扩大成全运行依赖相同。
 - WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。已集成wire组合c0d7554c与HEAD4a9b88b2的当前坐标以A/current-recovery-receipt.json为准；ROOT集成index=TEMP/coordinator/git/wire-ROOT-integration.idx。旧0b064/history及其它早包索引只作历史证据，不作为当前生产恢复基线。固定tree与WT live分开，默认HEAD不代表完整在途组合。
 - 主串行集成与机械冻结导出，作者仅编辑指定WT owned源码和必要测试、定向Ruff；测试/Git由主承担，不改 index/refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
@@ -23,6 +23,10 @@
 persistent 5.4/5.5最终17路径tree **340dcbd74a9051584a20b730d8f90525e84800ca** 已以 **1b6305d7** 串行集成；guard/双祖先及共享index精确SHA c77082e3通过。关闭生产十一路径/Sol、六测试/主；7unit（含未登记child清理故障）actual0，生产未变的48caller及真实三个PGID成员关闭1项复用627f收据。5.5目标端两HTTP竞争、Node15/client17及P08静态0aec复用；P07最终4f6fd4ac接受、旧P2保留历史。tasks正式23/23，strict有效；技能与任务说明已以e12f8982独立提交，不代表原Goal完成。
 
 Chat最终消息身份已以 **a4b19e0b** 集成六路径tree **6d2184cb**；两生产/Sol、三unit/Sol、一正式integration/主。codec首次与重放消费同一消息model-call身份，fork同步source→target模型身份；真实provenance guard未改。最终reasoning17pass actual0/11.145s、真实Chat/Responses Job与整组关闭2pass actual0/69.031s，1458运行依赖未变；模型为明确TCP回放替身，不称完整模型E2E。原三文件70pass1fail和fork5pass按未变生产/测试范围复用，失败保留；最终机械6路径/7outside精确defer actual0/10.976s，Ruff0，guard/双祖先/共享index不变。P08生产早审4d83、P07最终测试窄审8117接受；证据 `r-chat-provenance-focused-dispatch/ROOT-integration-final/integration-receipt.json`。WT CSM旧WIP仅留后续R，itemized50/87及完整R/epoch/CSM/view、activation等待验。协作记忆10/07已集成；17目录/文件工具规划未变、strict41/0复用，新文件工具0/22未实施。主补生产0，测试/机械/协调成本单列。
+
+R epoch 本轮：两份旧 `SourceSealCase` fixture 补必填 `frozen_provider_wire`，固定tree `3ea767a3` 已以 **46f2485c** 集成；26pass actual0/22.118s，80原assert AST不变、唯二 `seal_sources` 改签名，生产未变。首次baseline31pass4fail为继承caller遗漏，原raw保留；机械2路径/7outside actual0/11.018s，guard/双祖先/共享index精确SHA不变。证据 `r-epoch-csm-focused-dispatch/fixture-caller-integration/receipt.json`，不重跑未变已验范围。
+
+Sol首段durable五生产路径已冻结为 **407bc9ce** 并严格重建，尚未集成或测试；Schema11、checkpoint完整control snapshot含空集合、view/tracking/pending同事务由P07窄审。prepare/seal及compaction仍在实现，不能据这段称完整epoch通过。原48现有路径与4个可新增文件的preimage/归属见 `r-epoch-csm-focused-dispatch/dispatch-preimage.json`；四个published snapshot/CAS必要caller一次扩范围，复用内存owner、不读盘。首冻因作者文件继续推进而SHA不符，guard拒绝、无生产/index改动；二次按实际稳定字节冻结，计主协调，不当Sol语义返工。P08真实rewind验收缺口报告SHA `c1433414` 保留。
 
 主开发服务 unit=`boxteam-dev-cff6686cbc5b0e76.service`，offset16；后端8026、前端8027、Gateway8030。BOXTEAM_HOME=ROOT/out/development-runtime/boxteam-home。此前systemctl核验 **active/running**（前一恢复轮已重新核服务，本次仅复用状态观察），实际 ExecStart 指向 ROOT/scripts/launch/dev.mjs；新增R切片未重启或进行完整产品验收，不将前次启动证据归给新增功能。
 
@@ -69,7 +73,7 @@ Chat最终消息身份已以 **a4b19e0b** 集成六路径tree **6d2184cb**；两
 - P07四路径原627f报告b922保留P2清理窗口，340dc窄复核4f6fd4ac闭合；test finally整体回收/reap子组，outer timeout按root实例回执重扫PGID/session。主一次嵌套probe字符串换行错误在编译预检捕获、测试前修正，计主成本。
 - Grant生产/测试未变，Node15/client17/真实HTTP2及P08静态0aec4a80复用。本地verified终态先于Thread admission拒绝只证明资源拒绝；未改remote/retired存量风险分列，非本包引入。
 - 627f作者WT机械17/43 outside通过；最终340dc主ROOT组合机械17/15 exact outside通过11.093s，R writer已在独立WT、最终unit由主写。ROOT首次只用Git差异列defer，漏6个ignored本地/演示产物，actual2/11.707s原raw保留；逐路径声明，不改保护源码/运行输入，不夹提交。旧index-dir两误调用保留。最终guard/双祖先/shared index c770不变。
-- Chat原Job在关闭前typed provenance/extensions失败；D/chat-provenance-followup.json事实转录与原service日志保留，trace被fixture重建，不伪造raw。当前同Sol已定位projection_identity.model_call_id第一次None/重复put真实ID，两生产早包5b4da9a9待回归/真实Job；guard未放宽。client首轮主fixture漏page_id修后17绿，主成本单列。
+- Chat原Job在关闭前typed provenance/extensions失败已由a4b19e0b闭合，最终reasoning17pass及真实双协议Job/关闭2pass，旧首包不再排队。D/chat-provenance-followup.json事实转录与原service日志保留，不伪造被fixture重建的Trace；guard未放宽。client首轮主fixture漏page_id修后17绿，主成本单列。
 - 17规划逐字匹配strict41/0，新文件工具0/22未实施。普通Skill读/activation与URI分段编码规范旧冲突已改。
 
 ## 实测改进与未证结论
