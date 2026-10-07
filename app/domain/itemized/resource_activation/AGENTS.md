@@ -1,12 +1,13 @@
 # 目录用途
 
 `resource_activation/` 是 v2 资源激活 snapshot/provenance 冻结领域合同的 owner：
-字段闭集、内容 hash 范围与 SourceLineageRef 的事实定义。它不拥有 ResourceRegistry、
-monitor、loader 或 activation policy，也不做任何 I/O。
+字段闭集、内容 hash 范围、完整冻结 policy 值与 SourceLineageRef 的事实定义。
+它不拥有 ResourceRegistry、monitor、loader、配置来源或运行时策略选择，也不做任何 I/O。
 
 # 可修改内容
 
 - 可以维护 snapshot/provenance 的字段清单、闭集、内容 hash 覆盖范围与校验 helper。
+- 可以维护 snapshot 持久化所需的纯 policy 值、规范化与 revision/hash 一致性校验。
 - 可以维护 `common.py` 中供 `provenance.py`/`snapshot.py` 共用的唯一共享定义。
 
 # 不可修改内容

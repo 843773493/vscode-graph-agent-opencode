@@ -254,7 +254,7 @@ boxteam://inline/{distribution_id}/resources/skills/{skill_name}/SKILL.md
 
 #### 5.2 Resource activation boundary
 
-Resource observation、domain desired state与thread applied context分离。provider/reconciler可以随时异步发布新snapshot，但不得因此唤醒每个thread、追加context item或改写sealed assembly。`ResourceActivationCoordinator`先在queue entry取得active execution slot时冻结不可变`ResourceActivationPolicySnapshot(policy_revision, policy_hash, default_boundary, effective_kind_boundaries)`，并据此建立或恢复有序`ExecutionResourceSnapshot`。冻结与userTurn retry/internal恢复遵守itemized唯一合同；config热发布的新policy不改变当前冻结事实。
+Resource observation、domain desired state与thread applied context分离。provider/reconciler可以随时异步发布新snapshot，但不得因此唤醒每个thread、追加context item或改写sealed assembly。`ResourceActivationCoordinator`先在queue entry取得active execution slot时冻结不可变`ResourceActivationPolicySnapshot`及其完整规范化`activation_policy={default_boundary, overrides}`与revision/hash，并据此建立或恢复有序`ExecutionResourceSnapshot`。包括未选中kind的override都随snapshot持久保存并校验hash，不能从选中bindings反推或补默认值。冻结与userTurn retry/internal恢复遵守itemized唯一合同；config热发布的新policy不改变当前冻结事实。
 
 - `turn`（默认）：`ExecutionResourceSnapshot`按唯一冻结合同取得所有effective boundary为`turn`的resource binding，作为当前execution基线；各model call复用这些binding。新变化只供后续新用户Turn或独立internal execution冻结，同用户Turn retry/resume保持原字节。
 - `model_call`：若冻结policy中至少一个resource kind使用`model_call`，每次tool protocol收敛后的model-call preparation从Registry内存状态建立`ModelCallResourceSnapshot(parent_execution_snapshot_id, model_call_id)`；它逐字节复用parent中全部turn-bound binding，只重新冻结model-call-bound kind，并形成该assembly的组合snapshot。已sealed/in-flight call保持不变。

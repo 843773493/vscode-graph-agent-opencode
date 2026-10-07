@@ -1330,7 +1330,9 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 ### Requirement: Context plan 必须绑定精确资源激活快照和安全来源
 
-每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=execution|model_call`、model-call snapshot的`parent_execution_snapshot_id`、activation policy revision/hash、Registry generation、owner SessionThread、真实execution identity、按admission kind可空的Turn及按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
+每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=execution|model_call`、model-call snapshot的`parent_execution_snapshot_id`、activation policy revision/hash及完整规范化`activation_policy={default_boundary, overrides}`、Registry generation、owner SessionThread、真实execution identity、按admission kind可空的Turn及按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
+
+完整policy MUST包含default与全部kind overrides，包括本次没有binding的kind；持久化和恢复 MUST校验其规范化JCS hash及revision与snapshot记录一致。MUST NOT从选中binding重建policy、补默认值或读取当前配置。model-call snapshot MUST与parent保存相同完整policy；policy正文不进入bindings/plan hash，其完整性由既有policy hash及provenance校验保护。
 
 真实execution取得active slot时 MUST按下述唯一冻结合同取得不可变的activation policy与`ExecutionResourceSnapshot`，其中固定turn-bound binding。若没有model-call-bound kind，该Turn全部model call复用同一snapshot；若存在override，每次安全model-call preparation MUST建立parent-linked`ModelCallResourceSnapshot`并绑定该model call，逐字节复用parent中的turn-bound binding，只重新冻结model-call-bound binding。同一assembly可以包含两类binding，必须由每个ResourceProvenanceRef的effective boundary区分，不能用单个assembly boundary覆盖。ResourceRegistry或activation配置后续变化不得改写已经sealed的plan、hash、selection或Provider bytes，policy变化只在下一个新用户Turn或独立internal execution生效；同用户Turn retry/resume保持原冻结事实。
 
@@ -1358,6 +1360,11 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 - **WHEN** 用户 Turn 已冻结 policy/binding，Registry 或配置变化后该 Turn 以新 execution ID retry/resume
 - **THEN** 唯一冻结 owner 为新 execution 建立真实归属并保留同一真实 Turn，复用原 policy/turn-bound字节；model-call parent属于该 execution，不能伪造 identity、借其它 execution/Turn 的快照或读当前资源重造旧事实
+
+#### Scenario: 未选中kind的冻结policy仍可恢复
+
+- **WHEN** execution冻结了model_call默认值或某尚无binding的kind override，之后配置变化并从持久snapshot恢复或retry/resume
+- **THEN** 恢复完整原default与override并校验policy hash/revision，不从现有bindings反推或用turn补默认；新增选中该kind的model-call preparation继续按原冻结policy执行，hash冲突时在seal/dispatch前失败
 
 #### Scenario: 来源变化但选中语义facet不变
 

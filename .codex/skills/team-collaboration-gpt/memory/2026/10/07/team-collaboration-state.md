@@ -52,20 +52,25 @@ R01只验配置刷新，**不能勾完整context4.6**。条件来源切片仍由
 
 ## 待完成队列
 
-1. activation boundary、runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
-2. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
-3. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
+1. A01已派同Sol：baseline `54a6ee55`/tree `2e68e276`，初始40个精确caller及扩展1的5个ROOT/WT preimage一致，当前45源码/测试path及扩展2的2份目录职责文档（主维护）；租约`A/activation-execution-dispatch/lease.json`，作者产物TEMP/sol_vertical_implementer/artifacts/activation-execution，可建`rollout_context/activation/`测试目录。贯穿execution-owned activation身份/SQLite→真实Runner active slot freeze→model-call parent→Saver assembly binding，MCP catalog父payload/target members沿既定8.3-A收口；扩展1承接fresh唯一DDL/显式Step port/旧activation migration删除及两个字符串引用测试；仅作者编辑/Ruff、主冻结测试。策略值`turn|model_call`不改，snapshot kind平移`execution|model_call`、internal Turn可空；不伪造Turn或直接单测freeze→手工seal冒充生产接线。
+2. activation runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
+3. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
+4. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
 
-当前context **20/59**；itemized完整checkbox清单 **55/96**，其中顶层编号项 **52/88**（本轮只纠正统计口径，没有新增勾选）。context1.1/4.6/5.4尚未全勾。历史“生产零caller”已纠正，R01–R07已有接线，不重派已完成epoch、发送合同或persistent验收。`current-task-index.json`、`implementation-queue.json`只作导航，不代源码/规范证据。
+当前context **20/59**；itemized完整checkbox清单 **55/96**，完整编号ID归并为 **54/94**（包括字母组及子号；checkbox只导航，没有新增验收勾选）。context1.1/4.6/5.4尚未全勾。历史“生产零caller”已纠正，R01–R07已有接线，不重派已完成epoch、发送合同或persistent验收。`current-task-index.json`、`implementation-queue.json`只作导航，不代源码/规范证据。
 
 ## 最新文件工具建议：仅规划
 
 统一寻址新增directory/file/domain_object、skills多层与files/root、UTF-8分段编码、轻量访问；context明确读Skill无activation/tracking，skill_load保冻结来源唯一owner；Session沿现有send/read/wait归一；新`add-unified-resource-file-tools`承接七文件工具、目标端执行、有界输出、预期版本冲突、单根patch部分/unknown结果、旧boxteam-session产物URI收口及首批验收。
 
-17规划中13份仍与原已验bytes相同，4份context后来修订并独立strict0；**不能称整批41项当前重跑**。`file-tools-openspec-plan/current-byte-attestation-after-final28.json`。新文件工具 **0/22、未实施**；终端/Python/浏览器/调试执行、跨根复制、通用目录mutation、二进制写入、watch/tail与通用operation_id留后续切片，本轮不扩大实现范围。
+最新请求恢复时17规划SHA全部与既有收据相同；其中13份复用原验证，4份context曾修订并独立strict0；**不能称整批41项当前重跑**。`file-tools-openspec-plan/current-byte-attestation-after-final28.json`。新文件工具 **0/22、未实施**；终端/Python/浏览器/调试执行、跨根复制、通用目录mutation、二进制写入、watch/tail与通用operation_id留后续切片，本轮不扩大实现范围。
+
+A01静态发现旧policy恢复从已选binding反推default/overrides，会丢未选kind与默认边界；主已同步完整policy持久化/hash恢复规范与纯领域值归属，itemized/context两change本轮strict0、技能quick_validate0，证据`A/activation-execution-dispatch/coordinator-planning-validation/receipt.json`。这次A01同步修改了前述17规划中的2份context正文，其余15份字节未变；真实Runner效果待固定候选验证。P08首条裸git status已透明说明；主核真实共享index SHA仍c77082e3…，未观察字节变化，未做恢复。P07核54a的outbox：两UI pending父Folder缺口保留，后端同步测试finding撤销；下一前端闭包为intent/dependency/projection及两hook，不新增backend writer。
 
 ## 技能维护与历史入口
 
 已在入口既有fixture规则补真实事件名/trace字段；第三fixture实际越过对应两个错误，只证明此窄修效果；R01来源/条件pending验收规则已由固定70f3e6完整用例验证，后续切片效果未测。R03修后9精确defer机械首轮通过，验证盘点ignored源码及移除旧defer规则；相关收据只复用实际未变范围。此次实时台账去除重复历史和已完成“下一动作”，旧状态完整保存在`skill-state-maintenance/pre-r01-current-state-compaction-20261007.md`；按task/关键词查历史，不再把全流水读作现行队列。未变固定检查按范围复用；main/继承fixture/作者返工/审查成本分列，不报告模型倍率。
+
+A01准备审查曾误把context默认策略`turn`当旧snapshot身份，建议再次同步规范；主定点核现行design5.2/spec361已明确ExecutionResourceSnapshot与可空Turn，撤销该前置，未改规范或计作者返工。后续只按固定owner的现行正文解释策略轴与身份轴，历史批注不代合同。
 
 其它细则按需要读[条件性失败细则](delivery-failure-rules.md)；目录/Git/派单只读[共同流程](team-collaboration-workflow.md)。本轮原始失败、检查收据与独有源码保留，无源码副本或正式测试数据清理。

@@ -358,7 +358,7 @@ URI resolver MUST在当前principal、workspace/gateway binding、resource activ
 
 ### Requirement: 资源上下文激活边界必须可配置且确定
 
-系统 SHALL只支持`turn`和`model_call`两种resource context activation boundary，默认值 MUST为`turn`，并允许按resource kind覆盖。queued execution取得active execution slot时 MUST取得一个`ResourceActivationPolicySnapshot`及有序`ExecutionResourceSnapshot`；policy snapshot保存revision/hash与每个resource kind的effective boundary，按唯一冻结合同在当前 execution及同用户Turn的retry/resume内不可变，配置热更新只影响后续首次取得冻结事实的新用户Turn或独立internal execution。`ExecutionResourceSnapshot`固定全部turn-bound binding；若存在model-call-bound kind，每次tool protocol收敛后的安全model-call preparation MUST建立引用parent execution snapshot的`ModelCallResourceSnapshot`，逐字节复用turn-bound binding并只重新冻结model-call-bound binding。已经sealed或in-flight的call始终不可变。
+系统 SHALL只支持`turn`和`model_call`两种resource context activation boundary，默认值 MUST为`turn`，并允许按resource kind覆盖。queued execution取得active execution slot时 MUST取得一个`ResourceActivationPolicySnapshot`及有序`ExecutionResourceSnapshot`；policy snapshot保存revision/hash及完整规范化`activation_policy={default_boundary, overrides}`，包括尚未选中resource kind的override；恢复校验同一policy hash/revision，不从bindings反推或读取当前配置，按唯一冻结合同在当前 execution及同用户Turn的retry/resume内不可变，配置热更新只影响后续首次取得冻结事实的新用户Turn或独立internal execution。`ExecutionResourceSnapshot`固定全部turn-bound binding；若存在model-call-bound kind，每次tool protocol收敛后的安全model-call preparation MUST建立引用parent execution snapshot的`ModelCallResourceSnapshot`，逐字节复用turn-bound binding并只重新冻结model-call-bound binding。已经sealed或in-flight的call始终不可变。
 
 真实 execution、可空 Turn、parent与默认冻结复用只引用 `add-itemized-rollout-context` 的「Context plan 必须绑定精确资源激活快照和安全来源」合同。配置名 `turn` 也适用于无 Turn 的 internal execution：以其真实 active execution为冻结边界，禁止创建或借用用户 Turn。该唯一合同约束 user Turn 的 retry/resume 与 internal 恢复，本 change 不维护第二份身份模型。
 
