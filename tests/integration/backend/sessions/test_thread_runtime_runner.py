@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import AsyncIterator, Callable
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -86,6 +87,7 @@ class RuntimeCase:
     )
     reactors: list[ContextSourceReactor] = field(default_factory=list)
     model_admissions: list[ExecutionAdmission] = field(default_factory=list)
+    model_requests: list[dict[str, object]] = field(default_factory=list)
     bindings: list[GraphBinding] = field(default_factory=list)
     build_scopes: list[LifetimeScope] = field(default_factory=list)
 
@@ -153,10 +155,12 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
 
     class RuntimeProtocolModel(BoxteamLiteLLMChatModel):
         admission_observer: Callable[[ExecutionAdmission], None]
+        request_observer: Callable[[dict[str, object]], None]
 
         async def acompletion_with_retry(self, run_manager=None, **kwargs):
             self._validate_completion_dispatch(kwargs)
             self.admission_observer(require_current_execution_admission())
+            self.request_observer(deepcopy(kwargs))
             return ModelReplyStream(kwargs)
 
     def model_from_provider(provider, runtime_config, **kwargs):
@@ -171,6 +175,7 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
             streaming=True,
             max_retries=0,
             admission_observer=case.model_admissions.append,
+            request_observer=case.model_requests.append,
         )
 
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", recording_resolve)
