@@ -1009,6 +1009,18 @@ ContextAssemblySnapshot
 
 assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpointSaver` 持久化；业务层和 projector 只能消费 Saver 提供的已提交 plan/snapshot，不得直接扫描 `RolloutStorage`、`AppendWriter` 或内部 context reader。若 snapshot 或 required detail reference 无法持久化，系统不得发起 provider 请求。provider 结果、canonical item、Turn finalization 和 assembly outcome 的提交 MUST 遵守 sealed-before-dispatch 与 terminal convergence 两阶段 JSONL/SQLite 收敛边界；没有 item 时使用 `commit_kind=terminal_convergence`、`commit_mode=metadata_only`，不能另造 `metadata_only` commit kind。`plan_hash` 必须是 provider-neutral canonical plan 的 hash，同一 plan 在不同 provider projector 中可比较；`request_hash` 必须覆盖具体 projector 的规范化 request，但排除 provider request ID、时间戳、认证和 retry identity，仅在相同 projector/provider profile 内用于 exact replay。request-only prompt、middleware 输入和完整渲染 prompt 只有在需要精确重放时才进入工作区会话节点内有界、受保护的 detail store；SQLite 只保存 detail reference、长度、hash、retention 和 availability，detail store 不得成为 canonical item 正文的第二事实源。
 
+工作区 runtime owner MUST 在真实 Provider 接线时向既有 protected detail backend 注入跨重启稳定的 32-byte 密钥。密钥只保存在显式工作区根的 `.boxteam/.context-detail-key`，不进入全局控制面、Session/Thread 节点、SQLite、配置快照或模型输出；它与 thread-scoped redaction key 是不同用途。仅权威 Session catalog 无节点的新工作区允许首次创建；已有节点而密钥缺失、密钥损坏或路径是 symlink 时 MUST 明确失败，不生成替代密钥尝试读取旧正文、不降级为 redaction。首次创建 MUST 以同目录权限受限的完整临时文件原子且不覆盖地发布并完成 durability barrier；并发创建者读取同一获胜密钥。普通低层 pure-plan 和显式 no-key/redaction 测试保留自身合同，不代表正式 wire 入口可以缺少 required protected backend。
+
+#### Scenario: protected detail 跨工作区后端重启恢复
+
+- **WHEN** 正式 Provider 入口冻结并 seal required activation detail，随后同工作区后端重启
+- **THEN** runtime owner 重新加载原持久密钥并恢复原 sealed 正文与 hash；测试必须经过真实 container/runtime 接线，不仅手工复用内存中的 key
+
+#### Scenario: 丢失密钥不能伪装新工作区
+
+- **WHEN** 权威 Session catalog 已有节点而工作区密钥缺失，或密钥长度/类型不合法
+- **THEN** runtime 装配明确失败，不替换密钥、清除业务事实或发送 Provider 请求；新空工作区并发首次创建只发布一份完整密钥
+
 #### Scenario: 同一历史生成不同 Provider 请求
 
 - **WHEN** 同一个 active view 分别编译为 LangChain request 和原生 Provider item request
