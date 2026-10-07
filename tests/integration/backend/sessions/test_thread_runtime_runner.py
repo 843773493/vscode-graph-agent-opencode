@@ -28,6 +28,7 @@ from app.core.execution_admission_context import (
     require_current_execution_admission,
 )
 from app.core.lifecycle import LifetimeScope
+from app.core.path_utils import workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_thread_context import current_session_thread_owner
@@ -186,14 +187,19 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
     try:
         yield case
     finally:
-        runner_case.container.job_service.close_admission()
-        await runner_case.container.job_service.force_interrupt_active(
-            reason="测试结束"
-        )
-        await runner_case.container.agent_execution_service.shutdown()
-        await runner_case.container.resource_platform.close()
-        await runner_case.container.mcp_catalog_owner.shutdown()
-        runner_case.container.workspace_source_owner.close()
+        with workspace_context(
+            runner_case.container.workspace_service.workspace_id,
+            runner_case.workspace,
+            session_catalog=runner_case.container.session_catalog,
+        ):
+            runner_case.container.job_service.close_admission()
+            await runner_case.container.job_service.force_interrupt_active(
+                reason="测试结束"
+            )
+            await runner_case.container.agent_execution_service.shutdown()
+            await runner_case.container.resource_platform.close()
+            await runner_case.container.mcp_catalog_owner.shutdown()
+            runner_case.container.workspace_source_owner.close()
 
 
 async def _complete_job(case: RuntimeCase, session_id: str, thread_id: str):
