@@ -8,7 +8,7 @@
 - 用户授权架构熵减、唯一owner、移除旧兼容、直接清理源码开发生成的新旧中间数据，无需重复询问。普通源码、未集成独有改动和来源不明业务文件保留；不能删fresh数据掩盖writer错误。
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial；D=A/r01-generation-refresh-dispatch。以下证据相对A；实际派单必须展开成完整绝对路径。
-- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。ROOT观察index=TEMP/coordinator/git/docs-skills-r01-recovery.idx；WT观察index=TEMP/coordinator/git/r01-author-observe.idx。私有观察index不替代候选preimage/tree。
+- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。ROOT观察index=TEMP/coordinator/git/r-policy-root-observe.idx；WT观察index=TEMP/coordinator/git/r-policy-author-observe.idx。私有观察index不替代候选preimage/tree。
 - 主独占Git、冻结、测试、串行集成与技能文档；Sol本轮仅编辑明确owned源码/测试并定向Ruff，不Git/测试/服务/派生。每命令显式物理cwd、私有index和GIT_OPTIONAL_LOCKS=0；禁共享index写、amend/reset/rebase/pathspec commit。进程外timeout+ulimit或matrix保护所有测试。
 - 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不/tmp、不整树复制/archive/自建.venv，不复用迁移排除的历史业务工作区；正式测试沿对应out/tests镜像路径，不注册源码根。
 - 另一聊天草稿`docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md`仅作已授权只读参考，不改原件。
@@ -44,16 +44,19 @@ ROOT `c0975751f0f29222ac6629015987f63da1ab438b` 已集成3path、完整tree `70f
 
 P08报告根TEMP/wire_http_acceptance_reviewer/artifacts/r01-generation-acceptance；P07组织TEMP/wire_contract_reviewer/artifacts/r01-identity-owner-review/r01-generation-organization-review.md；下一条件矩阵入口TEMP/wire_contract_reviewer/artifacts/r-producer-conditional-matrix/report.md。该矩阵报告中旧“Runner整体stub”判断已由d030真实fixture替换，仅复用未变policy/source与缺口分析，不再次迁fixture。
 
-R01只验配置刷新，**不能勾完整context4.6**。当前无活测试runner，Sol已停写；下一实施仍由同Sol，两个Luna只读审查。
+R01只验配置刷新，**不能勾完整context4.6**。条件来源切片仍由同Sol仅编辑/Ruff；lease在`A/r-conditional-policy-dispatch/lease.json`，产物TEMP/sol_vertical_implementer/artifacts/r-conditional-policy。原单向policy baseline actual0/17.811s、1465依赖不变。
+
+- task1已集成`266ac1ad`/tree `524cc5f2`：四独立params首轮4pass actual0/71.936s、1466依赖不变；P08无可行动finding。机械第三次actual0/10.315s/8精确defer，前两机械红是主旧defer与ignored文件盘点失误，非作者返工；guard、双祖先及共享index bytes/stage均通过。`create_team`仍为受信注册桩，不覆盖真实配置team模式入口。
+- task2已集成`4abdc3bb`/完整tree `42cefa8b`：真实workspace JSONC mode按team→single_agent→team发布，实际generation、create_team注册/移除/恢复、R03/root/ToolSet/wire一致；两次hard rebase与三次旧请求retry通过。R03节点actual0/43.421s、1466依赖不变，两个原compiler/Turn.close失败入口actual0/24.665s、1465依赖不变；非全Runner重跑、非Provider或团队创建E2E。机械actual0/11.563s/9精确defer，P08修后增量无finding，guard、双祖先及共享index bytes/stage通过。证据`A/r-conditional-policy-dispatch/task2-integration-attempt-1/receipt.json`。
+- 首候选`ea0250c2`actual1/45.75s：第三Job等待窗内执行两次完整历史投影，在registration前超时；fixture清理缺workspace上下文报次生错。保留raw，不归为生产缺陷。Sol把最早旧request retry移至第三Job完成后，另两次仍在新generation首dispatch前；65assert AST多重集及全部timeout完整保留，finalizer原body只包显式workspace/catalog scope，生产未改。该修在原时间窗内通过，验证技能“区分观测开销/保断言/显式清理owner”的窄效果；没有逐函数性能结论。
 
 ## 待完成队列
 
-1. R03/R04/R06/R07各用独立fixture走启用→隐藏模型可见性→恢复，验证hard rebase epoch+1、root/source/ToolSet一致及旧sealed retry不变；另外用真实ConfigService team↔非team→AgentExecutionService generation→create_team生产注册/移除。前置R01已完成，不重做。
-2. activation boundary、runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
-3. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
-4. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
+1. activation boundary、runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
+2. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
+3. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
 
-当前context **20/59**、itemized **52/89**；context1.1/4.6/5.4尚未全勾。历史“生产零caller”已纠正，R01–R07已有接线，不重派已完成epoch、发送合同或persistent验收。`current-task-index.json`、`implementation-queue.json`只作导航，不代源码/规范证据。
+当前context **20/59**；itemized完整checkbox清单 **55/96**，其中顶层编号项 **52/88**（本轮只纠正统计口径，没有新增勾选）。context1.1/4.6/5.4尚未全勾。历史“生产零caller”已纠正，R01–R07已有接线，不重派已完成epoch、发送合同或persistent验收。`current-task-index.json`、`implementation-queue.json`只作导航，不代源码/规范证据。
 
 ## 最新文件工具建议：仅规划
 
@@ -63,6 +66,6 @@ R01只验配置刷新，**不能勾完整context4.6**。当前无活测试runner
 
 ## 技能维护与历史入口
 
-已在入口既有fixture规则补真实事件名/trace字段；第三fixture实际越过对应两个错误，只证明此窄修效果；R01来源/条件pending验收规则已由固定70f3e6完整用例验证，后续切片效果未测。此次实时台账去除重复历史和已完成“下一动作”，旧状态完整保存在`skill-state-maintenance/pre-r01-current-state-compaction-20261007.md`；按task/关键词查历史，不再把全流水读作现行队列。未变固定检查按范围复用；main/继承fixture/作者返工/审查成本分列，不报告模型倍率。
+已在入口既有fixture规则补真实事件名/trace字段；第三fixture实际越过对应两个错误，只证明此窄修效果；R01来源/条件pending验收规则已由固定70f3e6完整用例验证，后续切片效果未测。R03修后9精确defer机械首轮通过，验证盘点ignored源码及移除旧defer规则；相关收据只复用实际未变范围。此次实时台账去除重复历史和已完成“下一动作”，旧状态完整保存在`skill-state-maintenance/pre-r01-current-state-compaction-20261007.md`；按task/关键词查历史，不再把全流水读作现行队列。未变固定检查按范围复用；main/继承fixture/作者返工/审查成本分列，不报告模型倍率。
 
 其它细则按需要读[条件性失败细则](delivery-failure-rules.md)；目录/Git/派单只读[共同流程](team-collaboration-workflow.md)。本轮原始失败、检查收据与独有源码保留，无源码副本或正式测试数据清理。
