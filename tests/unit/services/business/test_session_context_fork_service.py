@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import (
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+)
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_creation_service, get_session_path_resolver
+from app.core.session_thread_context import session_thread_owner_scope
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_context_fork_service import (
     SessionContextForkService,
@@ -55,9 +65,71 @@ def fork_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ForkServic
     )
 
 
+@pytest.fixture
+def write_checkpoint(
+    fork_services: ForkServices,
+) -> Callable[..., Awaitable[RunnableConfig]]:
+    """夹具使用真实 acceptance/admission 与 SessionThread owner 写入 checkpoint。"""
+
+    async def write(
+        session_id: str,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        versions: ChannelVersions,
+        config: RunnableConfig | None = None,
+    ) -> RunnableConfig:
+        saver = fork_services.checkpointer
+        owner = saver.resolve_main_thread_owner(session_id)
+        user = next(
+            message for message in checkpoint["channel_values"]["messages"]
+            if isinstance(message, HumanMessage)
+        )
+        turn_id = user.response_metadata.get("turn_id", "turn-1")
+        accepted = saver.accept_turn(
+            session_id, thread_id=owner.thread_id,
+            accepted_ingress_id=f"ingress-fork-fixture:{turn_id}",
+            acceptance_idempotency_key=f"accept-fork-fixture:{turn_id}",
+            job_id=f"job-fork-fixture:{turn_id}",
+            admission_idempotency_key=f"admit-fork-fixture:{turn_id}",
+            payload=user.content, turn_id=turn_id,
+            root_item_id=f"item-{user.id}",
+            initial_execution_id=f"execution-fork-fixture:{turn_id}",
+        )
+        admission = saver.execution_admission(
+            session_id, thread_id=owner.thread_id, execution_id=accepted["execution_id"],
+        )
+        with (
+            session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+            execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
+        ):
+            return await saver.aput(
+                build_checkpoint_config(owner.thread_id) if config is None else config,
+                checkpoint, metadata, versions,
+            )
+
+    return write
+
+
+@pytest.fixture
+def read_checkpoint(
+    fork_services: ForkServices,
+) -> Callable[[str], Awaitable[CheckpointTuple | None]]:
+    "按同一 SessionThread owner 读取并恢复 checkpoint，不以 Session ID 冒充 Thread。"
+
+    async def read(session_id: str) -> CheckpointTuple | None:
+        saver = fork_services.checkpointer
+        owner = saver.resolve_main_thread_owner(session_id)
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            return await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+
+    return read
+
+
 @pytest.mark.asyncio
 async def test_fork_copies_agent_state_into_independent_child(
     fork_services: ForkServices,
+    read_checkpoint: Callable[[str], Awaitable[CheckpointTuple | None]],
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]],
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="源会话")
@@ -82,8 +154,8 @@ async def test_fork_copies_agent_state_into_independent_child(
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
     }
-    await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    await write_checkpoint(
+        source.session_id,
         checkpoint,
         {"source": "loop", "step": 2, "parents": {}},
         {"messages": "1", "scratchpad": "1"},
@@ -110,12 +182,8 @@ async def test_fork_copies_agent_state_into_independent_child(
     )
     assert child_path.parent == source_path.parent
 
-    source_tuple = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(source.session_id)
-    )
-    child_tuple = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(child.session_id)
-    )
+    source_tuple = await read_checkpoint(source.session_id)
+    child_tuple = await read_checkpoint(child.session_id)
     assert source_tuple is not None
     assert child_tuple is not None
     assert child_tuple.checkpoint["id"] != source_tuple.checkpoint["id"]
@@ -148,6 +216,8 @@ async def test_fork_empty_context_is_rejected_before_child_creation(
 @pytest.mark.asyncio
 async def test_detached_fork_survives_parent_deletion(
     fork_services: ForkServices,
+    read_checkpoint: Callable[[str], Awaitable[CheckpointTuple | None]],
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]],
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="可删除源会话")
@@ -172,8 +242,8 @@ async def test_detached_fork_survives_parent_deletion(
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
     }
-    await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    await write_checkpoint(
+        source.session_id,
         checkpoint,
         {"source": "test", "step": 1, "parents": {}},
         {"messages": "1", "counter": "1"},
@@ -188,9 +258,7 @@ async def test_detached_fork_survives_parent_deletion(
     child = await fork_services.fork_service.fork(source.session_id)
     await fork_services.session_service.delete(source.session_id)
 
-    restored = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(child.session_id)
-    )
+    restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert restored.checkpoint["channel_values"]["messages"][0].content == "独立上下文"
 
@@ -198,6 +266,7 @@ async def test_detached_fork_survives_parent_deletion(
 @pytest.mark.asyncio
 async def test_pinned_fork_blocks_parent_deletion(
     fork_services: ForkServices,
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]],
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="固定源会话")
@@ -221,8 +290,8 @@ async def test_pinned_fork_blocks_parent_deletion(
         "pending_sends": [],
         "updated_channels": ["messages"],
     }
-    await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    await write_checkpoint(
+        source.session_id,
         checkpoint,
         {"source": "test", "step": 1, "parents": {}},
         {"messages": "1"},
@@ -246,6 +315,8 @@ async def test_pinned_fork_blocks_parent_deletion(
 @pytest.mark.asyncio
 async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
     fork_services: ForkServices,
+    read_checkpoint: Callable[[str], Awaitable[CheckpointTuple | None]],
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]],
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="历史前缀源会话")
@@ -263,8 +334,8 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
     }
-    first_config = await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    first_config = await write_checkpoint(
+        source.session_id,
         first,
         {"source": "test", "step": 1, "parents": {}},
         {"messages": "1", "scratchpad": "1"},
@@ -281,11 +352,12 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
         },
         "channel_versions": {"messages": "2", "scratchpad": "2"},
     }
-    await fork_services.checkpointer.aput(
-        first_config,
+    await write_checkpoint(
+        source.session_id,
         second,
         {"source": "test", "step": 2, "parents": {}},
         {"messages": "2", "scratchpad": "2"},
+        config=first_config,
     )
 
     child = await fork_services.fork_service.fork(
@@ -301,22 +373,35 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
         child.session_id
     )
     assert child_path.parent == source_path.parent
-    child_checkpoints = [
-        item
-        async for item in fork_services.checkpointer.alist(
-            build_checkpoint_config(child.session_id)
-        )
-    ]
+    owner = fork_services.checkpointer.resolve_main_thread_owner(child.session_id)
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        child_checkpoints = [
+            item
+            async for item in fork_services.checkpointer.alist(
+                build_checkpoint_config(owner.thread_id)
+            )
+        ]
+        earlier_checkpoints = [
+            item
+            async for item in fork_services.checkpointer.alist(
+                build_checkpoint_config(owner.thread_id),
+                before=child_checkpoints[0].config,
+                limit=1,
+            )
+        ]
     assert len(child_checkpoints) == 2
+    assert len(earlier_checkpoints) == 1
+    assert earlier_checkpoints[0].checkpoint["id"] == child_checkpoints[1].checkpoint["id"]
+    assert earlier_checkpoints[0].checkpoint["channel_values"]["scratchpad"] == {
+        "step": 1
+    }
     assert child_checkpoints[0].checkpoint["id"] != "checkpoint-prefix-2"
     assert child_checkpoints[0].checkpoint["channel_values"]["scratchpad"] == {
         "step": 2
     }
 
     await fork_services.session_service.delete(source.session_id)
-    restored = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(child.session_id)
-    )
+    restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert [
         message.content for message in restored.checkpoint["channel_values"]["messages"]
@@ -329,6 +414,8 @@ async def test_history_prefix_fork_copies_checkpoints_without_parent_dependency(
 @pytest.mark.asyncio
 async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
     fork_services: ForkServices,
+    read_checkpoint: Callable[[str], Awaitable[CheckpointTuple | None]],
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]],
 ) -> None:
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="完整复制源会话")
@@ -353,8 +440,8 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
         "pending_sends": [],
         "updated_channels": ["messages", "scratchpad"],
     }
-    await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    await write_checkpoint(
+        source.session_id,
         checkpoint,
         {"source": "test", "step": 1, "parents": {}},
         {"messages": "1", "scratchpad": "1"},
@@ -365,11 +452,13 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
         turn_id="turn-1",
         final_message_id="a1",
     )
-    fork_services.checkpointer.rewind(
-        build_checkpoint_config(source.session_id),
-        checkpoint_id="checkpoint-full-1",
-        source_anchor="u1",
-    )
+    owner = fork_services.checkpointer.resolve_main_thread_owner(source.session_id)
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        fork_services.checkpointer.rewind(
+            build_checkpoint_config(owner.thread_id),
+            checkpoint_id="checkpoint-full-1",
+            source_anchor="u1",
+        )
 
     child = await fork_services.fork_service.fork(
         source.session_id,
@@ -394,23 +483,23 @@ async def test_full_rollout_copy_clones_single_rollout_as_independent_storage(
     )
 
     await fork_services.session_service.delete(source.session_id)
-    restored = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(child.session_id)
-    )
+    restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert restored.checkpoint["channel_values"]["messages"][0].content == "原始内容"
 
 
 @pytest.mark.asyncio
-async def test_full_rollout_copy_without_activation_schema_succeeds(
+@pytest.mark.parametrize("missing_marker", [False, True])
+async def test_full_rollout_copy_accepts_empty_catalog_and_rejects_missing_marker(
     fork_services: ForkServices,
+    read_checkpoint: Callable[[str], Awaitable[CheckpointTuple | None]],
+    write_checkpoint: Callable[..., Awaitable[RunnableConfig]], missing_marker: bool,
 ) -> None:
-    """source 库有 context_plan_details 但无 activation 表时 full copy 仍成功。
+    """fresh 空 catalog 合法；既有库缺 marker 则不能回退成无 activation 事实。"""
 
-    regression：remap_prepare 曾无条件解引用 activation_snapshot 映射键，而该键
-    只在 resource_activation_snapshots 表存在时才创建，未 bootstrap activation
-    schema 的 source 会直接 KeyError 崩溃。
-    """
+    from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
+        ResourceActivationStoreError,
+    )
 
     source = await fork_services.session_service.create(
         SessionCreateRequest(title="无 activation schema 源会话")
@@ -434,8 +523,8 @@ async def test_full_rollout_copy_without_activation_schema_succeeds(
         "pending_sends": [],
         "updated_channels": ["messages"],
     }
-    await fork_services.checkpointer.aput(
-        build_checkpoint_config(source.session_id),
+    await write_checkpoint(
+        source.session_id,
         checkpoint,
         {"source": "test", "step": 1, "parents": {}},
         {"messages": "1"},
@@ -455,9 +544,18 @@ async def test_full_rollout_copy_without_activation_schema_succeeds(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-    # 前置事实：必须复现「有 context_plan_details 但无 activation 表」才有效。
     assert "context_plan_details" in tables
-    assert "resource_activation_snapshots" not in tables
+    assert "resource_activation_snapshots" in tables
+    with sqlite3.connect(source_index) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM resource_activation_snapshots").fetchone() == (0,)
+        if missing_marker:
+            connection.execute("DROP TABLE resource_activation_schema_state")
+            connection.commit()
+    if missing_marker:
+        with pytest.raises(ResourceActivationStoreError) as error:
+            await fork_services.fork_service.fork(source.session_id, mode="full_rollout_copy")
+        assert error.value.code == "resource-activation-schema-unavailable"
+        return
 
     child = await fork_services.fork_service.fork(
         source.session_id,
@@ -466,9 +564,7 @@ async def test_full_rollout_copy_without_activation_schema_succeeds(
 
     child_index = fork_services.checkpointer._storage.index_path(child.session_id, "")
     assert child_index.is_file()
-    restored = await fork_services.checkpointer.aget_tuple(
-        build_checkpoint_config(child.session_id)
-    )
+    restored = await read_checkpoint(child.session_id)
     assert restored is not None
     assert (
         restored.checkpoint["channel_values"]["messages"][0].content

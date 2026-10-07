@@ -45,14 +45,6 @@ def test_sha256_hex_distinguishes_byte_encoding() -> None:
 _ALLOWED_OTHER_BARE_SHA256 = {
     ("app/core/thread_creation.py", "compute_artifact_manifest_hash"),
     ("app/services/infrastructure/attachment_blob_catalog/store.py", "_sha256_hex"),
-    (
-        "app/services/infrastructure/rollout_context/storage/resource_activation_migration.py",
-        "_checksum",
-    ),
-    (
-        "app/services/infrastructure/rollout_context/storage/resource_activation_store.py",
-        "_checksum",
-    ),
 }
 
 

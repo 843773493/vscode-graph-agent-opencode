@@ -14,8 +14,8 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
 from app.services.infrastructure.rollout_context.assembly.detail_registry import (
     validate_assembly_details,
 )
-from app.services.infrastructure.rollout_context.assembly.plans.registry import (
-    read_registration,
+from app.services.infrastructure.rollout_context.assembly.plans.types import (
+    ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import (
     exact_row,
@@ -208,6 +208,7 @@ class ContextAssemblyManifestMixin:
         connection: sqlite3.Connection,
         snapshot: ContextAssemblySnapshot,
         *,
+        registration: ContextPlanRegistration,
         header_detail_ref: str | None = None,
         checkpoint_ns: str = "",
     ) -> None:
@@ -219,12 +220,10 @@ class ContextAssemblyManifestMixin:
         """
         # plan registry 是来源的唯一 owner，同时核验 refs/contributions/tools
         # 和已封存 snapshot 的 hash；本层不读取 draft 或重新解释 omitted 正文。
-        registration = read_registration(
-            connection,
-            snapshot.session_id,
-            snapshot.thread_id,
-            snapshot.plan_id,
-        )
+        if (registration.session_id, registration.thread_id) != (
+            snapshot.session_id, snapshot.thread_id,
+        ):
+            raise RuntimeError("source-mismatch: context assembly 与 plan registry owner 不一致")
         if registration.plan_state != "sealed":
             raise RuntimeError(
                 "source-mismatch: context assembly 的 plan 尚未 sealed: "
@@ -237,7 +236,7 @@ class ContextAssemblyManifestMixin:
             )
 
         ref_rows = connection.execute(
-            "SELECT ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, redacted_stable_digest, detail_ref, contribution_id, visibility, protection, availability FROM assembly_item_refs WHERE assembly_id = ? ORDER BY ref_ordinal",
+            'SELECT ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability FROM assembly_item_refs WHERE assembly_id = ? ORDER BY ref_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
         expected_refs = [
@@ -251,7 +250,6 @@ class ContextAssemblyManifestMixin:
                 ref.content_hash,
                 ref.source_revision,
                 ref.content_length,
-                ref.redacted_stable_digest,
                 optional_detail_ref_key(entry.detail_ref) if entry else None,
                 entry.contribution_id if entry else None,
                 ref.visibility,
@@ -278,7 +276,7 @@ class ContextAssemblyManifestMixin:
         )
 
         contribution_rows = connection.execute(
-            "SELECT contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, binding_manifest_json FROM context_assembly_contributions WHERE assembly_id = ? ORDER BY contribution_ordinal",
+            'SELECT contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, binding_manifest_json FROM context_assembly_contributions WHERE assembly_id = ? ORDER BY contribution_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
         expected_contributions = []
@@ -301,7 +299,6 @@ class ContextAssemblyManifestMixin:
                     contribution.source_revision,
                     contribution.content_hash,
                     contribution.content_length,
-                    contribution.redacted_stable_digest,
                     int(contribution.request_only),
                     contribution.contribution_kind,
                     contribution.visibility,
@@ -318,7 +315,7 @@ class ContextAssemblyManifestMixin:
             connection, snapshot, checkpoint_ns=checkpoint_ns,
         )
         selection_rows = connection.execute(
-            "SELECT plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, redacted_stable_digest, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal",
+            'SELECT plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id FROM context_assembly_selections WHERE assembly_id = ? ORDER BY plan_ordinal',
             (snapshot.assembly_id,),
         ).fetchall()
         expected_selection = [
@@ -333,7 +330,6 @@ class ContextAssemblyManifestMixin:
                 entry.source_revision,
                 entry.content_length,
                 entry.content_hash,
-                entry.redacted_stable_digest,
                 entry.visibility,
                 entry.protection,
                 entry.availability,

@@ -1,4 +1,4 @@
-"""ResourceActivationSnapshotRef：Turn / model-call 冻结的资源激活结果。"""
+"""ResourceActivationSnapshotRef：Execution / model-call 冻结的资源激活结果。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.domain.itemized.resource_activation.common import (
     RESOURCE_ACTIVATION_SNAPSHOT_FIELDS,
     SNAPSHOT_FIELD_ALIASES,
     ResourceActivationContractError,
+    ResourceActivationPolicySnapshot,
     _non_empty_string,
     _non_negative_int,
     _reject_forbidden_fields,
@@ -62,16 +63,18 @@ def resource_activation_provenance_hash(
 
 @dataclass(frozen=True, slots=True)
 class ResourceActivationSnapshotRef:
-    """一个 Turn 或一次 model call 冻结的资源激活结果。"""
+    """一个真实 execution 或一次 model call 冻结的资源激活结果。"""
 
     activation_snapshot_id: str
     snapshot_kind: str
     activation_policy_revision: str
     activation_policy_hash: str
+    activation_policy: ResourceActivationPolicySnapshot
     registry_generation: int
     owner_session_id: str
     owner_thread_id: str
-    turn_id: str
+    execution_id: str
+    turn_id: str | None
     captured_at: str
     bindings: tuple[ResourceProvenanceRef, ...]
     parent: ResourceActivationSnapshotRef | None = None
@@ -88,7 +91,7 @@ class ResourceActivationSnapshotRef:
         )
         if self.snapshot_kind not in _SNAPSHOT_KINDS:
             raise _schema_error(
-                f"未知 snapshot_kind: {self.snapshot_kind!r}，必须是 turn|model_call"
+                f"未知 snapshot_kind: {self.snapshot_kind!r}，必须是 execution|model_call"
             )
         _non_empty_string(
             self.activation_policy_revision,
@@ -98,44 +101,65 @@ class ResourceActivationSnapshotRef:
             self.activation_policy_hash,
             "ResourceActivationSnapshotRef.activation_policy_hash",
         )
+        if not isinstance(self.activation_policy, ResourceActivationPolicySnapshot):
+            raise _schema_error("activation_policy 必须是完整 typed 冻结 policy")
+        if (
+            self.activation_policy_revision != self.activation_policy.revision
+            or self.activation_policy_hash != self.activation_policy.hash
+        ):
+            raise ResourceActivationContractError(
+                _CODE_HASH_MISMATCH,
+                "activation policy revision/hash 与完整冻结 policy 不一致",
+            )
         _non_negative_int(
             self.registry_generation,
             "ResourceActivationSnapshotRef.registry_generation",
         )
-        for name in ("owner_session_id", "owner_thread_id", "turn_id", "captured_at"):
+        for name in ("owner_session_id", "owner_thread_id", "execution_id", "captured_at"):
             _non_empty_string(
                 getattr(self, name), f"ResourceActivationSnapshotRef.{name}"
             )
-        if self.snapshot_kind == "turn":
+        if self.turn_id is not None:
+            _non_empty_string(self.turn_id, "ResourceActivationSnapshotRef.turn_id")
+        if self.snapshot_kind == "execution":
             if self.parent is not None:
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "turn snapshot 不得携带 parent turn snapshot",
+                    "execution snapshot 不得携带 parent execution snapshot",
                 )
             if self.model_call_id is not None:
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "turn snapshot 不得携带 model_call_id",
+                    "execution snapshot 不得携带 model_call_id",
                 )
         else:
             if not isinstance(self.parent, ResourceActivationSnapshotRef):
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "model_call snapshot 必须携带 typed parent turn snapshot",
+                    "model_call snapshot 必须携带 typed parent execution snapshot",
                 )
-            if self.parent.snapshot_kind != "turn":
+            if self.parent.snapshot_kind != "execution":
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "model_call snapshot 的 parent 必须是 turn snapshot",
+                    "model_call snapshot 的 parent 必须是 execution snapshot",
                 )
             if (
                 self.parent.owner_session_id != self.owner_session_id
                 or self.parent.owner_thread_id != self.owner_thread_id
+                or self.parent.execution_id != self.execution_id
                 or self.parent.turn_id != self.turn_id
             ):
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "model_call snapshot 的 owner/turn 必须与 parent 一致",
+                    "model_call snapshot 的 owner/execution/可空 Turn 必须与 parent 一致",
+                )
+            if (
+                self.parent.activation_policy_revision != self.activation_policy_revision
+                or self.parent.activation_policy_hash != self.activation_policy_hash
+            ):
+                raise ResourceActivationContractError(
+                    _CODE_PARENT_INVALID,
+                    "model_call snapshot 必须复用 parent 的冻结 policy",
                 )
             if not isinstance(self.model_call_id, str) or not self.model_call_id:
                 raise ResourceActivationContractError(
@@ -143,13 +167,15 @@ class ResourceActivationSnapshotRef:
                     "model_call snapshot 必须携带非空 model_call_id",
                 )
         ordered = _ordered_bindings(self.bindings)
-        if not ordered:
-            raise _schema_error(
-                "ResourceActivationSnapshotRef 必须捕获至少一个 binding"
-            )
-        if self.snapshot_kind == "turn":
+        for binding in ordered:
+            if binding.effective_boundary != self.activation_policy.effective_boundary(binding.resource_kind):
+                raise _schema_error("binding effective boundary 与完整冻结 policy 不一致")
+            ref = binding.detail_ref or binding.snapshot_ref
+            if (ref.session_id, ref.thread_id) != (self.owner_session_id, self.owner_thread_id):
+                raise _schema_error("binding typed ref 与 activation owner 不一致")
+        if self.snapshot_kind == "execution":
             if any(binding.effective_boundary != "turn" for binding in ordered):
-                raise _schema_error("turn snapshot 只能包含 turn-bound binding")
+                raise _schema_error("execution snapshot 只能包含 turn-bound binding")
         else:
             parent_bindings = self.parent.bindings
             if ordered[: len(parent_bindings)] != parent_bindings:
@@ -184,7 +210,7 @@ class ResourceActivationSnapshotRef:
         )
 
     @property
-    def parent_turn_snapshot_id(self) -> str | None:
+    def parent_execution_snapshot_id(self) -> str | None:
         """typed parent relation 的 id 投影；不进入任一内容 hash。"""
 
         return None if self.parent is None else self.parent.activation_snapshot_id
@@ -193,12 +219,14 @@ class ResourceActivationSnapshotRef:
         return {
             "activation_snapshot_id": self.activation_snapshot_id,
             "snapshot_kind": self.snapshot_kind,
-            "parent_turn_snapshot_id": self.parent_turn_snapshot_id,
+            "parent_execution_snapshot_id": self.parent_execution_snapshot_id,
             "activation_policy_revision": self.activation_policy_revision,
             "activation_policy_hash": self.activation_policy_hash,
+            "activation_policy": self.activation_policy.to_dict(),
             "registry_generation": self.registry_generation,
             "owner_session_id": self.owner_session_id,
             "owner_thread_id": self.owner_thread_id,
+            "execution_id": self.execution_id,
             "turn_id": self.turn_id,
             "model_call_id": self.model_call_id,
             "captured_at": self.captured_at,
@@ -237,31 +265,33 @@ class ResourceActivationSnapshotRef:
                 "ResourceActivationSnapshotRef.bindings 必须是数组"
             )
         snapshot_kind = value["snapshot_kind"]
-        declared_parent_id = value["parent_turn_snapshot_id"]
+        declared_parent_id = value["parent_execution_snapshot_id"]
         if snapshot_kind == "model_call":
             if not isinstance(parent, ResourceActivationSnapshotRef):
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "恢复 model_call snapshot 必须提供 typed parent turn snapshot",
+                    "恢复 model_call snapshot 必须提供 typed parent execution snapshot",
                 )
             if declared_parent_id != parent.activation_snapshot_id:
                 raise ResourceActivationContractError(
                     _CODE_PARENT_INVALID,
-                    "parent_turn_snapshot_id 与提供的 parent relation 不一致",
+                    "parent_execution_snapshot_id 与提供的 parent relation 不一致",
                 )
         elif declared_parent_id is not None:
             raise ResourceActivationContractError(
                 _CODE_PARENT_INVALID,
-                "turn snapshot 的 parent_turn_snapshot_id 必须是 null",
+                "execution snapshot 的 parent_execution_snapshot_id 必须是 null",
             )
         restored = cls(
             activation_snapshot_id=value["activation_snapshot_id"],
             snapshot_kind=snapshot_kind,
             activation_policy_revision=value["activation_policy_revision"],
             activation_policy_hash=value["activation_policy_hash"],
+            activation_policy=ResourceActivationPolicySnapshot.from_dict(value["activation_policy"]),
             registry_generation=value["registry_generation"],
             owner_session_id=value["owner_session_id"],
             owner_thread_id=value["owner_thread_id"],
+            execution_id=value["execution_id"],
             turn_id=value["turn_id"],
             captured_at=value["captured_at"],
             bindings=tuple(

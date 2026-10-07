@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from _thread import RLock
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol, TypeAlias
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.sessions import Connection, create_session
@@ -48,6 +49,11 @@ from app.services.infrastructure.mcp.extension_catalog import (
 from app.services.infrastructure.mcp.naming import build_mcp_tool_id
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+        ResourceRegistryCapture,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,26 @@ class McpCatalogSnapshot:
 
     revision: str
     tools: Mapping[str, BaseTool]
+
+
+@dataclass(frozen=True, slots=True)
+class McpCatalogPublication:
+    "Owner 向 Registry 发布的完整不可变值；读线程不拼接可变目录字段。"
+
+    binding_ref: ExtensionCatalogBindingRef
+    descriptors: tuple[McpToolDescriptor, ...]
+    tools: Mapping[str, BaseTool]
+    status: Literal["available", "dirty", "unavailable"]
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"available", "dirty", "unavailable"}:
+            raise ValueError("MCP publication status 非法")
+        if (self.status == "available") != (self.error is None):
+            raise ValueError("MCP publication readiness 与 error 不一致")
+
+
+McpPublicationCallback: TypeAlias = Callable[[McpCatalogPublication], None]
 
 
 class McpServerSessionPort(Protocol):
@@ -245,6 +271,7 @@ class _ServerRuntime:
     generation: int
     session: McpServerSessionPort
     last_relist_error: str | None = None
+    relist_sequence: int = 0
 
 
 class McpCatalogOwner:
@@ -281,6 +308,11 @@ class McpCatalogOwner:
         self._runtimes: dict[str, _ServerRuntime] = {}
         self._catalog_lock = asyncio.Lock()
         self._pending_relist_tasks: set[asyncio.Task[None]] = set()
+        self._publication_lock = RLock()
+        self._publication: McpCatalogPublication | None = None
+        self._publication_subscribers: dict[int, McpPublicationCallback] = {}
+        self._next_publication_subscriber = 0
+        self._dirty_servers: set[str] = set()
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -307,7 +339,8 @@ class McpCatalogOwner:
                         )
                     ),
                 )
-                self._runtimes[server.server_id] = runtime
+                with self._publication_lock:
+                    self._runtimes[server.server_id] = runtime
                 await self._apply_relist(runtime, source="startup")
             if self._snapshot is None:
                 # 目录为空（零 server / 全 disabled）也发布固定 envelope/revision。
@@ -328,20 +361,35 @@ class McpCatalogOwner:
         self._started = True
 
     async def shutdown(self) -> None:
+        errors: list[Exception] = []
+        with self._publication_lock:
+            self._started = False
+            for runtime in self._runtimes.values():
+                runtime.generation += 1
+            if self._publication is not None:
+                try:
+                    self._publish_readiness_locked("unavailable", "MCP 目录 owner 已关闭")
+                except ExceptionGroup as error:
+                    errors.append(error)
+            self._runtimes.clear()
+            self._tools_by_id.clear()
+            self._descriptors_by_server.clear()
+            self._publication = None
+            self._snapshot = None
+            self._dirty_servers.clear()
         for task in tuple(self._pending_relist_tasks):
             task.cancel()
         if self._pending_relist_tasks:
-            await asyncio.gather(
-                *tuple(self._pending_relist_tasks), return_exceptions=True
-            )
+            await asyncio.gather(*tuple(self._pending_relist_tasks), return_exceptions=True)
         if self._session_stack is not None:
-            await self._session_stack.aclose()
+            try:
+                await self._session_stack.aclose()
+            except Exception as error:
+                logger.exception("MCP 生命周期或 publication callback 失败")
+                errors.append(error)
             self._session_stack = None
-        self._runtimes.clear()
-        self._tools_by_id.clear()
-        self._descriptors_by_server.clear()
-        self._snapshot = None
-        self._started = False
+        if errors:
+            raise ExceptionGroup("MCP Owner 关闭失败", errors)
 
     # ------------------------------------------------------------------
     # 消费面（Agent / API / 健康检查）
@@ -355,68 +403,86 @@ class McpCatalogOwner:
     def catalog_channel_name(self) -> str:
         return self._publisher.channel_name
 
+    @property
+    def publication_lock(self) -> RLock:
+        """runtime Registry 直接复用 Owner 的唯一发布锁。"""
+        return self._publication_lock
+
+    def validate_resource_capture(
+        self, capture: ResourceRegistryCapture,
+    ) -> None:
+        """拒绝损坏的 stale available；正常 unavailable 保留 Coordinator 边界等待。"""
+        for snapshot in capture.snapshots:
+            if snapshot.resource_kind != "mcp_tool_catalog" or not snapshot.available:
+                continue
+            publication = self._publication
+            owner_revision = dict(snapshot.source_lineage).get("mcp-owner-catalog:v1")
+            if (
+                not self._started
+                or publication is None
+                or publication.status != "available"
+                or snapshot.generation != publication.binding_ref.generation
+                or owner_revision != publication.binding_ref.catalog_revision
+            ):
+                raise McpCatalogError(
+                    "MCP Registry available snapshot 与唯一 Owner publication 不一致: "
+                    f"resource_id={snapshot.resource_id}, generation={snapshot.generation}, "
+                    f"owner_status={publication.status if publication else 'closed'}"
+                )
+
+    def publication_snapshot(self) -> McpCatalogPublication:
+        "在读线程与发布线程间原子取得唯一完整值，不读取文件或网络。"
+
+        with self._publication_lock:
+            self._require_started()
+            if self._publication is None:
+                raise McpCatalogError("MCP 目录 owner 缺少已发布事实")
+            return self._publication
+
+    def subscribe_publication(
+        self, callback: McpPublicationCallback,
+    ) -> Callable[[], None]:
+        "在同一发布锁内登记并立即交付完整值；释放归调用方 LifetimeScope。"
+
+        if not callable(callback):
+            raise TypeError("MCP publication callback 必须可调用")
+        with self._publication_lock:
+            publication = self.publication_snapshot()
+            callback(publication)
+            subscriber_id = self._next_publication_subscriber
+            self._next_publication_subscriber += 1
+            self._publication_subscribers[subscriber_id] = callback
+
+        def unsubscribe() -> None:
+            with self._publication_lock:
+                self._publication_subscribers.pop(subscriber_id, None)
+
+        return unsubscribe
+
     def get_tools(self) -> list[BaseTool]:
-        self._require_started()
-        assert self._snapshot is not None
-        return list(self._snapshot.tools.values())
+        return list(self.publication_snapshot().tools.values())
 
     def get_tool_ids(self) -> frozenset[str]:
-        self._require_started()
-        assert self._snapshot is not None
-        return frozenset(self._snapshot.tools)
+        return frozenset(self.publication_snapshot().tools)
 
     def list_servers(self) -> list[McpServerSnapshot]:
-        self._require_started()
-        return list(self._build_server_snapshots())
+        with self._publication_lock:
+            self._require_started()
+            return list(self._build_server_snapshots())
 
     def catalog_revision(self) -> str:
-        self._require_started()
-        assert self._snapshot is not None
-        return self._snapshot.revision
+        return self.publication_snapshot().binding_ref.catalog_revision
 
     def catalog_generation(self) -> int:
-        """当前目录 generation lease；revision 推进时单调递增。"""
-        self._require_started()
-        return self._catalog_generation
+        "目录 generation 由唯一不可变 publication 携带；unchanged 不推进。"
+        return self.publication_snapshot().binding_ref.generation
 
     def binding_snapshot(self) -> ExtensionCatalogBindingRef:
-        """当前目录的 sealed binding ref；目录后续变化不影响已返回的 ref。
-
-        发布链路只在持有 _catalog_lock 时改写目录字段；本方法在同一事件循
-        环线程内同步读取并完成冻结构造，读取与构造之间无 await，不存在撕
-        裂窗口。schema_hash 冻结自当前工具参数 schema，与语义 revision 同源。
-        """
-        self._require_started()
-        assert self._snapshot is not None
-        targets = [
-            ExtensionTargetBindingInput(
-                target_id=descriptor.tool_id,
-                origin="mcp",
-                server_id=descriptor.server_id,
-                args=self._tools_by_id[descriptor.tool_id].args,
-            )
-            for server_descriptors in self._descriptors_by_server.values()
-            for descriptor in server_descriptors
-        ]
-        return build_extension_catalog_binding(
-            catalog_revision=self._snapshot.revision,
-            generation=self._catalog_generation,
-            targets=targets,
-        )
+        "完整不可变 publication 已冻结成员/参数 schema，不在消费时重建。"
+        return self.publication_snapshot().binding_ref
 
     def tool_descriptors(self) -> tuple[McpToolDescriptor, ...]:
-        """全部目录 descriptor（按 tool_id 排序）；供受信派生方消费。"""
-        self._require_started()
-        return tuple(
-            sorted(
-                (
-                    descriptor
-                    for descriptors in self._descriptors_by_server.values()
-                    for descriptor in descriptors
-                ),
-                key=lambda item: item.tool_id,
-            )
-        )
+        return self.publication_snapshot().descriptors
 
     def servers_without_change_notifications(self) -> tuple[str, ...]:
         """当前不具备 ``tools/list_changed`` 通知能力的已连接 server。"""
@@ -430,11 +496,7 @@ class McpCatalogOwner:
         )
 
     async def relist_servers_without_notifications(self) -> None:
-        """激活边界（安全点）主动 relist 无通知 server；失败显式抛出。
-
-        E4 的 activation coordinator 在每个允许的激活边界调用本方法；本方法
-        不做网络节流，也不把失败伪装成成功。
-        """
+        """显式目录刷新边界 relist 无通知 server；model-call preparation 不调用。"""
         self._require_started()
         for server_id in self.servers_without_change_notifications():
             await self._apply_relist(self._runtimes[server_id], source="activation")
@@ -455,77 +517,135 @@ class McpCatalogOwner:
 
     def _handle_tools_list_changed(self, server_id: str, generation: int) -> None:
         """通知回调入口：generation lease 校验后调度 relist 任务。"""
-        if not self._started:
-            return
-        runtime = self._runtimes.get(server_id)
-        if runtime is None or runtime.generation != generation:
-            logger.info(
-                "忽略过期 MCP 连接的 tools/list_changed 回调: "
-                "server_id=%s callback_generation=%d current_generation=%s",
-                server_id,
-                generation,
-                runtime.generation if runtime is not None else None,
-            )
-            return
+        with self._publication_lock:
+            if not self._started:
+                return
+            runtime = self._runtimes.get(server_id)
+            if runtime is None or runtime.generation != generation:
+                logger.info(
+                    "忽略过期 MCP tools/list_changed: server_id=%s callback_generation=%d",
+                    server_id, generation,
+                )
+                return
+            runtime.relist_sequence += 1
+            relist_sequence = runtime.relist_sequence
+            self._mark_dirty(server_id)
         task = asyncio.create_task(
-            self._apply_relist(runtime, source="notification")
+            self._apply_relist(runtime, source="notification", relist_sequence=relist_sequence)
         )
         self._pending_relist_tasks.add(task)
         task.add_done_callback(self._pending_relist_tasks.discard)
 
-    async def _apply_relist(self, runtime: _ServerRuntime, *, source: str) -> None:
-        """完整 relist 一个 server 并原子发布；失败保留旧 valid revision。"""
+    async def _apply_relist(
+        self, runtime: _ServerRuntime, *, source: str, relist_sequence: int | None = None,
+    ) -> None:
+        "完整 relist 并原子发布；失败同时保留旧 valid 与显式 unavailable。"
+
         server_id = runtime.server.server_id
         generation_at_start = runtime.generation
+        with self._publication_lock:
+            if relist_sequence is None:
+                runtime.relist_sequence += 1
+                relist_sequence = runtime.relist_sequence
+            if self._started:
+                self._mark_dirty(server_id)
         try:
             remote_tools = await runtime.session.list_tools()
+            async with self._catalog_lock:
+                with self._publication_lock:
+                    if (
+                        runtime.generation != generation_at_start
+                        or runtime.relist_sequence != relist_sequence
+                        or self._runtimes.get(server_id) is not runtime
+                    ):
+                        logger.info("MCP relist 过期结果已丢弃: server_id=%s", server_id)
+                        return
+                    own_ids = {
+                        descriptor.tool_id
+                        for descriptor in self._descriptors_by_server.get(server_id, ())
+                    }
+                    server_tools, descriptors = _adapt_server_tools(
+                        server_id, remote_tools,
+                        foreign_tool_ids=set(self._tools_by_id) - own_ids,
+                    )
+                    candidate_tools = {
+                        tool_id: tool
+                        for tool_id, tool in self._tools_by_id.items()
+                        if tool_id not in own_ids
+                    }
+                    candidate_tools.update(server_tools)
+                    candidate_descriptors = {
+                        **self._descriptors_by_server, server_id: descriptors,
+                    }
+                    self._dirty_servers.discard(server_id)
+                    self._publish_snapshot_locked(
+                        server_id=server_id, candidate_tools=candidate_tools,
+                        candidate_descriptors=candidate_descriptors,
+                    )
+                    runtime.last_relist_error = None
         except Exception as error:
-            runtime.last_relist_error = _bounded_error_text(error)
+            with self._publication_lock:
+                if (
+                    runtime.generation != generation_at_start
+                    or runtime.relist_sequence != relist_sequence
+                    or self._runtimes.get(server_id) is not runtime
+                ):
+                    return
+                runtime.last_relist_error = _bounded_error_text(error)
+                self._dirty_servers.add(server_id)
+                invalidation_errors: list[Exception] = []
+                if self._publication is not None:
+                    try:
+                        self._publish_readiness_locked("unavailable", runtime.last_relist_error)
+                    except ExceptionGroup as invalidation_error:
+                        invalidation_errors.append(invalidation_error)
+                if invalidation_errors:
+                    raise ExceptionGroup(
+                        "MCP relist 与失效广播失败", [error, *invalidation_errors]
+                    )
             if source == "notification":
                 logger.exception(
-                    "MCP relist 失败，保留旧目录 revision: server_id=%s", server_id
+                    "MCP relist 失败，Registry 已标记不可用: server_id=%s", server_id
                 )
                 return
             raise McpCatalogRelistError(
                 f"MCP 工具目录 relist 失败: server_id={server_id}: {error}"
             ) from error
-        async with self._catalog_lock:
-            # 等待锁期间连接可能已被重建/关闭：二次 generation lease 校验。
-            if (
-                runtime.generation != generation_at_start
-                or self._runtimes.get(server_id) is not runtime
-            ):
-                logger.info(
-                    "MCP relist 结果所属连接代际已失效，丢弃: server_id=%s",
-                    server_id,
+
+    def _mark_dirty(self, server_id: str) -> None:
+        with self._publication_lock:
+            self._dirty_servers.add(server_id)
+            if self._publication is not None:
+                self._publish_readiness_locked(
+                    "dirty", f"MCP 目录正在完整刷新: server_id={server_id}",
                 )
-                return
-            runtime.last_relist_error = None
-            own_ids = {
-                descriptor.tool_id
-                for descriptor in self._descriptors_by_server.get(server_id, ())
-            }
-            foreign_tool_ids = set(self._tools_by_id) - own_ids
-            server_tools, descriptors = _adapt_server_tools(
-                server_id,
-                remote_tools,
-                foreign_tool_ids=foreign_tool_ids,
-            )
-            candidate_tools = {
-                tool_id: tool
-                for tool_id, tool in self._tools_by_id.items()
-                if tool_id not in own_ids
-            }
-            candidate_tools.update(server_tools)
-            candidate_descriptors = {
-                **self._descriptors_by_server,
-                server_id: descriptors,
-            }
-            self._publish_snapshot_locked(
-                server_id=server_id,
-                candidate_tools=candidate_tools,
-                candidate_descriptors=candidate_descriptors,
-            )
+
+    def _publish_readiness_locked(
+        self, status: Literal["dirty", "unavailable"], error: str,
+    ) -> None:
+        previous = self._publication
+        if previous is None:
+            raise McpCatalogError("MCP readiness 缺少原 publication")
+        publication = McpCatalogPublication(
+            binding_ref=previous.binding_ref, descriptors=previous.descriptors,
+            tools=previous.tools, status=status, error=error,
+        )
+        self._publication = publication
+        errors = self._broadcast_publication_locked(publication)
+        if errors:
+            raise ExceptionGroup("MCP readiness 广播失败", errors)
+
+    def _broadcast_publication_locked(
+        self, publication: McpCatalogPublication,
+    ) -> list[Exception]:
+        errors: list[Exception] = []
+        for callback in tuple(self._publication_subscribers.values()):
+            try:
+                callback(publication)
+            except Exception as error:
+                logger.exception("MCP 生命周期或 publication callback 失败")
+                errors.append(error)
+        return errors
 
     # ------------------------------------------------------------------
     # 内部状态
@@ -538,44 +658,76 @@ class McpCatalogOwner:
         candidate_tools: dict[str, BaseTool],
         candidate_descriptors: dict[str, tuple[McpToolDescriptor, ...]],
     ) -> None:
-        """在持有 _catalog_lock 的前提下切换目录状态并发布轻量事件。"""
-        new_revision = _compute_catalog_revision(
-            candidate_tools,
-            candidate_descriptors,
-        )
-        previous_revision = (
-            self._snapshot.revision if self._snapshot is not None else None
-        )
-        if previous_revision is not None and new_revision == previous_revision:
+        "唯一发布锁内构造完整值并切换；事件只携带 revision，不注册资源。"
+
+        with self._publication_lock:
+            new_revision = _compute_catalog_revision(
+                candidate_tools, candidate_descriptors,
+            )
+            previous_revision = (
+                self._snapshot.revision if self._snapshot is not None else None
+            )
+            unchanged = new_revision == previous_revision
+            generation = self._catalog_generation + int(not unchanged)
+            descriptors = tuple(sorted(
+                (
+                    descriptor
+                    for entries in candidate_descriptors.values()
+                    for descriptor in entries
+                ),
+                key=lambda item: item.tool_id,
+            ))
+            binding = build_extension_catalog_binding(
+                catalog_revision=new_revision, generation=generation,
+                targets=(
+                    ExtensionTargetBindingInput(
+                        target_id=descriptor.tool_id, origin="mcp",
+                        server_id=descriptor.server_id,
+                        args=candidate_tools[descriptor.tool_id].args,
+                    )
+                    for descriptor in descriptors
+                ),
+            )
+            publication = McpCatalogPublication(
+                binding_ref=binding, descriptors=descriptors,
+                tools=MappingProxyType(dict(candidate_tools)),
+                status="dirty" if self._dirty_servers else "available",
+                error=(
+                    f"MCP 目录仍有未完成刷新: {sorted(self._dirty_servers)}"
+                    if self._dirty_servers else None
+                ),
+            )
+            # 同锁内完成全部 subscriber 发布；任何失败先设置 Owner unavailable，
+            # 再向所有 subscriber 广播失效。失败的失效回调由 capture validator 拒绝。
+            errors = self._broadcast_publication_locked(publication)
+            if errors:
+                if self._publication is None:
+                    self._publication = publication
+                try:
+                    self._publish_readiness_locked("unavailable", "MCP subscriber 发布失败")
+                except ExceptionGroup as invalidation_error:
+                    errors.append(invalidation_error)
+                raise ExceptionGroup("MCP publication 广播失败", errors)
+            removed_ids = set(self._tools_by_id) - set(candidate_tools)
+            self._catalog_generation = generation
+            self._tools_by_id = candidate_tools
+            self._descriptors_by_server = candidate_descriptors
+            self._snapshot = McpCatalogSnapshot(
+                revision=new_revision, tools=publication.tools,
+            )
+            self._publication = publication
             self._publisher.publish(
                 server_id=server_id,
-                kind="unchanged",
-                revision=new_revision,
-                previous_revision=previous_revision,
+                kind="unchanged" if unchanged else (
+                    "tombstone" if removed_ids else "published"
+                ),
+                revision=new_revision, previous_revision=previous_revision,
             )
-            return
-        removed_ids = set(self._tools_by_id) - set(candidate_tools)
-        kind = "tombstone" if removed_ids else "published"
-        self._catalog_generation += 1
-        self._tools_by_id = candidate_tools
-        self._descriptors_by_server = candidate_descriptors
-        self._snapshot = McpCatalogSnapshot(
-            revision=new_revision,
-            tools=MappingProxyType(dict(candidate_tools)),
-        )
-        self._publisher.publish(
-            server_id=server_id,
-            kind=kind,
-            revision=new_revision,
-            previous_revision=previous_revision,
-        )
-        if removed_ids:
-            logger.info(
-                "MCP 目录 tombstone: server_id=%s removed=%s revision=%s",
-                server_id,
-                sorted(removed_ids),
-                new_revision,
-            )
+            if removed_ids:
+                logger.info(
+                    "MCP 目录 tombstone: server_id=%s removed=%s revision=%s",
+                    server_id, sorted(removed_ids), new_revision,
+                )
 
     def _build_server_snapshots(self) -> tuple[McpServerSnapshot, ...]:
         """现读 server 连接状态视图（不属于不可变目录语义）。"""

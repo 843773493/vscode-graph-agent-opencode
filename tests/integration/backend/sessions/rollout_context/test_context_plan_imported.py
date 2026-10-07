@@ -103,7 +103,9 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
             contribution_id="source-contribution", source_kind="workspace_instructions",
             source_revision="source-revision", body=body,
             content_hash=contribution_content_hash("prompt", body),
-            source_binding=SourceBinding(source_ref="source-contribution"),
+            source_binding=SourceBinding(
+                source_ref="source-alias" if fork_plan_kind == "known_omitted" else "source-contribution",
+            ),
         )
         if fork_plan_kind != "unbound_omitted":
             saver.register_context_contribution(source, source_thread, contribution, request_content=body)
@@ -118,7 +120,10 @@ def fork_case(request, session_bundle_factory, fork_plan_kind):
         )
         if fork_plan_kind == "known_omitted":
             plan = replace(
-                plan, refs=tuple(replace(ref, availability="unavailable") for ref in plan.refs),
+                plan, refs=tuple(replace(
+                    ref, ref_id=contribution.source_binding.source_ref,
+                    source_ref=contribution.source_binding.source_ref, availability="unavailable",
+                ) for ref in plan.refs),
                 tool_set_refs=(),
             )
         elif fork_plan_kind == "unbound_omitted":
@@ -607,7 +612,7 @@ def test_import_snapshot_json_inline_body_is_rejected_before_normalization(
         connection.execute(
             "UPDATE context_assemblies SET snapshot_json=?", (json_text(value),)
         )
-    with pytest.raises(ValueError, match="snapshot schema/hash/privacy") as caught:
+    with pytest.raises(ValueError, match="snapshot schema/hash/body") as caught:
         read_registration(connection, session, snapshot.thread_id, snapshot.plan_id)
     assert "secret not allowed" not in str(caught.value)
     assert caught.value.__cause__ is None and caught.value.__context__ is None

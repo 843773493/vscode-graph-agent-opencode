@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -17,9 +16,6 @@ from app.services.infrastructure.node_debug.session.fork import (
 )
 from app.services.infrastructure.rollout_context.fork.assembly_copy import (
     validate_source_assemblies,
-)
-from app.services.infrastructure.rollout_context.fork.full_copy.details import (
-    write_private,
 )
 from app.services.infrastructure.rollout_context.fork.full_copy.staging import (
     FullCopyStagingStorage,
@@ -97,14 +93,12 @@ def full_rollout_copy(
             prefix=".fork-staging-", dir=target.parent
         ) as temporary:
             stage_root = Path(temporary) / "rollout"
-            target_key = secrets.token_bytes(32)
             stage = FullCopyStagingStorage(
                 storage,
                 source=source_session_id,
                 target=target_session_id,
                 root=stage_root,
                 capability=detail_capability,
-                target_session_key=target_key,
             )
             # 从读取 source manifest 到全部正文认证保持共享锁；不修改 source SQLite。
             with ExitStack() as source_locks:
@@ -122,7 +116,6 @@ def full_rollout_copy(
                     checkpoint_ns=checkpoint_ns,
                     detail_capability=detail_capability,
                 )
-                write_private(stage_root / ".context-redaction-key", target_key)
                 fields = {
                     "source_session_id": source_session_id,
                     "target_session_id": target_session_id,

@@ -48,15 +48,23 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.message_stream_store import (
     MessageStreamStore,
+)
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
 from app.services.orchestration.event_stream.contracts import AgentEventSource
-from app.services.orchestration.execution_step.ports import StepExecutionPorts
+from app.services.orchestration.execution_step.ports import (
+    StepAgentRuntime,
+    StepExecutionPorts,
+)
 from app.services.orchestration.execution_step.runner import StepRunner
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.thread_residency import (
     ThreadResidencyTracker,
     ThreadRuntimeLease,
@@ -88,6 +96,7 @@ class AgentExecutionService(JobStepExecutor):
         model_timeout_seconds: float | None = None,
         tool_timeout_seconds: float | None = None,
         residency_tracker: ThreadResidencyTracker,
+        resource_activation_factory: Callable[[ResourceRegistry], ResourceActivationCoordinator],
         # Turn 控制 inbox 状态路径解析器；None 时用 SQLite catalog 解析到会话节点。
         control_inbox_state_path: Callable[[str, str], Path] | None = None,
     ):
@@ -117,6 +126,7 @@ class AgentExecutionService(JobStepExecutor):
         self._workspace_file_resource_registry = workspace_file_resource_registry
         self._graph_binding_store = graph_binding_store
         self._residency_tracker = residency_tracker
+        self._resource_activation_factory = resource_activation_factory
         self._model_timeout_seconds = model_timeout_seconds
         self._tool_timeout_seconds = tool_timeout_seconds
         self._sweep_task: asyncio.Task[None] | None = None
@@ -165,6 +175,9 @@ class AgentExecutionService(JobStepExecutor):
         preferred_provider_id: str | None,
         include_team_tools: bool,
         mcp_tools: Sequence[BaseTool],
+        mcp_catalog_owner: McpCatalogOwner | None = None,
+        resource_registry: ResourceRegistry,
+        resource_activation: ResourceActivationCoordinator | None,
         owns_thread: bool = True,
         lifetime_scope: LifetimeScope | None = None,
     ) -> AgentEventSource:
@@ -189,6 +202,9 @@ class AgentExecutionService(JobStepExecutor):
             job_event_bus=self._bus,
             dependency_provider=self._dependency_provider,
             mcp_tools=mcp_tools,
+            mcp_catalog_owner=mcp_catalog_owner,
+            resource_registry=resource_registry,
+            resource_activation=resource_activation,
             execution_overrides=execution_overrides,
             model_visibility_overrides=model_visibility_overrides,
             preferred_provider_id=preferred_provider_id,
@@ -212,7 +228,7 @@ class AgentExecutionService(JobStepExecutor):
         model_visibility_overrides: Mapping[str, bool],
         preferred_provider_id: str | None,
         include_team_tools: bool,
-    ) -> ThreadRuntimeLease[AgentEventSource]:
+    ) -> ThreadRuntimeLease[StepAgentRuntime]:
         """只有真实准入可物化 runtime；代 key 与 builder 均不保留该 admission。"""
         self._check_sweeper()
         pair = MutationIntentOwner(admission.session_id, admission.thread_id)
@@ -221,8 +237,10 @@ class AgentExecutionService(JobStepExecutor):
             owner=GraphBindingOwnerKey(pair.session_id, pair.thread_id),
         )
         snapshot = self._config_service.get_snapshot()
-        mcp_tools = tuple(self._dependency_provider.get_mcp_tools())
-        mcp = seal_extension_catalog_binding_from_tools(mcp_tools)()
+        mcp_owner = self._dependency_provider.get_mcp_catalog_owner()
+        publication = mcp_owner.publication_snapshot()
+        mcp_tools = tuple(publication.tools.values())
+        mcp = publication.binding_ref
         generation_key = (
             binding.selector_fields(),
             snapshot.revision,
@@ -237,9 +255,9 @@ class AgentExecutionService(JobStepExecutor):
 
         async def build(
             session_id: str, thread_id: str, scope: LifetimeScope
-        ) -> AgentEventSource:
+        ) -> StepAgentRuntime:
 
-            def compile_agent() -> AgentEventSource:
+            def compile_agent() -> StepAgentRuntime:
                 # builder task 使用空 Context；显式恢复工作区、代配置及 thread owner。
                 with (
                     workspace_context(
@@ -253,7 +271,12 @@ class AgentExecutionService(JobStepExecutor):
                         langgraph_thread_id=thread_id,
                     ),
                 ):
-                    return self._build_agent(
+                    resource_registry = ResourceRegistry(
+                        publication_lock=mcp_owner.publication_lock,
+                        capture_validator=mcp_owner.validate_resource_capture,
+                    )
+                    resource_activation = self._resource_activation_factory(resource_registry)
+                    agent = self._build_agent(
                         session_id=session_id,
                         thread_id=thread_id,
                         agent_id=agent_id,
@@ -262,8 +285,12 @@ class AgentExecutionService(JobStepExecutor):
                         preferred_provider_id=preferred_provider_id,
                         include_team_tools=include_team_tools,
                         mcp_tools=mcp_tools,
+                        mcp_catalog_owner=mcp_owner,
+                        resource_registry=resource_registry,
+                        resource_activation=resource_activation,
                         lifetime_scope=scope,
                     )
+                    return StepAgentRuntime(agent, resource_activation)
 
             return await asyncio.to_thread(compile_agent)
 
@@ -420,6 +447,8 @@ class AgentExecutionService(JobStepExecutor):
                 preferred_provider_id=None,
                 include_team_tools=include_team_tools,
                 mcp_tools=mcp_tools,
+                resource_registry=ResourceRegistry(),
+                resource_activation=None,
                 owns_thread=False,
             )
             definitions = build_agent_tool_definitions(

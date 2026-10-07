@@ -104,8 +104,8 @@ class RolloutTerminalProjectionMixin:
             raise RuntimeError(f"canonical item catalog 与 JSONL identity 冲突: {item_id}")
         return item
 
-    @staticmethod
     def _ensure_active_view_turn(
+        self,
         connection: sqlite3.Connection,
         *,
         checkpoint_ns: str,
@@ -151,9 +151,13 @@ class RolloutTerminalProjectionMixin:
             root[0], field="turn_records.root_input_item_id"
         )
         existing = connection.execute(
-            "SELECT 1 FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
+            "SELECT user_message_sequence, final_message_sequence, root_input_item_id "
+            "FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
             (view_id, turn_id),
         ).fetchone()
+        if existing == (user_sequence, final_sequence, root_item_id):
+            return
+        view_id = self._writable_active_context_view_id(connection, checkpoint_ns, branch_id)
         if existing is not None:
             connection.execute(
                 "UPDATE context_view_turns SET user_message_sequence = ?, "

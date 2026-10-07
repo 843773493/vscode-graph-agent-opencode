@@ -1,7 +1,7 @@
 """activation storage 错误码的单点化防漂移合同。
 
 同一 code 只允许在 storage/resource_activation_common.py 定义一次；store/reads/
-migration/lineage 必须引用常量，不得重新裸写同一字面量。
+schema/lineage 必须引用常量，不得重新裸写同一字面量。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _SCANNED_MODULES = (
     "resource_activation_common.py",
     "resource_activation_store.py",
     "resource_activation_reads.py",
-    "resource_activation_migration.py",
+    "resource_activation_schema.py",
     "resource_activation_lineage.py",
 )
 _CODE_LITERAL = re.compile(

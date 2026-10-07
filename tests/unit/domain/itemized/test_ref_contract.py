@@ -113,7 +113,6 @@ def test_omission_preserves_tag_with_no_body_or_binding(
         "source_revision",
         "content_length",
         "content_hash",
-        "redacted_stable_digest",
         "detail_ref",
         "contribution_ordinal",
     ):
@@ -422,31 +421,21 @@ def test_selection_matrix_rejects_union_mismatch_before_projection(
             source_revision=ref.source_revision,
             content_length=ref.content_length,
             content_hash=ref.content_hash,
-            redacted_stable_digest=ref.redacted_stable_digest,
             visibility=ref.visibility,
             protection=ref.protection,
             availability=ref.availability,
         )
 
 
-def test_omitted_selection_cannot_carry_two_manifest_tokens(
-    user_item: CanonicalItemRecord,
-) -> None:
+def test_omitted_selection_rejects_invalid_content_hash(user_item: CanonicalItemRecord) -> None:
     ref = ContextRef.canonical_item(user_item, session_id="session-1", thread_id="thread-1")
-    with pytest.raises(ItemSchemaError, match="不能同时携带"):
+    with pytest.raises(ItemSchemaError):
         ContextSelectionEntry(
-            assembly_id="assembly-omitted-two-tokens",
-            plan_ordinal=0,
-            ref=ref,
-            selection_kind=SelectionKind.CANONICAL_HISTORY,
-            included=False,
-            omission_reason="budget",
-            loss=("budget",),
-            visibility=ref.visibility,
-            protection=ref.protection,
-            availability=ref.availability,
-            content_hash=ref.content_hash,
-            redacted_stable_digest="redacted:known",
+            assembly_id="assembly-omitted-invalid-token", plan_ordinal=0,
+            ref=ref, selection_kind=SelectionKind.CANONICAL_HISTORY,
+            included=False, omission_reason="budget", loss=("budget",),
+            visibility=ref.visibility, protection=ref.protection,
+            availability=ref.availability, content_hash="invalid-content-hash",
         )
 
 

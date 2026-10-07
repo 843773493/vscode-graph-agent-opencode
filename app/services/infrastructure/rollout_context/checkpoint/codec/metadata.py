@@ -9,6 +9,11 @@ from app.domain.itemized.schema import validate_extensions
 
 ANNOTATION_SCHEMA = "boxteam.checkpoint.annotations"
 CANONICAL_GROUP_FIELD = "canonical_item_manifests"
+TOOL_BINDING_FIELD = "tool_binding"
+TOOL_BINDING_KEYS = {
+    "tool_call": ("tool_call_id", "tool_invocation_id", "tool_attempt_id"),
+    "tool_result": ("tool_call_id", "tool_invocation_id", "tool_attempt_id", "result_id"),
+}
 # 仅统计与展示信息；归属、phase、source revision、内部标记和替换关系不在此列。
 ANNOTATION_FIELDS = (
     "source",

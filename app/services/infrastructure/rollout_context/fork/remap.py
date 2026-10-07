@@ -48,7 +48,6 @@ class ForkRemapMixin:
         checkpoint_ns: str,
         timestamp: str,
         detail_capability=None,
-        target_session_key: bytes | None = None,
     ) -> None:
         state = prepare_full_copy_remap(
             self,
@@ -62,7 +61,6 @@ class ForkRemapMixin:
         if state is None:
             return
         state.detail_capability = detail_capability
-        state.target_session_key = target_session_key
         state.source_assembly_fingerprints = {
             assembly_id: (plan_id, plan_hash, request_hash)
             for assembly_id, plan_id, plan_hash, request_hash in connection.execute(

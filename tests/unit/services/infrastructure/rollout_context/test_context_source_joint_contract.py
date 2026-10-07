@@ -157,7 +157,9 @@ def empty_tool_set() -> ToolSetSnapshot:
 
 
 @pytest.fixture
-def source_seal_owner(saver: RolloutCheckpointSaver, frozen_provider_wire) -> SourceSealCase:
+def source_seal_owner(
+    saver: RolloutCheckpointSaver, frozen_provider_wire, frozen_provider_activation,
+) -> SourceSealCase:
     owner = ContextSourceOwnerKey(MAIN_SESSION_ID, saver._storage.main_thread_id(MAIN_SESSION_ID))
     accepted = saver.accept_turn(
         owner.session_id, thread_id=owner.thread_id,
@@ -165,7 +167,7 @@ def source_seal_owner(saver: RolloutCheckpointSaver, frozen_provider_wire) -> So
         job_id="joint-job", admission_idempotency_key="joint-admission",
         payload="联合来源真实 seal 合同", root_item_id="item-joint-ingress",
     )
-    return SourceSealCase(saver, owner, accepted, frozen_provider_wire)
+    return SourceSealCase(saver, owner, accepted, frozen_provider_wire, frozen_provider_activation)
 
 
 @pytest.fixture
@@ -788,6 +790,7 @@ class TestComposerThreadIdentity:
             status=CanonicalItemStatus.COMPLETED,
             producer_ref={"producer_kind": "provider", "producer_id": "model-call-1"},
             payload="最终回答",
+            wire_role="assistant",
             projection_identity=ItemProjectionIdentity(projection_message_id="message-thread-identity"),
             turn_id=accepted["turn_id"],
             turn_scope=TurnScope.TURN_MEMBER,

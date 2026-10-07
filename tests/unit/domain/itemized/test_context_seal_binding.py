@@ -28,7 +28,6 @@ from app.domain.itemized.epoch.seal_binding import (
 )
 from app.domain.itemized.epoch.tool_set import (
     ToolSetSnapshot,
-    tool_set_manifest_compatibility_key,
 )
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
@@ -46,7 +45,17 @@ from app.domain.itemized.serde.epoch import (
 def tool_set() -> ToolSetSnapshot:
     return ToolSetSnapshot(
         selection_revision=sha256_jcs({"read_file": True}),
-        tools=({"type": "function", "function": {"name": "read_file", "description": "读文件"}},),
+        tools=({
+            "type": "function",
+            "function": {
+                "name": "read_file", "description": "读文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        },),
         policy_keys=("filesystem_rules",),
     )
 
@@ -232,66 +241,36 @@ def test_validate_hashes_rechecks_toolset_cross_binding(snapshot, tampered_bindi
 
 @pytest.fixture(params=["protected", "redacted"])
 def protected_snapshot(snapshot, request):
-    """原 policy 非空；最终 registry 只保留合法非正文 manifest token。"""
-    public_ref = snapshot.tool_set_refs[0]
-    assert public_ref.tool_policy == {
-        "enabled_policy_keys": ["filesystem_rules"],
-        "wire_tool_order": ["read_file"],
-    }
-    protected_ref = replace(
-        public_ref, protection=request.param, content_hash=None,
-        redacted_stable_digest="hmac-sha256:session:v1:" + "7" * 64,
-        tool_policy={}, tools=(),
-    )
-    key = tool_set_manifest_compatibility_key(protected_ref)
-    raw_binding = context_seal_binding_to_dict(snapshot.seal_binding)
-    raw_binding["prefix"]["state"]["tool_compatibility_key"] = key
-    raw_binding["root"]["tool_compatibility_key"] = key
-    root = replace(snapshot.seal_binding.root, tool_compatibility_key=key)
-    raw_binding["prefix"]["state"]["frames"][0]["item_ref"]["source_revision"] = root.frame_hash()
-    raw_binding["prefix"]["appended_refs"][0]["source_revision"] = root.frame_hash()
-    binding = context_seal_binding_from_dict(raw_binding)
-    entry = replace(
-        snapshot.selection[0], ref=protected_ref, content_hash=None,
-        redacted_stable_digest=protected_ref.redacted_stable_digest,
-        protection=request.param,
-    )
+    """访问分类不改变内部 ToolSet 正文、精确 hash 或封存 binding。"""
+    ref = replace(snapshot.tool_set_refs[0], protection=request.param)
+    entry = replace(snapshot.selection[0], ref=ref, protection=request.param)
     plan = ContextRequestPlan(
         session_id=snapshot.session_id, thread_id=snapshot.thread_id,
         plan_id=snapshot.plan_id, refs=(),
-        tool_set_refs=(replace(protected_ref, assembly_id=None),),
+        tool_set_refs=(replace(ref, assembly_id=None),),
+        tool_snapshot=snapshot.tool_snapshot,
     ).seal_for_assembly(snapshot.assembly_id, selection=(entry,))
     return replace(
-        snapshot, tool_snapshot=(), tool_set_refs=plan.tool_set_refs,
-        selection=plan.selection, plan_hash=plan.plan_hash(),
+        snapshot, tool_set_refs=plan.tool_set_refs, selection=plan.selection,
+        plan_hash=plan.plan_hash(),
         request_hash=context_request_hash(
             plan, snapshot.provider_version, target_format=snapshot.target_format,
         ),
-        seal_binding=binding,
     )
 
 
-def test_protected_nonempty_policy_binding_round_trips_without_plaintext(protected_snapshot):
+def test_sensitive_toolset_roundtrip_preserves_exact_internal_manifest(protected_snapshot):
     raw = protected_snapshot.to_dict()
-    assert raw["tool_snapshot"] == []
-    assert raw["tool_set_refs"][0]["tool_policy"] == {}
-    assert raw["tool_set_refs"][0]["tools"] == []
+    assert raw["tool_snapshot"]
+    assert raw["tool_set_refs"][0]["tool_policy"] == {
+        "enabled_policy_keys": ["filesystem_rules"], "wire_tool_order": ["read_file"],
+    }
+    assert raw["tool_set_refs"][0]["tools"] == list(protected_snapshot.tool_set_refs[0].tools)
     restored = ContextAssemblySnapshot.from_dict(json.loads(json.dumps(raw)))
     assert restored.seal_binding == protected_snapshot.seal_binding
     restored.validate_hashes()
 
 
-def test_protected_manifest_digest_change_cannot_reuse_applied_binding(protected_snapshot):
-    ref = replace(
-        protected_snapshot.tool_set_refs[0],
-        redacted_stable_digest="hmac-sha256:session:v1:" + "8" * 64,
-    )
-    entry = replace(
-        protected_snapshot.selection[0], ref=ref,
-        redacted_stable_digest=ref.redacted_stable_digest,
-    )
-    with pytest.raises(ItemSchemaError, match="compatibility key.*ToolSet"):
-        replace(protected_snapshot, tool_set_refs=(ref,), selection=(entry,))
 
 
 @pytest.mark.parametrize("changed_field", ["tool_policy", "tools"])

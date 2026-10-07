@@ -360,7 +360,7 @@ def test_rewind_at_closed_boundaries_succeeds(protocol_case) -> None:
     )
 
 
-def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_wire, protocol_case) -> None:
+def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation, frozen_provider_wire, protocol_case) -> None:
     """rewind 只推进 view/pending epoch：已 seal assembly 的持久字节保持不变。
 
     OpenSpec add-context-injection-lifecycle 6.3：旧 sealed bytes 不变；
@@ -423,6 +423,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_wire, prot
 
         plan_creation_idempotency_key="rewind-guard:create",
         seal_idempotency_key="rewind-guard:seal",
+        **frozen_provider_activation(saver, plan_creation_idempotency_key='rewind-guard:create'),
     )
     assert prepared["losses"] == ()
     sealed_before = saver.list_context_assemblies(SESSION_ID, thread)

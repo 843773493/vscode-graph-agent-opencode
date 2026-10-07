@@ -54,7 +54,7 @@ def golden_plan(hash_vectors: dict[str, object]) -> ContextRequestPlan:
         source_revision="tools-rev-golden",
         tools=scenario["tools"],
         tool_set_schema="example.tools",
-        tool_policy={"mode": "allow"},
+        tool_policy=scenario["tool_policy"],
     )
     selection = tuple(
         ContextSelectionEntry(

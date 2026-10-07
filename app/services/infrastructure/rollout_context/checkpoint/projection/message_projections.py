@@ -7,12 +7,18 @@ canonical item 是 JSONL/catalog 的唯一正文事实；本模块只把已提�
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping
 
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.enums import SemanticKind
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.domain.itemized.records import (
+    CanonicalItemRecord,
+    parse_item_projection_manifest,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -327,7 +333,8 @@ class RolloutMessageProjectionMixin:
             )
         if message_type == "tool" and isinstance(data, Mapping):
             canonical_row = connection.execute(
-                "SELECT item.status FROM messages AS message JOIN item_catalog AS item "
+                "SELECT item.status, item.projection_manifest_json, message.execution_id, message.turn_id "
+                "FROM messages AS message JOIN item_catalog AS item "
                 "ON item.jsonl_offset = message.jsonl_offset AND item.jsonl_length = message.jsonl_length "
                 "WHERE message.message_sequence = ?",
                 (sequence,),
@@ -342,13 +349,37 @@ class RolloutMessageProjectionMixin:
                 status = (
                     data.get("status") if isinstance(data.get("status"), str) else "success"
                 )
-                pending = connection.execute(
-                    "SELECT assistant_message_sequence FROM tool_calls "
-                    "WHERE tool_call_id = ? AND status = 'pending' "
-                    "ORDER BY assistant_message_sequence DESC LIMIT 1",
-                    (call_id,),
-                ).fetchone()
-                if pending is not None:
+                projection = parse_item_projection_manifest(
+                    json.loads(canonical_row[1]),
+                )["projection_identity"]
+                identity = ItemProjectionIdentity.from_dict(projection) if projection is not None else None
+                model_call_id = identity.model_call_id if identity is not None else None
+                checkpoint_result = identity is not None and identity.projection_message_id is not None
+                raw_call_id = provider_tool_call_id(identity, call_id)
+                scoped_call_id = f"{model_call_id}:tool-call:{raw_call_id}" if model_call_id is not None else raw_call_id
+                paired_candidates = connection.execute(
+                    "SELECT call.tool_call_id, call.assistant_message_sequence, item.projection_manifest_json, call.status "
+                    "FROM tool_calls AS call JOIN messages AS message "
+                    "ON message.message_sequence = call.assistant_message_sequence "
+                    "JOIN item_catalog AS item ON item.jsonl_offset = message.jsonl_offset "
+                    "AND item.jsonl_length = message.jsonl_length "
+                    "WHERE call.tool_call_id IN (?, ?) "
+                    "AND message.execution_id = ? AND message.turn_id IS ?",
+                    (raw_call_id, scoped_call_id, canonical_row[2], canonical_row[3]),
+                ).fetchall()
+                for pending_call_id, assistant_sequence, projection_manifest, call_status in paired_candidates:
+                    pending_projection = parse_item_projection_manifest(
+                        json.loads(projection_manifest),
+                    )["projection_identity"]
+                    pending_identity = ItemProjectionIdentity.from_dict(pending_projection) if pending_projection is not None else None
+                    pending_model_call_id = pending_identity.model_call_id if pending_identity is not None else None
+                    checkpoint_call = pending_identity is not None and pending_identity.projection_message_id is not None
+                    if pending_model_call_id != model_call_id or (
+                        call_status != "pending" and checkpoint_call != checkpoint_result
+                    ):
+                        continue
+                    # 同 scope 的真实 terminal 先闭合 pending 配对；同类
+                    # carrier 到达后更新引用，已闭合引用不再被另一 sink 改回。
                     connection.execute(
                         "UPDATE tool_calls SET result_message_sequence = ?, result_length = ?, "
                         "result_hash = ?, status = ?, completed_at = ? "
@@ -359,9 +390,9 @@ class RolloutMessageProjectionMixin:
                             _hash_bytes(result_blob),
                             status,
                             timestamp,
-                            call_id,
+                            pending_call_id,
                             strict_non_negative_int(
-                                pending[0],
+                                assistant_sequence,
                                 field=f"tool_calls.assistant_message_sequence: {call_id}",
                             ),
                         ),

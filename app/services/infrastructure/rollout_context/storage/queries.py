@@ -273,28 +273,43 @@ class RolloutCheckpointQueriesMixin:
             self._require_v2_runtime(connection)
             before = (
                 connection.execute(
-                    "SELECT commit_id FROM checkpoints WHERE checkpoint_id = ? AND checkpoint_ns = ?",
+                    "SELECT cv.control_sequence FROM checkpoints AS c "
+                    "LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
+                    "WHERE c.checkpoint_id = ? AND c.checkpoint_ns = ?",
                     (before_checkpoint_id, checkpoint_ns),
                 ).fetchone()
                 if before_checkpoint_id
                 else None
             )
             query = (
-                "SELECT checkpoint_id, checkpoint_ns, commit_id, message_sequence, message_count, parent_checkpoint_id, view_id, branch_id, checkpoint_version, checkpoint_timestamp, checkpoint_json, metadata_json, versions_seen_type, versions_seen_blob, pending_sends_type, pending_sends_blob FROM checkpoints WHERE checkpoint_ns = ? AND status = 'active' AND (? IS NULL OR commit_id < ?) ORDER BY commit_id DESC"
+                "SELECT c.checkpoint_id, c.checkpoint_ns, c.commit_id, c.message_sequence, "
+                "c.message_count, c.parent_checkpoint_id, c.view_id, c.branch_id, "
+                "c.checkpoint_version, c.checkpoint_timestamp, c.checkpoint_json, "
+                "c.metadata_json, c.versions_seen_type, c.versions_seen_blob, "
+                "c.pending_sends_type, c.pending_sends_blob, cv.control_sequence "
+                "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
+                "WHERE c.checkpoint_ns = ? AND c.status = 'active' "
+                "AND (? IS NULL OR cv.control_sequence < ?) ORDER BY cv.control_sequence DESC"
                 + (" LIMIT ?" if limit is not None else "")
             )
-            before_commit_id = (
-                strict_non_negative_int(before[0], field="checkpoints.commit_id")
+            before_control_sequence = (
+                strict_non_negative_int(before[0], field="checkpoint context_views.control_sequence")
                 if before is not None
                 else None
             )
             params: tuple[object, ...] = (
                 checkpoint_ns,
-                before_commit_id,
-                before_commit_id,
+                before_control_sequence,
+                before_control_sequence,
             ) + ((limit,) if limit is not None else ())
             rows = connection.execute(query, params).fetchall()
-        return [self._checkpoint_index(row) for row in rows]
+        # 仅 channel/metadata 变化的 checkpoint 可以共用 item commit，
+        # 已有 checkpoint_created 的控制序才是其唯一创建顺序。
+        for row in rows:
+            strict_non_negative_int(
+                row[-1], field="checkpoint context_views.control_sequence"
+            )
+        return [self._checkpoint_index(row[:-1]) for row in rows]
 
     def checkpoint_values(
         self,

@@ -1,4 +1,4 @@
-"""规范化只识别真实声明入口；同形业务数据不能借 schema 绕过凭据校验。"""
+"""规范化仅剔除请求级 transport 字段；所有实际正文和 schema 精确保留。"""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ from copy import deepcopy
 
 import pytest
 
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.refs import ToolSetRef
-from app.domain.itemized.redaction import SessionHashRedactor
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.serialization import _hash_safe_value, normalize_wire_request
 
@@ -77,7 +75,7 @@ def forged_declaration(request: pytest.FixtureRequest) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("surface", ["metadata", "nested_tools", "nested_format"])
-def test_business_shapes_do_not_authorize_schema_credential_exemptions(
+def test_nested_business_fields_are_preserved_exactly(
     forged_declaration: dict[str, object], surface: str,
 ) -> None:
     if surface == "metadata":
@@ -87,16 +85,14 @@ def test_business_shapes_do_not_authorize_schema_credential_exemptions(
     else:
         value = {"metadata": {"text": {"format": forged_declaration}}}
     before = deepcopy(value)
-    with pytest.raises(ItemSchemaError, match="hash-redaction"):
-        normalize_wire_request(value)
+    assert normalize_wire_request(value) == before
     assert value == before
 
 
-def test_generic_hash_values_have_no_wire_declaration_context(
-    forged_declaration: dict[str, object],
-) -> None:
-    with pytest.raises(ItemSchemaError, match="hash-redaction"):
-        _hash_safe_value(forged_declaration)
+def test_generic_hash_values_preserve_exact_semantics(forged_declaration: dict[str, object]) -> None:
+    before = deepcopy(forged_declaration)
+    assert _hash_safe_value(forged_declaration) == before
+    assert forged_declaration == before
 
 
 @pytest.mark.parametrize("wire", [
@@ -104,9 +100,8 @@ def test_generic_hash_values_have_no_wire_declaration_context(
     {"text": {"format": {"type": "text", "schema": {"api_key": "fixture-raw-credential"}}}},
     {"tools": [{"type": "business_object", "parameters": {"api_key": "fixture-raw-credential"}}]},
 ])
-def test_non_schema_carriers_do_not_gain_declaration_exemptions(wire: object) -> None:
-    with pytest.raises(ItemSchemaError):
-        normalize_wire_request(wire)
+def test_non_schema_carriers_keep_all_business_fields(wire: object) -> None:
+    assert normalize_wire_request(wire) == wire
 
 
 @pytest.mark.parametrize("wire", [
@@ -117,9 +112,8 @@ def test_non_schema_carriers_do_not_gain_declaration_exemptions(wire: object) ->
     {"tools": [{"type": "function", "function": {"name": "search", "parameters": {}}, "api_key": "fixture-raw-credential"}]},
     {"tools": [{"type": "function", "function": {"name": "search", "parameters": {}, "api_key": "fixture-raw-credential"}}]},
 ])
-def test_carrier_fields_outside_schema_keep_credential_validation(wire: object) -> None:
-    with pytest.raises(ItemSchemaError):
-        normalize_wire_request(wire)
+def test_carrier_fields_outside_schema_are_hashed_exactly(wire: object) -> None:
+    assert normalize_wire_request(wire) == wire
 
 
 @pytest.fixture(params=["Authorization", "X-API-Key", "Set-Cookie"])
@@ -127,21 +121,13 @@ def credential_header(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
 
-@pytest.fixture
-def credential_marker() -> dict[str, object]:
-    return SessionHashRedactor(b"normalization-fixture-key-32bytes").redact(
-        "fixture-credential", redaction_class="credential",
-    )
 
 
 @pytest.mark.parametrize("surface", ["chat_tool", "responses_tool", "chat_format", "responses_format"])
-def test_wrapper_headers_require_complete_marker_and_keep_business_fields(
-    surface: str, credential_header: str, credential_marker: dict[str, object],
+def test_nested_wrapper_headers_are_model_visible_business_values(
+    surface: str, credential_header: str,
 ) -> None:
-    """真实包装层中的认证 header 与同名 schema 属性不能混为一类。"""
-    wrapper: dict[str, object] = {
-        "headers": {credential_header: "fixture-raw-credential", "Accept": "business-type"},
-    }
+    wrapper = {"headers": {credential_header: "fixture-value", "Accept": "business-type"}}
     if surface == "chat_tool":
         wire = {"tools": [{"type": "function", "function": {"name": "search", **wrapper}}]}
     elif surface == "responses_tool":
@@ -150,17 +136,10 @@ def test_wrapper_headers_require_complete_marker_and_keep_business_fields(
         wire = {"response_format": {"type": "json_schema", "json_schema": {"name": "result", **wrapper}}}
     else:
         wire = {"text": {"format": {"type": "json_schema", "name": "result", **wrapper}}}
-    with pytest.raises(ItemSchemaError, match="hash-redaction-required"):
-        normalize_wire_request(wire)
-    headers = wrapper["headers"]
-    assert isinstance(headers, dict)
-    headers[credential_header] = credential_marker
     before = deepcopy(wire)
     assert normalize_wire_request(wire) == before
-    assert wire == before
-    headers[credential_header] = {"redaction_class": "credential"}
-    with pytest.raises(ItemSchemaError, match="hash-redaction-invalid"):
-        normalize_wire_request(wire)
+    wrapper["headers"][credential_header] = "changed-value"
+    assert sha256_jcs(normalize_wire_request(wire)) != sha256_jcs(before)
 
 
 def test_attempt_exclusions_do_not_remove_nested_business_semantics() -> None:

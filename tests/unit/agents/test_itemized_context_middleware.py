@@ -18,6 +18,7 @@ def bridge(registered_tool_set_producer_factory):
         checkpointer=object(), session_id="session-unit", thread_id="thread-unit",
         context_source_manager=ContextSourceManager(),
         tool_set_producer=registered_tool_set_producer_factory(),
+        resource_activation=None,
     )
 
 

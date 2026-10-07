@@ -88,29 +88,4 @@ CREATE TABLE context_plan_seal_failures (
 """
 
 
-TOOL_SET_SNAPSHOT_SCHEMA_SQL = """
-CREATE TABLE tool_set_snapshots (
-    tool_set_snapshot_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    plan_id TEXT NOT NULL,
-    assembly_id TEXT,
-    source_revision TEXT NOT NULL,
-    tool_set_schema TEXT NOT NULL,
-    tool_set_schema_version TEXT NOT NULL,
-    tool_policy_version TEXT NOT NULL,
-    content_length INTEGER NOT NULL,
-    content_hash TEXT,
-    redacted_stable_digest TEXT,
-    protection TEXT NOT NULL,
-    availability TEXT NOT NULL,
-    tool_policy_json TEXT NOT NULL,
-    tools_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY(session_id, thread_id, plan_id, tool_set_snapshot_id),
-    UNIQUE(assembly_id, tool_set_snapshot_id),
-    FOREIGN KEY(session_id, thread_id, plan_id)
-        REFERENCES context_plans(session_id, thread_id, plan_id),
-    CHECK((content_hash IS NOT NULL) != (redacted_stable_digest IS NOT NULL))
-);
-"""
+TOOL_SET_SNAPSHOT_SCHEMA_SQL = '\nCREATE TABLE tool_set_snapshots (\n    tool_set_snapshot_id TEXT NOT NULL,\n    session_id TEXT NOT NULL,\n    thread_id TEXT NOT NULL,\n    plan_id TEXT NOT NULL,\n    assembly_id TEXT,\n    source_revision TEXT NOT NULL,\n    tool_set_schema TEXT NOT NULL,\n    tool_set_schema_version TEXT NOT NULL,\n    tool_policy_version TEXT NOT NULL,\n    content_length INTEGER NOT NULL,\n    content_hash TEXT,\n    protection TEXT NOT NULL,\n    availability TEXT NOT NULL,\n    tool_policy_json TEXT NOT NULL,\n    tools_json TEXT NOT NULL,\n    created_at TEXT NOT NULL,\n    PRIMARY KEY(session_id, thread_id, plan_id, tool_set_snapshot_id),\n    UNIQUE(assembly_id, tool_set_snapshot_id),\n    FOREIGN KEY(session_id, thread_id, plan_id)\n        REFERENCES context_plans(session_id, thread_id, plan_id),\n    CHECK(content_hash IS NOT NULL)\n);\n'

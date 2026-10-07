@@ -75,14 +75,15 @@ def _expected_binding_hash(ref: ExtensionCatalogBindingRef) -> str:
         "catalog_revision": ref.catalog_revision,
         "generation": ref.generation,
         "provider_binding_identity": ref.provider_binding_identity,
-        "targets": [
+        "members": [
             {
-                "target_id": t.target_id,
-                "origin": t.origin,
-                "server_id": t.server_id,
-                "schema_hash": t.schema_hash,
+                "member_id": member.member_id,
+                "member_kind": member.member_kind,
+                "schema_hash": member.schema_hash,
+                "server_id": member.server_id,
+                "revision": member.revision,
             }
-            for t in sorted(ref.targets.values(), key=lambda item: item.target_id)
+            for member in sorted(ref.members, key=lambda item: item.member_id)
         ],
     }
     return sha256_jcs(payload)

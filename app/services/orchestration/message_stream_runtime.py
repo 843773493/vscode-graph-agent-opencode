@@ -55,6 +55,7 @@ class MessageStreamRuntime(
         self._canonical_block_accumulators: dict[str, CanonicalBlockAccumulator] = {}
         self._sealed_canonical_model_call_ids: set[str] = set()
         self._model_execution_ids: dict[str, str] = {}
+        self._pending_model_starts: dict[str, asyncio.Future[None]] = {}
         self._completed_model_call_ids: set[str] = set()
         self._pending_canonical_blocks: list[dict[str, object]] = []
         self.current_model_call_id: str | None = None

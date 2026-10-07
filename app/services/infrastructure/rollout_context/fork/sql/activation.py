@@ -12,7 +12,6 @@ owner 的 operational ref 不得直接用于 target lookup。
 from __future__ import annotations
 
 import json
-import sqlite3
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.services.infrastructure.rollout_context.fork.remap_state import (
@@ -27,6 +26,9 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_com
     BINDING_COLUMNS,
     SNAPSHOT_COLUMNS,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
+    require_resource_activation_schema,
+)
 from app.services.mapping.itemized.projection import build_projection_evidence
 
 _TABLES = (
@@ -36,22 +38,11 @@ _TABLES = (
 )
 
 
-def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (name,),
-        ).fetchone()
-        is not None
-    )
-
-
 def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
-    """在 target 事务内重造 activation catalog；无 activation schema 时短路。"""
+    """在 target 事务内重造当前 activation catalog；缺 schema 显式失败。"""
 
     connection = state.connection
-    if not _table_exists(connection, "resource_activation_snapshots"):
-        return
+    require_resource_activation_schema(connection)
     target_session_id = state.target_session_id
     maps = state.maps
 
@@ -74,7 +65,7 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
 
     snapshot_rows = connection.execute(
         f"SELECT {','.join(SNAPSHOT_COLUMNS)} FROM resource_activation_snapshots "
-        "ORDER BY session_id, thread_id, activation_snapshot_id"
+        "ORDER BY CASE snapshot_kind WHEN 'execution' THEN 0 ELSE 1 END, activation_snapshot_id"
     ).fetchall()
     binding_rows = connection.execute(
         f"SELECT {','.join(BINDING_COLUMNS)} FROM resource_activation_bindings "
@@ -94,16 +85,18 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
         record = dict(zip(SNAPSHOT_COLUMNS, raw, strict=True))
         values = (
             target_session_id,
-            record["thread_id"],
+            state.target_thread_id,
             identity("activation_snapshot", record["activation_snapshot_id"]),
             record["snapshot_kind"],
             optional_identity(
-                "activation_snapshot", record["parent_turn_snapshot_id"]
+                "activation_snapshot", record["parent_execution_snapshot_id"]
             ),
             record["activation_policy_revision"],
             record["activation_policy_hash"],
+            record["activation_policy_json"],
             record["registry_generation"],
-            identity("turn", record["turn_id"]),
+            identity("execution", record["execution_id"]),
+            optional_identity("turn", record["turn_id"]),
             optional_identity("model_call", record["model_call_id"]),
             record["captured_at"],
             record["bindings_hash"],
@@ -124,7 +117,7 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
         record = dict(zip(BINDING_COLUMNS, raw, strict=True))
         values = (
             target_session_id,
-            record["thread_id"],
+            state.target_thread_id,
             identity("activation_snapshot", record["activation_snapshot_id"]),
             non_negative_int(
                 record["activation_ordinal"], field="activation_ordinal"
@@ -138,7 +131,6 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
             record["availability"],
             record["content_length"],
             record["content_hash"],
-            record["redacted_stable_digest"],
             record["effective_boundary"],
             record["captured_registry_generation"],
             record["source_lineage_digest"],
@@ -172,7 +164,7 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
         values = (
             target_assembly_id,
             target_session_id,
-            record["thread_id"],
+            state.target_thread_id,
             identity("activation_snapshot", record["activation_snapshot_id"]),
             identity("plan", record["plan_id"]),
             required_text(row[0], field="context_assemblies.plan_hash"),
@@ -189,10 +181,6 @@ def rewrite_full_copy_activation_catalog(state: FullCopyRemapState) -> None:
             values,
         )
 
-    if _table_exists(connection, "resource_activation_migration_losses"):
-        # migration loss 描述 source 升级时的 quarantine，assembly_id 指向 source
-        # 而非 target；复制后是悬空事实，必须移除而不是改写成 target session。
-        connection.execute("DELETE FROM resource_activation_migration_losses")
 
 
 __all__ = ["rewrite_full_copy_activation_catalog"]

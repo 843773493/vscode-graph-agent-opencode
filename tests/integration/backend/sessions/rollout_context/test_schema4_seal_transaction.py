@@ -25,15 +25,18 @@ __all__ = ["registry_db"]
 
 @pytest.fixture
 def plan(registry_db):
-    _saver, session, _connection, _accepted = registry_db
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
     return ContextRequestPlan(
         session_id=session,
+        thread_id=thread,
         plan_id="transaction-plan",
         refs=(),
         plan_creation_idempotency_key="transaction-create",
         tool_set_refs=(
             ToolSetRef.from_tool_snapshot(
                 session_id=session,
+                thread_id=thread,
                 snapshot_id="tool-read",
                 plan_id="transaction-plan",
                 source_revision="tool-revision",
@@ -52,6 +55,7 @@ def snapshot_factory(registry_db, plan):
             "plan": plan,
             "assembly_id": "transaction-assembly",
             "session_id": session,
+            "thread_id": plan.thread_id,
             "turn_id": str(accepted["turn_id"]),
             "execution_id": str(accepted["initial_execution_id"]),
             "provider_version": "transaction-provider",
@@ -71,7 +75,7 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
     saver.create_context_plan(session, plan)
     snapshot = snapshot_factory()
     commit_id = saver._storage.seal_context_assembly(
-        snapshot,
+        session, plan.thread_id, snapshot,
         seal_idempotency_key="transaction-seal",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
@@ -91,12 +95,12 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
     ).fetchone() == ("assembly_sealed", "metadata_only", len(original), len(original))
     restarted = RolloutCheckpointSaver(saver._storage.sessions_dir)
     restored = restarted._storage.get_context_assembly(
-        session, assembly_id=snapshot.assembly_id
+        session, plan.thread_id, assembly_id=snapshot.assembly_id
     )
     assert restored.to_dict() == snapshot.to_dict()
     assert (
         restarted._storage.seal_context_assembly(
-            restored,
+            session, plan.thread_id, restored,
             seal_idempotency_key="transaction-seal",
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
@@ -109,12 +113,12 @@ def test_real_seal_commits_plan_tools_selection_once_and_reopens(
 
 
 def test_unregistered_snapshot_cannot_create_dispatchable_rows(
-    registry_db, snapshot_factory
+    registry_db, plan, snapshot_factory
 ):
-    saver, _session, connection, _accepted = registry_db
+    saver, session, connection, _accepted = registry_db
     with pytest.raises(KeyError, match="context plan 不存在"):
         saver._storage.seal_context_assembly(
-            snapshot_factory(),
+            session, plan.thread_id, snapshot_factory(),
             seal_idempotency_key="unregistered",
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
@@ -152,7 +156,7 @@ def test_failure_rolls_back_assembly_selection_binding_and_commit(
         connection.commit()
     with pytest.raises(Exception, match="injected"):
         saver._storage.seal_context_assembly(
-            snapshot_factory(),
+            session, plan.thread_id, snapshot_factory(),
             seal_idempotency_key="transaction-seal",
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
@@ -183,7 +187,7 @@ def test_missing_draft_tool_registry_is_not_recreated_at_seal(
         connection.execute("DELETE FROM tool_set_snapshots")
     with pytest.raises(ValueError, match="source-mismatch"):
         saver._storage.seal_context_assembly(
-            snapshot_factory(),
+            session, plan.thread_id, snapshot_factory(),
             seal_idempotency_key="transaction-seal",
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
@@ -202,12 +206,12 @@ def test_seal_retry_input_hash_is_bound_to_the_committed_snapshot(
     saver.create_context_plan(session, plan)
     snapshot = snapshot_factory()
     saver._storage.seal_context_assembly(
-        snapshot, seal_idempotency_key="transaction-seal",
+        session, plan.thread_id, snapshot, seal_idempotency_key="transaction-seal",
         seal_input_hash=sha256_jcs("original-request-input"),
     )
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
         saver._storage.seal_context_assembly(
-            snapshot, seal_idempotency_key="transaction-seal",
+            session, plan.thread_id, snapshot, seal_idempotency_key="transaction-seal",
             seal_input_hash=sha256_jcs("changed-request-input"),
         )
     with connection:
@@ -216,9 +220,9 @@ def test_seal_retry_input_hash_is_bound_to_the_committed_snapshot(
             (sha256_jcs("changed-request-input"),),
         )
     with pytest.raises(ValueError, match="source-mismatch"):
-        saver.get_context_plan_registration(session, plan_id=plan.plan_id)
+        saver.get_context_plan_registration(session, thread_id=plan.thread_id, plan_id=plan.plan_id)
     with pytest.raises(ValueError, match="source-mismatch"):
-        saver._storage.get_context_assembly(session, assembly_id=snapshot.assembly_id)
+        saver._storage.get_context_assembly(session, plan.thread_id, assembly_id=snapshot.assembly_id)
 
 
 @pytest.mark.parametrize("input_hash", ["", "not-a-hash", "sha256:jcs:v1:" + "A" * 64])
@@ -229,7 +233,7 @@ def test_invalid_seal_input_hash_rejected_before_any_binding(
     saver.create_context_plan(session, plan)
     with pytest.raises(ValueError, match="seal_input_hash"):
         saver._storage.seal_context_assembly(
-            snapshot_factory(), seal_idempotency_key="transaction-seal",
+            session, plan.thread_id, snapshot_factory(), seal_idempotency_key="transaction-seal",
             seal_input_hash=input_hash,
         )
     assert connection.execute("SELECT plan_state FROM context_plans").fetchone() == ("unsealed",)
@@ -244,7 +248,7 @@ def test_sealed_plan_cannot_be_reused_with_changed_input(
     saver.create_context_plan(session, plan)
     snapshot = snapshot_factory()
     saver._storage.seal_context_assembly(
-        snapshot,
+        session, plan.thread_id, snapshot,
         seal_idempotency_key="transaction-seal",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )
@@ -257,7 +261,7 @@ def test_sealed_plan_cannot_be_reused_with_changed_input(
     )
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
         saver._storage.seal_context_assembly(
-            candidate,
+            session, plan.thread_id, candidate,
             seal_idempotency_key="second-key"
             if change == "key"
             else "transaction-seal",
@@ -288,23 +292,27 @@ import sys
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
 from app.services.infrastructure.rollout_context.runtime.composer import ContextPlanComposer
 from app.domain.itemized.hashing import sha256_jcs
-saver = RolloutCheckpointSaver(sys.argv[1])
-session = sys.argv[2]
-plan = saver.get_context_plan_registration(session, plan_id='transaction-plan').draft
-snapshot = ContextPlanComposer().assembly(
-    plan=plan, assembly_id='transaction-assembly', session_id=session,
-    turn_id=sys.argv[3], execution_id=sys.argv[4],
-    provider_version='transaction-provider', target_format='responses',
-)
-commit = saver._storage._commit_connection
-def crash(connection):
-    assert connection.execute('SELECT plan_state FROM context_plans').fetchone() == ('sealed',)
-    assert connection.execute('SELECT count(*) FROM context_assembly_selections').fetchone() == (1,)
-    if sys.argv[5] == 'after_commit':
-        commit(connection)
-    os._exit(66)
-saver._storage._commit_connection = crash
-saver._storage.seal_context_assembly(snapshot, seal_idempotency_key='transaction-seal', seal_input_hash=sha256_jcs('storage-seal-test-input'))
+from tests.support.session_catalog_owner import fixture_catalog_scope
+with fixture_catalog_scope():
+    saver = RolloutCheckpointSaver(sys.argv[1])
+    session = sys.argv[2]
+    thread = saver._storage.main_thread_id(session)
+    plan = saver.get_context_plan_registration(session, thread_id=thread, plan_id='transaction-plan').draft
+    snapshot = ContextPlanComposer().assembly(
+        plan=plan, assembly_id='transaction-assembly', session_id=session, thread_id=thread,
+        turn_id=sys.argv[3], execution_id=sys.argv[4],
+        provider_version='transaction-provider', target_format='responses',
+    )
+    commit = saver._storage._commit_connection
+    def crash(connection):
+        assert connection.execute('SELECT plan_state FROM context_plans').fetchone() == ('sealed',)
+        assert connection.execute('SELECT count(*) FROM context_assembly_selections').fetchone() == (1,)
+        if sys.argv[5] == 'after_commit':
+            commit(connection)
+        os._exit(66)
+    saver._storage._commit_connection = crash
+    saver._storage.seal_context_assembly(session, thread, snapshot, seal_idempotency_key='transaction-seal', seal_input_hash=sha256_jcs('storage-seal-test-input'))
+
 """
     result = subprocess.run(
         [
@@ -327,7 +335,7 @@ saver._storage.seal_context_assembly(snapshot, seal_idempotency_key='transaction
     connection = sqlite3.connect(database_path)
     request.addfinalizer(connection.close)
     registration = restarted.get_context_plan_registration(
-        session, plan_id=plan.plan_id
+        session, thread_id=plan.thread_id, plan_id=plan.plan_id
     )
     if crash_point == "before_commit":
         assert registration.plan_state == "unsealed"
@@ -343,7 +351,7 @@ saver._storage.seal_context_assembly(snapshot, seal_idempotency_key='transaction
         assert registration.assembly_id == "transaction-assembly"
     # 不论是否跨过 COMMIT，显式重试都只留下同一个 seal commit。
     restarted._storage.seal_context_assembly(
-        snapshot_factory(),
+        session, plan.thread_id, snapshot_factory(),
         seal_idempotency_key="transaction-seal",
         seal_input_hash=sha256_jcs("storage-seal-test-input"),
     )

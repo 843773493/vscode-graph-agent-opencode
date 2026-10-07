@@ -45,13 +45,16 @@ def projection_workspace(request: pytest.FixtureRequest) -> Path:
 
 @pytest.fixture
 def projection_saver(
+    request: pytest.FixtureRequest,
     projection_workspace: Path,
     session_bundle_factory: Callable[[Path, str], Path],
 ) -> Iterator[tuple[RolloutCheckpointSaver, str, Path]]:
     sessions = projection_workspace / ".boxteam/sessions"
     session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session_id)
-    with RolloutCheckpointSaver(sessions) as saver:
+    with RolloutCheckpointSaver(
+        sessions,
+    ) as saver:
         thread = saver._storage.main_thread_id(session_id)
         owner_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
         accepted = saver.accept_turn(

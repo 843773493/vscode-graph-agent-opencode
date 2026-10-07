@@ -35,6 +35,7 @@ from app.domain.itemized.request_plan import (
     SourceBinding,
     resolve_contribution_for_ref,
 )
+from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
     ContextSourceSnapshot,
     PendingContextSourceBatch,
@@ -212,6 +213,8 @@ def compile_prefix_context(
     if rebuilding and retained_source_assembly is not None:
         # 携带 cutoff 前已封存的 snapshot/untracked 帧；不生成 CSM 恢复决策。
         for frame in retained_source_assembly.seal_binding.prefix.state.frames:
+            if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID:
+                continue
             if (frame.item_ref.ref_id, frame.item_ref.source_revision) not in retained_source_refs or frame.role != "user":
                 continue
             ref_id = frame.item_ref.ref_id

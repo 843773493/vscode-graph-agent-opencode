@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any, cast
+from uuid import UUID
 
 from langchain_core.callbacks import (
     AsyncCallbackManager,
@@ -141,6 +142,37 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             )
         return self._no_proxy_sync_client
 
+    def _dispatch_run_config(self, config: RunnableConfig | None) -> RunnableConfig:
+        """真实 callback run_id 使用 Bridge 为本次 handler 分配的 UUID。"""
+
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+        result = dict(config or {})
+        if binding is None:
+            return result
+        run_id = UUID(binding.callback_model_call_id)
+        if result.get("run_id") is not None and str(result["run_id"]) != str(run_id):
+            raise ValueError("source-mismatch: Provider callback run_id 与 dispatch scope 不一致")
+        result["run_id"] = run_id
+        return result
+
+    def invoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None,
+        *, stop: list[str] | None = None, **kwargs: Any,
+    ) -> AIMessage:
+        return super().invoke(input, config=self._dispatch_run_config(config), stop=stop, **kwargs)
+
+    async def ainvoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None,
+        *, stop: list[str] | None = None, **kwargs: Any,
+    ) -> AIMessage:
+        return await super().ainvoke(input, config=self._dispatch_run_config(config), stop=stop, **kwargs)
+
+    def stream(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None,
+        *, stop: list[str] | None = None, **kwargs: Any,
+    ) -> Iterator[AIMessageChunk]:
+        yield from super().stream(input, config=self._dispatch_run_config(config), stop=stop, **kwargs)
+
     async def astream(
         self,
         input: LanguageModelInput,
@@ -163,7 +195,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             )
             return
 
-        config = ensure_config(config)
+        config = ensure_config(self._dispatch_run_config(config))
         messages = self._convert_input(input).to_messages()
         ls_structured_output_format = kwargs.pop(
             "ls_structured_output_format", None

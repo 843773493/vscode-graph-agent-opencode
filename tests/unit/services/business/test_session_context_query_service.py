@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, create_autospec
 
@@ -11,6 +13,14 @@ from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
     SessionContextRevisionChangedError,
 )
+from app.domain.itemized.hashing import (
+    canonical_json_bytes,
+    contribution_content_hash,
+    sha256_jcs,
+)
+from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.selection import ContextSelectionEntry
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationExecutionDTO,
@@ -347,6 +357,190 @@ async def test_assembly_history_projection_uses_session_thread_pair():
         "thread_target",
         plan,
     )
+
+
+@pytest.fixture
+def _assembly_selection_query():
+    selection = []
+    for protection in ("public", "protected"):
+        body = f"overlay 正文 {protection}"
+        source_revision = sha256_jcs(f"来源版本 {protection}")
+        content_hash = contribution_content_hash("overlay_delta", body)
+        detail_ref = DetailRef("ses_target", "thread_target", "asm_target", f"detail-{protection}")
+        ref = ContextRef(
+            "request_only", f"source-{protection}",
+            session_id="ses_target", thread_id="thread_target", plan_id="plan_target",
+            source_revision=source_revision, content_length=len(canonical_json_bytes(body)),
+            content_hash=content_hash, source_ref=detail_ref, protection=protection,
+            base_delta_role="delta", source_overlay_epoch=1,
+            overlay_from_revision=sha256_jcs(f"旧版本 {protection}"),
+            overlay_to_revision=source_revision, overlay_diff_hash=sha256_jcs(body),
+        )
+        selection.append(ContextSelectionEntry(
+            assembly_id="asm_target", plan_ordinal=len(selection), ref=ref,
+            selection_kind="overlay_delta", protection=protection,
+            source_revision=ref.source_revision, content_length=ref.content_length,
+            content_hash=ref.content_hash, detail_ref=detail_ref,
+            contribution_id=f"contribution-{protection}", contribution_ordinal=0,
+            base_delta_role="delta", source_overlay_epoch=1,
+            overlay_from_revision=ref.overlay_from_revision,
+            overlay_to_revision=ref.overlay_to_revision, overlay_diff_hash=ref.overlay_diff_hash,
+        ))
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": f"tool_{protection}",
+                "description": f"ToolSet 正文 {protection}",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+        tool_ref = replace(ToolSetRef.from_tool_snapshot(
+            snapshot_id=f"tools-{protection}", session_id="ses_target",
+            thread_id="thread_target", plan_id="plan_target", assembly_id="asm_target",
+            tools=tools, source_revision=sha256_jcs(tools),
+            tool_policy={"mode": f"policy-{protection}"},
+        ), protection=protection)
+        tool_ref.validate_manifest()
+        selection.append(ContextSelectionEntry(
+            assembly_id="asm_target", plan_ordinal=len(selection), ref=tool_ref,
+            selection_kind="tool_set", protection=protection,
+            source_revision=tool_ref.source_revision, content_length=tool_ref.content_length,
+            content_hash=tool_ref.content_hash,
+        ))
+    snapshot = MagicMock(
+        assembly_id="asm_target", session_id="ses_target", plan_id="plan_target",
+        plan_hash="plan-hash", request_hash="request-hash", history_view_revision=1,
+        source_overlay_epoch=1, target_format="langchain", compiler_version="compiler",
+        provider_version="provider", projector_id="projector", projector_version="1",
+        selection=tuple(selection), loss=(),
+    )
+    assembly_source = create_autospec(SessionContextAssemblySourceProtocol, spec_set=True)
+    assembly_source.list_context_assemblies.return_value = (snapshot,)
+    assembly_source.project_context_plan_to_history_with_diagnostics.return_value = ([], ())
+    service = SessionContextQueryService(
+        message_source=_FakeMessageSource(), session_lookup=_FakeSessionLookup(),
+        assembly_source=assembly_source, workspace_id=BACKEND_WORKSPACE_ID,
+    )
+    return service, snapshot
+
+
+@pytest.mark.asyncio
+async def test_default_assembly_projection_hides_sensitive_hashes_and_tool_body(_assembly_selection_query):
+    service, snapshot = _assembly_selection_query
+    internal = tuple(entry.to_dict() for entry in snapshot.selection)
+    assembly_ref = context_assembly_identity(
+        session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"), "asm_target",
+    )
+
+    result = await service.read_context(_session_request(
+        view="assembly", assembly_ref=assembly_ref, max_chars=65_536,
+    ))
+
+    selections = [item for item in result.items if item.kind == "selection"]
+    assert len(selections) == len(snapshot.selection)
+    serialized = result.model_dump_json()
+    assert snapshot.plan_hash not in serialized
+    assert snapshot.request_hash not in serialized
+    assert "plan_hash" not in result.items[0].data
+    assert "request_hash" not in result.items[0].data
+    assert "ToolSet 正文 public" in serialized
+    assert "ToolSet 正文 protected" not in serialized
+    for item, entry, original in zip(selections, snapshot.selection, internal, strict=True):
+        assert item.record_index == entry.plan_ordinal
+        if entry.protection == "public":
+            assert item.data == original
+            continue
+        assert item.data["protection"] == entry.protection
+        assert item.data["content_length"] == entry.content_length
+        assert item.data["detail_ref"] == original["detail_ref"]
+        assert item.data["content_hash"] is None
+        assert item.data["source_revision"] is None
+        assert item.data["ref"]["content_hash"] is None
+        assert item.data["ref"]["source_revision"] is None
+        assert entry.content_hash not in serialized
+        assert entry.source_revision not in serialized
+        if isinstance(entry.ref, ToolSetRef):
+            assert "tools" not in item.data["ref"]
+            assert "tool_policy" not in item.data["ref"]
+            entry.ref.validate_manifest()
+        else:
+            assert item.data["ref"]["source_ref"] == entry.detail_ref.to_dict()
+            for name in ("overlay_from_revision", "overlay_to_revision", "overlay_diff_hash"):
+                assert item.data[name] is None
+                assert item.data["ref"][name] is None
+                assert original[name] not in serialized
+    assert tuple(entry.to_dict() for entry in snapshot.selection) == internal
+
+
+@pytest.mark.asyncio
+async def test_default_assembly_revision_and_cursor_use_structure_without_body_hashes(
+    _assembly_selection_query,
+):
+    service, snapshot = _assembly_selection_query
+    assembly_ref = context_assembly_identity(
+        session_resource_identity(BACKEND_WORKSPACE_ID, "ses_target"), "asm_target",
+    )
+    request = _session_request(
+        view="assembly", assembly_ref=assembly_ref, include=["visible_text"],
+        limit=1, max_chars=65_536,
+    )
+    detail = await service.read_context(request)
+    expected_revision = "assembly:asm_target:" + hashlib.sha256(
+        json.dumps(["visible_text"]).encode("utf-8"),
+    ).hexdigest()
+    assert detail.revision == expected_revision
+    assert detail.has_more and detail.next_cursor is not None
+    payload = json.loads(base64.urlsafe_b64decode(
+        detail.next_cursor + "=" * (-len(detail.next_cursor) % 4),
+    ))
+    assert payload["revision"] == expected_revision
+    assert payload["assembly_ref"] == assembly_ref
+    assert snapshot.plan_hash not in json.dumps(payload)
+    assert snapshot.request_hash not in json.dumps(payload)
+    original_hashes = (snapshot.plan_hash, snapshot.request_hash)
+    snapshot.plan_hash, snapshot.request_hash = "changed-plan-hash", "changed-request-hash"
+    continued = await service.read_context(request.model_copy(update={
+        "cursor": detail.next_cursor, "revision": detail.revision,
+    }))
+    assert continued.revision == detail.revision
+    assert continued.items[0].record_index == 0
+    changed_include = request.model_copy(update={
+        "cursor": detail.next_cursor, "include": ["reasoning"],
+    })
+    with pytest.raises(SessionContextRevisionChangedError, match="revision changed"):
+        await service.read_context(changed_include)
+    snapshot.plan_hash, snapshot.request_hash = original_hashes
+
+    second = MagicMock(
+        assembly_id="asm_second", session_id=snapshot.session_id,
+        plan_id="plan_second", plan_hash="second-sensitive-plan-hash",
+        history_view_revision=2, source_overlay_epoch=2,
+        selection=snapshot.selection, target_format=snapshot.target_format,
+    )
+    service._assembly_source.list_context_assemblies.return_value = (snapshot, second)
+    list_request = _session_request(view="assemblies", limit=1, max_chars=65_536)
+    listing = await service.read_context(list_request)
+    list_revision = "assemblies:" + hashlib.sha256(
+        json.dumps(["asm_second", "asm_target"]).encode("utf-8"),
+    ).hexdigest()
+    assert listing.revision == list_revision
+    assert listing.has_more and listing.next_cursor is not None
+    assert listing.items[0].data["assembly_id"] == "asm_second"
+    assert "plan_hash" not in listing.items[0].data
+    list_payload = json.loads(base64.urlsafe_b64decode(
+        listing.next_cursor + "=" * (-len(listing.next_cursor) % 4),
+    ))
+    assert list_payload["revision"] == list_revision
+    assert original_hashes[0] not in json.dumps(list_payload)
+    assert second.plan_hash not in json.dumps(list_payload)
+    second.plan_hash = "changed-second-sensitive-plan-hash"
+    next_listing = await service.read_context(list_request.model_copy(update={
+        "cursor": listing.next_cursor, "revision": listing.revision,
+    }))
+    assert next_listing.revision == listing.revision
+    assert next_listing.items[0].data["assembly_id"] == "asm_target"
+    assert next_listing.has_more is False
+    assert (snapshot.plan_hash, snapshot.request_hash) == original_hashes
 
 
 @pytest.mark.asyncio

@@ -78,15 +78,16 @@ async def test_concurrent_admission_builds_one_runtime_for_exact_owner() -> None
     first, second = await asyncio.wait_for(
         asyncio.gather(first_task, second_task), timeout=5
     )
+    async with first, second:
 
-    assert build_owners == [("ses-a", "child-a")]
-    assert first.runtime is second.runtime
-    assert first.generation == second.generation == 1
-    resident = tracker.snapshot("ses-a", "child-a")
-    assert resident.generation == 1
-    assert resident.residency == "resident"
-    first.release()
-    second.release()
+        assert build_owners == [("ses-a", "child-a")]
+        assert first.runtime is second.runtime
+        assert first.generation == second.generation == 1
+        resident = tracker.snapshot("ses-a", "child-a")
+        assert resident.generation == 1
+        assert resident.residency == "resident"
+        first.release()
+        second.release()
 
 
 @pytest.mark.asyncio
@@ -112,16 +113,21 @@ async def test_runtime_slots_are_isolated_by_session_and_thread_pair() -> None:
             build,
         ),
     )
+    async with first, second:
 
-    assert set(build_owners) == {
-        ("ses-a", "same-thread-id"),
-        ("ses-b", "same-thread-id"),
-    }
-    assert first.runtime == ("ses-a", "same-thread-id")
-    assert second.runtime == ("ses-b", "same-thread-id")
-    assert first.generation == second.generation == 1
-    first.release()
-    second.release()
+        assert set(build_owners) == {
+            ("ses-a", "same-thread-id"),
+            ("ses-b", "same-thread-id"),
+        }
+        assert first.runtime == ("ses-a", "same-thread-id")
+        assert second.runtime == ("ses-b", "same-thread-id")
+        assert {first.generation, second.generation} == {1, 2}
+        assert tracker.is_current_generation("ses-a", "same-thread-id", first.generation)
+        assert tracker.is_current_generation("ses-b", "same-thread-id", second.generation)
+        assert not tracker.is_current_generation("ses-a", "same-thread-id", second.generation)
+        assert not tracker.is_current_generation("ses-b", "same-thread-id", first.generation)
+        first.release()
+        second.release()
 
 
 @pytest.mark.asyncio
@@ -142,29 +148,30 @@ async def test_active_lease_blocks_unload_then_starts_idle_on_release() -> None:
         "config-v1",
         build,
     )
-    scope = scopes[0]
-    clock.advance(THREAD_IDLE_UNLOAD_SECONDS * 2)
-    active = tracker.snapshot("ses-a", "thread-a")
-    assert active.execution_state == "active"
-    assert active.cold_eligible is False
-    assert await tracker.sweep() == ()
-    assert released == []
+    async with lease:
+        scope = scopes[0]
+        clock.advance(THREAD_IDLE_UNLOAD_SECONDS * 2)
+        active = tracker.snapshot("ses-a", "thread-a")
+        assert active.execution_state == "active"
+        assert active.cold_eligible is False
+        assert await tracker.sweep() == ()
+        assert released == []
 
-    lease.release()
-    assert tracker.snapshot("ses-a", "thread-a").idle_seconds == 0
-    clock.advance(THREAD_IDLE_UNLOAD_SECONDS - 1)
-    assert tracker.snapshot("ses-a", "thread-a").cold_eligible is False
-    clock.advance(1)
-    assert tracker.snapshot("ses-a", "thread-a").cold_eligible is True
-    await tracker.sweep()
+        lease.release()
+        assert tracker.snapshot("ses-a", "thread-a").idle_seconds == 0
+        clock.advance(THREAD_IDLE_UNLOAD_SECONDS - 1)
+        assert tracker.snapshot("ses-a", "thread-a").cold_eligible is False
+        clock.advance(1)
+        assert tracker.snapshot("ses-a", "thread-a").cold_eligible is True
+        await tracker.sweep()
 
-    assert released == ["closed"]
-    assert scope.state == "closed"
-    assert tracker.snapshot("ses-a", "thread-a").residency == "cold"
-    assert tracker.is_current_generation("ses-a", "thread-a", lease.generation) is False
-    lease.release()
-    with pytest.raises(RuntimeError, match="已释放"):
-        _ = lease.runtime
+        assert released == ["closed"]
+        assert scope.state == "closed"
+        assert tracker.snapshot("ses-a", "thread-a").residency == "cold"
+        assert tracker.is_current_generation("ses-a", "thread-a", lease.generation) is False
+        lease.release()
+        with pytest.raises(RuntimeError, match="已释放"):
+            _ = lease.runtime
 
 
 @pytest.mark.asyncio
@@ -197,32 +204,34 @@ async def test_scope_close_failure_fences_old_runtime_and_retries_before_rebuild
         "config-v1",
         build,
     )
-    generation = lease.generation
-    lease.release()
-    clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
+    async with lease:
+        generation = lease.generation
+        lease.release()
+        clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
 
-    with pytest.raises(ExceptionGroup, match="LifetimeScope close 失败"):
+        with pytest.raises(ExceptionGroup, match="LifetimeScope close 失败"):
+            await tracker.sweep()
+        assert tracker.is_current_generation("ses-a", "thread-a", generation) is False
+        assert scopes[0].state == "close_failed"
+        close_failed = tracker.snapshot("ses-a", "thread-a")
+        assert close_failed.residency == "unloading"
+        assert close_failed.cold_eligible is True
+
         await tracker.sweep()
-    assert tracker.is_current_generation("ses-a", "thread-a", generation) is False
-    assert scopes[0].state == "close_failed"
-    close_failed = tracker.snapshot("ses-a", "thread-a")
-    assert close_failed.residency == "unloading"
-    assert close_failed.cold_eligible is True
+        assert scopes[0].state == "closed"
+        cold = tracker.snapshot("ses-a", "thread-a")
+        assert cold.residency == "cold"
 
-    await tracker.sweep()
-    assert scopes[0].state == "closed"
-    cold = tracker.snapshot("ses-a", "thread-a")
-    assert cold.residency == "cold"
-
-    rebuilt = await tracker.acquire(
-        MutationIntentOwner("ses-a", "thread-a"),
-        _admission("ses-a", "thread-a"),
-        "config-v1",
-        build,
-    )
-    assert rebuilt.generation == generation + 1
-    assert rebuilt.runtime == "runtime-2"
-    rebuilt.release()
+        rebuilt = await tracker.acquire(
+            MutationIntentOwner("ses-a", "thread-a"),
+            _admission("ses-a", "thread-a"),
+            "config-v1",
+            build,
+        )
+        async with rebuilt:
+            assert rebuilt.generation == generation + 1
+            assert rebuilt.runtime == "runtime-2"
+            rebuilt.release()
 
 
 @pytest.mark.asyncio
@@ -253,33 +262,35 @@ async def test_admission_waits_for_closing_scope_and_rebuilds_new_generation() -
         "config-v1",
         build,
     )
-    first_generation = first.generation
-    first.release()
-    assert tracker.snapshot("ses-a", "thread-a").residency == "resident"
-    clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
-    sweep = asyncio.create_task(tracker.sweep())
-    await asyncio.wait_for(close_started.wait(), timeout=5)
+    async with first:
+        first_generation = first.generation
+        first.release()
+        assert tracker.snapshot("ses-a", "thread-a").residency == "resident"
+        clock.advance(THREAD_IDLE_UNLOAD_SECONDS)
+        sweep = asyncio.create_task(tracker.sweep())
+        await asyncio.wait_for(close_started.wait(), timeout=5)
 
-    assert tracker.snapshot("ses-a", "thread-a").residency == "unloading"
-    assert tracker.is_current_generation("ses-a", "thread-a", first_generation) is False
-    second_task = asyncio.create_task(
-        tracker.acquire(
-            MutationIntentOwner("ses-a", "thread-a"),
-            _admission("ses-a", "thread-a"),
-            "config-v1",
-            build,
+        assert tracker.snapshot("ses-a", "thread-a").residency == "unloading"
+        assert tracker.is_current_generation("ses-a", "thread-a", first_generation) is False
+        second_task = asyncio.create_task(
+            tracker.acquire(
+                MutationIntentOwner("ses-a", "thread-a"),
+                _admission("ses-a", "thread-a"),
+                "config-v1",
+                build,
+            )
         )
-    )
-    await asyncio.sleep(0)
-    assert second_task.done() is False
+        await asyncio.sleep(0)
+        assert second_task.done() is False
 
-    finish_close.set()
-    await asyncio.wait_for(sweep, timeout=5)
-    second = await asyncio.wait_for(second_task, timeout=5)
-    assert second.generation == first_generation + 1
-    assert second.runtime == 2
-    assert scopes[0].state == "closed"
-    second.release()
+        finish_close.set()
+        await asyncio.wait_for(sweep, timeout=5)
+        second = await asyncio.wait_for(second_task, timeout=5)
+        async with second:
+            assert second.generation == first_generation + 1
+            assert second.runtime == 2
+            assert scopes[0].state == "closed"
+            second.release()
 
 
 @pytest.mark.asyncio
@@ -312,10 +323,11 @@ async def test_builder_failure_does_not_publish_generation_and_can_retry() -> No
         "config-v1",
         build,
     )
-    assert lease.generation == 1
-    assert lease.runtime == ("ses-a", "thread-a")
-    assert tracker.snapshot("ses-a", "thread-a").residency == "resident"
-    lease.release()
+    async with lease:
+        assert lease.generation == 1
+        assert lease.runtime == ("ses-a", "thread-a")
+        assert tracker.snapshot("ses-a", "thread-a").residency == "resident"
+        lease.release()
 
 
 @pytest.mark.asyncio
@@ -355,9 +367,10 @@ async def test_cancelled_waiter_does_not_cancel_shared_build() -> None:
     )
     finish_build.set()
     lease = await asyncio.wait_for(survivor, timeout=5)
-    assert calls == 1
-    assert lease.generation == 1
-    lease.release()
+    async with lease:
+        assert calls == 1
+        assert lease.generation == 1
+        lease.release()
 
 
 @pytest.mark.asyncio
@@ -414,8 +427,9 @@ async def test_cancelled_last_waiter_logs_later_builder_failure(caplog) -> None:
         "config-v1",
         lambda session_id, thread_id, scope: "recovered",
     )
-    assert retry.runtime == "recovered"
-    retry.release()
+    async with retry:
+        assert retry.runtime == "recovered"
+        retry.release()
 
 
 @pytest.mark.asyncio

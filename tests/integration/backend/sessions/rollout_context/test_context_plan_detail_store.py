@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import sqlite3
 from dataclasses import asdict, replace
@@ -13,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -27,11 +27,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     DetailUnavailableError,
     detail_record_from_mapping,
     detail_relative_path,
-    protected_detail_relative_path,
-)
-from app.services.infrastructure.rollout_context.runtime.protected_detail import (
-    ProtectedDetailBackend,
-    ProtectedDetailError,
 )
 
 SESSION_ID = "ses_019c205391bb7a4b81b6728df70f63e6"
@@ -103,157 +98,71 @@ def test_detail_store_round_trip_uses_session_relative_assembly_path(
 
 @pytest.mark.parametrize("protection", ["public", "redacted", "protected"])
 def test_normal_write_uses_current_typed_envelope(detail_sessions: Path, protection) -> None:
-    store = ContextPlanDetailStore(detail_sessions, protected_key=b"p" * 32)
+    store = ContextPlanDetailStore(detail_sessions)
     body = {"text": "normal-new-write"}
     record = store.write(
-        session_id=SESSION_ID,
-        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-        assembly_id="normal-assembly",
-        detail_kind="request_source",
-        retention_class="request_replay",
-        visibility="internal",
-        detail=body,
-        sensitive=protection != "public",
-        protection=protection,
+        session_id=SESSION_ID, thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+        assembly_id="normal-assembly", detail_kind="request_source",
+        retention_class="request_replay", visibility="internal", detail=body,
+        sensitive=protection != "public", protection=protection,
         source_revision="normal-producer",
     )
     payload = json.loads((_thread_node(detail_sessions, SESSION_ID) / record.relative_path).read_bytes())
-    assert payload["format_version"] == 2
+    assert payload["format_version"] == 3
     assert payload["detail_ref"] == record.detail_ref.to_dict()
+    assert payload["detail"] == body
+    assert payload["detail_content_hash"] == sha256_jcs(body)
     assert sha256_jcs(payload) == record.content_hash
-    if protection == "redacted":
-        with pytest.raises(DetailUnavailableError, match="没有 protected body"):
-            store.read(
-                session_id=SESSION_ID, thread_id=record.thread_id,
-                record=record, include_sensitive=True,
-            )
-    else:
-        assert store.read(
-            session_id=SESSION_ID, thread_id=record.thread_id,
-            record=record, include_sensitive=True,
-        )["detail"] == body
+    assert store.read(
+        session_id=SESSION_ID, thread_id=record.thread_id,
+        record=record, include_sensitive=True,
+    )["detail"] == body
+    if protection != "public":
+        with pytest.raises(PermissionError):
+            store.read(session_id=SESSION_ID, thread_id=record.thread_id, record=record)
 
 
-def test_sensitive_detail_never_writes_plaintext_or_claims_protected_body(
-    detail_sessions: Path,
-) -> None:
+def test_sensitive_detail_persists_exact_body_and_requires_explicit_access(detail_sessions: Path) -> None:
     store = ContextPlanDetailStore(detail_sessions)
-    secret = "sensitive-provider-prompt"
+    body = {"secret": "sensitive-provider-prompt"}
     record = store.write(
-        session_id=SESSION_ID,
-        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-        assembly_id="assembly-sensitive",
-        detail_kind="request_source",
-        retention_class="request_replay",
-        visibility="internal",
-        detail={"secret": secret},
-        sensitive=True,
+        session_id=SESSION_ID, thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+        assembly_id="assembly-sensitive", detail_kind="request_source",
+        retention_class="request_replay", visibility="internal", detail=body, sensitive=True,
     )
     target = _thread_node(detail_sessions, SESSION_ID) / record.relative_path
-    assert secret.encode() not in target.read_bytes()
+    assert json.loads(target.read_bytes())["detail"] == body
     with pytest.raises(PermissionError, match="未授权读取"):
-        store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-        )
-    with pytest.raises(DetailUnavailableError, match="没有 protected body"):
-        store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )
+        store.read(session_id=SESSION_ID, thread_id=record.thread_id, record=record)
+    assert store.read(
+        session_id=SESSION_ID, thread_id=record.thread_id, record=record,
+        include_sensitive=True,
+    )["detail"] == body
 
 
-def test_protected_detail_round_trip_survives_restart_and_rejects_wrong_key(
-    detail_sessions: Path,
-) -> None:
-    key = b"0123456789abcdef0123456789abcdef"
-    store = ContextPlanDetailStore(detail_sessions, protected_key=key)
-    detail = {"secret": "必须进入 provider，但不能进入普通 manifest"}
+def test_sensitive_detail_survives_restart_and_rejects_body_tamper(detail_sessions: Path) -> None:
+    body = {"secret": "精确正文"}
+    store = ContextPlanDetailStore(detail_sessions)
     record = store.write(
-        session_id=SESSION_ID,
-        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-        assembly_id="assembly-protected",
-        detail_kind="request_source",
-        retention_class="request_replay",
-        visibility="internal",
-        detail=detail,
-        required=True,
-        sensitive=True,
-        protection="protected",
-        source_revision="secret-revision-1",
+        session_id=SESSION_ID, thread_id=_main_thread_id(detail_sessions, SESSION_ID),
+        assembly_id="assembly-protected", detail_kind="request_source",
+        retention_class="request_replay", visibility="internal", detail=body,
+        required=True, sensitive=True, protection="protected", source_revision="secret-revision-1",
     )
-
-    session_root = _thread_node(detail_sessions, SESSION_ID)
-    manifest = session_root / record.relative_path
-    protected = session_root / protected_detail_relative_path(
-        record.detail_ref,
-    )
-    assert record.protection == "protected"
-    assert manifest.is_file()
-    assert protected.is_file()
-    assert b"provider" not in manifest.read_bytes()
-    assert detail["secret"].encode() not in manifest.read_bytes()
-    assert detail["secret"].encode() not in protected.read_bytes()
-    assert (
-        store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )["detail"]
-        == detail
-    )
-
-    restarted = ContextPlanDetailStore(detail_sessions, protected_key=key)
-    assert (
+    target = _thread_node(detail_sessions, SESSION_ID) / record.relative_path
+    assert tuple(target.parent.iterdir()) == (target,)
+    restarted = ContextPlanDetailStore(detail_sessions)
+    assert restarted.read(
+        session_id=SESSION_ID, thread_id=record.thread_id,
+        record=record, include_sensitive=True,
+    )["detail"] == body
+    payload = json.loads(target.read_bytes())
+    payload["detail"] = {"secret": "另一个正文"}
+    target.write_bytes(canonical_json_bytes(payload))
+    with pytest.raises(DetailUnavailableError):
         restarted.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )["detail"]
-        == detail
-    )
-
-    assert store._protected_backend is not None
-    altered = {"secret": "另一个正文"}
-    protected.write_bytes(
-        store._protected_backend.encrypt(
-            record=record,
-            detail=altered,
-            detail_content_hash=sha256_jcs(altered),
-        )
-    )
-    with pytest.raises(DetailUnavailableError, match="provenance"):
-        restarted.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )
-
-    wrong_key = ContextPlanDetailStore(
-        detail_sessions,
-        protected_key=b"fedcba9876543210fedcba9876543210",
-    )
-    with pytest.raises(DetailUnavailableError, match="校验失败"):
-        wrong_key.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )
-
-    protected.write_bytes(protected.read_bytes()[:-1] + b"x")
-    with pytest.raises(DetailUnavailableError, match="校验失败"):
-        restarted.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
+            session_id=SESSION_ID, thread_id=record.thread_id,
+            record=record, include_sensitive=True,
         )
 
 
@@ -390,7 +299,7 @@ def detail_arguments(detail_sessions: Path) -> dict[str, object]:
 
 @pytest.fixture
 def detail_store(detail_sessions: Path) -> ContextPlanDetailStore:
-    return ContextPlanDetailStore(detail_sessions, protected_key=b"k" * 32)
+    return ContextPlanDetailStore(detail_sessions)
 
 
 @pytest.fixture
@@ -430,7 +339,7 @@ def test_typed_record_and_registry_roundtrip(
         "assembly-detail",
         public_record.detail_id,
     )
-    saver = RolloutCheckpointSaver(detail_sessions, protected_detail_key=b"k" * 32)
+    saver = RolloutCheckpointSaver(detail_sessions)
     saver._storage.register_context_plan_detail(public_record)
     restored = saver._storage.get_context_plan_detail(
         SESSION_ID, ref.thread_id, detail_ref=ref
@@ -485,7 +394,7 @@ def test_typed_record_and_registry_roundtrip(
         ("expires_at", "2026-09-01T00:00:00"),
         ("expires_at", "not-a-time"),
         ("availability", "unavailable"),
-        ("redacted_stable_digest", "unexpected"),
+        ("removed_field", "unexpected"),
     ],
 )
 def test_registry_mapping_rejects_old_coerced_or_mismatched_fields(
@@ -523,8 +432,6 @@ def test_write_has_no_classification_defaults(detail_store, detail_arguments, fi
 def test_locator_only_accepts_typed_identity(value):
     with pytest.raises(TypeError, match="DetailRef"):
         detail_relative_path(value)
-    with pytest.raises(TypeError, match="DetailRef"):
-        protected_detail_relative_path(value)
 
 
 @pytest.mark.parametrize("operation", ["read", "remove", "gc"])
@@ -565,51 +472,28 @@ def test_owner_failure_cannot_touch_either_session(
         ({"secret": "令牌"}, "object"),
     ],
 )
-def test_sensitive_marker_keeps_session_v1_algorithm_for_all_json_types(
+def test_sensitive_exact_body_hash_is_owner_independent(
     detail_sessions, detail_store, detail_arguments, body, value_type
 ):
     arguments = {**detail_arguments, "detail": body, "sensitive": True}
     first = detail_store.write(**arguments)
-    restarted = ContextPlanDetailStore(detail_sessions, protected_key=b"k" * 32)
+    restarted = ContextPlanDetailStore(detail_sessions)
     same = restarted.write(**arguments)
-    other = restarted.write(
-        **{
-            **arguments,
-            "session_id": OTHER_SESSION_ID,
-            "thread_id": _main_thread_id(detail_sessions, OTHER_SESSION_ID),
-        }
-    )
-    root = _thread_node(detail_sessions, SESSION_ID)
-    session_root = get_session_path_resolver(detail_sessions).resolve_session_node(
-        SESSION_ID
-    )
-    key = (session_root / "rollout" / ".context-redaction-key").read_bytes()
-    expected = (
-        "hmac-sha256:session:v1:"
-        + hmac.new(key, canonical_json_bytes(body), hashlib.sha256).hexdigest()
-    )
-    assert first.redacted_stable_digest == same.redacted_stable_digest == expected
-    assert other.redacted_stable_digest != expected
-    raw = json.loads((root / first.relative_path).read_bytes())
-    assert raw["detail"] == {
-        "redacted": True,
-        "redacted_stable_digest": expected,
-        "value_type": value_type,
-        "detail_kind": "request_source",
-        "length": len(canonical_json_bytes(body)),
-    }
-    assert raw["detail_content_hash"] is None
-    assert raw["length"] == first.length == len(canonical_json_bytes(body))
-    assert raw["detail_ref"] == first.detail_ref.to_dict()
-    assert (
-        restarted.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=first,
-            include_sensitive=True,
-        )["detail"]
-        == body
-    )
+    other = restarted.write(**{
+        **arguments, "session_id": OTHER_SESSION_ID,
+        "thread_id": _main_thread_id(detail_sessions, OTHER_SESSION_ID),
+    })
+    for record in (first, same, other):
+        payload = restarted.read(
+            session_id=record.session_id, thread_id=record.thread_id,
+            record=record, include_sensitive=True,
+        )
+        assert payload["detail"] == body
+        assert payload["detail_content_hash"] == sha256_jcs(body)
+        assert payload["length"] == record.length == len(canonical_json_bytes(body))
+        assert payload["detail_ref"] == record.detail_ref.to_dict()
+    assert value_type in {"null", "boolean", "number", "string", "array", "object"}
+    assert first.detail_ref != other.detail_ref
 
 
 @pytest.mark.parametrize(
@@ -629,22 +513,23 @@ def test_sensitive_marker_keeps_session_v1_algorithm_for_all_json_types(
         ("content_hash", "different-envelope-hash"),
     ],
 )
-def test_protected_aad_binds_typed_owner_and_manifest(
+def test_detail_binds_typed_owner_and_manifest(
     detail_sessions, detail_store, detail_arguments, field, value
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
-    root = _thread_node(detail_sessions, SESSION_ID)
-    blob = (root / protected_detail_relative_path(record.detail_ref)).read_bytes()
     changes = {field: value}
     if field in {"assembly_id", "detail_id"}:
-        identity = {**record.detail_ref.to_dict(), field: value}
         changes["relative_path"] = detail_relative_path(
-            DetailRef.from_dict(identity)
+            DetailRef.from_dict({**record.detail_ref.to_dict(), field: value})
         ).as_posix()
     different = replace(record, **changes)
-    backend = ProtectedDetailBackend(b"k" * 32)
-    with pytest.raises(ProtectedDetailError, match="authentication"):
-        backend.decrypt(blob, record=different)
+    error = ItemSchemaError if field == "session_id" else DetailUnavailableError
+    match = "detail_ref 不属于请求的 session/thread/assembly" if field == "session_id" else None
+    with pytest.raises(error, match=match):
+        detail_store.read(
+            session_id=SESSION_ID, thread_id=record.thread_id,
+            record=different, include_sensitive=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -730,52 +615,38 @@ def test_expired_read_fails_and_gc_requires_explicit_typed_allowlist(
     assert (root / retained.relative_path).is_file()
 
 
-@pytest.mark.parametrize("missing", ["none", "manifest", "protected", "both"])
+@pytest.mark.parametrize("missing", ["none", "body"])
 def test_gc_retries_tombstoned_exact_files_without_source_sharing(
     detail_sessions, detail_store, detail_arguments, missing
 ):
     expired = detail_store.write(**detail_arguments, sensitive=True, retention_days=0)
     independent = detail_store.write(
-        **{**detail_arguments, "assembly_id": "other-assembly"}, sensitive=True
+        **{**detail_arguments, "assembly_id": "other-assembly"}, sensitive=True,
     )
-    root = _thread_node(detail_sessions, SESSION_ID)
-    manifest = root / expired.relative_path
-    protected = root / protected_detail_relative_path(expired.detail_ref)
-    if missing in {"manifest", "both"}:
-        manifest.unlink()
-    if missing in {"protected", "both"}:
-        protected.unlink()
+    target = _thread_node(detail_sessions, SESSION_ID) / expired.relative_path
+    if missing == "body":
+        target.unlink()
     removed = detail_store.gc(
-        session_id=SESSION_ID,
-        thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-        expired_before=datetime.now(UTC),
-        allowed_refs=[expired.detail_ref],
+        session_id=SESSION_ID, thread_id=expired.thread_id,
+        expired_before=datetime.now(UTC), allowed_refs=[expired.detail_ref],
     )
-    assert removed == (() if missing == "both" else (expired.detail_ref,))
-    assert not manifest.exists() and not protected.exists()
-    assert (
-        detail_store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=independent,
-            include_sensitive=True,
-        )["detail"]
-        == detail_arguments["detail"]
-    )
+    assert removed == (() if missing == "body" else (expired.detail_ref,))
+    assert not target.exists()
+    assert detail_store.read(
+        session_id=SESSION_ID, thread_id=independent.thread_id,
+        record=independent, include_sensitive=True,
+    )["detail"] == detail_arguments["detail"]
 
 
 @pytest.mark.parametrize("operation", ["read", "remove", "gc"])
-@pytest.mark.parametrize("location", ["manifest", "protected", "parent"])
+@pytest.mark.parametrize("location", ["body", "parent"])
 def test_symlink_preflight_preserves_other_files(
     detail_sessions, detail_store, detail_arguments, tmp_path, operation, location
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
     root = _thread_node(detail_sessions, SESSION_ID)
     manifest = root / record.relative_path
-    protected = root / protected_detail_relative_path(record.detail_ref)
-    victim = manifest if location == "manifest" else protected
-    if location == "parent":
-        victim = protected.parent
+    victim = manifest if location == "body" else manifest.parent
     saved = tmp_path / "artifacts" / "original"
     saved.parent.mkdir()
     victim.rename(saved)
@@ -801,33 +672,11 @@ def test_symlink_preflight_preserves_other_files(
     assert manifest.exists() == manifest_exists
 
 
-def test_missing_key_is_not_regenerated_during_read(
-    detail_sessions, detail_store, detail_arguments
-):
-    record = detail_store.write(**detail_arguments, sensitive=True)
-    session_root = get_session_path_resolver(detail_sessions).resolve_session_node(
-        SESSION_ID
-    )
-    key_path = session_root / "rollout" / ".context-redaction-key"
-    key_path.unlink()
-    with pytest.raises(DetailUnavailableError, match="key 不存在"):
-        detail_store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
-        )
-    assert not key_path.exists()
 
 
 @pytest.mark.parametrize("failure", ["collision", "symlink", "io"])
-def test_publish_failure_preserves_existing_target_and_rolls_back_own_cipher(
-    detail_sessions,
-    detail_store,
-    detail_arguments,
-    tmp_path,
-    monkeypatch,
-    failure,
+def test_publish_failure_preserves_existing_target(
+    detail_sessions, detail_store, detail_arguments, tmp_path, monkeypatch, failure,
 ):
     original_publish = detail_store._files.publish
     attempted = []
@@ -835,29 +684,27 @@ def test_publish_failure_preserves_existing_target_and_rolls_back_own_cipher(
     outside.parent.mkdir()
     outside.write_bytes(b"existing-owner-content")
 
-    def fail_public(ref, raw, *, protected=False):
-        if not protected:
-            attempted.append(ref)
-            target = detail_store._files.path(ref, create=True)
-            if failure == "collision":
-                target.write_bytes(b"existing-owner-content")
-            elif failure == "symlink":
-                target.symlink_to(outside)
-            else:
-                raise OSError("injected publication failure")
-        return original_publish(ref, raw, protected=protected)
+    def fail_publish(ref, raw):
+        attempted.append(ref)
+        target = detail_store._files.path(ref, create=True)
+        if failure == "collision":
+            target.write_bytes(b"existing-owner-content")
+        elif failure == "symlink":
+            target.symlink_to(outside)
+        else:
+            raise OSError("injected publication failure")
+        return original_publish(ref, raw)
 
-    monkeypatch.setattr(detail_store._files, "publish", fail_public)
+    monkeypatch.setattr(detail_store._files, "publish", fail_publish)
     with pytest.raises((DetailUnavailableError, OSError)):
         detail_store.write(**detail_arguments, sensitive=True)
     assert len(attempted) == 1
     root = _thread_node(detail_sessions, SESSION_ID)
-    public = root / detail_relative_path(attempted[0])
-    assert not (root / protected_detail_relative_path(attempted[0])).exists()
+    target = root / detail_relative_path(attempted[0])
     assert not list(root.rglob("*.tmp"))
     if failure != "io":
-        assert public.read_bytes() == b"existing-owner-content"
-        assert public.is_symlink() == (failure == "symlink")
+        assert target.read_bytes() == b"existing-owner-content"
+        assert target.is_symlink() == (failure == "symlink")
     assert outside.read_bytes() == b"existing-owner-content"
 
 
@@ -884,9 +731,8 @@ def test_same_leaf_copy_cannot_replay_another_typed_owner(
         changes["thread_id"] = identity["thread_id"]
     different = replace(record, **changes)
     assert different.detail_id == record.detail_id
-    for protected in (False, True):
-        raw = detail_store._files.read(record.detail_ref, protected=protected)
-        detail_store._files.publish(ref, raw, protected=protected)
+    raw = detail_store._files.read(record.detail_ref)
+    detail_store._files.publish(ref, raw)
     with pytest.raises(DetailUnavailableError, match="source-mismatch"):
         detail_store.read(
             session_id=ref.session_id,
@@ -928,19 +774,16 @@ def test_invalid_file_gc_fails_without_deleting(
     assert target.read_bytes() == raw
 
 
-@pytest.mark.parametrize("protected", [False, True])
-def test_missing_files_fail_without_recreating_paths(
-    detail_sessions, detail_store, detail_arguments, protected
+def test_missing_body_fails_without_recreating_paths(
+    detail_sessions, detail_store, detail_arguments,
 ):
     record = detail_store.write(**detail_arguments, sensitive=True)
-    target = detail_store._files.path(record.detail_ref, protected=protected)
+    target = detail_store._files.path(record.detail_ref)
     target.unlink()
     target.parent.rmdir()
     with pytest.raises(DetailUnavailableError, match="缺失"):
         detail_store.read(
-            session_id=SESSION_ID,
-            thread_id=_main_thread_id(detail_sessions, SESSION_ID),
-            record=record,
-            include_sensitive=True,
+            session_id=SESSION_ID, thread_id=record.thread_id,
+            record=record, include_sensitive=True,
         )
     assert not target.parent.exists()

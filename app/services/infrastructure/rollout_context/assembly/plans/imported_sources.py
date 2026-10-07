@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.serialization import (
 
 _FIELDS = {"schema", "session_id", "thread_id", "plan_id", "refs", "contributions"}
 _INTEGRITY_FIELDS = (
-    "source_revision", "content_length", "content_hash", "redacted_stable_digest",
+    "source_revision", "content_length", "content_hash",
 )
 
 
@@ -96,7 +96,7 @@ def parse_source_manifest(
     else:
         failed = False
     if failed:
-        raise ValueError("source-mismatch: imported source manifest schema/owner/privacy 非法")
+        raise ValueError("source-mismatch: imported source manifest schema/owner/body 非法")
     return result
 
 
@@ -116,7 +116,7 @@ def read_source_manifest(
     else:
         failed = False
     if failed:
-        raise ValueError("source-mismatch: imported source manifest JCS/schema/owner/privacy 非法")
+        raise ValueError("source-mismatch: imported source manifest JCS/schema/owner/body 非法")
     return result
 
 

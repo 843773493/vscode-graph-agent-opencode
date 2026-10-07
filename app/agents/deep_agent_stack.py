@@ -141,6 +141,7 @@ def build_deep_agent_middleware(
     context_source_manager: ContextSourceManager | None = None,
     source_registry: WorkspaceFileResourceRegistry | None = None,
     context_source_reactor: ContextSourceReactor | None = None,
+    execution_owned_skill_catalog: bool = False,
     resolved_tool_denylist: set[str],
     interrupt_on: dict[str, bool | InterruptOnConfig] | None,
     runtime_middleware: list[AgentMiddleware],
@@ -169,6 +170,7 @@ def build_deep_agent_middleware(
         context_source_manager=context_source_manager,
         source_registry=source_registry,
         context_source_reactor=context_source_reactor,
+        execution_owned_catalog=execution_owned_skill_catalog,
     )
     filesystem_middleware = FilesystemMiddleware(
         backend=backend,

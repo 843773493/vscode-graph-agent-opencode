@@ -119,7 +119,9 @@ class ContextSourceReactor:
     def subscribed_uri_count(self) -> int:
         return len(self._source_ids_by_uri)
 
-    def sync_sources(self) -> tuple[str, ...]:
+    def sync_sources(
+        self, *, descriptors: tuple[ContextSourceDescriptor, ...] | None = None,
+    ) -> tuple[str, ...]:
         """按 CSM 当前注册表增量接线，返回本次新绑定的虚拟 URI。
 
         该方法只做内存操作：为带 ``resource_uri`` 的 descriptor 建立订阅，
@@ -127,7 +129,8 @@ class ContextSourceReactor:
         """
         self._require_active()
         newly_bound: list[str] = []
-        for descriptor in self._context_sources.descriptors():
+        selected = self._context_sources.descriptors() if descriptors is None else descriptors
+        for descriptor in selected:
             resource_uri = descriptor.resource_uri
             if resource_uri is None:
                 # 非文件来源由对应 owner 直接调用 observe，不进入本 reactor。

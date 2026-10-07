@@ -17,6 +17,8 @@ from app.domain.itemized.records import (
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
+    TOOL_BINDING_FIELD,
+    TOOL_BINDING_KEYS,
     companion_extensions,
     message_annotations,
     project_annotations,
@@ -271,9 +273,36 @@ def restore_group_manifests(
         if not isinstance(entry, Mapping) or entry.get("item_id") != item.item_id:
             raise ValueError("checkpoint canonical group manifest item identity 不一致")
         manifest = parse_item_projection_manifest(
-            {key: value for key, value in entry.items() if key != "item_id"}
+            {key: value for key, value in entry.items() if key not in {"item_id", TOOL_BINDING_FIELD}}
         )
         values = {**item.to_dict(), **manifest}
+        if TOOL_BINDING_FIELD in entry:
+            binding = entry[TOOL_BINDING_FIELD]
+            binding_keys = TOOL_BINDING_KEYS.get(item.semantic_kind, ())
+            calls = item.payload.get("tool_calls") if isinstance(item.payload, Mapping) else None
+            message_call_id = (
+                calls[0].get("id")
+                if isinstance(calls, list) and len(calls) == 1
+                else item.payload.get("tool_call_id")
+                if isinstance(item.payload, Mapping) and item.semantic_kind == "tool_result"
+                else None
+            )
+            if (
+                not isinstance(binding, Mapping)
+                or "tool_call_id" not in binding
+                or set(binding) - set(binding_keys)
+                or any(not isinstance(value, str) or not value for value in binding.values())
+                or message_call_id != binding["tool_call_id"]
+            ):
+                raise ValueError(f"checkpoint {item.semantic_kind.replace('_', '-')} binding 与消息调用身份不一致")
+            # 生命周期镜像只保存 ID；正文仍完全取自消息中的真实 name/args/content。
+            payload = (
+                {"name": calls[0]["name"], "args": calls[0]["args"]}
+                if item.semantic_kind == "tool_call"
+                else {key: value for key, value in item.payload.items() if key not in binding_keys}
+            )
+            values["payload"] = {**payload, **binding}
+            values["content_hash"] = content_hash(item.payload_kind, values["payload"])
         evidence = manifest["tool_result_evidence"]
         if evidence is not None:
             if item.semantic_kind != "tool_result" or not isinstance(

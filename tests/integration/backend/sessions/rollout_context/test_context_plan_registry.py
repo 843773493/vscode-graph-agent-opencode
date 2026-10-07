@@ -49,7 +49,9 @@ def registry_db(request, session_bundle_factory):
     sessions = context.workspace_root / ".boxteam" / "sessions"
     session_id = f"ses_{create_uuid_hex()}"
     session_bundle_factory(sessions, session_id)
-    saver = RolloutCheckpointSaver(sessions)
+    saver = RolloutCheckpointSaver(
+        sessions,
+    )
     accepted = saver.accept_turn(
         session_id,
         accepted_ingress_id="registry-ingress",

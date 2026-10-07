@@ -18,9 +18,6 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     fork_workspace as fork_workspace,  # noqa: PLC0414 - 当前正式路径独立工作区
 )
 from tests.integration.backend.sessions.test_rollout_fork_protected import (
-    protected_key as protected_key,  # noqa: PLC0414 - 显式注入 fixture key
-)
-from tests.integration.backend.sessions.test_rollout_fork_protected import (
     protected_source as protected_source,  # noqa: PLC0414 - 不运行其它正式文件
 )
 
@@ -84,10 +81,13 @@ import sys
 from pathlib import Path
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
+from tests.support.session_catalog_owner import fixture_catalog_scope
 
-with RolloutCheckpointSaver(Path(sys.argv[1])) as saver:
-    saver.create_context_plan(sys.argv[2], ContextRequestPlan(
-        session_id=sys.argv[2], plan_id='independent-writer', refs=(),
+with fixture_catalog_scope(), RolloutCheckpointSaver(Path(sys.argv[1])) as saver:
+    session = sys.argv[2]
+    thread = saver._storage.main_thread_id(session)
+    saver.create_context_plan(session, ContextRequestPlan(
+        session_id=session, thread_id=thread, plan_id='independent-writer', refs=(),
         plan_creation_idempotency_key='writer-after-fork',
     ))
 """
@@ -161,7 +161,10 @@ async def test_fork_preserves_live_reader_and_independent_writer(
     assert source_reader.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
     assert source_reader.execute("PRAGMA foreign_key_check").fetchall() == []
     if operation == "full-copy":
-        with saver._storage._connect(TARGET_SESSION_ID, "", read_only=True) as target:
+        with saver._storage._connect(
+            saver._storage.main_thread_id(TARGET_SESSION_ID), "",
+            session_id=TARGET_SESSION_ID, read_only=True,
+        ) as target:
             assert target.execute(
                 "SELECT count(*) FROM context_plans WHERE plan_id='independent-writer'"
             ).fetchone() == (0,)

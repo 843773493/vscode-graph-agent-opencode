@@ -79,7 +79,6 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 "request_only",
                 "extensions",
                 "content_length",
-                "redacted_stable_digest",
                 "contribution_kind",
                 "visibility",
                 "protection",
@@ -102,27 +101,8 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
             or values["replacement_policy"] not in {"immutable", "replaceable"}
         ):
             raise ValueError("context contribution 字段不完整")
-        if (
-            (
-                values["content_hash"] is not None
-                and (
-                    not isinstance(values["content_hash"], str)
-                    or not values["content_hash"]
-                )
-            )
-            or (
-                values["redacted_stable_digest"] is not None
-                and (
-                    not isinstance(values["redacted_stable_digest"], str)
-                    or not values["redacted_stable_digest"]
-                )
-            )
-            or (
-                (values["content_hash"] is None)
-                == (values["redacted_stable_digest"] is None)
-            )
-        ):
-            raise ValueError("context contribution 必须恰好包含一个 hash token")
+        if not isinstance(values["content_hash"], str) or not values["content_hash"]:
+            raise ValueError("context contribution 必须携带 content_hash")
         if values["request_only"] is not True:
             raise ValueError("context contribution 必须是 request-only")
         if values["source_kind"] == "tool_set":
@@ -164,10 +144,6 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         content_hash = strict_optional_text(
             values["content_hash"], field="context_contribution.content_hash"
         )
-        redacted_stable_digest = strict_optional_text(
-            values["redacted_stable_digest"],
-            field="context_contribution.redacted_stable_digest",
-        )
         contribution_kind = strict_text(
             values["contribution_kind"], field="context_contribution.contribution_kind"
         )
@@ -197,7 +173,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                 self._require_v2_runtime(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 existing = connection.execute(
-                    "SELECT source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json FROM context_contributions WHERE contribution_id = ?",
+                    'SELECT source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, binding_manifest_json FROM context_contributions WHERE contribution_id = ?',
                     (contribution_id,),
                 ).fetchone()
                 expected = (
@@ -205,7 +181,6 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     source_revision,
                     content_hash,
                     content_length,
-                    redacted_stable_digest,
                     int(values["request_only"]),
                     contribution_kind,
                     visibility,
@@ -215,7 +190,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     binding_manifest_json,
                 )
                 if existing is not None:
-                    if len(existing) != 12:
+                    if len(existing) != 11:
                         raise RuntimeError("context contribution 行字段数非法")
                     stored = (
                         strict_text(
@@ -230,34 +205,30 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                         strict_non_negative_int(
                             existing[3], field="context_contributions.content_length"
                         ),
-                        strict_optional_text(
-                            existing[4],
-                            field="context_contributions.redacted_stable_digest",
-                        ),
                         int(
                             _strict_bool(
-                                existing[5], field="context_contributions.request_only"
+                                existing[4], field="context_contributions.request_only"
                             )
                         ),
                         strict_text(
-                            existing[6], field="context_contributions.contribution_kind"
+                            existing[5], field="context_contributions.contribution_kind"
                         ),
                         strict_text(
-                            existing[7], field="context_contributions.visibility"
+                            existing[6], field="context_contributions.visibility"
                         ),
                         strict_text(
-                            existing[8], field="context_contributions.protection"
+                            existing[7], field="context_contributions.protection"
                         ),
                         strict_text(
-                            existing[9],
+                            existing[8],
                             field="context_contributions.selection_role",
                         ),
                         strict_text(
-                            existing[10],
+                            existing[9],
                             field="context_contributions.replacement_policy",
                         ),
                         _canonical_json_object(
-                            existing[11], field="context_contributions.binding_manifest_json"
+                            existing[10], field="context_contributions.binding_manifest_json"
                         ),
                     )
                     if expected_source_revision is not None and expected_source_revision != stored[1]:
@@ -265,7 +236,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     if stored == expected:
                         connection.commit()
                         return
-                    if stored[10] != "replaceable" or replacement_policy != "replaceable":
+                    if stored[9] != "replaceable" or replacement_policy != "replaceable":
                         raise ValueError("context contribution immutable identity/hash 冲突")
                     if expected_source_revision is None or expected_source_revision != stored[1]:
                         raise ValueError("context contribution replacement 缺少匹配的 expected source revision CAS")
@@ -278,7 +249,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     if sealed is not None:
                         raise ValueError("context contribution 已封存，禁止更新原 registry slot")
                     cursor = connection.execute(
-                        "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, redacted_stable_digest = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, binding_manifest_json = ? WHERE contribution_id = ? AND source_revision = ? AND replacement_policy = 'replaceable' AND assembly_id IS NULL",
+                        "UPDATE context_contributions SET source_kind = ?, source_revision = ?, content_hash = ?, content_length = ?, request_only = ?, contribution_kind = ?, visibility = ?, protection = ?, selection_role = ?, replacement_policy = ?, binding_manifest_json = ? WHERE contribution_id = ? AND source_revision = ? AND replacement_policy = 'replaceable' AND assembly_id IS NULL",
                         (*expected, contribution_id, expected_source_revision),
                     )
                     if cursor.rowcount != 1:
@@ -297,7 +268,7 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     field="context_contributions.source_ordinal",
                 )
                 cursor = connection.execute(
-                    "INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)",
+                    'INSERT INTO context_contributions(contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
                     (
                         contribution_id,
                         *expected[:-1],
@@ -345,14 +316,14 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
         try:
             self._require_v2_runtime(connection)
             rows = connection.execute(
-                "SELECT contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id"
+                'SELECT contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, selection_role, replacement_policy, assembly_id, contribution_ordinal, source_ordinal, binding_manifest_json, created_at FROM context_contributions ORDER BY source_ordinal, contribution_id'
             ).fetchall()
         finally:
             if owned_connection is not None:
                 owned_connection.close()
         result: list[dict[str, object]] = []
         for row in rows:
-            if len(row) != 17:
+            if len(row) != 16:
                 raise RuntimeError("context_contributions 行字段数非法")
             result.append(
                 {
@@ -371,41 +342,38 @@ class AssemblyRegistryMixin(DetailRegistryMixin):
                     "content_length": strict_non_negative_int(
                         row[4], field="context_contributions.content_length"
                     ),
-                    "redacted_stable_digest": strict_optional_text(
-                        row[5], field="context_contributions.redacted_stable_digest"
-                    ),
                     "request_only": int(
-                        _strict_bool(row[6], field="context_contributions.request_only")
+                        _strict_bool(row[5], field="context_contributions.request_only")
                     ),
                     "contribution_kind": strict_text(
-                        row[7], field="context_contributions.contribution_kind"
+                        row[6], field="context_contributions.contribution_kind"
                     ),
                     "visibility": strict_text(
-                        row[8], field="context_contributions.visibility"
+                        row[7], field="context_contributions.visibility"
                     ),
                     "protection": strict_text(
-                        row[9], field="context_contributions.protection"
+                        row[8], field="context_contributions.protection"
                     ),
                     "assembly_id": strict_optional_text(
-                        row[12], field="context_contributions.assembly_id"
+                        row[11], field="context_contributions.assembly_id"
                     ),
                     "contribution_ordinal": strict_optional_non_negative_int(
-                        row[13], field="context_contributions.contribution_ordinal"
+                        row[12], field="context_contributions.contribution_ordinal"
                     ),
                     "source_ordinal": strict_non_negative_int(
-                        row[14], field="context_contributions.source_ordinal"
+                        row[13], field="context_contributions.source_ordinal"
                     ),
                     "selection_role": strict_text(
-                        row[10], field="context_contributions.selection_role"
+                        row[9], field="context_contributions.selection_role"
                     ),
                     "replacement_policy": strict_text(
-                        row[11], field="context_contributions.replacement_policy"
+                        row[10], field="context_contributions.replacement_policy"
                     ),
                     **parse_contribution_binding_manifest(json.loads(_canonical_json_object(
-                        row[15], field="context_contributions.binding_manifest_json"
+                        row[14], field="context_contributions.binding_manifest_json"
                     ))),
                     "created_at": strict_text(
-                        row[16], field="context_contributions.created_at"
+                        row[15], field="context_contributions.created_at"
                     ),
                 }
             )

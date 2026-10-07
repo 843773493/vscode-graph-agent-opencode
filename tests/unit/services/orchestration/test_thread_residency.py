@@ -176,8 +176,9 @@ async def _resident_runtime(
         generation_key,
         build,
     )
-    lease.release()
-    return lease
+    async with lease:
+        lease.release()
+        return lease
 
 
 @pytest.mark.asyncio

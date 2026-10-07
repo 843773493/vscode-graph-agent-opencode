@@ -14,11 +14,19 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
     finalize_provider_wire,
 )
+from app.agents.skill_runtime import install_frozen_skill_catalog
 from app.core.execution_admission_context import require_current_execution_admission
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.request_plan import resolve_contribution_for_ref
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_GUIDANCE_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    mcp_guidance_content,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
 )
@@ -33,12 +41,63 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDelta,
+    ContextSourceDescriptor,
+    ContextSourceSnapshot,
     PendingContextSourceBatch,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
 )
 from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
     compile_prefix_context,
     source_contributions,
 )
+
+
+def _activation_guidance_batch(
+    owner, activation: ResourceActivationSnapshotRef, previous: ContextAssemblySnapshot | None,
+    batch: PendingContextSourceBatch, *, checkpoint_ns: str,
+) -> PendingContextSourceBatch:
+    """MCP exact body 只由本次冻结 activation 派生，不登记第二个 CSM owner。"""
+    if any(source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID for source in batch.sources):
+        raise ValueError("context-source-owner-conflict: MCP guidance 不得登记为 CSM source")
+    parents = tuple(binding for binding in activation.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    if len(parents) > 1:
+        raise ValueError("resource-activation-snapshot-conflict: MCP parent 不唯一")
+    previous_frames = () if previous is None or previous.seal_binding is None else previous.seal_binding.prefix.state.frames
+    previous_revision = next((
+        frame.item_ref.source_revision for frame in reversed(previous_frames)
+        if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
+    ), None)
+    if not parents and previous_revision is None:
+        return batch
+    content = mcp_guidance_content(owner.read_resource_activation_payload(
+        activation, parents[0], checkpoint_ns=checkpoint_ns,
+    )) if parents else ""
+    revision = parents[0].revision if parents else sha256_jcs({"content": ""})
+    source = ContextSourceSnapshot(
+        descriptor=ContextSourceDescriptor(
+            source_id=MCP_GUIDANCE_SOURCE_ID, source_kind="mcp_tool_catalog",
+            name="MCP 工具指引", description="本次冻结的 MCP 工具目录正文",
+            internal_locator=MCP_TOOL_CATALOG_RESOURCE_ID, root_placement="tail_only",
+        ),
+        revision=revision, content=content, applied_revision=previous_revision, tracked=False,
+    )
+    deltas = () if revision == previous_revision else (ContextSourceDelta(
+        source_id=MCP_GUIDANCE_SOURCE_ID, source_kind="mcp_tool_catalog",
+        source_name=source.descriptor.name, revision=revision, previous_revision=previous_revision,
+        content=content, content_hash=sha256_jcs(content),
+        kind="activation" if previous_revision is None else "delta",
+    ),)
+    return PendingContextSourceBatch(deltas=(*batch.deltas, *deltas), sources=(*batch.sources, source))
+
+
+def prepared_context_plan_id(creation_key: str) -> str:
+    """创建与只读恢复共用唯一 plan identity 算法。"""
+
+    require_key(creation_key, field="plan_creation_idempotency_key")
+    return "plan-prepared:" + sha256_jcs({"creation_key": creation_key})
 
 
 def prepare_registered_context(
@@ -51,6 +110,8 @@ def prepare_registered_context(
     provider_version: str, wire_profile: ChatWireProfile | ResponsesWireProfile,
     wire_params: Mapping[str, object],
     target_format: str, checkpoint_ns: str,
+    model_call_id: str,
+    activation_snapshot: ResourceActivationSnapshotRef,
 ) -> dict[str, object]:
     require_key(plan_creation_idempotency_key, field="plan_creation_idempotency_key")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -66,6 +127,11 @@ def prepare_registered_context(
         session_id, thread_id, execution_id, turn_id,
     ):
         raise RuntimeError("provider context 与当前 execution admission 不一致")
+    owner.require_provider_resource_activation(
+        activation_snapshot, session_id=session_id, thread_id=thread_id,
+        execution_id=execution_id, turn_id=turn_id, model_call_id=model_call_id,
+        checkpoint_ns=checkpoint_ns,
+    )
     if target_format not in {"chat_completions", "responses"}:
         raise ValueError("不支持的 provider context target_format: " + target_format)
     if not owner.supports_itemized_context(session_id, thread_id, checkpoint_ns=checkpoint_ns):
@@ -81,7 +147,7 @@ def prepare_registered_context(
         "projector_id": WIRE_PROJECTOR_ID,
         "projector_version": WIRE_PROJECTOR_VERSION,
     })
-    plan_id = "plan-prepared:" + sha256_jcs({"creation_key": plan_creation_idempotency_key})
+    plan_id = prepared_context_plan_id(plan_creation_idempotency_key)
     with owner._lock:
         registered = owner._find_runtime_context_plan(session_id, thread_id, plan_id, checkpoint_ns)
         if registered is not None and registered.plan_state == "sealed":
@@ -100,6 +166,12 @@ def prepare_registered_context(
                 or snapshot.seal_binding is None
             ):
                 raise ValueError("assembly-idempotency-conflict: sealed provider request 身份不一致")
+            owner.verify_resource_activation_binding(
+                session_id, assembly_id=snapshot.assembly_id,
+                activation_snapshot=activation_snapshot, checkpoint_ns=checkpoint_ns,
+            )
+            if snapshot.model_call_id != model_call_id:
+                raise ValueError("assembly-idempotency-conflict: sealed model-call identity 不一致")
         else:
             # 只有新请求读取 desired；已 sealed/in-flight attempt 完全复用旧 binding。
             tool_set = tool_set_supplier()
@@ -115,9 +187,18 @@ def prepare_registered_context(
             )
             # 先收敛真实 call/result group；未闭合时不得冻结或登记恢复 source。
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
-                view_id = owner._storage.active_view_id(read_snapshot)
-                sequences = owner._storage._view_message_sequences_from_connection(read_snapshot.connection, view_id)
+                sequences = owner.selected_context_message_sequences(read_snapshot)
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
+            frozen_skills = skill_catalog_from_activation(
+                activation_snapshot, lambda frozen, binding: owner.read_resource_activation_payload(
+                    frozen, binding, checkpoint_ns=checkpoint_ns,
+                ),
+            )
+            if frozen_skills is not None:
+                install_frozen_skill_catalog(
+                    context_source_manager, frozen_skills,
+                    include_instructions="read_file" in tool_set.tool_names,
+                )
             rebuild = owner.load_context_source_rebuild_state(
                 ContextSourceOwnerKey(session_id, thread_id), checkpoint_ns=checkpoint_ns,
             )
@@ -133,6 +214,12 @@ def prepare_registered_context(
                 deltas=tuple(delta for delta in frozen.deltas if delta.source_id in allowed),
                 sources=tuple(source for source in frozen.sources if source.descriptor.source_id in allowed),
             )
+            csm_batch = batch
+            with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
+                previous = owner._storage.latest_context_assembly(read_snapshot)
+            batch = _activation_guidance_batch(
+                owner, activation_snapshot, previous, batch, checkpoint_ns=checkpoint_ns,
+            )
             bodies = {}
             for contribution in source_contributions(batch):
                 owner.register_context_contribution(
@@ -147,10 +234,7 @@ def prepare_registered_context(
                     checkpoint_ns=checkpoint_ns, read_snapshot=read_snapshot,
                 )
                 items = owner._storage.committed_context_items(read_snapshot)
-                view_id = owner._storage.active_view_id(read_snapshot)
-                sequences = owner._storage._view_message_sequences_from_connection(
-                    read_snapshot.connection, view_id,
-                )
+                sequences = owner.selected_context_message_sequences(read_snapshot)
                 validate_tool_protocol_closure(read_snapshot.connection, sequences, len(sequences))
             overlay_bodies = {}
             for ref in full_plan.refs:
@@ -194,9 +278,10 @@ def prepare_registered_context(
                 wire_profile=wire_profile, wire_params=wire_params,
                 target_format=target_format, request_input_hash=input_hash,
                 request_only_content=bodies, context_preparation=preparation,
+                model_call_id=model_call_id, activation_snapshot=activation_snapshot,
                 checkpoint_ns=checkpoint_ns,
             )
-            context_source_manager.acknowledge_sealed_pending(batch, snapshot.seal_binding)
+            context_source_manager.acknowledge_sealed_pending(csm_batch, snapshot.seal_binding)
         plan = snapshot.as_sealed_plan()
         messages, tools, losses = owner.project_context_plan_to_provider(
             session_id, thread_id, plan, target_format=target_format,
@@ -216,7 +301,7 @@ def prepare_registered_context(
             raise ValueError("source-mismatch: 最终 Provider request 与封存 request hash preimage 不一致")
         pending = {
             "assembly_id": snapshot.assembly_id, "execution_id": snapshot.execution_id,
-            "plan": plan, "messages": messages, "tools": tools, "losses": losses,
+            "snapshot": snapshot, "plan": plan, "messages": messages, "tools": tools, "losses": losses,
         }
         queue = owner._prepared_dispatches.setdefault((session_id, thread_id, checkpoint_ns, execution_id), [])
         if not any(item["assembly_id"] == snapshot.assembly_id for item in queue):
@@ -224,4 +309,4 @@ def prepare_registered_context(
         return pending
 
 
-__all__ = ["prepare_registered_context"]
+__all__ = ["prepare_registered_context", "prepared_context_plan_id"]

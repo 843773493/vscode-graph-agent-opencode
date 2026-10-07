@@ -7,6 +7,9 @@ from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
 from app.agents.policy import ToolPolicyResolver
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -55,6 +58,8 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         "session_context_query_service": MagicMock(),
         "workspace_session_context_client": MagicMock(),
         "config_service": config_service,
+        "resource_registry": ResourceRegistry(),
+        "resource_activation": None,
         "workspace_root": tmp_path,
         "skill_catalog": MagicMock(),
         "middleware": [],
@@ -128,6 +133,8 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "session_context_query_service": MagicMock(),
         "workspace_session_context_client": MagicMock(),
         "config_service": config_service,
+        "resource_registry": ResourceRegistry(),
+        "resource_activation": None,
         "workspace_root": tmp_path,
         "skill_catalog": MagicMock(),
         "middleware": [],

@@ -35,7 +35,6 @@ class ContextSelectionEntry:
     source_revision: str | None = None
     content_length: int | None = None
     content_hash: str | None = None
-    redacted_stable_digest: str | None = None
     detail_ref: DetailRef | None = None
     contribution_id: str | None = None
     base_delta_role: str = "none"
@@ -107,10 +106,8 @@ class ContextSelectionEntry:
                 raise ItemSchemaError(
                     "included ContextSelectionEntry.content_length 必须是非负整数"
                 )
-            if (self.content_hash is None) == (self.redacted_stable_digest is None):
-                raise ItemSchemaError(
-                    "included ContextSelectionEntry 必须恰好包含一个 hash token"
-                )
+            if self.content_hash is None:
+                raise ItemSchemaError('included ContextSelectionEntry 必须包含一个 hash token')
         elif self.content_length is not None and (
             not isinstance(self.content_length, int)
             or isinstance(self.content_length, bool)
@@ -119,26 +116,12 @@ class ContextSelectionEntry:
             raise ItemSchemaError(
                 "omitted ContextSelectionEntry.content_length 必须是非负整数或 NULL"
             )
-        if (
-            not self.included
-            and self.content_hash is not None
-            and self.redacted_stable_digest is not None
-        ):
-            raise ItemSchemaError(
-                "omitted ContextSelectionEntry 不能同时携带 content_hash 和 redacted_stable_digest"
-            )
         if self.source_revision is not None:
             _non_empty_string(self.source_revision, "ContextSelectionEntry.source_revision")
         if self.content_hash is not None:
             validate_hash_token(
                 self.content_hash,
                 "ContextSelectionEntry manifest content_hash",
-            )
-        if self.redacted_stable_digest is not None:
-            validate_hash_token(
-                self.redacted_stable_digest,
-                "ContextSelectionEntry manifest redacted_stable_digest",
-                redacted=True,
             )
         if self.omission_reason is not None:
             _non_empty_string(
@@ -261,11 +244,6 @@ class ContextSelectionEntry:
             raise ItemSchemaError("selection content_length 与 ref manifest 不一致")
         if self.content_hash is not None and self.content_hash != self.ref.content_hash:
             raise ItemSchemaError("selection content_hash 与 ref manifest 不一致")
-        if (
-            self.redacted_stable_digest is not None
-            and self.redacted_stable_digest != self.ref.redacted_stable_digest
-        ):
-            raise ItemSchemaError("selection hash token 与 ref manifest 不一致")
         ref_visibility = (
             self.ref.visibility
             if isinstance(self.ref, ContextRef)
@@ -329,7 +307,6 @@ class ContextSelectionEntry:
             "source_revision": self.source_revision,
             "content_length": self.content_length,
             "content_hash": self.content_hash,
-            "redacted_stable_digest": self.redacted_stable_digest,
             "detail_ref": self.detail_ref.to_dict() if self.detail_ref is not None else None,
             "contribution_id": self.contribution_id,
             "base_delta_role": self.base_delta_role,

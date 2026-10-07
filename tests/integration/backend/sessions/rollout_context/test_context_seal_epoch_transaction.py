@@ -234,9 +234,7 @@ def _sealed_facts(saver, connection):
             (path.relative_to(saver._storage.sessions_dir).as_posix(), path.read_bytes())
             for path in sorted(saver._storage.sessions_dir.rglob("*"))
             if path.is_file() and (
-                path.name == ".context-redaction-key"
-                or "context-plan-details" in path.parts
-                or "context-plan-details-protected" in path.parts
+                "context-plan-details" in path.parts
             )
         ),
     )

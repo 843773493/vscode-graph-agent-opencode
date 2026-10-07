@@ -13,13 +13,20 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+import pytest
+
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
-    ActivationLineageBodyStore,
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
+    SemanticResourceDescriptor,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
-    ResourceActivationStore,
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
+)
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from tests.unit.services.infrastructure.rollout_context.test_resource_activation_retention import (
     SESSION_ID,
     _saver,
@@ -29,7 +36,8 @@ from tests.unit.services.infrastructure.rollout_context.test_resource_activation
 TARGET_SESSION_ID = "ses_019c49da91667f7b842224c1bfc58b01"
 
 
-def test_full_copy_rebuilds_target_local_activation_identity(
+@pytest.mark.asyncio
+async def test_full_copy_rebuilds_target_local_activation_identity(
     tmp_path: Path, session_bundle_factory
 ) -> None:
     """full_rollout_copy 必须重造 target-local activation id 并保留 source lineage。"""
@@ -110,12 +118,6 @@ def test_full_copy_rebuilds_target_local_activation_identity(
 
     # target 侧按 sealed ref 读回，且与 source 语义等价。
     restarted = _saver(sessions_dir)
-    restarted.attach_resource_activation_store(
-        ResourceActivationStore(
-            restarted._storage,
-            ActivationLineageBodyStore(restarted._storage, restarted._detail_store),
-        )
-    )
     target_thread_id = restarted._storage.main_thread_id(TARGET_SESSION_ID)
     with closing(
         sqlite3.connect(
@@ -136,6 +138,47 @@ def test_full_copy_rebuilds_target_local_activation_identity(
     )
     assert restored.activation_snapshot_id == target_snapshot_id
     assert restored.owner_session_id == TARGET_SESSION_ID
+    assert [b.members for b in restored.bindings] == [b.members for b in snapshot.bindings]
+    assert restored.activation_policy == snapshot.activation_policy
     assert [b.resource_id for b in restored.bindings] == [
         b.resource_id for b in snapshot.bindings
     ]
+
+
+    # target parent 的 operational ID 已重造，但 lineage 内容 hash 保持语义中立。
+    # 新 model-call save 会递归复用 parent，不能因为 source audit ID 留在正文而失败。
+    registry = ResourceRegistry()
+    descriptor = SemanticResourceDescriptor(
+        resource_id="mcp:catalog", resource_kind="mcp_tool_catalog", facet="activation",
+        display_uri="boxteam://workspace/test/mcp-catalog",
+    )
+    registry.register_descriptor(descriptor)
+    registry.publish(ResourceSnapshot(
+        resource_id=descriptor.resource_id, resource_kind=descriptor.resource_kind,
+        facet=descriptor.facet, display_uri=descriptor.display_uri, revision="catalog-target-1",
+        payload={"members": [member.to_dict() for member in restored.bindings[0].members]},
+        source_lineage=(("mcp-source", "catalog-target-1"),), generation=4,
+    ))
+    coordinator = ResourceActivationCoordinator(
+        registry=registry, saver=restarted,
+        body_store=ResourceActivationBodyStore(restarted._storage, restarted._detail_store),
+    )
+    child = await coordinator.prepare_model_call(parent=restored, model_call_id="fork-target-call")
+    assert child.snapshot_kind == "model_call"
+    assert child.bindings[:len(restored.bindings)] == restored.bindings
+    store = restarted._activation_store()
+    parent_ref = store.save_snapshot(restored)
+    child_ref = store.save_snapshot(child)
+    assert parent_ref.session_id == child_ref.session_id == TARGET_SESSION_ID
+    assert parent_ref.thread_id == child_ref.thread_id == target_thread_id
+    restored_child = store.read_snapshot(
+        TARGET_SESSION_ID, thread_id=target_thread_id,
+        activation_snapshot_id=child.activation_snapshot_id,
+    )
+    assert restored_child.to_dict() == child.to_dict()
+    assert restored_child.parent.to_dict() == restored.to_dict()
+    assert restored_child.bindings[:len(restored.bindings)] == restored.bindings
+    assert store.read_snapshot(
+        TARGET_SESSION_ID, thread_id=target_thread_id,
+        activation_snapshot_id=restored.activation_snapshot_id,
+    ).to_dict() == restored.to_dict()

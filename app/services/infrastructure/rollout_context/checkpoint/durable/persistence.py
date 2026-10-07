@@ -355,6 +355,13 @@ class RolloutCheckpointPersistenceMixin:
                     self._insert_message_projection(
                         connection, sequence, message_value, timestamp
                     )
+                # typed display notice 与 checkpoint 在同一事务登记；fork 的
+                # target-local notice 也从已校验的 canonical group 恢复 membership。
+                self._append_context_view_items(
+                    connection, checkpoint_ns=checkpoint_ns,
+                    item_ids=batch.display_only_item_ids, branch_id=active_branch,
+                    require_view=True, source_kind="display_only",
+                )
                 active_view_row = connection.execute(
                     "SELECT head_view_id, head_checkpoint_id FROM branches WHERE branch_id = ? AND status = 'active'",
                     (active_branch,),
@@ -390,42 +397,6 @@ class RolloutCheckpointPersistenceMixin:
                     if parent
                     else None
                 )
-                if active_view_id is not None:
-                    active_view_sequences = set(
-                        self._view_message_sequences_from_connection(
-                            connection,
-                            active_view_id,
-                        )
-                    )
-                    # rewind 创建的 view 是一次上下文边界。重放 checkpoint
-                    # 通常同时携带边界内的旧前缀和新的 assistant 消息；此时
-                    # 父 view 中被替换的 canonical suffix 不能再次继承。只在
-                    # 已有前缀与新消息同时出现时切换为 replacement，避免
-                    # 增量 ToolMessage/新用户消息丢失 rewind 前缀。
-                    active_view_kind = connection.execute(
-                        "SELECT view_kind FROM context_views WHERE view_id = ?",
-                        (active_view_id,),
-                    ).fetchone()
-                    if active_view_kind is None:
-                        raise RuntimeError(
-                            f"branches.head_view_id 引用了不存在的 context view: {active_view_id}"
-                        )
-                    active_view_kind_value = strict_text(
-                        active_view_kind[0], field="context_views.view_kind"
-                    )
-                    is_rewind_replacement = (
-                        active_view_kind_value == "rewind"
-                        and any(
-                            sequence in active_view_sequences
-                            for sequence in visible_sequences
-                        )
-                        and any(
-                            sequence not in active_view_sequences
-                            for sequence in visible_sequences
-                        )
-                    )
-                    if is_rewind_replacement:
-                        parent_view_id = None
                 channel_values = checkpoint.get("channel_values")
                 has_compaction_event = isinstance(channel_values, Mapping) and (
                     "_summarization_event" in channel_values

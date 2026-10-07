@@ -10,6 +10,8 @@ from langchain_core.messages import AIMessageChunk
 
 
 class ModelDeltaSink(Protocol):
+    async def prepare_tool_execution(self, model_call_id: str) -> None: ...
+
     async def accept_message_chunk(
         self,
         chunk: AIMessageChunk,

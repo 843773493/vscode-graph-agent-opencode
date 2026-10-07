@@ -7,9 +7,12 @@ from collections.abc import Callable, Mapping, Sequence
 from langchain_core.messages import BaseMessage
 
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.rollout_context.checkpoint.seal.preparation import (
     prepare_registered_context,
+    prepared_context_plan_id,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
@@ -18,6 +21,30 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 
 class ContextDispatchOwnerMixin:
     """只负责 provider dispatch 的 plan seal、投影和 pending handle。"""
+
+    def find_sealed_context_for_provider_creation(
+        self, session_id: str, thread_id: str, *,
+        plan_creation_idempotency_key: str, checkpoint_ns: str = "",
+    ) -> ContextAssemblySnapshot | None:
+        """按唯一 plan key 恢复已封存事实；不读取 CSM/Registry 或新增准备 handle。"""
+
+        checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
+        plan_id = prepared_context_plan_id(plan_creation_idempotency_key)
+        with self._lock:
+            registered = self._find_runtime_context_plan(
+                session_id, thread_id, plan_id, checkpoint_ns,
+            )
+            if registered is None or registered.plan_state != "sealed":
+                return None
+            snapshot = self._storage.get_context_assembly(
+                session_id, thread_id, assembly_id=registered.assembly_id,
+                checkpoint_ns=checkpoint_ns,
+            )
+        if (snapshot.session_id, snapshot.thread_id, snapshot.plan_id) != (
+            session_id, thread_id, plan_id,
+        ):
+            raise ValueError("source-mismatch: sealed provider creation owner 不一致")
+        return snapshot
 
     def prepare_context_for_provider(
         self,
@@ -36,6 +63,8 @@ class ContextDispatchOwnerMixin:
         wire_params: Mapping[str, object],
         target_format: str,
         checkpoint_ns: str = "",
+        model_call_id: str,
+        activation_snapshot: ResourceActivationSnapshotRef,
     ) -> dict[str, object]:
         """最终过滤后显式注册；稳定请求 key 必须由 middleware/runtime owner 提供。
 
@@ -57,6 +86,7 @@ class ContextDispatchOwnerMixin:
             wire_profile=wire_profile,
             wire_params=wire_params,
             target_format=target_format,
+            model_call_id=model_call_id, activation_snapshot=activation_snapshot,
             checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
         )
 

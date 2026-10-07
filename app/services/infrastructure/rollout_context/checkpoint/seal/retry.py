@@ -13,7 +13,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.manifest import 
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     ContextPlanRegistration,
 )
-from app.services.mapping.itemized.selection import VerifiedRequestBody
 
 
 def require_key(value: str, *, field: str) -> str:
@@ -161,8 +160,6 @@ def committed_retry(
         )
         for key, value in explicit_included.items():
             body = persisted.get(key)
-            if isinstance(body, VerifiedRequestBody):
-                body = body.body
             if key not in persisted or canonical_json_bytes(
                 value
             ) != canonical_json_bytes(body):

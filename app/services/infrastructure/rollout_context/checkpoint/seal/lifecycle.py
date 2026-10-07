@@ -20,6 +20,7 @@ from app.domain.itemized.assembly_snapshot import (
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
 from app.domain.itemized.identity.refs import ToolSetRef
 from app.domain.itemized.request_plan import ContextRequestPlan
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.seal.cleanup import (
     record_failed_seal,
@@ -53,7 +54,7 @@ def seal_registered_plan(
     request_input_hash: str | None,
     wire_profile: ChatWireProfile | ResponsesWireProfile | None,
     wire_params: Mapping[str, object] | None,
-    activation_snapshot=None,
+    activation_snapshot: ResourceActivationSnapshotRef | None = None,
     context_preparation: ContextSealPreparation | None = None,
 ) -> ContextAssemblySnapshot:
     require_key(seal_idempotency_key, field="seal_idempotency_key")
@@ -70,6 +71,11 @@ def seal_registered_plan(
             raise ValueError("source-mismatch: wire profile 与 seal 声明不一致")
         if context_preparation is None:
             raise ValueError("source-mismatch: wire seal 缺少封存 prefix 准备")
+        owner.require_provider_resource_activation(
+            activation_snapshot, session_id=session_id, thread_id=thread_id,
+            execution_id=assembly_options["execution_id"], turn_id=assembly_options["turn_id"],
+            model_call_id=assembly_options["model_call_id"], checkpoint_ns=checkpoint_ns,
+        )
         wire_configuration = {
             "wire_profile": asdict(wire_profile),
             "wire_params": normalize_wire_request(wire_params),

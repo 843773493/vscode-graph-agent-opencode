@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Literal
 
+from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
@@ -50,6 +51,43 @@ class RolloutViewMembershipMixin:
         if view_row is None or view_row[0] is None:
             return None
         return strict_text(view_row[0], field="branches.head_view_id")
+
+    def _writable_active_context_view_id(
+        self,
+        connection: sqlite3.Connection,
+        checkpoint_ns: str,
+        branch_id: str | None = None,
+    ) -> str:
+        """实际写入前隔离 checkpoint 引用的 head，并在同一事务发布 successor。"""
+        view_id = self._active_context_view_id(connection, checkpoint_ns, branch_id)
+        if view_id is None:
+            raise RuntimeError(f"rollout namespace 缺少 active context view: {checkpoint_ns!r}")
+        pinned = connection.execute(
+            "SELECT 1 FROM checkpoints WHERE view_id = ? UNION ALL "
+            "SELECT 1 FROM checkpoint_channels WHERE context_view_id = ? LIMIT 1",
+            (view_id, view_id),
+        ).fetchone()
+        if pinned is None:
+            return view_id
+        branch = connection.execute(
+            "SELECT branch_id FROM branches WHERE head_view_id = ? AND status = 'active'",
+            (view_id,),
+        ).fetchone()
+        if branch is None:
+            raise RuntimeError(f"active context view 缺少所属 branch: {view_id}")
+        active_branch = strict_text(branch[0], field="branches.branch_id")
+        timestamp = utc_now_text()
+        successor = self._create_view(
+            connection, active_branch, view_id, (), timestamp, view_kind="active"
+        )
+        published = connection.execute(
+            "UPDATE branches SET head_view_id = ?, updated_at = ? "
+            "WHERE branch_id = ? AND head_view_id = ? AND status = 'active'",
+            (successor, timestamp, active_branch, view_id),
+        )
+        if published.rowcount != 1:
+            raise RuntimeError(f"active successor head 发布失败: {active_branch}/{view_id}")
+        return successor
 
     def _append_context_view_items(
         self,
@@ -101,15 +139,7 @@ class RolloutViewMembershipMixin:
                 "active view membership 缺少 canonical catalog item: "
                 + ",".join(missing)
             )
-        next_ordinal = strict_non_negative_int(
-            connection.execute(
-                "SELECT COALESCE(MAX(logical_item_ordinal), -1) + 1 "
-                "FROM context_view_items WHERE view_id = ?",
-                (view_id,),
-            ).fetchone()[0],
-            field="context_view_items.logical_item_ordinal",
-        )
-        inserted = False
+        pending: list[str] = []
         for item_id, semantic_kind, turn_id, turn_scope, execution_id in catalog_rows:
             item_id = strict_text(item_id, field="item_catalog.item_id")
             semantic_kind = strict_text(
@@ -173,22 +203,31 @@ class RolloutViewMembershipMixin:
                         f"view_id={view_id}, item_id={item_id}, source_kind={source_kind}"
                     )
                 continue
-            try:
-                cursor = connection.execute(
-                    "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
-                    "VALUES (?, ?, ?, 1, ?)",
-                    (view_id, item_id, next_ordinal, source_kind),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError("active view item membership 插入未产生一条记录")
-            except sqlite3.IntegrityError as error:
-                raise RuntimeError(
-                    "active view item ordinal 冲突，拒绝静默跳过: "
-                    f"view_id={view_id}, item_id={item_id}, ordinal={next_ordinal}"
-                ) from error
-            inserted = True
+            pending.append(item_id)
+        if not pending:
+            return False
+        view_id = self._writable_active_context_view_id(
+            connection, checkpoint_ns, branch_id
+        )
+        next_ordinal = strict_non_negative_int(
+            connection.execute(
+                "SELECT COALESCE(MAX(logical_item_ordinal), -1) + 1 "
+                "FROM context_view_items WHERE view_id = ?",
+                (view_id,),
+            ).fetchone()[0],
+            field="context_view_items.logical_item_ordinal",
+        )
+        for item_id in pending:
+            cursor = connection.execute(
+                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
+                "VALUES (?, ?, ?, 1, ?)",
+                (view_id, item_id, next_ordinal, source_kind),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"active view item membership 插入失败: {view_id}/{item_id}")
             next_ordinal += 1
-        return inserted
+        return True
+
 
 
 __all__ = ["RolloutViewMembershipMixin"]

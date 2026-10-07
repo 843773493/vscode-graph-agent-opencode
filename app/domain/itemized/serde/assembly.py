@@ -123,7 +123,6 @@ def context_assembly_snapshot_from_dict(
                 "source_revision",
                 "content_length",
                 "content_hash",
-                "redacted_stable_digest",
                 "base_delta_role",
                 "source_overlay_epoch",
                 "overlay_from_revision",
@@ -211,11 +210,6 @@ def context_assembly_snapshot_from_dict(
                 # included/loss 语义并绕过 omission gate。
                 content_hash=_optional_string(
                     raw_entry, "content_hash", "ContextSelectionEntry.content_hash"
-                ),
-                redacted_stable_digest=_optional_string(
-                    raw_entry,
-                    "redacted_stable_digest",
-                    "ContextSelectionEntry.redacted_stable_digest",
                 ),
                 base_delta_role=_required_string(
                     raw_entry["base_delta_role"],

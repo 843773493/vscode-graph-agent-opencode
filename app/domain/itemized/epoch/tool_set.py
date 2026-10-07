@@ -28,7 +28,7 @@ def tool_set_manifest_compatibility_key(ref: ToolSetRef) -> str:
     不能把不可见的 policy 当成空对象重新散列。
     """
     ref.validate_manifest()
-    manifest_token = ref.content_hash or ref.redacted_stable_digest
+    manifest_token = ref.content_hash
     return toolset_compatibility_key(
         ref, policy_hash=sha256_jcs({"tool_manifest": manifest_token}),
     )

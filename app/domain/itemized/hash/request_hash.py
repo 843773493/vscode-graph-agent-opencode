@@ -50,14 +50,12 @@ def context_request_hash(
                     "source_revision": entry.source_revision,
                     "content_length": entry.content_length,
                     "content_hash": entry.content_hash,
-                    "redacted_stable_digest": entry.redacted_stable_digest,
                     "base_delta_role": entry.base_delta_role,
                     "source_overlay_epoch": entry.source_overlay_epoch,
                     "overlay_from_revision": entry.overlay_from_revision,
                     "overlay_to_revision": entry.overlay_to_revision,
                     "overlay_diff_hash": entry.overlay_diff_hash,
                     "contribution_ordinal": entry.contribution_ordinal,
-                    "detail_ref": entry.detail_ref.to_dict() if entry.detail_ref is not None else None,
                     "contribution_id": entry.contribution_id,
                     "omission_reason": entry.omission_reason,
                     "loss": list(entry.loss),
@@ -78,14 +76,12 @@ def context_request_hash(
             "source_revision": entry.source_revision,
             "content_length": entry.content_length,
             "content_hash": entry.content_hash,
-            "redacted_stable_digest": entry.redacted_stable_digest,
             "base_delta_role": entry.base_delta_role,
             "source_overlay_epoch": entry.source_overlay_epoch,
             "overlay_from_revision": entry.overlay_from_revision,
             "overlay_to_revision": entry.overlay_to_revision,
             "overlay_diff_hash": entry.overlay_diff_hash,
             "contribution_ordinal": entry.contribution_ordinal,
-            "detail_ref": entry.detail_ref.to_dict() if entry.detail_ref is not None else None,
             "contribution_id": entry.contribution_id,
             "ref": {
                 "ref_type": entry.ref.ref_type,
@@ -95,7 +91,6 @@ def context_request_hash(
                 "source_revision": entry.ref.source_revision,
                 "content_length": entry.ref.content_length,
                 "content_hash": entry.ref.content_hash,
-                "redacted_stable_digest": entry.ref.redacted_stable_digest,
             },
         }
         for entry in plan.selection
@@ -119,7 +114,6 @@ def context_request_hash(
                     "source_revision": ref.source_revision,
                     "content_length": ref.content_length,
                     "content_hash": ref.content_hash,
-                    "redacted_stable_digest": ref.redacted_stable_digest,
                     "overlay_from_revision": ref.overlay_from_revision,
                     "overlay_to_revision": ref.overlay_to_revision,
                     "overlay_diff_hash": ref.overlay_diff_hash,
@@ -137,7 +131,6 @@ def context_request_hash(
                     "source_revision": contribution.source_revision,
                     "content_length": contribution.content_length,
                     "content_hash": contribution.content_hash,
-                    "redacted_stable_digest": contribution.redacted_stable_digest,
                     "contribution_ordinal": contribution.contribution_ordinal,
                 }
                 for contribution in sorted(
@@ -151,7 +144,6 @@ def context_request_hash(
                     "source_revision": ref.source_revision,
                     "content_length": ref.content_length,
                     "content_hash": ref.content_hash,
-                    "redacted_stable_digest": ref.redacted_stable_digest,
                     "tool_set_schema": ref.tool_set_schema,
                     "tool_set_schema_version": ref.tool_set_schema_version,
                     "tool_policy_version": ref.tool_policy_version,
@@ -164,8 +156,7 @@ def context_request_hash(
             ],
             "selection": normalized_selection,
             "tool_snapshot": (
-                # tool_snapshot 是 typed ToolSet 声明入口；只有这里允许把
-                # parameters/input_schema 当声明子树，普通正文不获得豁免。
+                # ToolSet 与真实 wire 使用同一 exact JSON 语义，不改写正文。
                 project_declared_tools(list(plan.tool_snapshot))
                 if plan.plan_state != "sealed"
                 else []

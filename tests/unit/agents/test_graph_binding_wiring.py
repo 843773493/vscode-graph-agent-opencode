@@ -17,6 +17,9 @@ from app.agents.graph_binding import (
     resolve_graph_binding,
 )
 from app.runtime.agent_runtime import build_session_agent_runtime
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 
@@ -42,6 +45,8 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
+            resource_registry=ResourceRegistry(),
+            resource_activation=MagicMock(),
             graph_binding_store=store,
         )
 
@@ -69,6 +74,8 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=[],
+            resource_registry=ResourceRegistry(),
+            resource_activation=MagicMock(),
             graph_binding_store=MagicMock(spec=GraphBindingStorePort),
             owns_thread=False,
         )
@@ -94,6 +101,7 @@ def test_execution_service_passes_store_to_runtime() -> None:
         session_catalog=MagicMock(),
         graph_binding_store=store,
         residency_tracker=ThreadResidencyTracker(),
+        resource_activation_factory=MagicMock(),
     )
 
     with patch(
@@ -108,6 +116,8 @@ def test_execution_service_passes_store_to_runtime() -> None:
             preferred_provider_id=None,
             include_team_tools=False,
             mcp_tools=[],
+            resource_registry=ResourceRegistry(),
+            resource_activation=MagicMock(),
         )
 
     assert build_runtime.call_args.kwargs["graph_binding_store"] is store

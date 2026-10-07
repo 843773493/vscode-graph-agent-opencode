@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from inspect import getclosurevars
 from typing import Any
+from uuid import uuid4
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT
@@ -14,6 +17,8 @@ from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.providers.wire_finalize import (
+    ChatWireProfile,
+    ResponsesWireProfile,
     chat_wire_params,
     chat_wire_profile,
     responses_wire_params,
@@ -25,9 +30,15 @@ from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
+)
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.resource_activation.contracts import (
+    require_current_execution_resource_activation,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,6 +119,21 @@ def _request_wire_options(bound_model: object) -> dict[str, Any]:
     return {key: value for key, value in kwargs.items() if key != "tools"}
 
 
+@dataclass(frozen=True, slots=True)
+class _ProviderPreparation:
+    """本次 request 的纯准备值；持久事实始终由 Saver 持有。"""
+
+    admission: ExecutionAdmission
+    checkpoint_ns: str
+    creation_key: str
+    seal_key: str
+    provider_version: str
+    target_format: str
+    wire_profile: ChatWireProfile | ResponsesWireProfile
+    wire_params: Mapping[str, object]
+    include_structured_output: bool
+
+
 class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
     """用构建时的 SessionThread owner 转发 Saver sealed selection。"""
 
@@ -115,6 +141,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self, *, checkpointer: object, session_id: str, thread_id: str,
         context_source_manager: ContextSourceManager,
         tool_set_producer: RegisteredToolSetProducer,
+        resource_activation: ResourceActivationCoordinator | None,
     ) -> None:
         if not session_id or not thread_id:
             raise ValueError("itemized context middleware 需要显式 SessionThread owner")
@@ -123,6 +150,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self._thread_id = thread_id
         self._context_source_manager = context_source_manager
         self._tool_set_producer = tool_set_producer
+        self._resource_activation = resource_activation
         self._graph_model_binding: Callable[[ModelRequest[Any]], tuple[object, object]] | None = None
 
     def bind_graph(self, graph: CompiledStateGraph) -> None:
@@ -145,7 +173,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         self._tool_set_producer.freeze_structured_output_tools(tools)
         self._graph_model_binding = bind_model
 
-    def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+    def _request_preparation(self, request: ModelRequest[Any]) -> _ProviderPreparation:
         if request.system_message is not None:
             raise RuntimeError("instruction-producer-unregistered: 最终请求出现未登记 system prompt")
         session_id = self._session_id
@@ -217,36 +245,90 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
                 if hasattr(message, "tool_call_id")
             ],
         )
-        prepared = prepare(
-            session_id,
-            thread_id,
-            turn_id=turn_id,
-            execution_id=admission.execution_id,
-            plan_creation_idempotency_key=creation_key,
-            seal_idempotency_key=seal_key,
+        return _ProviderPreparation(
+            admission=admission, checkpoint_ns=checkpoint_ns,
+            creation_key=creation_key, seal_key=seal_key,
+            provider_version=provider_version, target_format=target_format,
+            wire_profile=wire_profile, wire_params=wire_params,
+            include_structured_output=include_structured_output,
+        )
+
+    def _frozen_preparation(
+        self, context: _ProviderPreparation,
+    ) -> tuple[ContextAssemblySnapshot | None, ResourceActivationSnapshotRef]:
+        if self._resource_activation is None:
+            raise RuntimeError("resource-activation-unavailable: inspection graph 不得执行模型调用")
+        admission = context.admission
+        sealed = self._checkpointer.find_sealed_context_for_provider_creation(
+            admission.session_id, admission.thread_id,
+            plan_creation_idempotency_key=context.creation_key,
+            checkpoint_ns=context.checkpoint_ns,
+        )
+        if sealed is not None:
+            frozen = self._checkpointer.load_sealed_resource_activation(
+                admission.session_id, thread_id=admission.thread_id,
+                assembly_id=sealed.assembly_id,
+                plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+                checkpoint_ns=context.checkpoint_ns,
+            )
+            return sealed, frozen
+        return None, require_current_execution_resource_activation(admission)
+
+    def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+        context = self._request_preparation(request)
+        sealed, frozen = self._frozen_preparation(context)
+        callback_id = str(uuid4())
+        if sealed is None and frozen.activation_policy.has_model_call_boundary():
+            # 同步接口只允许在无运行事件循环时等待；sealed 重入始终仅只读恢复。
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                frozen = asyncio.run(self._resource_activation.prepare_model_call(
+                    parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
+                ))
+            else:
+                raise RuntimeError("同步 model-call preparation 不能阻塞运行中的事件循环")
+        return self._complete_preparation(request, context, sealed, frozen, callback_id)
+
+    async def _aprepare(self, request: ModelRequest[Any]) -> dict[str, object]:
+        context = self._request_preparation(request)
+        sealed, frozen = self._frozen_preparation(context)
+        callback_id = str(uuid4())
+        if sealed is None:
+            frozen = await self._resource_activation.prepare_model_call(
+                parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,
+            )
+        return self._complete_preparation(request, context, sealed, frozen, callback_id)
+
+    def _complete_preparation(
+        self, request: ModelRequest[Any], context: _ProviderPreparation,
+        sealed: ContextAssemblySnapshot | None, activation: ResourceActivationSnapshotRef,
+        callback_id: str,
+    ) -> dict[str, object]:
+        admission = context.admission
+        session_id, thread_id, turn_id = admission.session_id, admission.thread_id, admission.turn_id
+        checkpoint_ns = context.checkpoint_ns
+        include_structured_output = context.include_structured_output
+        prepared = self._checkpointer.prepare_context_for_provider(
+            session_id, thread_id,
+            turn_id=turn_id, execution_id=admission.execution_id,
+            plan_creation_idempotency_key=context.creation_key,
+            seal_idempotency_key=context.seal_key,
             request_messages=request.messages,
             context_source_manager=self._context_source_manager,
             tool_set_supplier=lambda: self._tool_set_producer.snapshot(include_structured_output),
-            provider_version=provider_version,
-            wire_profile=wire_profile,
-            wire_params=wire_params,
-            target_format=target_format,
-            checkpoint_ns=checkpoint_ns,
+            provider_version=context.provider_version,
+            wire_profile=context.wire_profile, wire_params=context.wire_params,
+            target_format=context.target_format, checkpoint_ns=checkpoint_ns,
+            model_call_id=callback_id if sealed is None else sealed.model_call_id,
+            activation_snapshot=activation,
         )
+        prepared["callback_model_call_id"] = callback_id
+        prepared["activation_snapshot"] = activation
         prepared["include_structured_output"] = include_structured_output
-        get_assembly = getattr(self._checkpointer, "get_context_assembly", None)
-        if not callable(get_assembly):
-            raise TypeError("source-mismatch: Saver 缺少已提交 assembly 读取端口")
-        try:
-            snapshot = get_assembly(
-                session_id, thread_id, assembly_id=prepared["assembly_id"],
-                checkpoint_ns=checkpoint_ns,
-            )
-        except KeyError as error:
-            raise ValueError(
-                "source-mismatch: Saver 刚提交的 assembly 在当前 checkpoint namespace 中缺失: "
-                f"assembly_id={prepared['assembly_id']!r}, checkpoint_ns={checkpoint_ns!r}"
-            ) from error
+        # prepare 返回同一已提交、已验证的 assembly，禁止重新读取另一份
+        # snapshot 后把它和本次消息/工具投影拼在一起。
+        snapshot = prepared.get("snapshot")
         if not isinstance(snapshot, ContextAssemblySnapshot):
             raise TypeError("source-mismatch: Saver 未返回已提交 ContextAssemblySnapshot")
         if (
@@ -286,7 +368,11 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         request: ModelRequest[Any],
     ) -> tuple[dict[str, object], list[Any], list[Any]]:
         """执行 provider projection，校验 messages/tools 结构并记录结果与能力损失。"""
-        prepared = self._prepare(request)
+        return self._project_prepared(request, self._prepare(request))
+
+    def _project_prepared(
+        self, request: ModelRequest[Any], prepared: dict[str, object],
+    ) -> tuple[dict[str, object], list[Any], list[Any]]:
         messages = prepared.get("messages")
         tools = prepared.get("tools")
         if not isinstance(messages, list) or not isinstance(tools, list):
@@ -328,6 +414,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         # middleware 的 handler 返回路径提前清理。
         with sealed_assembly_dispatch_scope(
             prepared["snapshot"], native_projection=prepared.get("native_projection"),
+            callback_model_call_id=prepared["callback_model_call_id"],
         ):
             return handler(
                 request.override(
@@ -347,11 +434,12 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
         if callable(reconcile):
             for message in request.messages:
                 await reconcile(message)
-        prepared, messages, tools = self._prepare_projection(request)
+        prepared, messages, tools = self._project_prepared(request, await self._aprepare(request))
         # 同步包装器的相同生命周期约束：真实 model-start event 消费前不
         # 得删除 Saver-owned prepared handle。
         with sealed_assembly_dispatch_scope(
             prepared["snapshot"], native_projection=prepared.get("native_projection"),
+            callback_model_call_id=prepared["callback_model_call_id"],
         ):
             return await handler(
                 request.override(

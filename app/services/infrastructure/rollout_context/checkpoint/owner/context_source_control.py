@@ -26,9 +26,13 @@ from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import CommitKind
 from app.domain.itemized.errors import ItemSchemaError
-from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_GUIDANCE_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+)
 from app.services.infrastructure.rollout_context.assembly.validation import json_text
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceControlState,
@@ -112,6 +116,56 @@ def _state_from_row(row: tuple[object, ...]) -> ContextSourceControlState:
     return state
 
 
+def _validate_activation_guidance(
+    connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot,
+    previous: ContextAssemblySnapshot | None,
+) -> None:
+    """同一 assembly 事务核 exact guidance 与唯一 activation 父行，不更新 CSM 控制行。"""
+    rows = connection.execute(
+        "SELECT r.revision, r.content_hash, r.availability FROM resource_activation_assembly_bindings a "
+        "JOIN resource_activation_bindings r ON r.activation_snapshot_id = a.activation_snapshot_id "
+        "AND r.session_id = a.session_id AND r.thread_id = a.thread_id "
+        "WHERE a.assembly_id = ? AND a.session_id = ? AND a.thread_id = ? AND r.resource_id = ?",
+        (snapshot.assembly_id, snapshot.session_id, snapshot.thread_id, MCP_TOOL_CATALOG_RESOURCE_ID),
+    ).fetchall()
+    if len(rows) > 1:
+        raise ItemSchemaError("context-source-seal-conflict: MCP activation parent 不唯一")
+    binding = snapshot.seal_binding
+    frames = tuple(frame for frame in binding.prefix.state.frames if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID)
+    previous_frames = () if previous is None or previous.seal_binding is None else tuple(
+        frame for frame in previous.seal_binding.prefix.state.frames
+        if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
+    )
+    if not rows and not previous_frames and not frames:
+        return
+    if not frames:
+        raise ItemSchemaError("context-source-seal-conflict: activation guidance 缺少 selected frame")
+    frame = frames[-1]
+    expected_revision, expected_hash = (
+        (rows[0][0], rows[0][1]) if rows else
+        (sha256_jcs({"content": ""}), sha256_jcs({"content": ""}))
+    )
+    if (
+        frame.role != "user" or frame.payload_kind != "text"
+        or not isinstance(frame.content, str)
+        or frame.item_ref.source_revision != expected_revision
+        or sha256_jcs({"content": frame.content}) != expected_hash
+        or (rows and rows[0][2] != "available")
+        or (not rows and frame.content != "")
+        or any(source.source_identity == MCP_GUIDANCE_SOURCE_ID for source in (() if binding.root is None else binding.root.sources))
+    ):
+        raise ItemSchemaError("context-source-seal-conflict: guidance 正文/revision 与冻结 activation 不一致")
+    previous_revision = previous_frames[-1].item_ref.source_revision if previous_frames else None
+    applied = tuple(source for source in binding.source_revisions if source.source_id == MCP_GUIDANCE_SOURCE_ID)
+    required = previous_revision != expected_revision or binding.prefix.consumed_transition is not None
+    if len(applied) != int(required) or any(
+        source.revision != expected_revision or source.previous_revision != previous_revision
+        or source.expected_control_revision is not None
+        for source in applied
+    ):
+        raise ItemSchemaError("context-source-seal-conflict: guidance applied revision 与原 assembly 不一致")
+
+
 class ContextSourceControlStorageMixin:
     """唯一 ContextStore owner 侧的 CSM 控制状态持久化实现。
 
@@ -192,7 +246,10 @@ class ContextSourceControlStorageMixin:
                 raise ItemSchemaError("context-seal-epoch-conflict: rebuild ordinal 必须连续")
         elif binding.prefix.state.epoch.ordinal != 1:
             raise ItemSchemaError("context-seal-epoch-conflict: 首个 assembly 必须是 initial epoch")
+        _validate_activation_guidance(connection, snapshot, previous)
         for source in binding.source_revisions:
+            if source.source_id == MCP_GUIDANCE_SOURCE_ID:
+                continue
             row = connection.execute(
                 f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
                 "WHERE session_id = ? AND thread_id = ? AND source_id = ?",

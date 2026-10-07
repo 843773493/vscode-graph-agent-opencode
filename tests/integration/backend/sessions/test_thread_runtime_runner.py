@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
@@ -10,9 +11,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from app.agents import agent_factory
 from app.agents.graph_binding import (
@@ -23,25 +27,55 @@ from app.agents.graph_binding import (
     compute_capability_profile_hash,
 )
 from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
+from app.agents.sealed_assembly_dispatch import (
+    SealedAssemblyDispatch,
+    read_sealed_assembly_dispatch,
+)
+from app.agents.skill_runtime import (
+    build_workspace_skill_catalog,
+    resolve_bundled_skill_groups,
+)
+from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.core.execution_admission_context import (
     current_execution_admission,
+    execution_admission_scope,
     require_current_execution_admission,
 )
 from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import workspace_context
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
-from app.core.session_thread_context import current_session_thread_owner
+from app.core.session_thread_context import (
+    current_session_thread_owner,
+    session_thread_owner_scope,
+)
 from app.core.thread_creation import ThreadCreationService
 from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogUnavailableError,
+)
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
 )
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
+)
+from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.session_title_service import SessionTitleService
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
@@ -91,6 +125,10 @@ class RuntimeCase:
     model_requests: list[dict[str, object]] = field(default_factory=list)
     bindings: list[GraphBinding] = field(default_factory=list)
     build_scopes: list[LifetimeScope] = field(default_factory=list)
+    resource_registries: list[ResourceRegistry] = field(default_factory=list)
+    model_dispatches: list[SealedAssemblyDispatch] = field(default_factory=list)
+    response_chunks: Callable[[dict[str, object]], list[dict[str, object]]] | None = None
+    shutdown_owned_by_lifespan: bool = False
 
     @property
     def tracker(self):
@@ -98,9 +136,13 @@ class RuntimeCase:
 
 
 @pytest.fixture
-async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch):
+async def runtime_case(
+    runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+):
     """只替换外部模型；compiler、CSM、reactor、Saver 与 Runner 都用生产实现。"""
-    case = RuntimeCase(runner_case)
+    case = RuntimeCase(
+        runner_case, shutdown_owned_by_lifespan=getattr(request, "param", "fixture") == "lifespan",
+    )
     resolve = GRAPH_FACTORY_REGISTRY.resolve
     reactor_type = agent_factory.ContextSourceReactor
 
@@ -114,6 +156,7 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
             assert owner is not None and (owner.session_id, owner.thread_id) == pair
             scope = kwargs["reactor_lifetime_scope"]
             case.build_scopes.append(scope)
+            case.resource_registries.append(kwargs["resource_registry"])
             graph = builder(**kwargs)
             assert isinstance(graph, CompiledStateGraph)
             case.compiled.append((pair, graph, scope))
@@ -132,6 +175,15 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
         received_finish_reason: str | None = None
 
         def __init__(self, payload: dict[str, object]):
+            self.chunks = (
+                case.response_chunks(payload) if case.response_chunks is not None else [
+                    {"choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "真实编译图回复"},
+                    }]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                ]
+            )
             self.logging_obj = SimpleNamespace(model_call_details={
                 "model": payload["model"],
                 "custom_llm_provider": payload["custom_llm_provider"],
@@ -143,16 +195,11 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
             })
 
         async def __aiter__(self) -> AsyncIterator[dict[str, object]]:
-            yield {
-                "choices": [{
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": "真实编译图回复"},
-                }],
-            }
-            self.received_finish_reason = "stop"
-            yield {
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
+            for chunk in self.chunks:
+                finish_reason = chunk["choices"][0].get("finish_reason")
+                if finish_reason is not None:
+                    self.received_finish_reason = finish_reason
+                yield chunk
 
     class RuntimeProtocolModel(BoxteamLiteLLMChatModel):
         admission_observer: Callable[[ExecutionAdmission], None]
@@ -160,6 +207,9 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
 
         async def acompletion_with_retry(self, run_manager=None, **kwargs):
             self._validate_completion_dispatch(kwargs)
+            dispatch = read_sealed_assembly_dispatch(invocation_purpose="agent")
+            assert dispatch is not None
+            case.model_dispatches.append(dispatch)
             self.admission_observer(require_current_execution_admission())
             self.request_observer(deepcopy(kwargs))
             return ModelReplyStream(kwargs)
@@ -182,30 +232,34 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", recording_resolve)
     monkeypatch.setattr(agent_factory, "ContextSourceReactor", recording_reactor)
     monkeypatch.setattr(agent_factory, "build_model_from_provider", model_from_provider)
-    await runner_case.container.mcp_catalog_owner.start()
-    await runner_case.container.workspace_file_resource_registry.start()
+    if not case.shutdown_owned_by_lifespan:
+        await runner_case.container.mcp_catalog_owner.start()
+        await runner_case.container.workspace_file_resource_registry.start()
     try:
         yield case
     finally:
-        with workspace_context(
-            runner_case.container.workspace_service.workspace_id,
-            runner_case.workspace,
-            session_catalog=runner_case.container.session_catalog,
-        ):
-            runner_case.container.job_service.close_admission()
-            await runner_case.container.job_service.force_interrupt_active(
-                reason="测试结束"
-            )
-            await runner_case.container.agent_execution_service.shutdown()
-            await runner_case.container.resource_platform.close()
-            await runner_case.container.mcp_catalog_owner.shutdown()
-            runner_case.container.workspace_source_owner.close()
+        if not case.shutdown_owned_by_lifespan:
+            with workspace_context(
+                runner_case.container.workspace_service.workspace_id,
+                runner_case.workspace,
+                session_catalog=runner_case.container.session_catalog,
+            ):
+                runner_case.container.job_service.close_admission()
+                await runner_case.container.job_service.force_interrupt_active(
+                    reason="测试结束"
+                )
+                await runner_case.container.agent_execution_service.shutdown()
+                await runner_case.container.resource_platform.close()
+                await runner_case.container.mcp_catalog_owner.shutdown()
+                runner_case.container.workspace_source_owner.close()
 
 
-async def _complete_job(case: RuntimeCase, session_id: str, thread_id: str):
+async def _complete_job(
+    case: RuntimeCase, session_id: str, thread_id: str, *, timeout_seconds: float = 8,
+):
     job = await _start_job(case.runner, "user", session_id, thread_id)
     assert job.task is not None
-    await asyncio.wait_for(asyncio.shield(job.task), 8)
+    await asyncio.wait_for(asyncio.shield(job.task), timeout_seconds)
     assert job.status == JobStatus.completed, job.error_message
     return case.runner.saver.execution_admission_for_job(
         session_id,
@@ -384,42 +438,48 @@ async def test_real_generation_change_waits_for_lease_and_scope_close_and_fences
     session_id, thread_id = await _session(case.runner)
     admission = _admit(case.runner, session_id, thread_id, "user")
     first = await _lease(case, admission)
-    graph = first.runtime
-    scope = case.compiled[0][2]
-    entered, release = asyncio.Event(), asyncio.Event()
+    async with first:
+        graph = first.runtime
+        scope = case.compiled[0][2]
+        entered, release = asyncio.Event(), asyncio.Event()
 
-    async def held_close():
-        entered.set()
-        await release.wait()
+        async def held_close():
+            entered.set()
+            await release.wait()
 
-    scope.register(held_close, label="实际 scope 关闭屏障")
-    next_admission = _admit(case.runner, session_id, thread_id, "internal")
-    pending = asyncio.create_task(_lease(case, next_admission, read_file=False))
-    await asyncio.sleep(0)
-    assert not pending.done() and not entered.is_set()
-    assert first.runtime is graph and len(case.compiled) == 1
-    first.release()
-    await asyncio.wait_for(entered.wait(), 3)
-    assert not pending.done() and not case.reactors[0].released
-    release.set()
-    second = await asyncio.wait_for(pending, 8)
-    try:
-        assert second.generation == first.generation + 1
-        assert second.runtime is not graph and scope.state == "closed"
-        assert case.reactors[0].released and not case.reactors[1].released
-        assert case.bindings == [DEEP_AGENT_GRAPH_BINDING, DEEP_AGENT_GRAPH_BINDING]
-        assert case.reactors[0].ingest_notifications() == 0
-        assert (
-            case.reactors[0]._handle_event(
-                ResourceObservation("file:late", "rev-late", True)
-            )
-            == 0
-        )
-        assert not case.tracker.is_current_generation(
-            session_id, thread_id, first.generation
-        )
-    finally:
-        second.release()
+        scope.register(held_close, label="实际 scope 关闭屏障")
+        next_admission = _admit(case.runner, session_id, thread_id, "internal")
+        pending = asyncio.create_task(_lease(case, next_admission, read_file=False))
+        try:
+            await asyncio.sleep(0)
+            assert not pending.done() and not entered.is_set()
+            assert first.runtime is graph and len(case.compiled) == 1
+            first.release()
+            await asyncio.wait_for(entered.wait(), 3)
+            assert not pending.done() and not case.reactors[0].released
+            release.set()
+            second = await asyncio.wait_for(pending, 8)
+            try:
+                assert second.generation == first.generation + 1
+                assert second.runtime is not graph and scope.state == "closed"
+                assert case.reactors[0].released and not case.reactors[1].released
+                assert case.bindings == [DEEP_AGENT_GRAPH_BINDING, DEEP_AGENT_GRAPH_BINDING]
+                assert case.reactors[0].ingest_notifications() == 0
+                assert (
+                    case.reactors[0]._handle_event(
+                        ResourceObservation("file:late", "rev-late", True)
+                    )
+                    == 0
+                )
+                assert not case.tracker.is_current_generation(
+                    session_id, thread_id, first.generation
+                )
+            finally:
+                second.release()
+        finally:
+            first.release()
+            release.set()
+            (await pending).release()
 
 
 @pytest.mark.asyncio
@@ -429,28 +489,30 @@ async def test_real_scope_close_failure_remains_unloading_until_retry(
     case = runtime_case
     session_id, thread_id = await _session(case.runner)
     first = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
-    scope = case.compiled[0][2]
-    attempts = 0
+    async with first:
+        scope = case.compiled[0][2]
+        attempts = 0
 
-    def fail_once():
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("真实 runtime scope 释放失败")
+        def fail_once():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("真实 runtime scope 释放失败")
 
-    scope.register(fail_once, label="失败资源")
-    first.release()
-    admission = _admit(case.runner, session_id, thread_id, "internal")
-    with pytest.raises(ExceptionGroup, match="LifetimeScope close"):
-        await _lease(case, admission, read_file=False)
-    tracker = case.tracker
-    assert tracker.snapshot(session_id, thread_id).residency == "unloading"
-    assert not tracker.is_current_generation(session_id, thread_id, first.generation)
-    assert scope.state == "close_failed" and case.reactors[0].released
-    second = await _lease(case, admission, read_file=False)
-    assert attempts == 2 and scope.state == "closed"
-    assert second.generation == 2 and len(case.compiled) == 2
-    second.release()
+        scope.register(fail_once, label="失败资源")
+        first.release()
+        admission = _admit(case.runner, session_id, thread_id, "internal")
+        with pytest.raises(ExceptionGroup, match="LifetimeScope close"):
+            await _lease(case, admission, read_file=False)
+        tracker = case.tracker
+        assert tracker.snapshot(session_id, thread_id).residency == "unloading"
+        assert not tracker.is_current_generation(session_id, thread_id, first.generation)
+        assert scope.state == "close_failed" and case.reactors[0].released
+        second = await _lease(case, admission, read_file=False)
+        async with second:
+            assert attempts == 2 and scope.state == "closed"
+            assert second.generation == 2 and len(case.compiled) == 2
+            second.release()
 
 
 @pytest.mark.asyncio
@@ -559,56 +621,58 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
     service = case.runner.container.agent_execution_service
     session_id, main_thread_id = await _session(case.runner)
     main = await _lease(case, _admit(case.runner, session_id, main_thread_id, "user"))
-    child_id = await _child(case, session_id)
-    child = await _lease(case, _admit(case.runner, session_id, child_id, "internal"))
-    main.release()
-    child.release()
-    failed_scope, healthy_scope = (entry[2] for entry in case.compiled)
-    allow_close = asyncio.Event()
-    wake_worker = asyncio.Event()
-    original_sleep = asyncio.sleep
-    original_sweep = case.tracker.sweep
-    sweep_calls = 0
+    async with main:
+        child_id = await _child(case, session_id)
+        child = await _lease(case, _admit(case.runner, session_id, child_id, "internal"))
+        async with child:
+            main.release()
+            child.release()
+            failed_scope, healthy_scope = (entry[2] for entry in case.compiled)
+            allow_close = asyncio.Event()
+            wake_worker = asyncio.Event()
+            original_sleep = asyncio.sleep
+            original_sweep = case.tracker.sweep
+            sweep_calls = 0
 
-    def held_failure():
-        if not allow_close.is_set():
-            raise RuntimeError("真实 generation scope 关闭失败")
+            def held_failure():
+                if not allow_close.is_set():
+                    raise RuntimeError("真实 generation scope 关闭失败")
 
-    async def worker_sleep(seconds):
-        if seconds == 60:
-            await wake_worker.wait()
-        else:
-            await original_sleep(seconds)
+            async def worker_sleep(seconds):
+                if seconds == 60:
+                    await wake_worker.wait()
+                else:
+                    await original_sleep(seconds)
 
-    async def fail_worker_sweep():
-        nonlocal sweep_calls
-        sweep_calls += 1
-        if sweep_calls == 2:
-            raise RuntimeError("真实 residency worker 失败")
-        return await original_sweep()
+            async def fail_worker_sweep():
+                nonlocal sweep_calls
+                sweep_calls += 1
+                if sweep_calls == 2:
+                    raise RuntimeError("真实 residency worker 失败")
+                return await original_sweep()
 
-    failed_scope.register(held_failure, label="待重试资源")
-    monkeypatch.setattr(asyncio, "sleep", worker_sleep)
-    monkeypatch.setattr(case.tracker, "sweep", fail_worker_sweep)
-    await service.start()
-    worker = service._sweep_task
-    assert worker is not None
-    wake_worker.set()
-    with pytest.raises(RuntimeError, match="真实 residency worker"):
-        await asyncio.wait_for(asyncio.shield(worker), 3)
-    with pytest.raises(RuntimeError, match="真实 residency worker"):
-        service._check_sweeper()
-    with pytest.raises(ExceptionGroup, match="ThreadRuntime owner") as failure:
-        await asyncio.wait_for(service.shutdown(), 3)
-    assert str(failure.value.exceptions[0]) == "真实 residency worker 失败"
-    assert failed_scope.state == "close_failed" and healthy_scope.state == "closed"
-    assert case.tracker._states[(session_id, main_thread_id)].runtime.lifetime_scope is failed_scope
-    healthy = case.tracker.snapshot(session_id, child_id)
-    assert healthy.residency == "cold" and healthy.execution_state == "idle"
-    assert all(reactor.released for reactor in case.reactors)
-    allow_close.set()
-    await asyncio.wait_for(service.shutdown(), 3)
-    assert failed_scope.state == "closed" and service._sweep_task is None
+            failed_scope.register(held_failure, label="待重试资源")
+            monkeypatch.setattr(asyncio, "sleep", worker_sleep)
+            monkeypatch.setattr(case.tracker, "sweep", fail_worker_sweep)
+            await service.start()
+            worker = service._sweep_task
+            assert worker is not None
+            wake_worker.set()
+            with pytest.raises(RuntimeError, match="真实 residency worker"):
+                await asyncio.wait_for(asyncio.shield(worker), 3)
+            with pytest.raises(RuntimeError, match="真实 residency worker"):
+                service._check_sweeper()
+            with pytest.raises(ExceptionGroup, match="ThreadRuntime owner") as failure:
+                await asyncio.wait_for(service.shutdown(), 3)
+            assert str(failure.value.exceptions[0]) == "真实 residency worker 失败"
+            assert failed_scope.state == "close_failed" and healthy_scope.state == "closed"
+            assert case.tracker._states[(session_id, main_thread_id)].runtime.lifetime_scope is failed_scope
+            healthy = case.tracker.snapshot(session_id, child_id)
+            assert healthy.residency == "cold" and healthy.execution_state == "idle"
+            assert all(reactor.released for reactor in case.reactors)
+            allow_close.set()
+            await asyncio.wait_for(service.shutdown(), 3)
+            assert failed_scope.state == "closed" and service._sweep_task is None
 
 
 @pytest.mark.asyncio
@@ -679,23 +743,40 @@ async def test_real_compiler_uses_the_same_mcp_tool_snapshot_as_generation_key(
 ):
     case = runtime_case
     service = case.runner.container.agent_execution_service
-    calls = 0
+    owner = service._dependency_provider.get_mcp_catalog_owner()
+    publication = owner.publication_snapshot()
+    publications = []
+    read_publication = owner.publication_snapshot
+    build_agent = service._build_agent
 
-    def read_once():
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            raise AssertionError("compiler 不得重新读取 MCP 工具集合")
-        return []
+    def record_publication():
+        current = read_publication()
+        publications.append(current)
+        return current
 
-    monkeypatch.setattr(service._dependency_provider, "get_mcp_tools", read_once)
+    def compile_same_publication(**kwargs):
+        assert kwargs["mcp_catalog_owner"] is owner
+        assert tuple(kwargs["mcp_tools"]) == tuple(publication.tools.values())
+        return build_agent(**kwargs)
+
+    monkeypatch.setattr(owner, "publication_snapshot", record_publication)
+    monkeypatch.setattr(service, "_build_agent", compile_same_publication)
     session_id, thread_id = await _session(case.runner)
     lease = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
-    assert calls == 1 and len(case.compiled) == 1
-    lease.release()
+    try:
+        # 准入和 generation 订阅各读取一次同一原子 publication；不再走旧 get_mcp_tools。
+        assert len(publications) == 2 and all(value is publication for value in publications)
+        assert len(case.compiled) == 1
+        runtime = case.tracker._states[(session_id, thread_id)].runtime
+        assert runtime.generation_key[-2:] == (
+            publication.binding_ref.catalog_revision, publication.binding_ref.generation,
+        )
+    finally:
+        lease.release()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_case", ["lifespan"], indirect=True)
 async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_platform(
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
@@ -710,6 +791,8 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
     service = container.agent_execution_service
     session_id, thread_id = await _session(case.runner)
     start, shutdown = service.start, service.shutdown
+    mcp_start, mcp_shutdown = container.mcp_catalog_owner.start, container.mcp_catalog_owner.shutdown
+    registry_start = container.workspace_file_resource_registry.start
     platform_type = type(container.resource_platform)
     close_resources = platform_type.close
     order: list[str] = []
@@ -729,6 +812,10 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         _isolate_non_navigation_services(container, lifespan_patch)
         lifespan_patch.setattr(service, "start", start)
         lifespan_patch.setattr(service, "shutdown", close_runtime)
+        # 生命周期用例由同一个 lifespan task 真实启动并关闭 MCP 和文件 registry。
+        lifespan_patch.setattr(container.mcp_catalog_owner, "start", mcp_start)
+        lifespan_patch.setattr(container.mcp_catalog_owner, "shutdown", mcp_shutdown)
+        lifespan_patch.setattr(container.workspace_file_resource_registry, "start", registry_start)
         lifespan_patch.setattr(platform_type, "close", close_platform)
         lifespan_patch.setattr(main, "configure_application_logging", lambda **_: None)
         lifespan_patch.setattr(main, "_model_stream_controller", None)
@@ -738,6 +825,256 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
             assert case.tracker.snapshot(session_id, thread_id).generation == 0
             assert case.compiled == [] and case.model_admissions == []
             lease = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
-            lease.release()
+            async with lease:
+                lease.release()
     assert order == ["runtime", "resource-platform"]
     assert main.app.state.workspace_container_registry is None
+
+
+@pytest.mark.asyncio
+async def test_real_runner_skill_tool_consumes_frozen_provenance_after_live_refresh_and_restart(
+    runtime_case: RuntimeCase,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    case = runtime_case
+    skill_name = "runtime-frozen-skill"
+    old_body = "冻结 Skill 正文 Ω 001  \n保留 é 与 e\u0301。\n"
+    new_body = "当前 live Skill 正文 Ω 002\n"
+    frontmatter = f"---\nname: {skill_name}\ndescription: 真实工具冻结归属\n---\n"
+    skill_file = case.runner.workspace / ".boxteam" / "skills" / skill_name / "SKILL.md"
+    skill_file.parent.mkdir(parents=True, exist_ok=True)
+    skill_file.write_text(frontmatter + old_body, encoding="utf-8", newline="")
+    session_id, thread_id = await _session(case.runner)
+    provider_call_id = "call_runtime_frozen_skill"
+    tools: list[BaseTool] = []
+    middlewares: list[ToolInvocationContextMiddleware] = []
+    model_starts: list[str] = []
+    resolutions: list[tuple[str, ResourceActivationSnapshotRef, str]] = []
+    live_catalogs = []
+    create_agent = agent_factory.create_agent
+    register_start = StepModelCallAdapter.register
+    resolve_activation = case.runner.saver.load_tool_call_resource_activation
+    wrap_tool = ToolInvocationContextMiddleware.awrap_tool_call
+
+    def record_agent(*args, **kwargs):
+        tools.extend(tool for tool in kwargs["tools"] if tool.name == "skill_load")
+        middlewares.extend(
+            item for item in kwargs["middleware"]
+            if isinstance(item, ToolInvocationContextMiddleware)
+        )
+        return create_agent(*args, **kwargs)
+
+    async def record_model_start(adapter, model_call_id, attempt, model):
+        result = await register_start(adapter, model_call_id, attempt, model)
+        model_starts.append(model_call_id)
+        return result
+
+    def record_resolution(
+        owner_session_id, *, thread_id, tool_call_id, model_call_id=None,
+        checkpoint_ns="",
+    ):
+        snapshot, resolved_model_call_id = resolve_activation(
+            owner_session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+        )
+        assert model_call_id == resolved_model_call_id
+        resolutions.append((tool_call_id, snapshot, resolved_model_call_id))
+        return snapshot, resolved_model_call_id
+
+    def forbid_live(*_args, **_kwargs):
+        raise AssertionError("skill_load 不得读取当前 Registry/catalog")
+
+    async def audit_skill_tool(middleware, request, handler):
+        if request.tool_call.get("name") != "skill_load":
+            return await wrap_tool(middleware, request, handler)
+        # 只封住工具消费阶段的 live 读取；durable detail 完整性读取保持真实。
+        with monkeypatch.context() as tool_patch:
+            for name in ("capture", "snapshots", "snapshot", "last_valid_snapshot", "latest_revision"):
+                tool_patch.setattr(case.resource_registries[0], name, forbid_live)
+            return await wrap_tool(middleware, request, handler)
+
+    def model_reply(_payload):
+        call_number = len(case.model_requests)
+        if call_number <= 2:
+            chunks = [
+                {"choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "index": 0, "id": provider_call_id, "type": "function",
+                            "function": {
+                                "name": "skill_load",
+                                "arguments": json.dumps({"name": skill_name, "mode": "snapshot"}),
+                            },
+                        }],
+                    },
+                }]},
+                {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+            if call_number == 1:
+                # 调用已由真实 Provider 生成；在真实工具消费前发布不同的 live 正文。
+                skill_file.write_text(frontmatter + new_body, encoding="utf-8", newline="")
+                live_catalogs.append(build_workspace_skill_catalog(
+                    case.runner.workspace, registry=case.resource_registries[0],
+                    bundled_skill_groups=resolve_bundled_skill_groups(),
+                ))
+                assert live_catalogs[0].activation_bodies[skill_name] == new_body
+            return chunks
+        return [
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "冻结正文消费完成"}}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+
+    monkeypatch.setattr(agent_factory, "create_agent", record_agent)
+    monkeypatch.setattr(StepModelCallAdapter, "register", record_model_start)
+    monkeypatch.setattr(case.runner.saver, "load_tool_call_resource_activation", record_resolution)
+    monkeypatch.setattr(ToolInvocationContextMiddleware, "awrap_tool_call", audit_skill_tool)
+    case.response_chunks = model_reply
+    # 三次真实模型调用的持久化收口实测约 10.4s，仅本新增场景使用独立等待预算。
+    admission = await _complete_job(case, session_id, thread_id, timeout_seconds=20)
+
+    assert len(case.compiled) == 1 and len(tools) == len(middlewares) == 1
+    assert len(case.model_requests) == len(case.model_dispatches) == 3
+    callback_ids = [dispatch.callback_model_call_id for dispatch in case.model_dispatches]
+    assert len(set(callback_ids)) == 3 and model_starts == callback_ids
+    for dispatch in case.model_dispatches:
+        assert str(UUID(dispatch.callback_model_call_id)) == dispatch.callback_model_call_id
+        assert dispatch.snapshot.model_call_id == dispatch.callback_model_call_id
+        assert dispatch.snapshot.execution_id == admission.execution_id
+        assert dispatch.snapshot.turn_id == admission.turn_id
+    assert [call_id for call_id, _, _ in resolutions] == [provider_call_id, provider_call_id]
+    assert [model_call_id for _, _, model_call_id in resolutions] == callback_ids[:2]
+    assert all(
+        (snapshot.owner_session_id, snapshot.owner_thread_id, snapshot.execution_id, snapshot.turn_id)
+        == (session_id, thread_id, admission.execution_id, admission.turn_id)
+        for _, snapshot, _ in resolutions
+    )
+    for payload in case.model_requests[1:]:
+        serialized = json.dumps(payload["messages"], ensure_ascii=False)
+        assert "冻结 Skill 正文 Ω 001" in serialized
+        assert "当前 live Skill 正文 Ω 002" not in serialized
+    receipts = [
+        json.loads(message["content"])
+        for message in case.model_requests[-1]["messages"]
+        if message.get("role") == "tool"
+    ]
+    receipts = [receipt for receipt in receipts if receipt.get("name") == skill_name]
+    assert len(receipts) == 2
+    assert [receipt["status"] for receipt in receipts] == ["loaded", "already_active"]
+    assert [receipt["append_status"] for receipt in receipts] == ["appended", "already_active"]
+    assert all(receipt["error"] is None for receipt in receipts)
+
+    saver = case.runner.saver
+    with saver._storage._connect(
+        thread_id, "", session_id=session_id, read_only=True,
+    ) as connection:
+        rows = connection.execute(
+            "SELECT m.model_call_id, m.assembly_id, m.execution_id, e.turn_id "
+            "FROM model_calls m JOIN executions e "
+            "ON e.session_id = m.session_id AND e.thread_id = m.thread_id "
+            "AND e.execution_id = m.execution_id "
+            "WHERE m.session_id = ? AND m.thread_id = ?",
+            (session_id, thread_id),
+        ).fetchall()
+        assert {row[0]: row[1:] for row in rows} == {
+            dispatch.callback_model_call_id: (
+                dispatch.snapshot.assembly_id, admission.execution_id, admission.turn_id,
+            ) for dispatch in case.model_dispatches
+        }
+        persisted_call_ids = {
+            row[0] for row in connection.execute(
+                "SELECT tool_call_id FROM tool_calls WHERE tool_name = 'skill_load'",
+            ).fetchall()
+        }
+    expected_persisted_ids = {
+        f"{model_call_id}:tool-call:{provider_call_id}" for model_call_id in callback_ids[:2]
+    }
+    assert expected_persisted_ids <= persisted_call_ids
+    restarted = RolloutCheckpointSaver(case.runner.workspace / ".boxteam" / "sessions")
+    for call_id, frozen, model_call_id in resolutions:
+        persisted_id = f"{model_call_id}:tool-call:{call_id}"
+        restored, restored_model_call_id = restarted.load_tool_call_resource_activation(
+            session_id, thread_id=thread_id, tool_call_id=persisted_id,
+        )
+        assert restored == frozen and restored_model_call_id == model_call_id
+        catalog = skill_catalog_from_activation(restored, restarted.read_resource_activation_payload)
+        assert catalog is not None
+        binding = catalog.entries[skill_name]
+        assert binding.body == old_body
+        assert catalog.catalog_revision != live_catalogs[0].catalog_revision
+        assert binding.activation_revision == receipts[0]["revision"]
+        assert binding.activation_revision != next(
+            entry.activation_revision for entry in live_catalogs[0].entries if entry.name == skill_name
+        )
+    with pytest.raises(ExtensionCatalogUnavailableError, match="缺失或歧义"):
+        restarted.load_tool_call_resource_activation(
+            session_id, thread_id=thread_id, tool_call_id="missing-tool-call",
+            model_call_id=callback_ids[0],
+        )
+
+    # 通过正式 Saver 创建唯一 raw canonical 样本，核对真实 typed owner；
+    # 无 scope 拒绝不得依赖 raw 查询恰好未命中，也不得改写原调用数据。
+    raw_only_call_id = "call_runtime_unscoped_fixture"
+    raw_message_id = "runtime-unscoped-fixture-assistant"
+    with (
+        session_thread_owner_scope(
+            MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+        ),
+        execution_admission_scope(admission, langgraph_thread_id=thread_id),
+    ):
+        restarted.append_items(session_id, (CanonicalItemRecord.create(
+            item_sequence=1, item_id="item-runtime-unscoped-fixture",
+            semantic_kind="tool_call", payload_kind="tool_call", status="completed",
+            producer_ref={"producer_kind": "provider", "producer_id": callback_ids[0]},
+            payload={"tool_calls": [{
+                "id": raw_only_call_id, "name": "skill_load", "type": "tool_call",
+                "args": {"name": skill_name, "mode": "snapshot"},
+            }]},
+            projection_identity=ItemProjectionIdentity(
+                projection_message_id=raw_message_id, model_call_id=callback_ids[0],
+            ),
+            turn_id=admission.turn_id, turn_scope="turn_member", wire_role="assistant",
+        ),), thread_id=thread_id)
+    with restarted._storage._connect(
+        thread_id, "", session_id=session_id, read_only=True,
+    ) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM tool_calls WHERE tool_call_id = ?", (raw_only_call_id,),
+        ).fetchone() == (1,)
+        durable_before = tuple(connection.iterdump())
+    raw_bound, raw_model_call_id = restarted.load_tool_call_resource_activation(
+        session_id, thread_id=thread_id, tool_call_id=raw_only_call_id,
+        model_call_id=callback_ids[0],
+    )
+    assert raw_bound == resolutions[0][1] and raw_model_call_id == callback_ids[0]
+    rollout_path = restarted._storage.jsonl_path(session_id, "", thread_id=thread_id)
+    rollout_before = rollout_path.read_bytes()
+    with pytest.raises(ExtensionCatalogUnavailableError, match="无 model-call scope.*scoped ID"):
+        restarted.load_tool_call_resource_activation(
+            session_id, thread_id=thread_id, tool_call_id=raw_only_call_id,
+        )
+    with restarted._storage._connect(
+        thread_id, "", session_id=session_id, read_only=True,
+    ) as connection:
+        assert tuple(connection.iterdump()) == durable_before
+    assert rollout_path.read_bytes() == rollout_before
+
+    # 真 Factory 注册的工具与原 invocation middleware；缺请求 provenance
+    # 时必须拒绝，不能使用 manager 的当前/已加载 catalog 伪造再次成功。
+    missing_request = ToolCallRequest(
+        tool_call={
+            "id": provider_call_id, "name": "skill_load", "type": "tool_call",
+            "args": {"name": skill_name, "mode": "snapshot"},
+        },
+        tool=tools[0], state={}, runtime=None,
+    )
+
+    async def invoke_registered(request):
+        return await request.tool.ainvoke(request.tool_call)
+
+    with pytest.raises(RuntimeError, match="emitting assistant.*model_call_id"):
+        await middlewares[0].awrap_tool_call(missing_request, invoke_registered)
+    assert len(resolutions) == 2
+    with pytest.raises(RuntimeError, match="tool_call_id"):
+        middlewares[0]._context.require_tool_call_id()

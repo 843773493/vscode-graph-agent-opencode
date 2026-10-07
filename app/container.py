@@ -138,6 +138,9 @@ from app.services.infrastructure.rollout_checkpoint_runtime import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.session_goal_store import SessionGoalStore
@@ -163,6 +166,7 @@ from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
@@ -249,6 +253,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
                 "_AgentRuntimeDependencyProvider 未绑定 SessionMessageDeliveryService"
             )
         return self._session_message_delivery_service
+
+    def get_mcp_catalog_owner(self) -> McpCatalogOwner:
+        return self._mcp_catalog_owner
 
     def get_mcp_tools(self) -> list[BaseTool]:
         return self._mcp_catalog_owner.get_tools()
@@ -567,6 +574,9 @@ def _build_app_container(
         ),
     )
     checkpointer = rollout_checkpoint_runtime.saver
+    resource_activation_body = ResourceActivationBodyStore(
+        checkpointer._storage, checkpointer._detail_store,
+    )
 
     mcp_catalog_owner = McpCatalogOwner(
         raw_config=config_service.get_mcp_config(),
@@ -700,6 +710,9 @@ def _build_app_container(
         ),
         # 精确 thread 的真实 generation scope、lease 与 idle unload 共用同一 owner。
         residency_tracker=thread_residency_tracker,
+        resource_activation_factory=lambda registry: ResourceActivationCoordinator(
+            registry=registry, saver=checkpointer, body_store=resource_activation_body,
+        ),
     )
     session_catalog_service = SessionCatalogService(
         session_service=session_service,

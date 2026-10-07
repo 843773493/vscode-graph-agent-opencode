@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
+from app.agents.providers.wire_finalize import WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
@@ -123,6 +124,10 @@ def seal_snapshot(
 
     if (snapshot.session_id, snapshot.thread_id) != (session_id, thread_id):
         raise ValueError("source-mismatch: assembly seal owner 不一致")
+    if (snapshot.projector_id, snapshot.projector_version) == (
+        WIRE_PROJECTOR_ID, WIRE_PROJECTOR_VERSION,
+    ) and activation_binding is None:
+        raise ValueError("resource-activation-unavailable: wire assembly seal 缺少冻结 activation 绑定")
     require_key(seal_idempotency_key, field="seal_idempotency_key")
     require_key(seal_input_hash, field="seal_input_hash")
     # 已提交 assembly 的幂等重试不重新绑定 activation：旧 assembly 若在接入前
@@ -219,22 +224,10 @@ def seal_snapshot(
             raise DetailUnavailableError(
                 "detail-unavailable: required assembly detail missing"
             )
-        if (
-            required_detail
-            and sensitive_detail
-            and not owner._detail_store.supports_protected_details
-        ):
-            raise DetailUnavailableError(
-                "detail-unavailable: required detail 需要 protected storage backend"
-            )
         if sensitive_detail and detail is None:
             raise ValueError("detail-unavailable: sensitive detail 必须提供正文")
         header = None
         if detail is not None:
-            redaction_key = next(
-                (prepared.redaction_key for prepared in prepared_details
-                 if prepared.redaction_key is not None), None,
-            )
             header = owner._detail_store.prepare(
                 session_id=session_id,
                 thread_id=thread_id,
@@ -246,7 +239,6 @@ def seal_snapshot(
                 required=required_detail,
                 sensitive=sensitive_detail,
                 checkpoint_ns=checkpoint_ns,
-                redaction_key=redaction_key,
             )
         return owner._storage.seal_context_assembly(
             session_id,

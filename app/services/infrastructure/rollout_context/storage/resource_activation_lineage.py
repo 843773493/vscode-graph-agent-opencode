@@ -1,7 +1,7 @@
-"""activation source lineage 的受保护 body store 适配（9.2）。
+"""activation source lineage 的精确 body store 适配（9.2）。
 
 lineage manifest 不属于 SQLite catalog：本适配把 manifest 正文写入既有
-``ContextPlanDetailStore``（受保护 detail 文件）并登记其 manifest，catalog 只
+``ContextPlanDetailStore``（单份精确 detail 文件）并登记其 manifest，catalog 只
 保存 typed ``DetailRef`` 与 digest。这样 catalog 不能补造 lineage 向量，
 retention 失效时也必须显式报 ``detail-unavailable``。
 """
@@ -17,16 +17,13 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
-from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
-    SCHEMA_UNAVAILABLE_CODE,
-)
 
 LINEAGE_DETAIL_KIND = "resource_activation_lineage"
 LINEAGE_RETENTION_CLASS = "resource_activation_provenance"
 
 
 class ActivationLineageBodyStore:
-    """以受保护 detail 文件保存/读取 activation lineage manifest 的唯一适配。"""
+    """以精确 detail 文件保存/读取 activation lineage manifest 的唯一适配。"""
 
     def __init__(self, storage, detail_store: ContextPlanDetailStore) -> None:
         self._storage = storage
@@ -43,13 +40,6 @@ class ActivationLineageBodyStore:
     ) -> DetailRef:
         if not isinstance(manifest, Mapping):
             raise TypeError("lineage manifest 必须是 mapping")
-        if not getattr(
-            self._detail_store, "supports_protected_details", False
-        ):
-            raise RuntimeError(
-                SCHEMA_UNAVAILABLE_CODE + ": lineage manifest 需要 "
-                "protected detail backend"
-            )
         record = self._detail_store.write(
             session_id=owner_session_id,
             thread_id=owner_thread_id,

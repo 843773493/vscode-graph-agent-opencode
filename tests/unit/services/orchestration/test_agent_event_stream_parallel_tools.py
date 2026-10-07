@@ -615,7 +615,8 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     tmp_path: Path,
 ) -> None:
     writer = SimpleNamespace(commit=AsyncMock())
-    runtime = MessageStreamRuntime(writer)
+    canonical_sink = AsyncMock()
+    runtime = MessageStreamRuntime(writer, canonical_item_sink=canonical_sink)
     await runtime.start_model("model_unknown_tool", "primary")
     await runtime.accept_message_chunk(
         AIMessageChunk(
@@ -683,6 +684,12 @@ async def test_custom_tool_execution_keeps_provider_tool_call_identity(
     assert tool_started["tool_call_id"] == expected_tool_call_id
     assert tool_started["tool_name"] == "totally_unknown_tool"
     assert tool_completed["tool_call_id"] == expected_tool_call_id
+    assert tool_completed["tool_name"] == "totally_unknown_tool"
+    result_item, = canonical_sink.await_args.args[0]
+    assert result_item.semantic_kind == "tool_result"
+    assert result_item.payload["tool_call_id"] == expected_tool_call_id
+    assert result_item.payload["name"] == "invoke_extension_tool"
+    assert result_item.payload["content"] == "unknown tool"
 
 
 @pytest.mark.asyncio

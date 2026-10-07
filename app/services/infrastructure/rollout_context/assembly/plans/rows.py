@@ -26,7 +26,6 @@ def tool_rows(
             ref.tool_policy_version,
             ref.content_length,
             ref.content_hash,
-            ref.redacted_stable_digest,
             ref.protection,
             ref.availability,
             json_text(dict(ref.tool_policy)),
@@ -74,10 +73,7 @@ def write_registry(
         ],
     )
     connection.executemany(
-        "INSERT INTO tool_set_snapshots(session_id, thread_id, plan_id, tool_set_snapshot_id, assembly_id, "
-        "source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, "
-        "content_length, content_hash, redacted_stable_digest, protection, availability, "
-        "tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        'INSERT INTO tool_set_snapshots(session_id, thread_id, plan_id, tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, content_length, content_hash, protection, availability, tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
             (plan.session_id, plan.thread_id, plan.plan_id, *row, timestamp)
             for row in tool_rows(plan, None)
@@ -115,10 +111,7 @@ def validate_registry(
     }:
         raise ValueError("source-mismatch: plan contribution registry 不一致")
     tools = connection.execute(
-        "SELECT tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, "
-        "tool_set_schema_version, tool_policy_version, content_length, content_hash, "
-        "redacted_stable_digest, protection, availability, tool_policy_json, tools_json "
-        "FROM tool_set_snapshots WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        'SELECT tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, content_length, content_hash, protection, availability, tool_policy_json, tools_json FROM tool_set_snapshots WHERE session_id = ? AND thread_id = ? AND plan_id = ?',
         identity,
     ).fetchall()
     if set(tools) != set(tool_rows(plan, assembly_id)):

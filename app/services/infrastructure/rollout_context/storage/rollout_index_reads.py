@@ -39,12 +39,8 @@ class RolloutIndexMixin:
     ) -> RolloutReadSnapshot:
         """打开带文件锁和 SQLite 事务的只读 snapshot。"""
         root = self._host.root(session_id, checkpoint_ns, thread_id=thread_id)
-        jsonl_path = self._host.jsonl_path(
-            session_id, checkpoint_ns, thread_id=thread_id
-        )
-        index_path = self._host.index_path(
-            session_id, checkpoint_ns, thread_id=thread_id
-        )
+        jsonl_path = root / "rollout.jsonl"
+        index_path = root / "index.sqlite"
         if not root.is_dir() or not jsonl_path.is_file() or not index_path.is_file():
             self.initialize(session_id, checkpoint_ns, thread_id=thread_id)
         file_lock = _RolloutFileLock(root.parent / ".rollout.write.lock", exclusive=False)

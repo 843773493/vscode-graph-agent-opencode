@@ -53,7 +53,13 @@ class SourceState:
                 f"registered_name={self.name} requested_name={descriptor.name}"
             )
         current = self.descriptor
-        if current is not None and current != descriptor:
+        if current is not None and (
+            current.source_id, current.source_kind, current.name, current.internal_locator,
+            current.resource_uri, current.root_placement, current.policy_key,
+        ) != (
+            descriptor.source_id, descriptor.source_kind, descriptor.name, descriptor.internal_locator,
+            descriptor.resource_uri, descriptor.root_placement, descriptor.policy_key,
+        ):
             raise ValueError(
                 "ContextSourceManager source descriptor 冲突: "
                 f"source_id={descriptor.source_id}"

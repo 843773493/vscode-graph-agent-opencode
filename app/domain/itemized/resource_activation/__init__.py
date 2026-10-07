@@ -1,7 +1,7 @@
 """v2 资源激活 snapshot/provenance 的冻结领域合同。
 
-本模块只定义类型、字段清单和内容 hash 范围，不拥有 ResourceRegistry、
-monitor、loader、activation policy，也不做任何 I/O。资源平台在 model-call
+本模块只定义类型、字段清单、完整冻结 policy 值和内容 hash 范围，不拥有
+ResourceRegistry、monitor、loader 或配置选择，也不做任何 I/O。资源平台在 model-call
 preparation 前冻结的 typed snapshot/decision 在此被固化成 ContextStore
 可以持久化和恢复的领域事实。
 
@@ -9,10 +9,11 @@ preparation 前冻结的 typed snapshot/decision 在此被固化成 ContextStore
 
 ResourceActivationSnapshotRef
   activation_snapshot_id    snapshot_kind
-  parent_turn_snapshot_id   activation_policy_revision
-  activation_policy_hash    registry_generation
+  parent_execution_snapshot_id   activation_policy_revision
+  activation_policy_hash    activation_policy
+  registry_generation
   owner_session_id          owner_thread_id
-  turn_id                   model_call_id
+  execution_id / turn_id                   model_call_id
   captured_at               bindings_hash
   activation_provenance_hash
   bindings[]                # ResourceProvenanceRef
@@ -20,10 +21,15 @@ ResourceActivationSnapshotRef
 ResourceProvenanceRef
   resource_id               display_uri          resource_kind
   owner_scope               facet                revision
-  content_length            content_hash         redacted_stable_digest
+  content_length            content_hash
   snapshot_ref              detail_ref           source_lineage_ref
   source_lineage_digest     availability         activation_ordinal
   effective_boundary        captured_registry_generation
+  members[]                 # ResourceMemberBinding（不进入现 v1 内容 hash）
+
+ResourceMemberBinding
+  member_id                 member_kind          schema_hash
+  server_id                 revision
 
 SourceLineageRef
   lineage_id                derivation_version
@@ -39,9 +45,9 @@ SourceLineageRef
   以及每个 binding 的 effective boundary、captured generation 和 source
   lineage digest。
 
-运行 identity（activation_snapshot_id、Turn/model-call identity、owner
+运行 identity（activation_snapshot_id、execution/Turn/model-call identity、owner
 session/thread）与 captured_at 只作 typed relation，不进入任一内容 hash；
-具体 parent_turn_snapshot_id 由 typed parent relation 与 turn-bound binding
+具体 parent_execution_snapshot_id 由 typed parent relation 与 turn-bound binding
 逐字节复用校验保护。
 """
 
@@ -58,14 +64,17 @@ from app.domain.itemized.resource_activation.common import (
     RESOURCE_ACTIVATION_ERROR_CODES,
     RESOURCE_ACTIVATION_SNAPSHOT_FIELDS,
     RESOURCE_ACTIVATION_TOKEN_PATTERN,
+    RESOURCE_MEMBER_BINDING_FIELDS,
     RESOURCE_PROVENANCE_FIELDS,
     SNAPSHOT_FIELD_ALIASES,
     SOURCE_LINEAGE_REF_FIELDS,
     ResourceActivationBoundary,
     ResourceActivationContractError,
+    ResourceActivationPolicySnapshot,
     SourceLineageRef,
 )
 from app.domain.itemized.resource_activation.provenance import (
+    ResourceMemberBinding,
     ResourceProvenanceRef,
     resource_bindings_hash,
 )
@@ -85,12 +94,15 @@ __all__ = [
     "RESOURCE_ACTIVATION_ERROR_CODES",
     "RESOURCE_ACTIVATION_SNAPSHOT_FIELDS",
     "RESOURCE_ACTIVATION_TOKEN_PATTERN",
+    "RESOURCE_MEMBER_BINDING_FIELDS",
     "RESOURCE_PROVENANCE_FIELDS",
     "SNAPSHOT_FIELD_ALIASES",
     "SOURCE_LINEAGE_REF_FIELDS",
     "ResourceActivationBoundary",
     "ResourceActivationContractError",
+    "ResourceActivationPolicySnapshot",
     "ResourceActivationSnapshotRef",
+    "ResourceMemberBinding",
     "ResourceProvenanceRef",
     "SourceLineageRef",
     "resource_activation_provenance_hash",

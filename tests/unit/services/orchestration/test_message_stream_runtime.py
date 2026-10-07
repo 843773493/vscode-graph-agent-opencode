@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,13 +18,49 @@ async def test_model_registration_failure_does_not_publish_unregistered_lifecycl
     writer.commit = AsyncMock()
     registrar = AsyncMock(side_effect=RuntimeError("登记失败"))
     runtime = MessageStreamRuntime(writer, model_call_registrar=registrar)
+    preparation = asyncio.create_task(runtime.prepare_tool_execution("model_unregistered"))
+    await asyncio.sleep(0)
 
     with pytest.raises(RuntimeError, match="登记失败"):
         await runtime.start_model("model_unregistered", "primary")
+    with pytest.raises(RuntimeError, match="登记失败"):
+        await preparation
 
     assert runtime.current_model_call_id is None
     assert runtime.current_attempt == 0
     writer.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_waits_for_emitting_model_and_commits_exact_calls() -> None:
+    canonical_sink = AsyncMock()
+    registrar = AsyncMock(return_value="execution-tool-boundary")
+    runtime = MessageStreamRuntime(
+        None, canonical_item_sink=canonical_sink, model_call_registrar=registrar,
+    )
+    await runtime.accept_message_chunk(AIMessageChunk(
+        content="", tool_call_chunks=[{
+            "index": 0, "id": "call_boundary", "name": "skill_load", "args": "{}",
+        }],
+    ), model_call_id="model_boundary")
+    preparation = asyncio.create_task(runtime.prepare_tool_execution("model_boundary"))
+    await asyncio.sleep(0)
+    assert not preparation.done()
+    canonical_sink.assert_not_awaited()
+
+    await runtime.start_model("model_boundary", "primary")
+    await preparation
+    canonical_sink.assert_awaited_once()
+    item, = canonical_sink.await_args.args[0]
+    assert item.payload["tool_call_id"] == "model_boundary:tool-call:call_boundary"
+    assert item.projection_identity.model_call_id == "model_boundary"
+    await runtime.prepare_tool_execution("model_boundary")
+    canonical_sink.assert_awaited_once()
+
+    await runtime.start_model("model_next", "primary")
+    with pytest.raises(RuntimeError, match="emitting model-call.*不一致"):
+        await runtime.prepare_tool_execution("model_boundary")
+    canonical_sink.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -136,7 +173,7 @@ async def test_internal_provider_stream_persists_turnless_items_without_writer()
     for item in model_items:
         assert item.turn_id is None
         assert item.turn_scope is None
-        assert item.metadata["execution_id"] == "execution-internal-stream"
+        assert item.item_id.startswith("item-execution-internal-stream-model-model_internal-block-")
     (assistant_item,) = [
         item for item in model_items if item.semantic_kind == "assistant_output"
     ]

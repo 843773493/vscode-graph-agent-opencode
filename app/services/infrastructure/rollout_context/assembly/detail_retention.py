@@ -11,17 +11,10 @@ from app.services.infrastructure.rollout_context.assembly.detail_identity import
     detail_ref_from_key,
     detail_ref_key,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
+    require_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
-
-
-def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (name,),
-        ).fetchone()
-        is not None
-    )
 
 
 def _activation_referenced(
@@ -35,19 +28,16 @@ def _activation_referenced(
     activation snapshot 的 lineage manifest 与逐资源正文以 activation
     snapshot id（而不是 assembly id）作为 detail 的 assembly 段，因此无法被上面的
     context_assemblies 连接命中；retention 必须独立检查这几列，否则 sealed
-    activation provenance 会被 tombstone 掉。schema 未 bootstrap 时该库没有
-    activation 事实，直接视为无引用。
+    activation provenance 会被 tombstone 掉。当前 schema 缺失必须显式失败，
+    只有已验证 schema 中不存在引用时才能回收。
     """
-    if not _table_exists(connection, "resource_activation_snapshots"):
-        return False
+    require_resource_activation_schema(connection)
     if connection.execute(
         "SELECT 1 FROM resource_activation_snapshots WHERE session_id = ? "
         "AND thread_id = ? AND lineage_detail_ref = ? LIMIT 1",
         (session_id, thread_id, detail_ref),
     ).fetchone() is not None:
         return True
-    if not _table_exists(connection, "resource_activation_bindings"):
-        return False
     return connection.execute(
         "SELECT 1 FROM resource_activation_bindings WHERE session_id = ? AND thread_id = ? "
         "AND (snapshot_ref = ? OR detail_ref = ?) LIMIT 1",

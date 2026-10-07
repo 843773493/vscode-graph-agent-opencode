@@ -9,6 +9,7 @@ import pytest
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
+    ResourceActivationPolicySnapshot,
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
     SourceLineageRef,
@@ -20,6 +21,8 @@ from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
     resource_projection_order_key,
 )
+
+POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {}})
 
 SESSION_ID = "ses_019c2b8707cf79388ef1648fa32ee819"
 
@@ -47,7 +50,6 @@ def _binding(
         availability=availability,
         content_length=7,
         content_hash="sha256:jcs:v1:" + "a" * 64,
-        redacted_stable_digest=None,
         source_lineage_ref=lineage,
         source_lineage_digest=lineage.digest,
         activation_ordinal=ordinal,
@@ -57,7 +59,7 @@ def _binding(
     )
 
 
-def _turn_snapshot(*, extra_ordinals: bool = False) -> ResourceActivationSnapshotRef:
+def _execution_snapshot(*, extra_ordinals: bool = False) -> ResourceActivationSnapshotRef:
     bindings: list[ResourceProvenanceRef] = [
         _binding("skill:alpha", ordinal=0, boundary="turn")
     ]
@@ -65,12 +67,14 @@ def _turn_snapshot(*, extra_ordinals: bool = False) -> ResourceActivationSnapsho
         bindings.append(_binding("skill:beta", ordinal=1, boundary="turn"))
     return ResourceActivationSnapshotRef(
         activation_snapshot_id=f"activation-turn:{SESSION_ID}:main:turn-1",
-        snapshot_kind="turn",
-        activation_policy_revision="resource-activation-policy:v1:abc",
-        activation_policy_hash="sha256:jcs:v1:" + "1" * 64,
+        snapshot_kind="execution",
+        activation_policy_revision=POLICY.revision,
+        activation_policy_hash=POLICY.hash,
+        activation_policy=POLICY,
         registry_generation=3,
         owner_session_id=SESSION_ID,
         owner_thread_id="main",
+        execution_id="execution-1",
         turn_id="turn-1",
         captured_at="2026-09-24T00:00:00+00:00",
         bindings=tuple(bindings),
@@ -78,13 +82,16 @@ def _turn_snapshot(*, extra_ordinals: bool = False) -> ResourceActivationSnapsho
 
 
 def test_projection_exposes_only_safe_fields() -> None:
-    snapshot = _turn_snapshot(extra_ordinals=True)
+    snapshot = _execution_snapshot(extra_ordinals=True)
     projections = project_sealed_resource_refs(snapshot)
 
     assert len(projections) == 2
     for projection in projections:
         payload = projection.to_dict()
         assert set(payload) == SAFE_RESOURCE_PROJECTION_FIELDS
+        assert payload["execution_id"] == snapshot.execution_id
+        assert payload["turn_id"] == snapshot.turn_id
+        assert payload["parent_execution_snapshot_id"] is None
         assert payload["display_uri"].startswith("boxteam://")
         # opaque provenance ref 不外泄 raw resource_id，且是合法 hash token。
         assert "skill:" not in payload["provenance_ref"]
@@ -111,7 +118,7 @@ def test_projection_exposes_only_safe_fields() -> None:
 
 
 def test_projection_never_leaks_locator_credential_or_body() -> None:
-    snapshot = _turn_snapshot()
+    snapshot = _execution_snapshot()
     encoded = json.dumps(
         [projection.to_dict() for projection in project_sealed_resource_refs(snapshot)]
     )
@@ -132,7 +139,7 @@ def test_projection_never_leaks_locator_credential_or_body() -> None:
 def test_identity_and_order_are_stable_across_projection_calls() -> None:
     """live/刷新/重启/跨端读取必须得到同一 identity/order。"""
 
-    snapshot = _turn_snapshot(extra_ordinals=True)
+    snapshot = _execution_snapshot(extra_ordinals=True)
     first = project_sealed_resource_refs(snapshot)
     # 模拟重启后从 SQLite/受保护 body 重建出的同一 snapshot。
     rebuilt = ResourceActivationSnapshotRef.from_dict(snapshot.to_dict())
@@ -144,13 +151,13 @@ def test_identity_and_order_are_stable_across_projection_calls() -> None:
 
 
 def test_projection_order_key_is_monotonic_in_ordinal() -> None:
-    projections = project_sealed_resource_refs(_turn_snapshot(extra_ordinals=True))
+    projections = project_sealed_resource_refs(_execution_snapshot(extra_ordinals=True))
     keys = resource_projection_order_key(projections)
     assert [key[0] for key in keys] == sorted(key[0] for key in keys)
 
 
 def test_request_only_binding_not_counted_as_turn_item() -> None:
-    projections = project_sealed_resource_refs(_turn_snapshot())
+    projections = project_sealed_resource_refs(_execution_snapshot())
     # 零 Item Turn 仍可携带 resource binding。
     assert_resource_bindings_not_counted_as_items(
         projections, {"item_count": 0}
@@ -166,7 +173,7 @@ def test_request_only_binding_not_counted_as_turn_item() -> None:
     ["resource_count", "resource_item_count", "binding_count", "resource_elapsed_ms"],
 )
 def test_resource_count_keys_are_rejected(forbidden_key: str) -> None:
-    projections = project_sealed_resource_refs(_turn_snapshot())
+    projections = project_sealed_resource_refs(_execution_snapshot())
     with pytest.raises(ResourceActivationProjectionError) as error:
         assert_resource_bindings_not_counted_as_items(
             projections, {"item_count": 0, forbidden_key: 1}

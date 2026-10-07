@@ -2,26 +2,23 @@
 
 冻结快照本体只有一个事实源：domain 的
 :class:`app.domain.itemized.resource_activation.ResourceActivationSnapshotRef`
-（9.1 冻结）。本模块不再保留第二套 Turn/ModelCall snapshot 类型，只定义
-activation policy（配置派生）、受保护 body port 和唯一 Saver port。
+（9.1 冻结）。本模块只负责有效配置选择、受保护 body port 和唯一 Saver port，
+完整冻结 policy 与 Execution/ModelCall snapshot 类型由领域合同定义。
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Literal, Protocol
+from contextvars import ContextVar, Token
+from typing import Protocol
 
-from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
-    RESOURCE_ACTIVATION_BOUNDARIES,
-    RESOURCE_ACTIVATION_TOKEN_PATTERN,
+    ResourceActivationPolicySnapshot,
     ResourceActivationSnapshotRef,
 )
-
-ResourceActivationBoundary = Literal["turn", "model_call"]
-_KIND_PATTERN_ERROR = f"resource kind 必须匹配 {RESOURCE_ACTIVATION_TOKEN_PATTERN}"
+from app.domain.itemized.resource_activation.common import ResourceActivationBoundary
 
 # binding 的 owner scope 由资源平台声明；derivation 契约当前未携带该字段
 # （见 derivation/types.SemanticResourceDescriptor）。在资源平台补全前，
@@ -30,80 +27,61 @@ _KIND_PATTERN_ERROR = f"resource kind 必须匹配 {RESOURCE_ACTIVATION_TOKEN_PA
 ACTIVATION_OWNER_SCOPE = "session"
 
 
-@dataclass(frozen=True, slots=True)
-class ResourceActivationPolicySnapshot:
-    """一次 Turn 冻结的 activation policy；热更新只影响下一个 Turn。"""
+def resource_activation_policy_from_config(
+    config: Mapping[str, object],
+) -> ResourceActivationPolicySnapshot:
+    """从有效配置选择 activation policy；领域类型只持有冻结后的纯值。"""
 
-    revision: str
-    hash: str
-    default_boundary: ResourceActivationBoundary
-    boundaries: Mapping[str, ResourceActivationBoundary]
+    context = config.get("context")
+    if not isinstance(context, Mapping):
+        raise TypeError("context 配置必须是对象")
+    return ResourceActivationPolicySnapshot.from_dict(context.get("resource_activation"))
 
-    @classmethod
-    def from_config(cls, config: Mapping[str, object]) -> ResourceActivationPolicySnapshot:
-        """从 Workspace 配置的 context.resource_activation 构造 policy。"""
 
-        context = config.get("context")
-        if not isinstance(context, Mapping):
-            raise TypeError("context 配置必须是对象")
-        section = context.get("resource_activation")
-        if not isinstance(section, Mapping):
-            raise TypeError("context.resource_activation 配置必须是对象")
-        unknown_section_keys = set(section) - {"default_boundary", "overrides"}
-        if unknown_section_keys:
-            raise ValueError(
-                "context.resource_activation 存在未登记字段: "
-                f"{sorted(unknown_section_keys)}"
-            )
-        default_boundary = section.get("default_boundary")
-        if default_boundary not in RESOURCE_ACTIVATION_BOUNDARIES:
-            raise ValueError("context.resource_activation.default_boundary 必须是 turn|model_call")
-        raw_overrides = section.get("overrides")
-        if not isinstance(raw_overrides, Mapping):
-            raise TypeError("context.resource_activation.overrides 必须是对象")
-        boundaries: dict[str, ResourceActivationBoundary] = {}
-        for key, value in raw_overrides.items():
-            if (
-                not isinstance(key, str)
-                or len(key) == 0
-                or len(key) > 64
-                or key[0] not in "abcdefghijklmnopqrstuvwxyz"
-                or any(
-                    not (
-                        char.isascii() and (char.islower() or char.isdigit())
-                    )
-                    and char not in "_-"
-                    for char in key
-                )
-            ):
-                raise ValueError(_KIND_PATTERN_ERROR)
-            if value not in RESOURCE_ACTIVATION_BOUNDARIES:
-                raise ValueError(
-                    f"context.resource_activation.overrides.{key} 必须是 turn|model_call"
-                )
-            boundaries[key] = value  # type: ignore[assignment]
-        normalized = {
-            "default_boundary": default_boundary,
-            "overrides": {key: boundaries[key] for key in sorted(boundaries)},
-        }
-        content_hash = sha256_jcs(normalized)
-        return cls(
-            revision=(
-                "resource-activation-policy:v1:"
-                + content_hash.removeprefix("sha256:jcs:v1:")
-            ),
-            hash=content_hash,
-            default_boundary=default_boundary,  # type: ignore[arg-type]
-            boundaries={key: boundaries[key] for key in sorted(boundaries)},
-        )
+_current_execution_activation: ContextVar[ResourceActivationSnapshotRef | None] = ContextVar(
+    "current_execution_resource_activation", default=None,
+)
 
-    def effective_boundary(self, resource_kind: str) -> ResourceActivationBoundary:
-        """返回某个已登记 resource kind 的 effective boundary。"""
 
-        return self.boundaries.get(resource_kind, self.default_boundary)
+def _execution_activation_matches(
+    snapshot: ResourceActivationSnapshotRef, admission: ExecutionAdmission,
+) -> None:
+    if snapshot.snapshot_kind != "execution" or (
+        snapshot.owner_session_id, snapshot.owner_thread_id,
+        snapshot.execution_id, snapshot.turn_id,
+    ) != (
+        admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id,
+    ):
+        raise ValueError("resource-activation-snapshot-conflict: 冻结 root 与当前 admission 不一致")
 
-    def has_model_call_boundary(self) -> bool:
-        return self.default_boundary == "model_call" or "model_call" in self.boundaries.values()
+
+def set_current_execution_resource_activation(
+    snapshot: ResourceActivationSnapshotRef, *, admission: ExecutionAdmission,
+) -> Token[ResourceActivationSnapshotRef | None]:
+    """仅向子调用传递 Saver 已持久化的不可变 root，不承担恢复或缓存权威。"""
+
+    if not isinstance(snapshot, ResourceActivationSnapshotRef):
+        raise TypeError("execution activation 必须是 typed snapshot")
+    _execution_activation_matches(snapshot, admission)
+    return _current_execution_activation.set(snapshot)
+
+
+def reset_current_execution_resource_activation(
+    token: Token[ResourceActivationSnapshotRef | None],
+) -> None:
+    _current_execution_activation.reset(token)
+
+
+def require_current_execution_resource_activation(
+    admission: ExecutionAdmission,
+) -> ResourceActivationSnapshotRef:
+    """实际模型调用必须消费当前 execution 的已冻结 root。"""
+
+    snapshot = _current_execution_activation.get()
+    if snapshot is None:
+        raise RuntimeError("resource-activation-unavailable: 当前 execution 尚未冻结 root")
+    _execution_activation_matches(snapshot, admission)
+    return snapshot
 
 
 class ResourceActivationBodyStore(Protocol):
@@ -133,6 +111,19 @@ class ResourceActivationSnapshotSaver(Protocol):
     伪造成功。seal 路径另外通过 Saver 的 assembly 事务原子绑定。
     """
 
+    def frozen_resource_activation_for_admission(
+        self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
+    ) -> ResourceActivationSnapshotRef | None: ...
+
+    def find_resource_activation_snapshot(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str = "",
+    ) -> ResourceActivationSnapshotRef | None: ...
+
     async def save_resource_activation_snapshot(
         self, snapshot: ResourceActivationSnapshotRef
     ) -> None: ...
@@ -144,4 +135,8 @@ __all__ = [
     "ResourceActivationBoundary",
     "ResourceActivationPolicySnapshot",
     "ResourceActivationSnapshotSaver",
+    "require_current_execution_resource_activation",
+    "reset_current_execution_resource_activation",
+    "resource_activation_policy_from_config",
+    "set_current_execution_resource_activation",
 ]

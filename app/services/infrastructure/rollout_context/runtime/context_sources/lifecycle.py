@@ -289,7 +289,7 @@ class SourceLifecycleMixin:
                             "context-source-seal-receipt-conflict: durable owner 尚未 applied: "
                             + delta.source_id
                         )
-                self._sync_persisted_control_states(set(applied))
+                self._sync_persisted_control_states(set(applied) & set(frozen))
             for delta in batch.deltas:
                 state = self._sources[delta.source_id]
                 state.latest_visible_committed_revision = delta.revision

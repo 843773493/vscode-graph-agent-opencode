@@ -102,7 +102,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 # 同一个写事务覆盖注册核验、快照/selection 和最终 plan 绑定。
                 # 未注册的快照不能绕过 draft 生命周期进入 dispatch。
                 connection.execute("BEGIN IMMEDIATE")
-                preflight_seal(
+                registration = preflight_seal(
                     connection,
                     snapshot,
                     seal_idempotency_key=seal_idempotency_key,
@@ -157,8 +157,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                                 f"assembly_id={snapshot.assembly_id} status={commit_row[1]}"
                             )
                         self._validate_context_assembly_manifest(
-                            connection, snapshot, header_detail_ref=detail_key,
-                            checkpoint_ns=checkpoint_ns,
+                            connection, snapshot, registration=registration,
+                            header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
                         )
                         return non_negative_int(commit_row[0], field="commit_id")
                     raise ValueError("assembly-idempotency-conflict: assembly_id 已存在但输入不一致")
@@ -256,7 +256,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         (ref.ref_type, ref.ref_id)
                     )
                     cursor = connection.execute(
-                        "INSERT INTO assembly_item_refs(assembly_id, ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, redacted_stable_digest, detail_ref, contribution_id, visibility, protection, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        'INSERT INTO assembly_item_refs(assembly_id, ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (
                             snapshot.assembly_id,
                             ordinal,
@@ -268,7 +268,6 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             ref.content_hash,
                             ref.source_revision,
                             ref.content_length,
-                            ref.redacted_stable_digest,
                             optional_detail_ref_key(selection_entry.detail_ref) if selection_entry else None,
                             selection_entry.contribution_id
                             if selection_entry
@@ -281,7 +280,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     _assert_one_row(cursor, context="assembly item ref 写入")
                 for ordinal, contribution in enumerate(snapshot.contributions):
                     cursor = connection.execute(
-                        "INSERT INTO context_assembly_contributions(assembly_id, contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, redacted_stable_digest, request_only, contribution_kind, visibility, protection, binding_manifest_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        'INSERT INTO context_assembly_contributions(assembly_id, contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, binding_manifest_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (
                             snapshot.assembly_id,
                             contribution.contribution_ordinal
@@ -292,7 +291,6 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             contribution.source_revision,
                             contribution.content_hash,
                             contribution.content_length,
-                            contribution.redacted_stable_digest,
                             int(contribution.request_only),
                             contribution.contribution_kind,
                             contribution.visibility,
@@ -306,7 +304,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 )
                 for entry in snapshot.selection:
                     cursor = connection.execute(
-                        "INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, redacted_stable_digest, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        'INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (
                             snapshot.assembly_id,
                             entry.plan_ordinal,
@@ -319,7 +317,6 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                             entry.source_revision,
                             entry.content_length,
                             entry.content_hash,
-                            entry.redacted_stable_digest,
                             entry.visibility,
                             entry.protection,
                             entry.availability,
@@ -335,7 +332,7 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                         ),
                     )
                     _assert_one_row(cursor, context="assembly selection 写入")
-                bind_sealed_registration(
+                registration = bind_sealed_registration(
                     connection,
                     snapshot,
                     seal_idempotency_key=seal_idempotency_key,
@@ -350,8 +347,8 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                 self._apply_sealed_context_sources(connection, snapshot)
                 self._consume_context_epoch_transition(connection, snapshot, checkpoint_ns)
                 self._validate_context_assembly_manifest(
-                    connection, snapshot, header_detail_ref=detail_key,
-                    checkpoint_ns=checkpoint_ns,
+                    connection, snapshot, registration=registration,
+                    header_detail_ref=detail_key, checkpoint_ns=checkpoint_ns,
                 )
                 published = []
                 try:

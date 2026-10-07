@@ -183,6 +183,7 @@ class SkillCatalogBinding:
     display_uri: str
     activation_revision: str
     body: str
+    description: str = ""
     content_hash: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -198,8 +199,8 @@ class SkillCatalogBinding:
                 raise ValueError(
                     f"SkillCatalogBinding.{field_name} 必须是非空字符串"
                 )
-        if not isinstance(self.body, str):
-            raise TypeError("SkillCatalogBinding.body 必须是字符串")
+        if not isinstance(self.body, str) or not isinstance(self.description, str):
+            raise TypeError("SkillCatalogBinding.body/description 必须是字符串")
         object.__setattr__(
             self,
             "content_hash",

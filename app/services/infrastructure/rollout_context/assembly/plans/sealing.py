@@ -53,7 +53,7 @@ def bind_sealed_registration(
     seal_idempotency_key: str,
     seal_input_hash: str,
     detail_key: str | None,
-) -> None:
+) -> ContextPlanRegistration:
     """由 assembly owner 在同一事务写入 snapshot/selection 后绑定 plan。"""
     require_transaction(connection)
     registered = preflight_seal(
@@ -82,7 +82,7 @@ def bind_sealed_registration(
             "source-mismatch: plan seal 必须与同事务 assembly snapshot 相符"
         )
     if registered.plan_state == "sealed":
-        return
+        return registered
     cursor = connection.execute(
         "UPDATE context_plans SET plan_state = 'sealed', assembly_id = ?, "
         "seal_idempotency_key = ?, seal_hash = ?, seal_input_hash = ?, updated_at = ? "
@@ -108,7 +108,7 @@ def bind_sealed_registration(
     )
     if cursor.rowcount != len(registered.draft.tool_set_refs):
         raise RuntimeError("source-mismatch: draft ToolSetSnapshot 绑定行数不一致")
-    read_registration(
+    return read_registration(
         connection, snapshot.session_id, snapshot.thread_id, snapshot.plan_id
     )
 

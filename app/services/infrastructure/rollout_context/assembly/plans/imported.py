@@ -25,9 +25,6 @@ from app.services.infrastructure.rollout_context.assembly.plans.imported_sources
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     sealed_hash,
 )
-from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
-    validate_draft_privacy,
-)
 from app.services.infrastructure.rollout_context.assembly.plans.registry import (
     require_owner,
     require_transaction,
@@ -83,14 +80,13 @@ def _snapshot(raw: str) -> ContextAssemblySnapshot:
         if any(item.get("body") is not None for item in value["contributions"]):
             raise ValueError("imported snapshot 不得包含 inline contribution body")
         result = ContextAssemblySnapshot.from_dict(value)
-        validate_draft_privacy(result.as_sealed_plan())
         result.validate_hashes()
     except Exception:  # noqa: BLE001 - 恢复边界禁止异常泄露凭据或正文
         failed = True
     else:
         failed = False
     if failed:
-        raise ValueError("source-mismatch: imported snapshot schema/hash/privacy 非法")
+        raise ValueError("source-mismatch: imported snapshot schema/hash/body 非法")
     return result
 
 
@@ -336,6 +332,7 @@ def read_imported_registration(
         registration_origin=row[0],
         source_provenance=provenance,
         source_manifest=sources.manifest,
+        sealed_snapshot=snapshot,
     )
 
 

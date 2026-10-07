@@ -1,7 +1,7 @@
 """activation boundary/token 的单一权威防漂移合同。
 
 boundary 集合与 token 正则只在 domain common.py 定义一次；orchestration
-contracts.py 必须引用 domain 的公开符号，不得重新定义本地副本。
+contracts.py 直接使用领域 policy 类型，不得重新定义边界或 policy 副本。
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ from pathlib import Path
 from app.domain.itemized.resource_activation import (
     RESOURCE_ACTIVATION_BOUNDARIES,
     RESOURCE_ACTIVATION_TOKEN_PATTERN,
+    ResourceActivationPolicySnapshot,
 )
+from app.services.orchestration.resource_activation import contracts
 
 _CONTRACTS = Path(
     "app/services/orchestration/resource_activation/contracts.py"
@@ -34,5 +36,5 @@ def test_contracts_does_not_redefine_boundaries_or_token():
 
 def test_contracts_consumes_domain_public_symbols():
     text = _CONTRACTS.read_text(encoding="utf-8")
-    assert "RESOURCE_ACTIVATION_BOUNDARIES" in text
-    assert "RESOURCE_ACTIVATION_TOKEN_PATTERN" in text
+    assert contracts.ResourceActivationPolicySnapshot is ResourceActivationPolicySnapshot
+    assert "class ResourceActivationPolicySnapshot" not in text

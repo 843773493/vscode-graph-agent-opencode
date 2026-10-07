@@ -107,6 +107,7 @@ def _dispatch(
         activation_policy_revision=policy_revision,
         owner_session_id=SESSION_ID,
         owner_thread_id="main",
+        execution_id="execution:boundary",
         turn_id="turn:boundary",
     )
 
@@ -188,6 +189,7 @@ def test_dispatch_hash_differs_when_catalog_or_guidance_changes() -> None:
         activation_policy_revision=base.activation_policy_revision,
         owner_session_id="ses_other",
         owner_thread_id="other",
+        execution_id="execution:other",
         turn_id="turn:other",
     )
     assert identity_changed.dispatch_binding_hash == base.dispatch_binding_hash

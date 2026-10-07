@@ -207,12 +207,19 @@ def test_corrupt_typed_selection_binding_is_rejected_after_restart(
                 projector(session_id, projection_plan.thread_id, projection_plan.as_sealed_plan())
 
 
-@pytest.mark.parametrize("port", ["seal", "prepare"])
-def test_seal_failure_keeps_prepared_details_out_of_durable_storage(
+@pytest.mark.parametrize(
+    "port,projection_saver", [("seal", None), ("prepare", "protected")],
+    indirect=["projection_saver"],
+)
+def test_seal_failure_keeps_prepared_details_out_of_durable_storage(frozen_provider_activation,
     frozen_provider_wire, projection_saver, monkeypatch, port
 ) -> None:
     saver, session_id, session = projection_saver
     thread = saver._storage.main_thread_id(session_id)
+    activation = (
+        frozen_provider_activation(saver, plan_creation_idempotency_key='create:cleanup-prepare')
+        if port == 'prepare' else {}
+    )
 
     body = [{"type": "text", "text": "typed cleanup source"}]
     contribution = ContextContribution(
@@ -266,8 +273,7 @@ def test_seal_failure_keeps_prepared_details_out_of_durable_storage(
                       for key, queue in sorted(saver._prepared_dispatches.items())),
                 tuple((path.relative_to(session).as_posix(), path.read_bytes())
                       for path in sorted(session.rglob("*")) if path.is_file() and (
-                          path.name == ".context-redaction-key" or "context-plan-details" in path.parts
-                          or "context-plan-details-protected" in path.parts
+                          "context-plan-details" in path.parts
                       )),
             )
 
@@ -305,6 +311,7 @@ def test_seal_failure_keeps_prepared_details_out_of_durable_storage(
                     context_source_manager=manager, tool_set_supplier=lambda: selected,
                     **frozen_provider_wire("typed-contract", "responses"),
 
+                    **activation,
                 )
     assert durable_facts() == before
     assert saver.list_context_assemblies(session_id, saver._storage.main_thread_id(session_id)) == ()

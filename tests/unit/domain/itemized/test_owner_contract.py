@@ -10,7 +10,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
-from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
+from app.domain.itemized.identity.refs import ContextRef, ToolSetIdentityRef, ToolSetRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.domain.itemized.selection import ContextSelectionEntry
@@ -280,7 +280,15 @@ def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
     wrong = replace(entry.ref, **{field: "wrong-owner"})
     wrong_entry = replace(entry, ref=wrong)
     refs = (wrong,) if isinstance(wrong, ContextRef) else ()
-    tools = (wrong,) if isinstance(wrong, ToolSetRef) else ()
+    tools = (
+        tuple(
+            replace(ref, **{field: "wrong-owner"})
+            for ref in snapshot.tool_set_refs
+            if ref.ref_id == wrong.ref_id
+        )
+        if isinstance(wrong, ToolSetIdentityRef)
+        else ()
+    )
     if (
         field == "thread_id"
         and isinstance(wrong, ContextRef)
@@ -298,7 +306,7 @@ def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
     # registry 与 entry 一同替换，不能靠 manifest 不一致偶然拒绝，而必须检查 parent owner。
     expected_plan_error = (
         "source-mismatch: ToolSetRef 不属于当前 session/thread/plan"
-        if isinstance(wrong, ToolSetRef)
+        if isinstance(wrong, ToolSetIdentityRef)
         else (
             "source-mismatch: request-only ContextRef 不属于当前 thread"
             if field == "thread_id" and wrong.ref_type == "request_only"
@@ -318,7 +326,7 @@ def test_omission_cannot_bypass_plan_or_snapshot_owner_checks(
         )
     expected_snapshot_error = (
         "ToolSetRef 与 assembly/plan 不一致"
-        if isinstance(wrong, ToolSetRef)
+        if isinstance(wrong, ToolSetIdentityRef)
         else (
             "source-mismatch: request-only ContextRef 与 assembly thread 不一致"
             if field == "thread_id" and wrong.ref_type == "request_only"
@@ -574,7 +582,7 @@ def test_tool_ref_constructor_also_requires_thread(golden_plan: ContextRequestPl
 
 
 @pytest.mark.parametrize("field", ["session_id", "thread_id", "plan_id"])
-def test_selected_owner_identity_is_bound_in_plan_and_request_hash(
+def test_selected_owner_scope_is_bound_and_plan_identity_is_excluded_from_hash(
     golden_plan: ContextRequestPlan,
     field: str,
 ) -> None:
@@ -613,10 +621,17 @@ def test_selected_owner_identity_is_bound_in_plan_and_request_hash(
         tool_set_refs=tools,
         selection=selection,
     )
-    assert target.plan_hash() != golden_plan.plan_hash()
-    assert context_request_hash(target, "provider-1") != context_request_hash(
-        golden_plan, "provider-1"
-    )
+    if field == "plan_id":
+        # 操作身份不进入 hash；owner 合法性仍由完整 source/selection 独立验证。
+        assert target.plan_hash() == golden_plan.plan_hash()
+        assert context_request_hash(target, "provider-1") == context_request_hash(
+            golden_plan, "provider-1"
+        )
+    else:
+        assert target.plan_hash() != golden_plan.plan_hash()
+        assert context_request_hash(target, "provider-1") != context_request_hash(
+            golden_plan, "provider-1"
+        )
     assert target.refs[0].plan_id is None
     assert target.refs[0].content_hash == golden_plan.refs[0].content_hash
     assert (

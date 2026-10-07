@@ -75,11 +75,9 @@ class ForkOverlayCopyMixin:
                     "base_source_revision",
                     "base_content_length",
                     "base_content_hash",
-                    "base_redacted_stable_digest",
                     "delta_source_revision",
                     "delta_content_length",
                     "delta_content_hash",
-                    "delta_redacted_stable_digest",
                     "delta_from_revision",
                     "delta_to_revision",
                     "delta_diff_hash",
@@ -99,11 +97,9 @@ class ForkOverlayCopyMixin:
                     "base_source_revision",
                     "base_content_length",
                     "base_content_hash",
-                    "base_redacted_stable_digest",
                     "delta_source_revision",
                     "delta_content_length",
                     "delta_content_hash",
-                    "delta_redacted_stable_digest",
                     "delta_from_revision",
                     "delta_to_revision",
                     "delta_diff_hash",
@@ -113,7 +109,7 @@ class ForkOverlayCopyMixin:
                     "idempotency_key",
                 )
                 raw_rows = source_connection.execute(
-                    "SELECT overlay_id, session_id, thread_id, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? ORDER BY source_overlay_epoch, created_at, overlay_id",
+                    'SELECT overlay_id, session_id, thread_id, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ? ORDER BY source_overlay_epoch, created_at, overlay_id',
                     (source_session_id, source_thread_id, checkpoint_ns),
                 ).fetchall()
                 rows = []
@@ -177,11 +173,9 @@ class ForkOverlayCopyMixin:
             base_source_revision,
             base_content_length,
             base_content_hash,
-            base_redacted_stable_digest,
             delta_source_revision,
             delta_content_length,
             delta_content_hash,
-            delta_redacted_stable_digest,
             delta_from_revision,
             delta_to_revision,
             delta_diff_hash,
@@ -192,7 +186,7 @@ class ForkOverlayCopyMixin:
         ) in rows:
             target_overlay_id = overlay_map[source_overlay_id]
             result = target_connection.execute(
-                "INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                'INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
                     target_overlay_id,
                     target_session_id,
@@ -206,11 +200,9 @@ class ForkOverlayCopyMixin:
                     base_source_revision,
                     base_content_length,
                     base_content_hash,
-                    base_redacted_stable_digest,
                     delta_source_revision,
                     delta_content_length,
                     delta_content_hash,
-                    delta_redacted_stable_digest,
                     delta_from_revision,
                     delta_to_revision,
                     delta_diff_hash,

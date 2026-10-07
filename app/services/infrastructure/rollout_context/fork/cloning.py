@@ -67,7 +67,7 @@ class ForkCloneMixin:
 
     def _require_private_detail_staging(self) -> None:
         raise DetailUnavailableError(
-            "detail-forbidden: protected clone 只能通过原子 full-copy staging"
+            "detail-forbidden: detail clone 只能通过原子 full-copy staging"
         )
 
     def clone_rollout(
@@ -193,15 +193,6 @@ class ForkCloneMixin:
                         (source_session_id, source_thread_id, checkpoint_ns),
                     ).fetchall()
                 )
-                if source_connection.execute(
-                    "SELECT 1 FROM context_plan_details WHERE protection='protected' LIMIT 1"
-                ).fetchone():
-                    if detail_capability is None:
-                        raise DetailUnavailableError(
-                            "detail-forbidden: protected fork 未注入 capability"
-                        )
-                    detail_capability.require_protected_key()
-                    self._require_private_detail_staging()
                 for (
                     detail_ref,
                     assembly_id,
@@ -255,8 +246,6 @@ class ForkCloneMixin:
                     raise FileExistsError(target)
                 ignored_details = shutil.ignore_patterns(
                     ".rollout.write.lock",
-                    ".context-redaction-key",
-                    "context-plan-details-protected",
                     *(
                         ("context-plan-details",)
                         if detail_capability is not None
@@ -281,6 +270,10 @@ class ForkCloneMixin:
                     checkpoint_ns,
                     session_id=target_session_id,
                 ) as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    # execution 与 activation 的复合 owner 引用必须在同一事务内
+                    # 一起平移；提交时仍检查全部外键，不关闭或丢弃任何运行事实。
+                    connection.execute("PRAGMA defer_foreign_keys = ON")
                     target_rollout_id = self._rollout_id(
                         target_session_id,
                         thread_id=target_thread_id,
@@ -317,6 +310,9 @@ class ForkCloneMixin:
                         "turn_execution_links",
                         "context_assemblies",
                         "context_source_control_states",
+                        "resource_activation_snapshots",
+                        "resource_activation_bindings",
+                        "resource_activation_assembly_bindings",
                     ):
                         source_owner_count = connection.execute(
                             f"SELECT COUNT(*) FROM {owner_table} "

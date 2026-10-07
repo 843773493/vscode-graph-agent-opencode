@@ -166,6 +166,10 @@ class RolloutActiveViewMixin:
                     and stored_turn_count == len(normalized_expected)
                 ):
                     return False
+                connection.execute("BEGIN IMMEDIATE")
+                view_id = self._host._writable_active_context_view_id(
+                    connection, checkpoint_ns
+                )
                 delete_result = connection.execute(
                     "DELETE FROM context_view_turns WHERE view_id = ?",
                     (view_id,),
@@ -217,7 +221,7 @@ class RolloutActiveViewMixin:
         acceptance 可能先于 LangGraph 创建初始化 view；因此 acceptance 事务
         本身没有可更新的 view。provider dispatch 前再次执行这个 owner-side
         同步，避免首个 assembly 在 active view 已建立后仍看不到 root。只更新
-        SQLite view membership，不改变 canonical JSONL 或 view head。
+        SQLite view membership；checkpoint 引用的 head 写前切换 successor。
         """
         session_id = strict_text(session_id, field="session_id")
         thread_id = strict_text(thread_id, field="thread_id")
@@ -284,6 +288,9 @@ class RolloutActiveViewMixin:
                 )
                 if not item_added:
                     return False
+                view_id = self._host._active_context_view_id(connection, checkpoint_ns)
+                if view_id is None:
+                    raise RuntimeError("Turn root 写入后缺少 active context view")
                 view_turn = connection.execute(
                     "SELECT 1 FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
                     (view_id, turn_id),

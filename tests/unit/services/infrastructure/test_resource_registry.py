@@ -8,15 +8,24 @@ CAS 幂等、进程重启 identity 稳定,以及禁止动态 import 的静态审
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
 import pytest
 
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.resource_activation import ResourceMemberBinding
 from app.services.infrastructure.resource_platform.derivation import (
     ResourceDerivationGraph,
     SemanticInput,
     SemanticPayload,
     SemanticResourceDescriptor,
+)
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -449,3 +458,121 @@ def test_no_dynamic_import_or_plugin_surface_in_core_modules() -> None:
                 ):
                     violations.append(f"{path}:{node.lineno}:{node.func.id}")
     assert violations == [], ("发现动态执行/插件面:", violations)
+
+
+@pytest.fixture
+def registry_catalog_member() -> ResourceMemberBinding:
+    return ResourceMemberBinding(
+        member_id="mcp:server:demo", member_kind="mcp",
+        schema_hash="sha256:" + "a" * 64, server_id="server-demo",
+        revision="catalog-revision-1",
+    )
+
+
+@pytest.fixture
+def registry_catalog_snapshot() -> ResourceSnapshot:
+    payload = {"guidance": "固定目录指引"}
+    return ResourceSnapshot(
+        resource_id="mcp:catalog", resource_kind="mcp_tool_catalog",
+        facet="guidance", display_uri="boxteam://workspace/mcp/catalog",
+        revision=sha256_jcs(payload), payload=payload,
+        source_lineage=(("mcp:catalog-source", "catalog-revision-1"),),
+        generation=1,
+    )
+
+
+def test_resource_snapshot_keeps_members_typed_and_separate_from_payload(
+    registry_catalog_snapshot: ResourceSnapshot,
+    registry_catalog_member: ResourceMemberBinding,
+) -> None:
+    assert registry_catalog_snapshot.members == ()
+    custom = ResourceMemberBinding(
+        member_id="custom:demo", member_kind="custom",
+        schema_hash="sha256:" + "b" * 64, server_id=None, revision="custom-revision",
+    )
+    populated = replace(
+        registry_catalog_snapshot, members=(registry_catalog_member, custom)
+    )
+    assert populated.members == (custom, registry_catalog_member)
+    assert populated.payload is registry_catalog_snapshot.payload
+    assert populated.revision == registry_catalog_snapshot.revision
+    with pytest.raises(ValueError, match="typed tuple"):
+        replace(registry_catalog_snapshot, members=(registry_catalog_member.to_dict(),))
+    with pytest.raises(ValueError, match="member_id 必须唯一"):
+        replace(
+            registry_catalog_snapshot,
+            members=(registry_catalog_member, registry_catalog_member),
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"member_id": "mcp:server:other"},
+        {"member_kind": "custom", "server_id": None},
+        {"schema_hash": "sha256:" + "b" * 64},
+        {"server_id": "server-other"},
+        {"revision": "catalog-revision-2"},
+    ],
+)
+def test_registry_same_semantic_revision_publishes_complete_member_changes(
+    registry_catalog_snapshot: ResourceSnapshot,
+    registry_catalog_member: ResourceMemberBinding,
+    changes: dict[str, object],
+) -> None:
+    registry = ResourceRegistry()
+    first = registry.publish(
+        replace(registry_catalog_snapshot, members=(registry_catalog_member,))
+    )
+    changed = replace(registry_catalog_member, **changes)
+    second = registry.publish(replace(first, members=(changed,)))
+    assert second is not first
+    assert second.members == (changed,)
+    assert second.revision == first.revision
+    assert second.payload == first.payload
+    assert registry.publish(replace(second)) is second
+    assert registry.last_valid_snapshot(second.resource_id) is second
+    removed = registry.publish(replace(second, members=()))
+    assert removed.members == () and removed is not second
+    assert registry.snapshot(removed.resource_id) is removed
+
+
+def test_registry_capture_waits_for_cross_thread_descriptor_snapshot_publication(
+    registry_catalog_snapshot: ResourceSnapshot,
+) -> None:
+    descriptor_registered = Event()
+    release_publication = Event()
+    capture_started = Event()
+
+    class PausingRegistry(ResourceRegistry):
+        def register_descriptor(self, descriptor: SemanticResourceDescriptor) -> None:
+            super().register_descriptor(descriptor)
+            descriptor_registered.set()
+            assert release_publication.wait(2), "发布线程未收到释放信号"
+
+    registry = PausingRegistry()
+
+    def capture():
+        capture_started.set()
+        return registry.capture()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        publication = workers.submit(registry.publish, registry_catalog_snapshot)
+        try:
+            assert descriptor_registered.wait(1)
+            captured = workers.submit(capture)
+            assert capture_started.wait(1)
+            # 描述已登记而完整发布尚未完成时，另一个线程不能读到半次发布。
+            with pytest.raises(FutureTimeoutError):
+                captured.result(timeout=0.05)
+        finally:
+            release_publication.set()
+        assert publication.result(timeout=1) is registry_catalog_snapshot
+        value = captured.result(timeout=1)
+
+    assert value.snapshots == (registry_catalog_snapshot,)
+    assert tuple(item.resource_id for item in value.descriptors) == ("mcp:catalog",)
+    assert value.resource_kinds == frozenset({"mcp_tool_catalog"})
+    registry.publish(replace(registry_catalog_snapshot, generation=2))
+    assert value.snapshots[0].generation == 1
+    assert registry.capture().snapshots[0].generation == 2

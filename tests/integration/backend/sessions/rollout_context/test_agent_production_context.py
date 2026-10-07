@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,13 +24,32 @@ from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
     build_workspace_skill_catalog,
 )
+from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.resource_activation.contracts import (
+    reset_current_execution_resource_activation,
+    set_current_execution_resource_activation,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     registry_db as registry_db,  # noqa: PLC0414 - 由当前测试路径隔离真实工作区
@@ -43,7 +64,20 @@ def factory_context(registry_db, request, monkeypatch):
     skill_file = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
     skill_file.parent.mkdir(parents=True, exist_ok=True)
     skill_file.write_text("---\nname: example\ndescription: 集成测试 Skill\n---\nSkill 正文\n")
-    catalog = build_workspace_skill_catalog(workspace, registry=ResourceRegistry(), bundled_skill_groups=())
+    owner = McpCatalogOwner(
+        raw_config={"servers": {}}, workspace_root=workspace,
+        event_service=EventChannelService(),
+    )
+    asyncio.run(owner.start())
+    scope = LifetimeScope("production-context-fixture")
+    registry = ResourceRegistry(
+        publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
+    )
+    catalog = build_workspace_skill_catalog(workspace, registry=registry, bundled_skill_groups=())
+    coordinator = ResourceActivationCoordinator(
+        registry=registry, saver=saver,
+        body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+    )
     config = MagicMock()
     config.get_tool_policy_resolver.return_value = ToolPolicyResolver(
         policy_defaults={}, policy_rules={}, restrictions={},
@@ -78,6 +112,8 @@ def factory_context(registry_db, request, monkeypatch):
         session_subagent_service=MagicMock(), session_context_query_service=MagicMock(),
         workspace_session_context_client=MagicMock(), config_service=config,
         workspace_root=workspace, skill_catalog=catalog, middleware=[],
+        resource_registry=registry, resource_activation=coordinator,
+        mcp_catalog_owner=owner, reactor_lifetime_scope=scope,
     )
     bridge = captured["middleware"][-1]
     assert isinstance(bridge, SealedAssemblyDispatchBridge)
@@ -94,6 +130,15 @@ def factory_context(registry_db, request, monkeypatch):
     admission = saver.execution_admission(
         session, thread_id=thread, execution_id=accepted["initial_execution_id"],
     )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        parent = asyncio.run(coordinator.freeze_execution(
+            admission=admission, policy=ResourceActivationPolicySnapshot(
+                default_boundary="turn", boundaries={"mcp_tool_catalog": "model_call"},
+            ),
+        ))
     registered = extract_agent_tools_by_name(graph)
 
     def dispatch(task, *, system_message=None):
@@ -114,10 +159,18 @@ def factory_context(registry_db, request, monkeypatch):
             session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
             execution_admission_scope(admission, langgraph_thread_id=thread),
         ):
-            model_chain(incoming, provider_handler)
+            token = set_current_execution_resource_activation(parent, admission=admission)
+            try:
+                model_chain(incoming, provider_handler)
+            finally:
+                reset_current_execution_resource_activation(token)
         return outbound[0]
 
-    return saver, session, thread, connection, selection, manager, captured, registered, dispatch
+    try:
+        yield saver, session, thread, connection, selection, manager, captured, registered, dispatch
+    finally:
+        asyncio.run(scope.close())
+        asyncio.run(owner.shutdown())
 
 
 def test_real_factory_bridge_registers_all_seven_sources_and_uses_sealed_request(factory_context):
@@ -176,3 +229,64 @@ def test_unregistered_system_prompt_is_rejected_before_seal(factory_context):
         dispatch("unregistered", system_message=SystemMessage(content="未登记说明"))
     assert manager.prepare_pending() == before
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == (0,)
+
+
+def test_frozen_skill_tool_uses_durable_body_after_live_catalog_changes(
+    factory_context, request,
+):
+    saver, session, thread, _connection, _selection, manager, captured, _registered, dispatch = factory_context
+    dispatch("skill-catalog-initial")
+    sealed = saver._storage.list_context_assemblies(session, thread)[-1]
+    activation = saver.load_sealed_resource_activation(
+        session, thread_id=thread, assembly_id=sealed.assembly_id,
+        plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+    )
+    frozen = skill_catalog_from_activation(activation, saver.read_resource_activation_payload)
+    assert frozen is not None
+    original_body = frozen.entries["example"].body
+    workspace = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    source = workspace / ".boxteam" / "skills" / "example" / "SKILL.md"
+    source.write_text("---\nname: example\ndescription: 当前已更新目录\n---\n新的 live 正文\n")
+    bridge = captured["middleware"][-1]
+    live = build_workspace_skill_catalog(
+        workspace, registry=bridge._resource_activation._registry, bundled_skill_groups=(),
+    )
+    assert live.activation_bodies["example"] != original_body
+
+    reads = []
+
+    def sealed_catalog():
+        reads.append(sealed.assembly_id)
+        restored = saver.load_sealed_resource_activation(
+            session, thread_id=thread, assembly_id=sealed.assembly_id,
+            plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+        )
+        return skill_catalog_from_activation(restored, saver.read_resource_activation_payload)
+
+    tool = create_skill_load_tool(manager, activation_snapshot_resolver=sealed_catalog)
+    admission = saver.execution_admission(
+        session, thread_id=thread, execution_id=sealed.execution_id,
+    )
+    with (
+        session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+        execution_admission_scope(admission, langgraph_thread_id=thread),
+    ):
+        receipt = json.loads(tool.invoke({"name": "example", "mode": "tracked"}))
+        assert receipt["status"] == "loaded" and receipt["tracked"]
+        assert original_body not in json.dumps(receipt, ensure_ascii=False)
+        outbound = dispatch("skill-body-selected")
+        texts = [message.content for message in outbound.messages if isinstance(message.content, str)]
+        assert any(original_body in text for text in texts)
+        assert all("新的 live 正文" not in text for text in texts)
+        before_reads = tuple(reads)
+        result = json.loads(tool.invoke({"name": "example", "mode": "untrack"}))
+        assert result["status"] == "loaded" and not result["tracked"]
+        assert tuple(reads) == before_reads
+
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+        restored = restarted.load_sealed_resource_activation(
+            session, thread_id=thread, assembly_id=sealed.assembly_id,
+            plan_hash=sealed.plan_hash, request_hash=sealed.request_hash,
+        )
+        catalog = skill_catalog_from_activation(restored, restarted.read_resource_activation_payload)
+        assert catalog == frozen

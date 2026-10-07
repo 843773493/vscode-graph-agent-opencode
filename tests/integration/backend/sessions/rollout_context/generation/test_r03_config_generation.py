@@ -20,6 +20,11 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.prefix_epoch import EpochReason
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.services.infrastructure.mcp import (
+    MCP_GUIDANCE_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    mcp_guidance_content,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -267,8 +272,28 @@ async def test_real_run_mode_reload_rebuilds_r03_registration_and_preserves_old_
                 assert delta.source_id not in root_source_ids
         owner = ContextSourceOwnerKey(session_id, thread_id)
         control = {state.source_id: state for state in saver.load_context_source_control_states(owner)}
+        activation = saver.load_sealed_resource_activation(
+            session_id, thread_id=thread_id, assembly_id=snapshot.assembly_id,
+            plan_hash=snapshot.plan_hash, request_hash=snapshot.request_hash,
+            checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
+        )
         for revision in binding.source_revisions:
-            assert control[revision.source_id].latest_visible_committed_revision == revision.revision
+            if revision.source_id == MCP_GUIDANCE_SOURCE_ID:
+                parents = [entry for entry in activation.bindings
+                           if entry.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID]
+                assert len(parents) == 1 and parents[0].revision == revision.revision
+                content = mcp_guidance_content(saver.read_resource_activation_payload(
+                    activation, parents[0],
+                    checkpoint_ns=saved_request.runtime.execution_info.checkpoint_ns,
+                ))
+                frames = [frame for frame in binding.prefix.state.frames
+                          if frame.item_ref.source_identity == revision.source_id
+                          and frame.item_ref.source_revision == revision.revision]
+                assert len(frames) == 1 and frames[0].role == "user"
+                assert frames[0].content == content
+                assert revision.source_id not in control
+            else:
+                assert control[revision.source_id].latest_visible_committed_revision == revision.revision
         for _old_bridge, old_request, _old_admission, old_snapshot, old_bytes, _old_messages, _old_tools in sealed_records:
             restored = saver.get_context_assembly(
                 session_id, thread_id, assembly_id=old_snapshot.assembly_id,

@@ -33,9 +33,6 @@ from tests.integration.backend.sessions.test_rollout_fork_protected import (
     fork_workspace as fork_workspace,  # noqa: PLC0414 - 显式注入当前正式测试工作区
 )
 from tests.integration.backend.sessions.test_rollout_fork_protected import (
-    protected_key as protected_key,  # noqa: PLC0414 - 明确 key fixture
-)
-from tests.integration.backend.sessions.test_rollout_fork_protected import (
     protected_source as protected_source,  # noqa: PLC0414 - 不运行被导入文件
 )
 
@@ -88,7 +85,7 @@ def _target_plan_id(connection, source_plan):
 
 @pytest.mark.asyncio
 async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_binding(
-    protected_source, draft_factory, protected_key
+    protected_source, draft_factory
 ):
     saver, sealed, _record, _body = protected_source
     target_thread_id = saver._storage.main_thread_id(TARGET_SESSION_ID)
@@ -155,7 +152,7 @@ async def test_full_copy_keeps_true_draft_revision_initial_and_nullable_tool_bin
         assert json.loads(raw_current) == draft_manifest(draft.draft)
         assert not connection.execute("PRAGMA foreign_key_check").fetchall()
     with RolloutCheckpointSaver(
-        saver._storage.sessions_dir, protected_detail_key=protected_key
+        saver._storage.sessions_dir
     ) as restarted:
         assert (
             restarted.get_context_plan_registration(
@@ -388,7 +385,7 @@ async def test_draft_only_contributions_and_aliases_are_remapped_without_source_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "property_name", ["plan_id", "ref_id", "source_ref", "redacted_stable_digest"]
+    "property_name", ["plan_id", "ref_id", "source_ref"]
 )
 async def test_tool_json_schema_property_names_are_not_identity_fields(
     protected_source, property_name

@@ -3,22 +3,28 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.session_catalog_store import validate_thread_id
 from app.core.turn_execution_scope import (
     get_current_turn_execution_scope,
     reset_current_turn_execution_scope,
     set_current_turn_execution_scope,
 )
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
 )
 
 
@@ -40,6 +46,12 @@ class ThreadRuntimeBinding:
         validate_thread_id(self.thread_id)
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolInvocationBinding:
+    tool_call_id: str
+    projection_identity: ItemProjectionIdentity | None
+
+
 class ToolInvocationContext:
     """由 Agent 后端注入的单次工具调用上下文，不属于模型参数。"""
 
@@ -49,8 +61,8 @@ class ToolInvocationContext:
         tool_timeout_seconds: float | None = None,
         thread_binding: ThreadRuntimeBinding | None = None,
     ) -> None:
-        self._tool_call_id: contextvars.ContextVar[str | None] = (
-            contextvars.ContextVar("agent_tool_call_id", default=None)
+        self._invocation: contextvars.ContextVar[_ToolInvocationBinding | None] = (
+            contextvars.ContextVar("agent_tool_invocation", default=None)
         )
         self._extension_catalog_binding: contextvars.ContextVar[
             ExtensionCatalogBindingRef | None
@@ -65,22 +77,31 @@ class ToolInvocationContext:
     def set_tool_call_id(
         self,
         tool_call_id: str,
-    ) -> contextvars.Token[str | None]:
+        *,
+        projection_identity: ItemProjectionIdentity | None = None,
+    ) -> contextvars.Token[_ToolInvocationBinding | None]:
         if not tool_call_id:
             raise ValueError("tool_call_id 不能为空")
-        return self._tool_call_id.set(tool_call_id)
+        return self._invocation.set(_ToolInvocationBinding(tool_call_id, projection_identity))
 
     def reset_tool_call_id(
         self,
-        token: contextvars.Token[str | None],
+        token: contextvars.Token[_ToolInvocationBinding | None],
     ) -> None:
-        self._tool_call_id.reset(token)
+        self._invocation.reset(token)
 
     def require_tool_call_id(self) -> str:
-        tool_call_id = self._tool_call_id.get()
-        if not tool_call_id:
+        invocation = self._invocation.get()
+        if invocation is None:
             raise RuntimeError("当前工具执行上下文缺少 tool_call_id")
-        return tool_call_id
+        return invocation.tool_call_id
+
+    def require_model_call_id(self) -> str:
+        invocation = self._invocation.get()
+        identity = invocation.projection_identity if invocation is not None else None
+        if identity is None or identity.model_call_id is None:
+            raise RuntimeError("当前工具执行上下文缺少 emitting assistant 的 model_call_id")
+        return identity.model_call_id
 
     def set_extension_catalog_binding(
         self,
@@ -140,7 +161,13 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
             if tool_scope is not None
             else None
         )
-        task = asyncio.create_task(handler(request))
+        async def invoke_tool() -> ToolMessage | Command[object]:
+            delta_sink = get_current_model_delta_sink()
+            if delta_sink is not None:
+                await delta_sink.prepare_tool_execution(self._context.require_model_call_id())
+            return await handler(request)
+
+        task = asyncio.create_task(invoke_tool())
         abort_hook_id = (
             tool_scope.register_abort(lambda _reason: _cancel_task(task))
             if tool_scope is not None
@@ -181,7 +208,7 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
     def _bind(
         self,
         request: ToolCallRequest,
-    ) -> contextvars.Token[str | None]:
+    ) -> contextvars.Token[_ToolInvocationBinding | None]:
         tool_call_id = request.tool_call.get("id")
         if not isinstance(tool_call_id, str) or not tool_call_id:
             tool_name = request.tool_call.get("name")
@@ -189,7 +216,29 @@ class ToolInvocationContextMiddleware(AgentMiddleware):
                 "工具调用缺少 tool_call_id，无法建立后端调用上下文: "
                 f"tool_name={tool_name!r}"
             )
-        return self._context.set_tool_call_id(tool_call_id)
+        # ToolNode 的本次 request 来自 state 最后一个 AI carrier；只核该
+        # carrier 的实际调用，不搜索历史消息或最新的 durable model-call。
+        state = request.state
+        messages = state.get("messages", ()) if isinstance(state, Mapping) else ()
+        assistant = next(
+            (message for message in reversed(messages) if isinstance(message, AIMessage)),
+            None,
+        )
+        identity = None
+        if assistant is not None:
+            model_call_id = LangChainMessageCodec().model_call_id(assistant)
+            if model_call_id is not None:
+                candidate = ItemProjectionIdentity(
+                    projection_message_id=assistant.id, model_call_id=model_call_id,
+                )
+                if any(
+                    call.get("name") == request.tool_call.get("name")
+                    and isinstance(call.get("id"), str)
+                    and matches_tool_call_id(candidate, call["id"], tool_call_id)
+                    for call in assistant.tool_calls
+                ):
+                    identity = candidate
+        return self._context.set_tool_call_id(tool_call_id, projection_identity=identity)
 
 
 async def _cancel_task(task: asyncio.Task[object]) -> None:

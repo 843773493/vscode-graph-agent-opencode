@@ -24,6 +24,7 @@ from app.services.infrastructure.background_task_history_store import (
     BackgroundTaskHistoryStore,
 )
 
+pytestmark = pytest.mark.usefixtures("workspace_scope")
 
 class _DummyConfigService:
     def get_llm_providers(self):
@@ -316,6 +317,7 @@ class _FakeResult:
     status = "running"
     dispatch = JobDispatchSnapshotDTO(
         session_id="ses_target",
+        thread_id="thr_01a100c4a1897a2d8d40b568d23fcbe6",
         job_id=job_id,
         job_status="running",
         active_job_id=job_id,
@@ -339,6 +341,7 @@ class _FakeQueuedResult:
     status = "queued"
     dispatch = JobDispatchSnapshotDTO(
         session_id="ses_target",
+        thread_id="thr_01a100c4a1897a2d8d40b568d23fcbe6",
         job_id=job_id,
         job_status="queued",
         active_job_id="job_running",
@@ -430,6 +433,7 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
         team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_resource_owner=_FakeTerminalManagerClient(),
+        workspace_root=tmp_path,
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -474,6 +478,7 @@ async def test_agent_omits_test_tool_without_development_config(monkeypatch, tmp
         team_service=_FakeTeamService(),
         config_service=_DummyConfigService(),
         terminal_resource_owner=_FakeTerminalManagerClient(),
+        workspace_root=tmp_path,
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -499,6 +504,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(monkeypatch, tmp_pat
         session_subagent_service=_FakeSessionSubagentService(),
         config_service=_DummyConfigService(),
         terminal_resource_owner=_FakeTerminalManagerClient(),
+        workspace_root=tmp_path,
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -550,6 +556,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         team_service=_FakeTeamService(),
         config_service=config_service,
         terminal_resource_owner=_FakeTerminalManagerClient(),
+        workspace_root=tmp_path,
         invocation_context=ToolInvocationContext(),
         communication_binding_lookup=_FakeCommunicationBindingLookup(
             target_session_id="target_session", job_id="job_target_1"
@@ -763,6 +770,7 @@ async def test_send_message_to_session_defaults_to_trusted_reminder_sender(
     assert result["status"] == "running"
     assert result["target_session_state"] == {
         "session_id": "ses_target",
+        "thread_id": "thr_01a100c4a1897a2d8d40b568d23fcbe6",
         "job_id": "job_test",
         "job_status": "running",
         "active_job_id": "job_test",
@@ -895,6 +903,7 @@ async def test_send_message_to_session_returns_atomic_target_queue_snapshot():
     assert result["status"] == "queued"
     assert result["target_session_state"] == {
         "session_id": "ses_target",
+        "thread_id": "thr_01a100c4a1897a2d8d40b568d23fcbe6",
         "job_id": "job_queued",
         "job_status": "queued",
         "active_job_id": "job_running",

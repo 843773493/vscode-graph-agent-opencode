@@ -13,7 +13,9 @@ from app.domain.itemized.errors import CodeCarryingError
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
+    ResourceActivationContractError,
     ResourceActivationSnapshotRef,
+    ResourceMemberBinding,
     SourceLineageRef,
 )
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
@@ -26,9 +28,9 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 )
 
 SCHEMA_UNAVAILABLE_CODE: Final = "resource-activation-schema-unavailable"
-LINEAGE_MANIFEST_SCHEMA: Final = "resource-activation-lineage-manifest:v1"
+LINEAGE_MANIFEST_SCHEMA: Final = "resource-activation-lineage-manifest:v2"
 
-# activation storage 的错误码：只在此定义一次，store/reads/migration 统一引用，
+# activation storage 的错误码：只在此定义一次，store/reads 统一引用，
 # 杜绝同一 code 在多个文件里裸写导致的漂移。
 SCHEMA_INVALID_CODE: Final = "resource-activation-schema-invalid"
 SCHEMA_CONFLICT_CODE: Final = "resource-activation-schema-conflict"
@@ -42,10 +44,12 @@ SNAPSHOT_COLUMNS: Final = (
     "thread_id",
     "activation_snapshot_id",
     "snapshot_kind",
-    "parent_turn_snapshot_id",
+    "parent_execution_snapshot_id",
     "activation_policy_revision",
     "activation_policy_hash",
+    "activation_policy_json",
     "registry_generation",
+    "execution_id",
     "turn_id",
     "model_call_id",
     "captured_at",
@@ -71,7 +75,6 @@ BINDING_COLUMNS: Final = (
     "availability",
     "content_length",
     "content_hash",
-    "redacted_stable_digest",
     "effective_boundary",
     "captured_registry_generation",
     "source_lineage_digest",
@@ -145,13 +148,13 @@ def lineage_manifest(snapshot: ResourceActivationSnapshotRef) -> dict[str, objec
 
     return {
         "schema": LINEAGE_MANIFEST_SCHEMA,
-        "activation_snapshot_id": snapshot.activation_snapshot_id,
         "lineages": [
             {
                 "resource_id": binding.resource_id,
                 "activation_ordinal": binding.activation_ordinal,
                 "source_lineage_ref": binding.source_lineage_ref.to_dict(),
                 "source_lineage_digest": binding.source_lineage_digest,
+                "members": [member.to_dict() for member in binding.members],
             }
             for binding in snapshot.bindings
         ],
@@ -174,8 +177,12 @@ def _lineage_by_resource(
             LINEAGE_INVALID_CODE,
             "受保护 lineage manifest schema 不匹配",
         )
+    if set(manifest) != {"schema", "lineages"}:
+        raise ResourceActivationStoreError(
+            LINEAGE_INVALID_CODE, "受保护 lineage manifest 字段闭集不匹配"
+        )
     entries = manifest.get("lineages")
-    if not isinstance(entries, list) or not entries:
+    if not isinstance(entries, list):
         raise ResourceActivationStoreError(
             LINEAGE_INVALID_CODE,
             "受保护 lineage manifest 缺少 lineages",
@@ -185,6 +192,13 @@ def _lineage_by_resource(
         if not isinstance(entry, Mapping):
             raise ResourceActivationStoreError(
                 LINEAGE_INVALID_CODE, "lineage entry 必须是对象"
+            )
+        if set(entry) != {
+            "resource_id", "activation_ordinal", "source_lineage_ref",
+            "source_lineage_digest", "members",
+        }:
+            raise ResourceActivationStoreError(
+                LINEAGE_INVALID_CODE, "受保护 lineage entry 字段闭集不匹配"
             )
         resource_id = strict_text(
             entry.get("resource_id"), field="lineage.resource_id"
@@ -231,3 +245,27 @@ def _source_lineage_ref_for_binding(
             f"lineage digest 与 binding 列不一致: {resource_id}",
         )
     return lineage
+
+
+def _member_bindings_for_resource(
+    lineages: Mapping[str, Mapping[str, object]], *, resource_id: str,
+) -> tuple[ResourceMemberBinding, ...]:
+    """成员只从已认证的 protected manifest 恢复，不建立第二 catalog 集合。"""
+
+    raw = lineages[resource_id]["members"]
+    if not isinstance(raw, list):
+        raise ResourceActivationStoreError(
+            LINEAGE_INVALID_CODE, "受保护 manifest members 必须是数组",
+        )
+    try:
+        members = tuple(ResourceMemberBinding.from_dict(member) for member in raw)
+    except ResourceActivationContractError as error:
+        raise ResourceActivationStoreError(
+            LINEAGE_INVALID_CODE, f"受保护 manifest 成员事实无效: {error}",
+        ) from error
+    identities = tuple(member.member_id for member in members)
+    if identities != tuple(sorted(set(identities))):
+        raise ResourceActivationStoreError(
+            LINEAGE_INVALID_CODE, "受保护 manifest members 必须按唯一 member_id 排序",
+        )
+    return members

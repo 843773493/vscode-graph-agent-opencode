@@ -405,8 +405,6 @@ def toolset_compatibility_key(tool_ref: ToolSetRef, *, policy_hash: str) -> str:
         raise ItemSchemaError("tool_ref 必须是 ToolSetRef")
     validate_hash_token(policy_hash, "policy_hash")
     manifest_token = tool_ref.content_hash
-    if manifest_token is None:
-        manifest_token = tool_ref.redacted_stable_digest
     return sha256_jcs(
         {
             "kind": "toolset_compatibility_key",

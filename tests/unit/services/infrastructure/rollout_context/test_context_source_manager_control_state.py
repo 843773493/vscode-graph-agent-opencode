@@ -95,6 +95,7 @@ def owner(source_seal_case) -> ContextSourceOwnerKey:
 def seal_sources(
     control_state_port: RolloutCheckpointSaver,
     frozen_provider_wire: Callable[[str, str], dict[str, object]],
+    frozen_provider_activation: Callable[..., dict[str, object]],
 ) -> Callable:
     cases: dict[ContextSourceOwnerKey, SourceSealCase] = {}
 
@@ -111,7 +112,7 @@ def seal_sources(
                 payload="控制状态重建真实 seal",
             )
             cases[owner] = SourceSealCase(
-                control_state_port, owner, accepted, frozen_provider_wire,
+                control_state_port, owner, accepted, frozen_provider_wire, frozen_provider_activation,
             )
         return cases[owner].seal(manager)
 

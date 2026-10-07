@@ -54,6 +54,8 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.groups import 
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
+    TOOL_BINDING_FIELD,
+    TOOL_BINDING_KEYS,
     message_annotations,
     project_annotations,
 )
@@ -608,10 +610,20 @@ class LangChainMessageCodec:
         merged["provenance_relations"] = [
             relation.to_dict() for relation in item.provenance_relations
         ]
-        merged[CANONICAL_GROUP_FIELD] = [
-            {"item_id": member.item_id, **member.projection_manifest()}
-            for member in items
-        ]
+        manifests = []
+        for member in items:
+            manifest = {"item_id": member.item_id, **member.projection_manifest()}
+            if (
+                member.semantic_kind in TOOL_BINDING_KEYS
+                and isinstance(member.payload, Mapping)
+                and "tool_calls" not in member.payload
+            ):
+                # 保留调用/结果 carrier 的生命周期 ID，不复制 name/args/content 正文。
+                manifest[TOOL_BINDING_FIELD] = {
+                    key: member.payload[key] for key in TOOL_BINDING_KEYS[member.semantic_kind] if key in member.payload
+                }
+            manifests.append(manifest)
+        merged[CANONICAL_GROUP_FIELD] = manifests
         if isinstance(item.payload, Mapping) and isinstance(
             item.payload.get("attachments"), list
         ):

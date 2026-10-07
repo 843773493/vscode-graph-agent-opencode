@@ -96,11 +96,9 @@ class ContextPlanRegistryOwnerMixin:
                 if (
                     candidate.source_revision,
                     candidate.content_hash,
-                    candidate.redacted_stable_digest,
                 ) != (
                     item.source_revision,
                     item.content_hash,
-                    item.redacted_stable_digest,
                 ):
                     continue
                 self._plan_request_content[

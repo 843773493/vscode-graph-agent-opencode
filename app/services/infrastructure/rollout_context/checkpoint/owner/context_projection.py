@@ -24,7 +24,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     PreparedDetail,
     detail_record_from_mapping,
 )
-from app.services.mapping.itemized.selection import VerifiedRequestBody
 
 
 class ContextProjectionOwnerMixin:
@@ -161,7 +160,6 @@ class ContextProjectionOwnerMixin:
                 result.setdefault(contribution.contribution_id, contribution.body)
         if explicit_content is not None:
             result.update(explicit_content)
-        verified_digests: dict[str, str] = {}
         selected_request_entries = {
             entry.ref.ref_id: entry
             for entry in plan.selection
@@ -201,17 +199,16 @@ class ContextProjectionOwnerMixin:
             )
             detail_envelope = (
                 self._detail_store.read_prepared(
-                    prepared, include_sensitive=ref.protection == "protected",
+                    prepared, include_sensitive=ref.protection != "public",
                 ) if prepared is not None else self._detail_store.read(
                     session_id=session_id, thread_id=thread_id, record=detail_record,
-                    include_sensitive=ref.protection == "protected",
+                    include_sensitive=ref.protection != "public",
                 )
             )
             detail_body = detail_envelope.get("detail")
             if (
                 detail_body is None
                 or detail_envelope.get("protection") != ref.protection
-                or ref.protection == "redacted"
             ):
                 raise DetailUnavailableError(
                     f"detail-unavailable: detail has no permitted body: {ref_id}"
@@ -225,19 +222,8 @@ class ContextProjectionOwnerMixin:
                 raise ValueError(f"source-mismatch: request-only detail body: {ref_id}")
             result[ref_id] = detail_body
             result[body_key] = detail_body
-            if ref.redacted_stable_digest is not None:
-                if (
-                    ref.protection != "protected"
-                    or detail_record.redacted_stable_digest
-                    != ref.redacted_stable_digest
-                    or detail_envelope.get("redacted_stable_digest")
-                    != ref.redacted_stable_digest
-                ):
-                    raise ValueError(
-                        f"source-mismatch: protected detail digest: {ref_id}"
-                    )
-                verified_digests[ref_id] = ref.redacted_stable_digest
-                verified_digests[body_key] = ref.redacted_stable_digest
+            if ref.content_hash is None:
+                raise ValueError(f"source-mismatch: local request source 缺少 content_hash: {ref_id}")
             body = result[ref_id]
             body_length = payload_content_length(
                 ref.payload_kind or "structured_content",
@@ -263,12 +249,8 @@ class ContextProjectionOwnerMixin:
                 if contribution is not None
                 else sha256_jcs(body)
             )
-            expected_token = ref.content_hash or ref.redacted_stable_digest
-            actual_token = (
-                body_hash
-                if ref.content_hash is not None
-                else verified_digests.get(ref_id)
-            )
+            expected_token = ref.content_hash
+            actual_token = body_hash
             if body_length != ref.content_length or actual_token != expected_token:
                 raise ValueError(f"source-mismatch: request-only ref: {ref_id}")
         for contribution in plan.contributions:
@@ -283,27 +265,20 @@ class ContextProjectionOwnerMixin:
                 )
             body = result[contribution_id]
             expected_token = (
-                contribution.content_hash or contribution.redacted_stable_digest
+                contribution.content_hash
             )
             if (
                 contribution.content_length
                 != payload_content_length("structured_content", body)
                 or (
                     contribution_content_hash(contribution.contribution_kind, body)
-                    if contribution.content_hash is not None
-                    else verified_digests.get(contribution_id)
                 )
                 != expected_token
             ):
                 raise ValueError(
                     f"source-mismatch: context contribution: {contribution_id}"
                 )
-        return {
-            key: VerifiedRequestBody(body, verified_digests[key])
-            if key in verified_digests
-            else body
-            for key, body in result.items()
-        }
+        return result
 
     def _request_source_record(
         self,
@@ -384,7 +359,6 @@ class ContextProjectionOwnerMixin:
                         "source_revision",
                         "content_length",
                         "content_hash",
-                        "redacted_stable_digest",
                         "protection",
                         "visibility",
                         "base_delta_role",
@@ -409,7 +383,7 @@ class ContextProjectionOwnerMixin:
                     session_id=session_id,
                     thread_id=thread_id,
                     record=record,
-                    include_sensitive=ref.protection == "protected",
+                    include_sensitive=ref.protection != "public",
                 )
                 return envelope["detail"]
         raise DetailUnavailableError(
@@ -430,14 +404,6 @@ class ContextProjectionOwnerMixin:
         if ref.availability != "available":
             raise DetailUnavailableError(
                 f"detail-unavailable: request-only source unavailable: {ref.ref_id}"
-            )
-        if ref.protection == "redacted" or (
-            ref.protection == "protected"
-            and not self._detail_store.supports_protected_details
-        ):
-            raise DetailUnavailableError(
-                "detail-unavailable: non-public request-only source cannot be"
-                f" dispatched without a protected detail backend: {ref.ref_id}"
             )
         contribution = resolve_contribution_for_ref(
             ref,
@@ -544,7 +510,6 @@ class ContextProjectionOwnerMixin:
             )
             pending.append((ref, body))
         detail_by_ref: dict[str, DetailRef] = {}
-        redaction_key = None
         for ref, body in pending:
             prepared = self._detail_store.prepare(
                 session_id=session_id,
@@ -559,19 +524,9 @@ class ContextProjectionOwnerMixin:
                 protection=ref.protection,
                 checkpoint_ns=checkpoint_ns,
                 source_revision=ref.source_revision,
-                redaction_key=redaction_key,
             )
             record = prepared.record
-            if (
-                ref.redacted_stable_digest is not None
-                and record.redacted_stable_digest != ref.redacted_stable_digest
-            ):
-                raise ValueError(
-                    f"source-mismatch: request-only protected digest: {ref.ref_id}"
-                )
             prepared_details.append(prepared)
-            if prepared.redaction_key is not None:
-                redaction_key = prepared.redaction_key
             detail_by_ref[ref.ref_id] = record.detail_ref
         return plan, tuple(prepared_details), detail_by_ref
 

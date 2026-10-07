@@ -29,7 +29,6 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
         {
             "session_id": ref.session_id,
             "thread_id": ref.thread_id,
-            "plan_id": ref.plan_id,
             "ref_id": ref.ref_id,
             "ref_type": ref.ref_type,
             "semantic_kind": ref.semantic_kind,
@@ -37,7 +36,6 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
             "status": ref.status,
             "item_sequence": ref.item_sequence,
             "content_hash": ref.content_hash,
-            "redacted_stable_digest": ref.redacted_stable_digest,
                     "content_length": ref.content_length,
                     "source_revision": ref.source_revision,
                     "base_delta_role": ref.base_delta_role,
@@ -63,26 +61,22 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
             "source_revision": entry.source_revision,
             "content_length": entry.content_length,
             "content_hash": entry.content_hash,
-            "redacted_stable_digest": entry.redacted_stable_digest,
             "base_delta_role": entry.base_delta_role,
             "source_overlay_epoch": entry.source_overlay_epoch,
             "overlay_from_revision": entry.overlay_from_revision,
             "overlay_to_revision": entry.overlay_to_revision,
             "overlay_diff_hash": entry.overlay_diff_hash,
             "contribution_ordinal": entry.contribution_ordinal,
-            "detail_ref": entry.detail_ref.to_dict() if entry.detail_ref is not None else None,
             "contribution_id": entry.contribution_id,
             "ref": (
                 {
                     "session_id": entry.ref.session_id,
                     "thread_id": entry.ref.thread_id,
-                    "plan_id": entry.ref.plan_id,
                     "ref_type": entry.ref.ref_type,
                     "ref_id": entry.ref.ref_id,
                     "source_revision": entry.ref.source_revision,
                     "content_length": entry.ref.content_length,
                     "content_hash": entry.ref.content_hash,
-                    "redacted_stable_digest": entry.ref.redacted_stable_digest,
                     "overlay_from_revision": (
                         entry.ref.overlay_from_revision
                         if isinstance(entry.ref, ContextRef)
@@ -107,12 +101,10 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
         {
             "session_id": ref.session_id,
             "thread_id": ref.thread_id,
-            "plan_id": ref.plan_id,
             "tool_set_snapshot_id": ref.ref_id,
             "source_revision": ref.source_revision,
             "content_length": ref.content_length,
             "content_hash": ref.content_hash,
-            "redacted_stable_digest": ref.redacted_stable_digest,
             "tool_set_schema": ref.tool_set_schema,
             "tool_set_schema_version": ref.tool_set_schema_version,
             "tool_policy_version": ref.tool_policy_version,
@@ -133,7 +125,6 @@ def context_plan_hash(plan: ContextRequestPlan) -> str:
                 "source_revision": item.source_revision,
                 "content_length": item.content_length,
                 "content_hash": item.content_hash,
-                "redacted_stable_digest": item.redacted_stable_digest,
                 "request_only": item.request_only,
                 "visibility": item.visibility,
                 "protection": item.protection,

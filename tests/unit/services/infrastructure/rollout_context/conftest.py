@@ -34,6 +34,7 @@ class SourceSealCase:
     owner: ContextSourceOwnerKey
     accepted: dict[str, object]
     wire_contract: Callable[[str, str], dict[str, object]]
+    activation_contract: Callable[..., dict[str, object]]
     request_number: int = 0
 
     def manager(
@@ -75,6 +76,9 @@ class SourceSealCase:
                 seal_idempotency_key=f"source-seal:{self.request_number}",
                 context_source_manager=manager, tool_set_supplier=lambda: selected,
                 **self.wire_contract("source-contract", "chat_completions"),
+                **self.activation_contract(
+                    self.saver, plan_creation_idempotency_key=f"source-create:{self.request_number}",
+                ),
             )
         snapshot = self.saver.get_context_assembly(
             session, thread, assembly_id=str(prepared["assembly_id"]),
@@ -88,6 +92,7 @@ class SourceSealCase:
 def source_seal_case(
     tmp_path: Path, session_bundle_factory: Callable[[Path, str], Path],
     frozen_provider_wire: Callable[[str, str], dict[str, object]],
+    frozen_provider_activation: Callable[..., dict[str, object]],
 ) -> SourceSealCase:
     sessions = tmp_path / ".boxteam" / "sessions"
     session = f"ses_{create_uuid_hex()}"
@@ -101,5 +106,5 @@ def source_seal_case(
     )
     return SourceSealCase(
         saver, ContextSourceOwnerKey(session, saver._storage.main_thread_id(session)),
-        accepted, frozen_provider_wire,
+        accepted, frozen_provider_wire, frozen_provider_activation,
     )

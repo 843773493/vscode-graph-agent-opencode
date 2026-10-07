@@ -101,7 +101,6 @@ class ContextSourceOverlayMixin:
             role_source_revision = getattr(overlay, f"{role}_source_revision", None)
             content_length = getattr(overlay, f"{role}_content_length", None)
             content_hash = getattr(overlay, f"{role}_content_hash", None)
-            redacted_digest = getattr(overlay, f"{role}_redacted_stable_digest", None)
             # storage 会在正文输入时规范化 manifest，但不反向修改调用方的
             # overlay 对象。这里必须从同一 canonical preimage 得到 runtime
             # contribution manifest，否则“持久化已成功、内存 registry 却
@@ -131,18 +130,11 @@ class ContextSourceOverlayMixin:
                 raise ValueError(
                     f"source overlay {role} source_revision 必须是非空字符串或 null: {ref}"
                 )
-            if redacted_digest is not None and (
-                not isinstance(redacted_digest, str) or not redacted_digest
-            ):
-                raise ValueError(
-                    f"source overlay {role} redacted digest 必须是非空字符串或 null: {ref}"
-                )
             contribution = ContextContribution(
                 contribution_id=f"overlay:{overlay_id}:{role}",
                 source_kind=f"overlay:{source_kind}",
                 source_revision=role_source_revision,
                 content_hash=content_hash,
-                redacted_stable_digest=redacted_digest,
                 request_only=True,
                 source_binding=SourceBinding(
                     source_ref=ref, overlay_ref=ref, overlay_id=overlay_id,

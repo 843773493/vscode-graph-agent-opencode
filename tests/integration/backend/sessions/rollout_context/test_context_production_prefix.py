@@ -23,9 +23,10 @@ from tests.integration.backend.sessions.rollout_context.test_context_plan_regist
     registry_db as registry_db,  # noqa: PLC0414 - fixture 根据当前测试文件隔离产物
 )
 
+pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 
 @pytest.fixture
-def production_context(frozen_provider_wire, registry_db):
+def production_context(frozen_provider_activation, frozen_provider_wire, registry_db):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.main_thread_id(session)
     manager = ContextSourceManager(
@@ -57,6 +58,7 @@ def production_context(frozen_provider_wire, registry_db):
                 context_source_manager=manager,
                 tool_set_supplier=supplier or (lambda: selected),
                 **frozen_provider_wire("production-provider", target_format),
+                **frozen_provider_activation(saver, plan_creation_idempotency_key='create:' + key),
             )
 
     return saver, session, thread, connection, manager, prepare

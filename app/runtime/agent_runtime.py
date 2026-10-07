@@ -37,7 +37,11 @@ from app.core.lifecycle import LifetimeScope
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
 from app.services.infrastructure.node_debug.service import NodeDebugService
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
@@ -46,6 +50,9 @@ if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
+    from app.services.orchestration.resource_activation import (
+        ResourceActivationCoordinator,
+    )
 
 
 class AgentRuntimeDependencyProvider(Protocol):
@@ -82,6 +89,8 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_mcp_tools(self) -> list[BaseTool]: ...
 
+    def get_mcp_catalog_owner(self) -> McpCatalogOwner: ...
+
     def get_node_debug_service(self) -> NodeDebugService: ...
 
 
@@ -97,6 +106,9 @@ def build_session_agent_runtime(
     job_event_bus: JobEventBusProtocol,
     dependency_provider: AgentRuntimeDependencyProvider,
     mcp_tools: Sequence[BaseTool],
+    mcp_catalog_owner: McpCatalogOwner | None = None,
+    resource_registry: ResourceRegistry,
+    resource_activation: ResourceActivationCoordinator | None,
     name: str | None = None,
     override_model: Any = None,
     model_routing_enabled: bool = True,
@@ -145,6 +157,9 @@ def build_session_agent_runtime(
             dependency_provider.get_session_message_delivery_service()
         ),
         mcp_tools=mcp_tools,
+        mcp_catalog_owner=mcp_catalog_owner,
+        resource_registry=resource_registry,
+        resource_activation=resource_activation,
         node_debug_service=(
             # TODO: 所有外部 runtime provider 补齐该依赖后移除兼容分支。
             dependency_provider.get_node_debug_service()

@@ -15,12 +15,15 @@ from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
+    ResourceActivationPolicySnapshot,
     ResourceActivationSnapshotRef,
+    ResourceMemberBinding,
     ResourceProvenanceRef,
     SourceLineageRef,
     resource_bindings_hash,
 )
 
+DEFAULT_POLICY = ResourceActivationPolicySnapshot.from_dict({"default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call"}})
 
 def lineage(*, revision: str = "raw-rev-1") -> SourceLineageRef:
     return SourceLineageRef(
@@ -39,16 +42,15 @@ def binding(
 ) -> ResourceProvenanceRef:
     resolved = lineage() if lineage_ref is None else lineage_ref
     return ResourceProvenanceRef(
-        resource_id="skill:demo:metadata",
+        resource_id="mcp:catalog" if boundary == "model_call" else "skill:demo:metadata",
         display_uri=display_uri,
-        resource_kind="skills",
+        resource_kind="mcp_tool_catalog" if boundary == "model_call" else "skills",
         owner_scope="workspace",
         facet="metadata",
         revision="rev-1",
         availability="available",
         content_length=12,
         content_hash=sha256_jcs("body"),
-        redacted_stable_digest=None,
         source_lineage_ref=resolved,
         source_lineage_digest=resolved.digest,
         activation_ordinal=ordinal,
@@ -58,15 +60,17 @@ def binding(
     )
 
 
-def turn_snapshot(**overrides: object) -> ResourceActivationSnapshotRef:
+def execution_snapshot(**overrides: object) -> ResourceActivationSnapshotRef:
     base: dict[str, object] = {
         "activation_snapshot_id": "turn:ses_a:thr_b:turn_1",
-        "snapshot_kind": "turn",
-        "activation_policy_revision": "resource-activation-policy:v1:abc",
-        "activation_policy_hash": sha256_jcs({"policy": 1}),
+        "snapshot_kind": "execution",
+        "activation_policy_revision": DEFAULT_POLICY.revision,
+        "activation_policy_hash": DEFAULT_POLICY.hash,
+        "activation_policy": DEFAULT_POLICY,
         "registry_generation": 3,
         "owner_session_id": "ses_a",
         "owner_thread_id": "thr_b",
+        "execution_id": "execution_1",
         "turn_id": "turn_1",
         "captured_at": "2026-01-01T00:00:00+00:00",
         "bindings": (binding(),),
@@ -85,9 +89,11 @@ def model_call_snapshot(
         "snapshot_kind": "model_call",
         "activation_policy_revision": parent.activation_policy_revision,
         "activation_policy_hash": parent.activation_policy_hash,
+        "activation_policy": parent.activation_policy,
         "registry_generation": parent.registry_generation + 1,
         "owner_session_id": parent.owner_session_id,
         "owner_thread_id": parent.owner_thread_id,
+        "execution_id": parent.execution_id,
         "turn_id": parent.turn_id,
         "captured_at": "2026-01-01T00:00:01+00:00",
         "bindings": (*parent.bindings, model_call_binding),
@@ -98,10 +104,10 @@ def model_call_snapshot(
     return ResourceActivationSnapshotRef(**base)  # type: ignore[arg-type]
 
 
-def test_snapshot_kind_turn_and_model_call_bind_parent_and_ordinal() -> None:
-    turn = turn_snapshot()
-    assert turn.snapshot_kind == "turn"
-    assert turn.parent is None and turn.parent_turn_snapshot_id is None
+def test_snapshot_kind_execution_and_model_call_bind_parent_and_ordinal() -> None:
+    turn = execution_snapshot()
+    assert turn.snapshot_kind == "execution"
+    assert turn.parent is None and turn.parent_execution_snapshot_id is None
     assert turn.model_call_id is None
 
     call_binding = binding(
@@ -111,7 +117,7 @@ def test_snapshot_kind_turn_and_model_call_bind_parent_and_ordinal() -> None:
     )
     call = model_call_snapshot(turn, call_binding)
     assert call.snapshot_kind == "model_call"
-    assert call.parent_turn_snapshot_id == turn.activation_snapshot_id
+    assert call.parent_execution_snapshot_id == turn.activation_snapshot_id
     assert call.model_call_id == "call_1"
     # 同一 assembly 允许混合 boundary，由逐 binding 字段区分。
     assert [item.effective_boundary for item in call.bindings] == [
@@ -121,15 +127,15 @@ def test_snapshot_kind_turn_and_model_call_bind_parent_and_ordinal() -> None:
     assert call.bindings[: len(turn.bindings)] == turn.bindings
 
 
-@pytest.mark.parametrize("invalid", ["Turn", "call", "", "turn ", "model-call"])
+@pytest.mark.parametrize("invalid", ["turn", "Turn", "call", "", "turn ", "model-call"])
 def test_snapshot_kind_rejects_unknown_values(invalid: str) -> None:
     with pytest.raises(ResourceActivationContractError) as excinfo:
-        turn_snapshot(snapshot_kind=invalid)
+        execution_snapshot(snapshot_kind=invalid)
     assert excinfo.value.code == "resource-activation-schema-invalid"
 
 
 def test_model_call_snapshot_requires_typed_parent_relation() -> None:
-    turn = turn_snapshot()
+    turn = execution_snapshot()
     call_binding = binding(ordinal=2, boundary="model_call")
     with pytest.raises(ResourceActivationContractError) as excinfo:
         ResourceActivationSnapshotRef(
@@ -137,9 +143,11 @@ def test_model_call_snapshot_requires_typed_parent_relation() -> None:
             snapshot_kind="model_call",
             activation_policy_revision=turn.activation_policy_revision,
             activation_policy_hash=turn.activation_policy_hash,
+            activation_policy=turn.activation_policy,
             registry_generation=4,
             owner_session_id=turn.owner_session_id,
             owner_thread_id=turn.owner_thread_id,
+            execution_id=turn.execution_id,
             turn_id=turn.turn_id,
             captured_at="2026-01-01T00:00:01+00:00",
             bindings=(*turn.bindings, call_binding),
@@ -150,12 +158,12 @@ def test_model_call_snapshot_requires_typed_parent_relation() -> None:
         model_call_snapshot(turn, call_binding, model_call_id=None)
     assert excinfo.value.code == "resource-activation-parent-invalid"
     with pytest.raises(ResourceActivationContractError) as excinfo:
-        turn_snapshot(parent=turn)
+        execution_snapshot(parent=turn)
     assert excinfo.value.code == "resource-activation-parent-invalid"
 
 
 def test_model_call_snapshot_must_reuse_parent_binding_bytes() -> None:
-    turn = turn_snapshot()
+    turn = execution_snapshot()
     changed = replace(turn.bindings[0], revision="rev-2")
     call_binding = binding(ordinal=2, boundary="model_call")
     with pytest.raises(ResourceActivationContractError) as excinfo:
@@ -166,8 +174,8 @@ def test_model_call_snapshot_must_reuse_parent_binding_bytes() -> None:
 def test_lineage_only_change_keeps_bindings_hash_but_changes_provenance_hash() -> None:
     """9.1 核心语义：raw 来源变化但选中语义未变时 bindings/plan hash 不抖动。"""
 
-    original = turn_snapshot()
-    advanced = turn_snapshot(bindings=(binding(lineage_ref=lineage(revision="raw-rev-2")),))
+    original = execution_snapshot()
+    advanced = execution_snapshot(bindings=(binding(lineage_ref=lineage(revision="raw-rev-2")),))
 
     assert advanced.bindings_hash == original.bindings_hash
     assert advanced.bindings[0].revision == original.bindings[0].revision
@@ -178,10 +186,14 @@ def test_lineage_only_change_keeps_bindings_hash_but_changes_provenance_hash() -
 
 
 def test_policy_and_boundary_changes_only_move_provenance_hash() -> None:
-    original = turn_snapshot()
-    republished = turn_snapshot(
-        activation_policy_revision="resource-activation-policy:v1:def",
-        activation_policy_hash=sha256_jcs({"policy": 2}),
+    original = execution_snapshot()
+    updated_policy = ResourceActivationPolicySnapshot.from_dict({
+        "default_boundary": "turn", "overrides": {"mcp_tool_catalog": "model_call", "skills": "turn"},
+    })
+    republished = execution_snapshot(
+        activation_policy_revision=updated_policy.revision,
+        activation_policy_hash=updated_policy.hash,
+        activation_policy=updated_policy,
         registry_generation=9,
         bindings=(replace(binding(), captured_registry_generation=9),),
     )
@@ -190,22 +202,23 @@ def test_policy_and_boundary_changes_only_move_provenance_hash() -> None:
 
 
 def test_additional_semantic_selection_changes_bindings_hash() -> None:
-    original = turn_snapshot()
+    original = execution_snapshot()
     extra = replace(
         binding(),
         resource_id="skill:demo:activation",
         facet="activation",
         activation_ordinal=2,
     )
-    widened = turn_snapshot(bindings=(*original.bindings, extra))
+    widened = execution_snapshot(bindings=(*original.bindings, extra))
     assert widened.bindings_hash != original.bindings_hash
     assert widened.bindings_hash == resource_bindings_hash((*original.bindings, extra))
 
 
 def test_runtime_identity_and_captured_at_do_not_change_content_hashes() -> None:
-    original = turn_snapshot()
-    reshaped = turn_snapshot(
+    original = execution_snapshot()
+    reshaped = execution_snapshot(
         activation_snapshot_id="turn:ses_a:thr_b:turn_2",
+        execution_id="execution_2",
         turn_id="turn_2",
         captured_at="2030-12-31T23:59:59+00:00",
     )
@@ -214,7 +227,7 @@ def test_runtime_identity_and_captured_at_do_not_change_content_hashes() -> None
 
 
 def test_model_call_identity_does_not_change_content_hashes() -> None:
-    turn = turn_snapshot()
+    turn = execution_snapshot()
     call_binding = binding(ordinal=2, boundary="model_call")
     first = model_call_snapshot(turn, call_binding)
     second = model_call_snapshot(
@@ -238,20 +251,20 @@ def test_ordinal_conflict_is_rejected() -> None:
         activation_ordinal=1,
     )
     with pytest.raises(ResourceActivationContractError) as excinfo:
-        turn_snapshot(bindings=(binding(), duplicate))
+        execution_snapshot(bindings=(binding(), duplicate))
     assert excinfo.value.code == "resource-activation-ordinal-conflict"
 
 
 def test_bindings_are_normalized_to_activation_ordinal_order() -> None:
     first = binding(ordinal=1)
     second = replace(binding(ordinal=2), resource_id="skill:demo:activation")
-    snapshot = turn_snapshot(bindings=(second, first))
+    snapshot = execution_snapshot(bindings=(second, first))
     assert [item.activation_ordinal for item in snapshot.bindings] == [1, 2]
     assert snapshot.bindings_hash == resource_bindings_hash((first, second))
 
 
 def test_snapshot_roundtrip_preserves_hashes_and_typed_refs() -> None:
-    turn = turn_snapshot()
+    turn = execution_snapshot()
     call_binding = binding(ordinal=2, boundary="model_call")
     call = model_call_snapshot(turn, call_binding)
     for snapshot in (turn, call):
@@ -264,25 +277,25 @@ def test_snapshot_roundtrip_preserves_hashes_and_typed_refs() -> None:
         assert restored.activation_provenance_hash == snapshot.activation_provenance_hash
         ref = restored.bindings[0].snapshot_ref
         assert isinstance(ref, DetailRef)
-    assert call.to_dict()["parent_turn_snapshot_id"] == turn.activation_snapshot_id
-    assert turn.to_dict()["parent_turn_snapshot_id"] is None
+    assert call.to_dict()["parent_execution_snapshot_id"] == turn.activation_snapshot_id
+    assert turn.to_dict()["parent_execution_snapshot_id"] is None
 
 
 def test_restore_requires_parent_relation_and_matching_id() -> None:
-    turn = turn_snapshot()
+    turn = execution_snapshot()
     call = model_call_snapshot(turn, binding(ordinal=2, boundary="model_call"))
     raw = json.loads(json.dumps(call.to_dict()))
     with pytest.raises(ResourceActivationContractError) as excinfo:
         ResourceActivationSnapshotRef.from_dict(raw)
     assert excinfo.value.code == "resource-activation-parent-invalid"
-    raw["parent_turn_snapshot_id"] = "turn:elsewhere"
+    raw["parent_execution_snapshot_id"] = "turn:elsewhere"
     with pytest.raises(ResourceActivationContractError) as excinfo:
         ResourceActivationSnapshotRef.from_dict(raw, parent=turn)
     assert excinfo.value.code == "resource-activation-parent-invalid"
 
 
 def test_restore_rejects_tampered_hashes() -> None:
-    raw = json.loads(json.dumps(turn_snapshot().to_dict()))
+    raw = json.loads(json.dumps(execution_snapshot().to_dict()))
     for name in ("bindings_hash", "activation_provenance_hash"):
         tampered = {**raw, name: sha256_jcs({"tampered": name})}
         with pytest.raises(ResourceActivationContractError) as excinfo:
@@ -331,6 +344,7 @@ SNAPSHOT_REJECTIONS = [
     ({}, "resource-activation-absolute-path-rejected", "path"),
     ({}, "resource-activation-absolute-path-rejected", "locator"),
     ({}, "resource-activation-legacy-field-rejected", "read_file_path"),
+    ({}, "resource-activation-legacy-field-rejected", "parent_turn_snapshot_id"),
     ({}, "resource-activation-legacy-field-rejected", "metadata"),
     ({}, "resource-activation-field-alias-rejected", "snapshot_id"),
     ({}, "resource-activation-field-alias-rejected", "created_at"),
@@ -341,7 +355,7 @@ SNAPSHOT_REJECTIONS = [
 def test_snapshot_restore_rejects_forbidden_fields(
     _marker: dict[str, object], code: str, field: str
 ) -> None:
-    raw = json.loads(json.dumps(turn_snapshot().to_dict()))
+    raw = json.loads(json.dumps(execution_snapshot().to_dict()))
     raw[field] = "value"
     with pytest.raises(ResourceActivationContractError) as excinfo:
         ResourceActivationSnapshotRef.from_dict(raw)
@@ -370,7 +384,7 @@ def test_provenance_restore_rejects_forbidden_fields(code: str, field: str) -> N
 
 
 def test_unregistered_field_is_schema_invalid() -> None:
-    raw = json.loads(json.dumps(turn_snapshot().to_dict()))
+    raw = json.loads(json.dumps(execution_snapshot().to_dict()))
     raw["extra_field"] = 1
     with pytest.raises(ResourceActivationContractError) as excinfo:
         ResourceActivationSnapshotRef.from_dict(raw)
@@ -430,13 +444,119 @@ def test_lineage_ref_rejects_duplicate_source_and_locator_fields() -> None:
     assert excinfo.value.code == "resource-activation-provider-locator-rejected"
 
 
-def test_turn_snapshot_rejects_model_call_bound_binding() -> None:
+def test_execution_snapshot_rejects_model_call_bound_binding() -> None:
     with pytest.raises(ResourceActivationContractError) as excinfo:
-        turn_snapshot(bindings=(binding(boundary="model_call"),))
+        execution_snapshot(bindings=(binding(boundary="model_call"),))
     assert excinfo.value.code == "resource-activation-schema-invalid"
 
 
-def test_snapshot_requires_at_least_one_binding() -> None:
+def test_empty_execution_selection_is_valid_but_model_call_cannot_omit_parent() -> None:
+    # 领域不知道 Registry 中有哪些 required 资源；空选择仍是完整冻结事实。
+    root = execution_snapshot(bindings=())
+    assert ResourceActivationSnapshotRef.from_dict(root.to_dict()) == root
+    parent = execution_snapshot()
     with pytest.raises(ResourceActivationContractError) as excinfo:
-        turn_snapshot(bindings=())
-    assert excinfo.value.code == "resource-activation-schema-invalid"
+        model_call_snapshot(parent, binding(ordinal=2, boundary="model_call"), bindings=())
+    assert excinfo.value.code == "resource-activation-parent-invalid"
+
+
+@pytest.mark.parametrize("turn_id", ["turn_1", None])
+def test_execution_identity_and_nullable_turn_survive_model_call_roundtrip(turn_id: str | None) -> None:
+    root = execution_snapshot(turn_id=turn_id)
+    call = model_call_snapshot(root, binding(ordinal=2, boundary="model_call"))
+    restored = ResourceActivationSnapshotRef.from_dict(call.to_dict(), parent=root)
+    assert restored.execution_id == root.execution_id
+    assert restored.turn_id == turn_id
+    assert restored.parent_execution_snapshot_id == root.activation_snapshot_id
+    with pytest.raises(ResourceActivationContractError, match="owner/execution"):
+        model_call_snapshot(root, binding(ordinal=2, boundary="model_call"), execution_id="other-execution")
+
+
+def test_complete_policy_is_immutable_and_hash_checked() -> None:
+    root = execution_snapshot()
+    with pytest.raises(TypeError):
+        root.activation_policy.boundaries["skills"] = "model_call"
+    raw = root.to_dict()
+    raw["activation_policy"] = {"default_boundary": "model_call", "overrides": {}}
+    with pytest.raises(ResourceActivationContractError) as error:
+        ResourceActivationSnapshotRef.from_dict(raw)
+    assert error.value.code == "resource-activation-hash-mismatch"
+
+
+def test_execution_root_can_be_empty_for_model_call_only_policy() -> None:
+    policy = ResourceActivationPolicySnapshot.from_dict({
+        "default_boundary": "model_call", "overrides": {},
+    })
+    root = execution_snapshot(
+        activation_policy=policy, activation_policy_revision=policy.revision,
+        activation_policy_hash=policy.hash, bindings=(),
+    )
+    assert root.bindings == ()
+    assert ResourceActivationSnapshotRef.from_dict(root.to_dict()) == root
+
+
+def member(
+    *, member_id: str = "mcp:server:demo", member_kind: str = "mcp",
+    schema_hash: str = "sha256:" + "a" * 64,
+    server_id: str | None = "server-demo", revision: str = "catalog-revision-1",
+) -> ResourceMemberBinding:
+    return ResourceMemberBinding(
+        member_id=member_id, member_kind=member_kind, schema_hash=schema_hash,
+        server_id=server_id, revision=revision,
+    )
+
+
+def test_members_roundtrip_sort_identity_and_preserve_v1_hash_preimages() -> None:
+    first = member()
+    custom = member(member_id="custom:demo", member_kind="custom", server_id=None)
+    base = execution_snapshot()
+    populated = replace(base, bindings=(replace(base.bindings[0], members=(first, custom)),))
+    assert populated.bindings[0].members == (custom, first)
+    assert ResourceActivationSnapshotRef.from_dict(populated.to_dict()) == populated
+    assert populated.bindings_hash == base.bindings_hash
+    assert populated.activation_provenance_hash == base.activation_provenance_hash
+
+    # 成员字段完整受独立 manifest 保护，但不改写已冻结的两个 v1 内容 hash。
+    for changed in (
+        replace(first, member_id="mcp:server:other"),
+        replace(first, schema_hash="sha256:" + "b" * 64),
+        replace(first, server_id="server-other"),
+        replace(first, revision="catalog-revision-2"),
+        custom,
+    ):
+        altered = replace(base, bindings=(replace(base.bindings[0], members=(changed,)),))
+        assert altered.bindings_hash == base.bindings_hash
+        assert altered.activation_provenance_hash == base.activation_provenance_hash
+        assert altered.to_dict() != populated.to_dict()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"member_kind": "unknown"}, {"schema_hash": "sha256:jcs:v1:" + "a" * 64},
+        {"server_id": None}, {"member_id": "/host/tool"}, {"server_id": "https://host/tools"},
+        {"revision": ""}, {"schema_hash": "sha256:" + "A" * 64},
+    ],
+)
+def test_member_rejects_noncanonical_or_locator_values(overrides: dict[str, object]) -> None:
+    with pytest.raises(ResourceActivationContractError):
+        member(**overrides)
+
+
+def test_members_closed_fields_and_unique_identity_are_mandatory() -> None:
+    first = member()
+    with pytest.raises(ResourceActivationContractError, match="必须唯一"):
+        replace(binding(), members=(first, first))
+    with pytest.raises(ResourceActivationContractError):
+        member(member_kind="custom", server_id="server-demo")
+    raw = first.to_dict()
+    for field in raw:
+        incomplete = {key: value for key, value in raw.items() if key != field}
+        with pytest.raises(ResourceActivationContractError):
+            ResourceMemberBinding.from_dict(incomplete)
+    with pytest.raises(ResourceActivationContractError):
+        ResourceMemberBinding.from_dict({**raw, "target": "alias"})
+    binding_raw = binding().to_dict()
+    binding_raw.pop("members")
+    with pytest.raises(ResourceActivationContractError, match="缺少必填字段"):
+        ResourceProvenanceRef.from_dict(binding_raw)

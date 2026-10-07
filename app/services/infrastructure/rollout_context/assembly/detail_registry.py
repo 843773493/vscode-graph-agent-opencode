@@ -26,7 +26,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import stri
 _COLUMNS = (
     "detail_ref", "session_id", "thread_id", "checkpoint_ns", "assembly_id", "detail_id",
     "detail_kind", "retention_class", "visibility", "relative_path", "content_hash",
-    "source_revision", "content_length", "redacted_stable_digest", "protection",
+    "source_revision", "content_length", "protection",
     "availability", "required", "sensitive", "status", "created_at", "expires_at",
 )
 
@@ -83,8 +83,6 @@ def validate_assembly_details(
             needs_body and record["availability"] != "available"
         ):
             raise RuntimeError("detail-unavailable: sealed assembly detail 状态或 namespace 不一致")
-        if record["required"] == 1 and record["protection"] == "redacted":
-            raise RuntimeError("detail-unavailable: required detail 不能仅有 redacted marker")
         if entry is not None and (
             entry.source_revision != record["source_revision"]
             or entry.content_length != record["length"]
@@ -93,8 +91,6 @@ def validate_assembly_details(
             or entry.availability != record["availability"]
             or record["detail_kind"] != "request_source"
             or record["retention_class"] != "request_replay"
-            or (entry.redacted_stable_digest is not None
-                and entry.redacted_stable_digest != record["redacted_stable_digest"])
         ):
             raise RuntimeError("source-mismatch: sealed assembly detail source manifest 不一致")
         if entry is None and (
@@ -150,7 +146,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
             key, ref.session_id, ref.thread_id, detail.checkpoint_ns, ref.assembly_id, ref.detail_id,
             detail.detail_kind, detail.retention_class, detail.visibility,
             detail.relative_path, detail.content_hash, detail.source_revision,
-            detail.length, detail.redacted_stable_digest, detail.protection,
+            detail.length, detail.protection,
             detail.availability, int(detail.required), int(detail.sensitive),
             detail.status, datetime.now(UTC).isoformat(), detail.expires_at,
         )
@@ -162,7 +158,7 @@ class DetailRegistryMixin(DetailRetentionMixin):
         if existing is not None:
             _detail_mapping(tuple(existing))
             # created_at 属于首次 registry 提交；其余 manifest 均不可覆盖。
-            if tuple(existing[:19]) != values[:19] or tuple(existing[20:]) != values[20:]:
+            if tuple(existing[:18]) != values[:18] or tuple(existing[19:]) != values[19:]:
                 raise ValueError("source-mismatch: detail_ref 已存在但 manifest 冲突")
             return
         result = connection.execute(

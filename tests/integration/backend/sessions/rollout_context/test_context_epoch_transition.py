@@ -96,6 +96,7 @@ class EpochCase:
     connection: sqlite3.Connection
     accepted: dict[str, object]
     wire: Callable[[str, str], dict[str, object]]
+    activation: Callable[..., dict[str, object]]
     publisher: PublishedResourceOwner
     descriptors: tuple[ContextSourceDescriptor, ...]
     stack: ExitStack
@@ -140,6 +141,9 @@ class EpochCase:
                 plan_creation_idempotency_key="epoch-create:" + key, seal_idempotency_key="epoch-seal:" + key,
                 context_source_manager=self.manager, tool_set_supplier=supplier or (lambda: selected),
                 **self.wire(model, "chat_completions"),
+                **self.activation(
+                    self.saver, plan_creation_idempotency_key="epoch-create:" + key,
+                ),
             )
 
     def checkpoint(self, key: str, *, compaction: bool = False, messages: list[BaseMessage] | None = None) -> None:
@@ -166,7 +170,9 @@ class EpochCase:
             )
 
     def restart(self) -> None:
-        self.saver = self.stack.enter_context(RolloutCheckpointSaver(self.saver._storage.sessions_dir))
+        self.saver = self.stack.enter_context(RolloutCheckpointSaver(
+            self.saver._storage.sessions_dir,
+        ))
         self.bind_manager()
 
     def snapshot(self, prepared: dict[str, object]):
@@ -273,7 +279,7 @@ def epoch_db(request, session_bundle_factory):
 
 
 @pytest.fixture
-def epoch_case(epoch_db, frozen_provider_wire):
+def epoch_case(epoch_db, frozen_provider_wire, frozen_provider_activation):
     saver, session, connection, accepted = epoch_db
     thread = saver._storage.main_thread_id(session)
     publisher = PublishedResourceOwner()
@@ -292,7 +298,8 @@ def epoch_case(epoch_db, frozen_provider_wire):
     )
     with ExitStack() as stack:
         case = EpochCase(saver, ContextSourceOwnerKey(session, thread), connection,
-                         accepted, frozen_provider_wire, publisher, descriptors, stack)
+                         accepted, frozen_provider_wire, frozen_provider_activation,
+                         publisher, descriptors, stack)
         case.config = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
         case.bind_manager()
         case.manager.observe("agents:workspace", "基础规则第一版", revision="agents:1")
@@ -503,6 +510,9 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     second = case.advance()
     old_snapshot = canonical_json_bytes(case.snapshot(second).to_dict())
     case.rewind("checkpoint-first")
+    # activation 是 seal 的已提交前置；原子性基线从冻结完成后开始。
+    with case.scope():
+        case.activation(case.saver, plan_creation_idempotency_key="epoch-create:retry")
     before, pending, view = case.source_rows(), case.pending_rows(), case.active_view()
     selected, dispatch, versions = case.selected_rows(), case.dispatch_rows(), case.checkpoint_versions()
     before_items = case.connection.execute("SELECT item_id, content_hash FROM item_catalog ORDER BY item_sequence").fetchall()
@@ -512,8 +522,7 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
         return tuple(
             (path.relative_to(root).as_posix(), path.read_bytes()) for path in sorted(root.rglob("*"))
             if path.is_file() and (
-                path.name == ".context-redaction-key" or "context-plan-details" in path.parts
-                or "context-plan-details-protected" in path.parts
+                "context-plan-details" in path.parts
             )
         )
 
@@ -581,19 +590,19 @@ def test_source_failure_keeps_view_pending_versions_and_retry_is_atomic(epoch_ca
     assert len(new_contributions) == 2
     for ordinal, row in enumerate(new_contributions, next_source_ordinal):
         delta = expected_drafts[row[0]]
-        assert row[:15] == (
+        assert row[:14] == (
             row[0], delta.source_kind, delta.revision,
             contribution_content_hash("notice", delta.content),
             payload_content_length("structured_content", delta.content),
-            None, 1, "notice", "internal", "public", None, None,
+            1, "notice", "internal", "public", None, None,
             ordinal, "direct", "immutable",
         )
-        assert json.loads(row[15]) == {
+        assert json.loads(row[14]) == {
             "root_placement": "tail_only",
             "source_binding": SourceBinding(source_ref=delta.source_id).to_dict(),
             "extensions": {},
         }
-        assert isinstance(row[16], str) and row[16]
+        assert isinstance(row[15], str) and row[15]
         assert case.connection.execute(
             "SELECT assembly_id FROM context_assembly_contributions WHERE contribution_id=?", (row[0],),
         ).fetchall() == []
@@ -1294,7 +1303,9 @@ async def test_full_copy_localizes_versions_transition_and_prefix_before_target_
         source_session_id=case.owner.session_id, target_session_id=target_session,
         mode="full_rollout_copy",
     )
-    saver = case.stack.enter_context(RolloutCheckpointSaver(case.saver._storage.sessions_dir))
+    saver = case.stack.enter_context(RolloutCheckpointSaver(
+        case.saver._storage.sessions_dir,
+    ))
     target_thread = saver._storage.main_thread_id(target_session)
     connection = case.stack.enter_context(saver._storage._connect(
         target_thread, "", session_id=target_session,
@@ -1384,7 +1395,7 @@ async def test_full_copy_localizes_versions_transition_and_prefix_before_target_
         payload_kind="text", root_item_id="item-target-epoch-ingress",
     )
     target = EpochCase(
-        saver, owner, connection, accepted, case.wire,
+        saver, owner, connection, accepted, case.wire, case.activation,
         PublishedResourceOwner(snapshots=dict(case.publisher.snapshots)), case.descriptors, case.stack,
     )
     target.bind_manager()

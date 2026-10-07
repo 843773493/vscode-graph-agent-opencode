@@ -160,6 +160,27 @@ class ContextPlanCompositionMixin:
                     (session_id, thread_id, checkpoint_ns, contribution.contribution_id)
                 ] = request_content
 
+    def selected_context_message_sequences(self, snapshot: RolloutReadSnapshot) -> list[int]:
+        """闭合校验与计划选择共用同一 typed carrier 去重规则。"""
+        view_id = self._storage.active_view_id(snapshot)
+        sequences = self._storage._view_message_sequences_from_connection(
+            snapshot.connection, view_id,
+        )
+        superseded = superseded_stream_item_ids(self._storage.committed_context_items(snapshot))
+        if not superseded:
+            return sequences
+        rows = snapshot.connection.execute(
+            "SELECT member.item_id, message.message_sequence "
+            "FROM context_view_items AS member "
+            "JOIN item_catalog AS item ON item.item_id = member.item_id "
+            "JOIN messages AS message ON message.jsonl_offset = item.jsonl_offset "
+            "AND message.jsonl_length = item.jsonl_length "
+            "WHERE member.view_id = ? AND member.visible = 1",
+            (view_id,),
+        ).fetchall()
+        excluded = {sequence for item_id, sequence in rows if item_id in superseded}
+        return [sequence for sequence in sequences if sequence not in excluded]
+
     def compose_committed_context_plan(
         self,
         session_id: str,
@@ -296,7 +317,6 @@ class ContextPlanCompositionMixin:
                     )
                     manifest_length = overlay.get(f"{role}_content_length")
                     manifest_hash = overlay.get(f"{role}_content_hash")
-                    manifest_digest = overlay.get(f"{role}_redacted_stable_digest")
                     manifest_length = _manifest_optional_non_negative_int(
                         manifest_length,
                         field=f"{role}_content_length",
@@ -305,17 +325,8 @@ class ContextPlanCompositionMixin:
                         manifest_hash,
                         field=f"{role}_content_hash",
                     )
-                    manifest_digest = _manifest_optional_string(
-                        manifest_digest,
-                        field=f"{role}_redacted_stable_digest",
-                    )
-                    if manifest_hash is not None and manifest_digest is not None:
-                        raise ValueError(
-                            "plan-order-integrity: overlay manifest 不能同时带两种 hash token: "
-                            f"{source_ref}"
-                        )
                     complete_manifest = manifest_length is not None and (
-                        manifest_hash is not None or manifest_digest is not None
+                        manifest_hash is not None
                     )
                     if overlay_content is not None and not complete_manifest:
                         raise ValueError(
@@ -329,7 +340,6 @@ class ContextPlanCompositionMixin:
                         "source_ref": source_ref,
                         "content_length": manifest_length,
                         "content_hash_value": manifest_hash,
-                        "redacted_stable_digest": manifest_digest,
                         "availability": "available" if complete_manifest else "unavailable",
                     }
                     ref_kwargs.update(
@@ -450,8 +460,8 @@ class ContextPlanCompositionMixin:
                             if raw["content_hash"] is not None
                             else None
                         ),
-                        # digest-only manifest 不携带明文；正文能力留在 owner
-                        # cache/detail backend，seal 时独立读取并验证 HMAC。
+                        # registry 只保存 manifest；正文由同一 owner 的 cache/detail 提供，
+                        # seal 独立校验精确正文的 content_hash。
                         body=(
                             self._request_only_content.get(
                                 (session_id, thread_id, checkpoint_ns, contribution_id)
@@ -471,14 +481,6 @@ class ContextPlanCompositionMixin:
                             _manifest_non_negative_int(
                                 raw["content_length"], field="content_length"
                             )
-                        ),
-                        redacted_stable_digest=(
-                            _manifest_string(
-                                raw["redacted_stable_digest"],
-                                field="redacted_stable_digest",
-                            )
-                            if raw.get("redacted_stable_digest") is not None
-                            else None
                         ),
                         visibility=_manifest_string(
                             raw.get("visibility"), field="visibility"

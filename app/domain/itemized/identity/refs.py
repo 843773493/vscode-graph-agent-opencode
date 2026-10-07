@@ -44,18 +44,8 @@ def ref_identity(ref: object) -> tuple[str, str, str]:
 
 
 def require_manifest_token(ref: object) -> str:
-    content_hash = getattr(ref, "content_hash", None)
-    redacted_digest = getattr(ref, "redacted_stable_digest", None)
-    if (content_hash is None) == (redacted_digest is None):
-        raise ItemSchemaError(
-            "context ref 必须恰好携带 content_hash 或 redacted_stable_digest"
-        )
-    token = content_hash if content_hash is not None else redacted_digest
-    return validate_hash_token(
-        token,
-        "context ref manifest token",
-        redacted=redacted_digest is not None,
-    )
+    """内部 ref 只绑定精确正文 content_hash。"""
+    return validate_hash_token(getattr(ref, "content_hash", None), "context ref content_hash")
 
 
 def unique_ref_identities(refs: object) -> tuple[object, ...]:
@@ -76,9 +66,9 @@ def selection_ref_identity(ref: object) -> tuple[str, ...]:
     排序或哈希范围选择时退回只看 (ref_type, ref_id)；否则同一 Session 下
     两个 sibling thread 的同名 ref 会被误判为重复或互相覆盖。
 
-    ToolSetRef 尚未携带 thread_id（其 registry scope 由 plan 内
-    tool_set_snapshot_id 表达），因此这里的键只保留 plan/assembly 内唯一的
-    ref_id；不得用 session_id 冒充 thread，也不得据此声称已 thread 化。
+    ToolSetRef 的 session/thread/plan/assembly 归属由所属 plan 和 snapshot
+    完整校验；这里在已校验的 plan/assembly 范围内使用唯一 tagged ref_id，
+    只选择 identity，不读取 omitted 工具正文或 policy。
     """
     if getattr(ref, "ref_type", None) == "tool_set":
         return (
@@ -125,7 +115,6 @@ class ContextRef:
     source_revision: str | None
     content_length: int | None
     content_hash: str | None
-    redacted_stable_digest: str | None
     source_ref: str | DetailRef | None
     base_delta_role: str
     source_overlay_epoch: int | None
@@ -151,7 +140,6 @@ class ContextRef:
         plan_id: str | None = None,
         item_sequence: int | None = None,
         content_length: int | None = None,
-        redacted_stable_digest: str | None = None,
         source_ref: str | DetailRef | None = None,
         base_delta_role: str = "none",
         source_overlay_epoch: int | None = None,
@@ -174,7 +162,6 @@ class ContextRef:
         object.__setattr__(self, "source_revision", source_revision)
         object.__setattr__(self, "content_length", content_length)
         object.__setattr__(self, "content_hash", content_hash)
-        object.__setattr__(self, "redacted_stable_digest", redacted_stable_digest)
         object.__setattr__(self, "source_ref", source_ref)
         object.__setattr__(self, "base_delta_role", base_delta_role)
         object.__setattr__(self, "source_overlay_epoch", source_overlay_epoch)
@@ -235,15 +222,6 @@ class ContextRef:
             raise ItemSchemaError("ContextRef.content_length 必须是非负整数")
         if self.content_hash is not None:
             _non_empty_string(self.content_hash, "ContextRef.content_hash")
-        if self.redacted_stable_digest is not None:
-            _non_empty_string(
-                self.redacted_stable_digest,
-                "ContextRef.redacted_stable_digest",
-            )
-            if self.protection == DetailProtection.PUBLIC:
-                raise ItemSchemaError(
-                    "ContextRef.redacted_stable_digest 不得用于 public protection"
-                )
         if self.semantic_kind is not None:
             _non_empty_string(self.semantic_kind, "ContextRef.semantic_kind")
             if self.semantic_kind not in {item.value for item in SemanticKind}:
@@ -260,11 +238,7 @@ class ContextRef:
             _non_empty_string(self.status, "ContextRef.status")
             if self.status not in {item.value for item in CanonicalItemStatus}:
                 raise ItemSchemaError(f"未知 ContextRef.status: {self.status}")
-        if (
-            self.availability == "available"
-            or self.content_hash is not None
-            or self.redacted_stable_digest is not None
-        ):
+        if self.availability == 'available' or self.content_hash is not None:
             require_manifest_token(self)
         if self.ref_type == "canonical_item":
             if self.availability == "available":
@@ -276,8 +250,6 @@ class ContextRef:
                 _non_empty_string(self.source_revision, "ContextRef.source_revision")
             if all(value is not None for value in (self.semantic_kind, self.payload_kind, self.status)):
                 validate_item_compatibility(self.semantic_kind, self.payload_kind, self.status)
-            if self.redacted_stable_digest is not None:
-                raise ItemSchemaError("canonical ContextRef 必须使用 item content_hash")
             if self.item_sequence is not None and (
                 not isinstance(self.item_sequence, int)
                 or isinstance(self.item_sequence, bool)
@@ -405,7 +377,6 @@ class ContextRef:
         content: object | None = None,
         content_length: int | None = None,
         content_hash_value: str | None = None,
-        redacted_stable_digest: str | None = None,
         source_ref: str | DetailRef | None = None,
         base_delta_role: str = "none",
         source_overlay_epoch: int | None = None,
@@ -435,10 +406,6 @@ class ContextRef:
                 raise ItemSchemaError(
                     f"request-only ref content_length 与正文不一致: {ref_id}"
                 )
-            if redacted_stable_digest is not None:
-                raise ItemSchemaError(
-                    f"带正文的 request-only ref 不得使用 redacted digest: {ref_id}"
-                )
             actual_hash = sha256_jcs(content)
             if content_hash_value is not None and content_hash_value != actual_hash:
                 raise ItemSchemaError(
@@ -460,7 +427,6 @@ class ContextRef:
             payload_kind=payload_kind,
             content_length=body_length,
             content_hash=body_hash,
-            redacted_stable_digest=redacted_stable_digest,
             source_ref=source_ref if source_ref is not None else ref_id,
             base_delta_role=base_delta_role,
             source_overlay_epoch=source_overlay_epoch,
@@ -501,7 +467,6 @@ class ContextRef:
             "protection": self.protection,
             "availability": self.availability,
             "content_hash": self.content_hash,
-            "redacted_stable_digest": self.redacted_stable_digest,
         }
         return result
 
@@ -520,7 +485,6 @@ class ToolSetIdentityRef:
     tool_policy_version: str
     content_length: int
     content_hash: str | None = None
-    redacted_stable_digest: str | None = None
     protection: str = DetailProtection.PUBLIC
     availability: str = DetailAvailability.AVAILABLE
     assembly_id: str | None = None
@@ -546,25 +510,10 @@ class ToolSetIdentityRef:
             or self.content_length < 0
         ):
             raise ItemSchemaError("ToolSetRef.content_length 必须是非负整数")
-        if (self.content_hash is None) == (self.redacted_stable_digest is None):
-            raise ItemSchemaError(
-                "ToolSetRef 必须恰好包含 content_hash 或 redacted_stable_digest"
-            )
+        if self.content_hash is None:
+            raise ItemSchemaError('ToolSetRef 必须包含 content_hash ')
         if self.content_hash is not None:
             validate_hash_token(self.content_hash, "ToolSetRef.content_hash")
-        if self.redacted_stable_digest is not None:
-            validate_hash_token(
-                self.redacted_stable_digest,
-                "ToolSetRef.redacted_stable_digest",
-                redacted=True,
-            )
-        if (
-            self.redacted_stable_digest is not None
-            and self.protection == DetailProtection.PUBLIC
-        ):
-            raise ItemSchemaError(
-                "带 redacted_stable_digest 的 ToolSetRef 必须声明 redacted 或 protected protection"
-            )
         if not isinstance(self.protection, str) or self.protection not in {
             item.value for item in DetailProtection
         }:
@@ -673,12 +622,6 @@ class ToolSetRef(ToolSetIdentityRef):
             raise ItemSchemaError("ToolSetRef.tool_policy 必须是 object")
         if not isinstance(self.tools, tuple):
             raise ItemSchemaError("ToolSetRef.tools 必须是 tuple")
-        if self.protection != DetailProtection.PUBLIC and (
-            self.tools or self.tool_policy
-        ):
-            raise ItemSchemaError(
-                "受保护或脱敏 ToolSetRef 不得携带原始 tools/tool_policy"
-            )
         tool_ids: list[str] = []
         for tool in self.tools:
             if not isinstance(tool, Mapping):
@@ -690,15 +633,14 @@ class ToolSetRef(ToolSetIdentityRef):
             raise ItemSchemaError("ToolSetRef.tools 必须按 tool_id 稳定排序")
         if len(tool_ids) != len(set(tool_ids)):
             raise ItemSchemaError("ToolSetRef.tools 不得包含重复 tool_id")
-        if self.protection == DetailProtection.PUBLIC:
-            wire_order = self.tool_policy.get("wire_tool_order")
-            if (
-                not isinstance(wire_order, (list, tuple))
-                or not all(isinstance(identity, str) for identity in wire_order)
-                or len(wire_order) != len(tool_ids)
-                or set(wire_order) != set(tool_ids)
-            ):
-                raise ItemSchemaError("ToolSetRef.wire_tool_order 必须完整且唯一")
+        wire_order = self.tool_policy.get("wire_tool_order")
+        if (
+            not isinstance(wire_order, (list, tuple))
+            or not all(isinstance(identity, str) for identity in wire_order)
+            or len(wire_order) != len(tool_ids)
+            or set(wire_order) != set(tool_ids)
+        ):
+            raise ItemSchemaError("ToolSetRef.wire_tool_order 必须完整且唯一")
 
     def manifest_preimage(self) -> dict[str, object]:
         return {
@@ -710,15 +652,7 @@ class ToolSetRef(ToolSetIdentityRef):
         }
 
     def validate_manifest(self) -> None:
-        # 脱敏/受保护的 registry entry 只携带稳定摘要和原文长度；普通
-        # reader 不能拿空的 tools/tool_policy 重建伪 manifest，也不能把
-        # metadata entry 误判为一个长度/哈希不匹配的公开 manifest。真正
-        # 的 provider dispatch 仍会在 project_tool_set_ref 中因缺少
-        # content_hash 而返回 detail-unavailable。
-        if self.redacted_stable_digest is not None:
-            if self.protection == DetailProtection.PUBLIC:
-                raise ItemSchemaError("redacted ToolSetRef 不得声明 public protection")
-            return
+        # 内部 manifest 始终保留完整正文；protection 仅由访问与展示 owner 消费。
         encoded = canonical_json_bytes(self.manifest_preimage())
         if len(encoded) != self.content_length:
             raise ItemSchemaError("ToolSetRef manifest content_length 不匹配")

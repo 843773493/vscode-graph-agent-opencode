@@ -82,7 +82,6 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
         "overlay_to_revision",
         "overlay_diff_hash",
         "content_hash",
-        "redacted_stable_digest",
         "visibility",
         "protection",
         "availability",
@@ -95,12 +94,11 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
     if set(raw) - required_ref_fields:
         raise ItemSchemaError("ContextRef 含未知或不属于 ref 的字段")
     content_hash_value = raw.get("content_hash")
-    digest_value = raw.get("redacted_stable_digest")
     availability_value = raw["availability"]
     if not isinstance(availability_value, str):
         raise ItemSchemaError("ContextRef.availability 必须是字符串")
     available = availability_value == "available"
-    if available and (content_hash_value is None) == (digest_value is None):
+    if available and content_hash_value is None:
         raise ItemSchemaError(
             "ContextAssemblySnapshot ContextRef 必须恰好包含一个 hash token"
         )
@@ -120,9 +118,6 @@ def parse_context_ref(raw: Mapping[str, object]) -> ContextRef:
         payload_kind=_optional_string(raw, "payload_kind", "ContextRef.payload_kind"),
         status=_optional_string(raw, "status", "ContextRef.status"),
         content_hash=_optional_string(raw, "content_hash", "ContextRef.content_hash"),
-        redacted_stable_digest=_optional_string(
-            raw, "redacted_stable_digest", "ContextRef.redacted_stable_digest"
-        ),
         source_revision=_optional_string(raw, "source_revision", "ContextRef.source_revision"),
         item_sequence=_optional_positive_int(
             raw.get("item_sequence"), "ContextRef.item_sequence"
@@ -167,7 +162,6 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         "source_revision",
         "content_hash",
         "content_length",
-        "redacted_stable_digest",
         "request_only",
         "contribution_kind",
         "visibility",
@@ -260,9 +254,6 @@ def parse_contribution(raw: object, *, sealed: bool = True) -> ContextContributi
         content_length=_required_non_negative_int(
             raw["content_length"], "ContextContribution.content_length"
         ),
-        redacted_stable_digest=_optional_string(
-            raw, "redacted_stable_digest", "ContextContribution.redacted_stable_digest"
-        ),
         assembly_id=_optional_string(raw, "assembly_id", "ContextContribution.assembly_id"),
         contribution_ordinal=_optional_non_negative_int(
             raw["contribution_ordinal"],
@@ -303,7 +294,6 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
             "tool_policy_version",
             "content_length",
             "content_hash",
-            "redacted_stable_digest",
             "protection",
             "availability",
             "tool_policy",
@@ -318,7 +308,7 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
     if set(tool) - {
         "session_id", "thread_id", "ref_type", "ref_id", "plan_id", "assembly_id", "source_revision",
         "tool_set_schema", "tool_set_schema_version", "tool_policy_version", "content_length",
-        "content_hash", "redacted_stable_digest", "protection", "availability", "tool_policy", "tools",
+        "content_hash",  "protection", "availability", "tool_policy", "tools",
     }:
         raise ItemSchemaError("ToolSetRef 含未知或不属于 registry 的字段")
     return ToolSetRef(
@@ -343,9 +333,6 @@ def parse_tool_set_ref(tool: object) -> ToolSetRef:
             tool["content_length"], "ToolSetRef.content_length"
         ),
         content_hash=_optional_string(tool, "content_hash", "ToolSetRef.content_hash"),
-        redacted_stable_digest=_optional_string(
-            tool, "redacted_stable_digest", "ToolSetRef.redacted_stable_digest"
-        ),
         protection=_required_string(tool["protection"], "ToolSetRef.protection"),
         availability=_required_string(
             tool["availability"], "ToolSetRef.availability"

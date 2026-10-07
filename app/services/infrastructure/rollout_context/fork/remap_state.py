@@ -88,9 +88,7 @@ class FullCopyRemapState:
         self.detail_rows: tuple[tuple[object, ...], ...] = ()
         self.session_root: Path | None = None
         self.detail_capability: ForkDetailCapability | None = None
-        self.target_session_key: bytes | None = None
         self.detail_records: dict[str, DetailRecord] = {}
-        self.detail_digests: dict[str, str] = {}
         self.source_assembly_fingerprints: dict[str, tuple[str, str, str]] = {}
         self.plan_sources: tuple[CopiedPlanSource, ...] = ()
         self.plan_failure_rows: tuple[tuple[object, ...], ...] = ()

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
+from uuid import UUID
 
 from app.agents.providers.wire_finalize import (
     WIRE_PROJECTOR_ID,
@@ -33,6 +34,7 @@ class SealedAssemblyDispatch:
     """同一已提交 snapshot 与它的可选 Responses 原生投影。"""
 
     snapshot: ContextAssemblySnapshot
+    callback_model_call_id: str
     native_projection: dict[str, object] | None = None
 
 _SEALED_ASSEMBLY_DISPATCH: ContextVar[SealedAssemblyDispatch | None] = ContextVar(
@@ -45,9 +47,11 @@ _SEALED_ASSEMBLY_DISPATCH: ContextVar[SealedAssemblyDispatch | None] = ContextVa
 def sealed_assembly_dispatch_scope(
     snapshot: ContextAssemblySnapshot,
     *,
+    callback_model_call_id: str,
     native_projection: Mapping[str, object] | None = None,
 ) -> Iterator[None]:
     """仅在本次 handler 内绑定 Saver snapshot；两协议都必须有真实封存。"""
+    UUID(callback_model_call_id)
     if not isinstance(snapshot, ContextAssemblySnapshot):
         raise TypeError("source-mismatch: dispatch 需要已提交 ContextAssemblySnapshot")
     if not isinstance(snapshot.request_hash_preimage, Mapping):
@@ -78,7 +82,7 @@ def sealed_assembly_dispatch_scope(
     elif snapshot.target_format != "chat_completions" or native_projection is not None:
         raise ValueError("source-mismatch: sealed dispatch protocol/native projection 不一致")
     binding = SealedAssemblyDispatch(
-        snapshot=snapshot,
+        snapshot=snapshot, callback_model_call_id=callback_model_call_id,
         native_projection=dict(native_projection) if native_projection is not None else None,
     )
     token = _SEALED_ASSEMBLY_DISPATCH.set(copy.deepcopy(binding))

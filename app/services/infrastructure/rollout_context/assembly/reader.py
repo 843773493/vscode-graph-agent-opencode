@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    read_registration,
+)
 from app.services.infrastructure.rollout_context.assembly.validation import (
-    json_text,
     non_negative_int,
     optional_text,
     required_text,
@@ -100,13 +100,12 @@ class ContextAssemblyReaderMixin:
             raise RuntimeError(
                 f"context assembly manifest status 非法或未封存: {assembly_id}"
             )
-        value = json_text(
-            required_text(row[0], field="snapshot_json"),
-            field="snapshot_json",
+        registration = read_registration(
+            connection, session_id, thread_id, required_text(row[2], field="plan_id"),
         )
-        if not isinstance(value, Mapping):
-            raise TypeError(f"context assembly snapshot 不是 object: {assembly_id}")
-        snapshot = ContextAssemblySnapshot.from_dict(value)
+        snapshot = registration.sealed_snapshot
+        if snapshot is None:
+            raise RuntimeError(f"source-mismatch: context assembly 的 plan 尚未 sealed: {assembly_id}")
         if (snapshot.assembly_id, snapshot.session_id, snapshot.thread_id) != (
             assembly_id,
             session_id,
@@ -137,15 +136,10 @@ class ContextAssemblyReaderMixin:
         self._validate_context_assembly_manifest(
             connection,
             snapshot,
+            registration=registration,
             header_detail_ref=optional_text(row[9], field="detail_ref"),
             checkpoint_ns=checkpoint_ns,
         )
-        try:
-            snapshot.validate_hashes()
-        except ItemSchemaError as error:
-            raise RuntimeError(
-                f"context assembly hash 校验失败: {assembly_id}: {error}"
-            ) from error
         header_key = optional_text(row[9], field="detail_ref")
         header_ref = detail_ref_from_key(header_key) if header_key is not None else None
         if header_ref is not None:

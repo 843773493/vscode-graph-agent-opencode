@@ -115,6 +115,7 @@ def read_registration(
             "source-mismatch: 未修订 draft 与初始 creation manifest 不一致"
         )
     validate_registry(connection, plan, row[5])
+    snapshot = None
     if row[4] == "sealed":
         assembly = connection.execute(
             "SELECT snapshot_json, detail_ref, status FROM context_assemblies "
@@ -138,6 +139,7 @@ def read_registration(
         seal_idempotency_key=row[6],
         seal_hash=row[7],
         seal_input_hash=row[12],
+        sealed_snapshot=snapshot,
     )
 
 

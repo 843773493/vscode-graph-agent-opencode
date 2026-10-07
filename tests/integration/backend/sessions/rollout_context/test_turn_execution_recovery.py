@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
@@ -278,11 +279,9 @@ def _source_overlay_for_test(*, thread_id: str, **overrides: object) -> SimpleNa
         "base_source_revision": "policy-base-rev-1",
         "base_content_length": None,
         "base_content_hash": None,
-        "base_redacted_stable_digest": None,
         "delta_source_revision": None,
         "delta_content_length": None,
         "delta_content_hash": None,
-        "delta_redacted_stable_digest": None,
         "delta_from_revision": None,
         "delta_to_revision": None,
         "delta_diff_hash": None,
@@ -295,11 +294,12 @@ def _source_overlay_for_test(*, thread_id: str, **overrides: object) -> SimpleNa
     return SimpleNamespace(**values)
 
 
-def test_acceptance_and_provider_retry_keep_one_real_user_root(
+def test_acceptance_and_provider_retry_keep_one_real_user_root(frozen_provider_activation,
     frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
     execution_scope,
 ) -> None:
+    model_call_1, model_call_2 = str(uuid4()), str(uuid4())
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
@@ -318,34 +318,35 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
             seal_idempotency_key="acceptance-retry:seal",
             context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
             **frozen_provider_wire("test-provider-v1", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key='acceptance-retry:create', model_call_id=model_call_1),
         )
     assembly_1 = str(prepared["assembly_id"])
     saver.register_model_call(
         SESSION_ID,
         execution_id=execution_id,
-        model_call_id="model-call-attempt-1",
+        model_call_id=model_call_1,
         attempt=1,
         provider="test-provider",
         assembly_id=assembly_1,
     )
     saver.update_model_call_outcome(
         SESSION_ID,
-        model_call_id="model-call-attempt-1",
+        model_call_id=model_call_1,
         outcome="failed",
         dispatch_state="failed",
     )
     saver.register_model_call(
         SESSION_ID,
         execution_id=execution_id,
-        model_call_id="model-call-attempt-2",
+        model_call_id=model_call_2,
         attempt=2,
         provider="test-provider",
-        retry_of_model_call_id="model-call-attempt-1",
+        retry_of_model_call_id=model_call_1,
         assembly_id=assembly_1,
     )
     saver.update_model_call_outcome(
         SESSION_ID,
-        model_call_id="model-call-attempt-2",
+        model_call_id=model_call_2,
         outcome="completed_empty",
         dispatch_state="completed",
     )
@@ -377,10 +378,10 @@ def test_acceptance_and_provider_retry_keep_one_real_user_root(
         "completed_empty",
     )
     assert model_calls == [
-        ("model-call-attempt-1", 1, None, "failed"),
-        ("model-call-attempt-2", 2, "model-call-attempt-1", "completed_empty"),
+        (model_call_1, 1, None, "failed"),
+        (model_call_2, 2, model_call_1, "completed_empty"),
     ]
-    assert assembly_model_call_id == "model-call-attempt-2"
+    assert assembly_model_call_id == model_call_2
 
 
 def test_turn_projection_uses_canonical_tool_identity_before_message_projection(
@@ -864,17 +865,18 @@ def test_interrupted_turn_resumes_after_restart_without_new_user_root(
 
 
 @pytest.mark.asyncio
-async def test_partial_stream_item_and_anchor_survive_runtime_restart(
+async def test_partial_stream_item_and_anchor_survive_runtime_restart(frozen_provider_activation,
     tmp_path: Path,
     session_bundle_factory,
     execution_scope,
     frozen_provider_wire,
 ) -> None:
     """真实 stream/runtime 写入的 partial item 与定位 anchor 可跨进程恢复。"""
+    model_call_id = str(uuid4())
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
-    accepted = _accept(saver, SESSION_ID, initial_execution_id="model-call-partial")
+    accepted = _accept(saver, SESSION_ID, initial_execution_id=model_call_id)
     thread = saver._storage.main_thread_id(SESSION_ID)
     resolver = get_session_path_resolver(sessions_dir)
     stream_store = MessageStreamStore(path_resolver=resolver)
@@ -907,8 +909,9 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
             seal_idempotency_key="partial-stream:seal",
             context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
             **frozen_provider_wire("test-provider", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key='partial-stream:create', model_call_id=model_call_id),
         )
-        await runtime.start_model("model-call-partial", "test-provider")
+        await runtime.start_model(model_call_id, "test-provider")
         await runtime.accept_message_chunk(
             AIMessageChunk(
                 content=[
@@ -950,16 +953,16 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     partial_item = partial_items[0]
     # block 身份已提升为 model-call scoped（见 _scoped_block_id）；item_id 由
     # execution_id + model_call_id + scoped block_id 组成，本用例中 execution_id
-    # 与 model_call_id 同为 model-call-partial。
+    # 与 model_call_id 同为当前 admission 的真实 UUID。
     assert partial_item.item_id == (
-        "item-model-call-partial-model-model-call-partial-block-"
-        "model-call-partial:block:answer-partial"
+        f"item-{model_call_id}-model-{model_call_id}-block-"
+        f"{model_call_id}:block:answer-partial"
     )
     assert partial_item.payload == "流式前半流式后半"
     assert partial_item.producer_ref == {
         "producer_kind": "provider",
-        "producer_id": "model-call-partial",
-        "invocation_id": "model-call-partial",
+        "producer_id": model_call_id,
+        "invocation_id": model_call_id,
     }
 
     with sqlite3.connect(_rollout_db(sessions_dir, SESSION_ID)) as connection:
@@ -978,7 +981,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     # item_parts.part_id 直接使用 canonical 的 scoped block_id，provider 原始
     # part id 只是其中的后缀。
     assert (part_id, part_ordinal, content_hash) == (
-        "model-call-partial:block:answer-partial",
+        f"{model_call_id}:block:answer-partial",
         0,
         partial_item.content_hash,
     )
@@ -1035,7 +1038,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
         key: model_call[key]
         for key in ("model_call_id", "attempt", "outcome", "status")
     } == {
-        "model_call_id": "model-call-partial",
+        "model_call_id": model_call_id,
         "attempt": 1,
         "outcome": "user_interrupt",
         "status": "failed",
@@ -1056,12 +1059,12 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
             "partial",
         )
     } == {
-        "block_id": "model-call-partial:block:answer-partial",
+        "block_id": f"{model_call_id}:block:answer-partial",
         "block_index": 0,
         "carrier_type": "text",
         "status": "completed",
         "text": "流式前半流式后半",
-        "model_call_id": "model-call-partial",
+        "model_call_id": model_call_id,
         "projection": "streaming",
         "completion_reason": "user_interrupt",
         "partial": True,
@@ -1073,7 +1076,7 @@ async def test_partial_stream_item_and_anchor_survive_runtime_restart(
     [{}, {"root_item_id": "item-explicit-root"}],
     ids=["default", "explicit"],
 )
-def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(
+def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(frozen_provider_activation,
     frozen_provider_wire,
     tmp_path: Path,
     session_bundle_factory,
@@ -1161,6 +1164,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(
             seal_idempotency_key="root-roundtrip:seal",
             context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
             **wire,
+            **frozen_provider_activation(saver, plan_creation_idempotency_key='root-roundtrip:create'),
         )
     assert prepared["messages"] == projected
     assembly_id = str(prepared["assembly_id"])
@@ -1194,6 +1198,7 @@ def test_acceptance_root_identity_survives_checkpoint_seal_and_restart(
             seal_idempotency_key="root-roundtrip:seal",
             context_source_manager=manager, tool_set_supplier=refuse_live_supplier,
             **wire,
+            **frozen_provider_activation(restarted, plan_creation_idempotency_key='root-roundtrip:create'),
         )
     assert sealed_retry["assembly_id"] == assembly_id
     assert sealed_retry["messages"] == projected
@@ -1297,11 +1302,9 @@ def test_committed_overlay_selection_is_epoch_stable_after_restart(
             base_source_revision=f"policy-base-rev-{epoch}",
             base_content_length=None,
             base_content_hash=None,
-            base_redacted_stable_digest=None,
             delta_source_revision=f"policy-delta-rev-{epoch}",
             delta_content_length=None,
             delta_content_hash=None,
-            delta_redacted_stable_digest=None,
             delta_from_revision=f"policy-base-rev-{epoch}",
             delta_to_revision=f"policy-delta-rev-{epoch}",
             delta_diff_hash=f"diff-{epoch}",
@@ -2035,7 +2038,7 @@ def test_partial_content_part_anchor_survives_restart_and_rejects_unreachable_vi
         )
 
 
-def test_sealed_selection_drives_langchain_and_provider_projection_after_restart(
+def test_sealed_selection_drives_langchain_and_provider_projection_after_restart(frozen_provider_activation,
     frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
     execution_scope,
@@ -2066,6 +2069,7 @@ def test_sealed_selection_drives_langchain_and_provider_projection_after_restart
             context_source_manager=manager,
             tool_set_supplier=lambda: selected,
             **frozen_provider_wire("provider-v2", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key='projection:create'),
         )
     assembly_id = str(prepared["assembly_id"])
     snapshot = saver.get_context_assembly(SESSION_ID, saver._storage.main_thread_id(SESSION_ID), assembly_id=assembly_id)
@@ -2253,10 +2257,8 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
 ) -> None:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    key = b"0123456789abcdef0123456789abcdef"
     saver = RolloutCheckpointSaver(
         sessions_dir,
-        protected_detail_key=key,
     )
     accepted = _accept(saver, SESSION_ID)
     thread = saver._storage.main_thread_id(SESSION_ID)
@@ -2302,7 +2304,6 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
 
     restarted = RolloutCheckpointSaver(
         sessions_dir,
-        protected_detail_key=key,
     )
     restored = restarted.get_context_assembly(SESSION_ID, restarted._storage.main_thread_id(SESSION_ID), assembly_id=snapshot.assembly_id)
     restored_plan = restored.as_sealed_plan()
@@ -2326,7 +2327,7 @@ def test_protected_request_only_detail_projects_after_restart_with_injected_key(
         ("assembly_item_refs", "content_length", -1),
     ],
 )
-def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
+def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(frozen_provider_activation,
     frozen_provider_wire, tmp_path: Path,
     session_bundle_factory,
     execution_scope,
@@ -2347,6 +2348,7 @@ def test_sealed_assembly_restore_rejects_coerced_sqlite_manifest_values(
             context_source_manager=manager,
             tool_set_supplier=lambda: EMPTY_TOOL_SET,
             **frozen_provider_wire("provider-v2", "chat_completions"),
+            **frozen_provider_activation(saver, plan_creation_idempotency_key='corrupt-manifest:create'),
         )
     assembly_id = str(prepared["assembly_id"])
     where = "assembly_id = ?"

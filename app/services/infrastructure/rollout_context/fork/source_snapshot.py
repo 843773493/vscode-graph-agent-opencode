@@ -41,8 +41,6 @@ if TYPE_CHECKING:
 
 _PRIVATE_SOURCE_FILES = frozenset(
     {
-        ".context-redaction-key",
-        "context-plan-details-protected",
         "index.sqlite-shm",
     }
 )
@@ -219,9 +217,16 @@ def capture_fork_rollout_snapshot(
         )
         lock.acquire()
     try:
-        source_files = _tree_manifest(source_rollout)
+        source_files = _tree_manifest(
+            source_rollout, excluded_root_files=frozenset(SQLITE_COPY_FILES),
+        )
         shutil.copytree(source_rollout, snapshot_rollout, ignore=_copy_ignore)
-        copy_live_sqlite_snapshot(source_rollout, snapshot_rollout)
+        sqlite_files = copy_live_sqlite_snapshot(source_rollout, snapshot_rollout)
+        # live SQLite 的源 hash 由同一个隔离复制 owner 提供；父进程只读取私有副本。
+        source_files = tuple(sorted(
+            (*source_files, *(ForkSnapshotFile(name, size, digest) for name, size, digest in sqlite_files)),
+            key=lambda file: file.relative_path,
+        ))
         snapshot_files = _tree_manifest(snapshot_rollout)
         if source_files != snapshot_files:
             raise RuntimeError(
@@ -293,10 +298,8 @@ def capture_fork_rollout_snapshot(
                 "content_sha256": (
                     hashlib.sha256(snapshot.value_bytes).hexdigest()
                     if snapshot.value_bytes is not None
-                    and not snapshot.source_record.sensitive
                     else None
                 ),
-                "redacted_stable_digest": snapshot.source_record.redacted_stable_digest,
             }
             for snapshot in detail_snapshots
         ],
@@ -372,16 +375,13 @@ def _copy_ignore(directory: str, names: list[str]) -> set[str]:
     root = Path(directory)
     ignored = {name for name in names if name == "index.sqlite-shm"}
     if root.name == "rollout":
-        ignored.update(
-            name
-            for name in names
-            if name in {".context-redaction-key", "context-plan-details-protected"}
-        )
         ignored.update(name for name in names if name in SQLITE_COPY_FILES)
     return ignored
 
 
-def _tree_manifest(root: Path) -> tuple[ForkSnapshotFile, ...]:
+def _tree_manifest(
+    root: Path, *, excluded_root_files: frozenset[str] = frozenset(),
+) -> tuple[ForkSnapshotFile, ...]:
     files: list[ForkSnapshotFile] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
         current_path = Path(current)
@@ -401,7 +401,7 @@ def _tree_manifest(root: Path) -> tuple[ForkSnapshotFile, ...]:
             if not (current_path == root and name in _PRIVATE_SOURCE_FILES)
         ]
         for name in file_names:
-            if current_path == root and name in _PRIVATE_SOURCE_FILES:
+            if current_path == root and name in (_PRIVATE_SOURCE_FILES | excluded_root_files):
                 continue
             path = current_path / name
             relative_path = path.relative_to(root).as_posix()

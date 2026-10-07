@@ -48,6 +48,7 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.runtime.agent_runtime import (
     get_configured_custom_tool_names,
     get_workspace_custom_tool_skill_sources,
@@ -67,7 +68,6 @@ from app.services.infrastructure.message_stream_store import (
 from app.services.orchestration.agent_stream_helpers import (
     build_human_response_metadata,
 )
-from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.event_stream.model_events import (
     last_model_token_usage,
 )
@@ -76,7 +76,10 @@ from app.services.orchestration.execution_step.failures import (
     handle_step_failure,
 )
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
-from app.services.orchestration.execution_step.ports import StepExecutionPorts
+from app.services.orchestration.execution_step.ports import (
+    StepAgentRuntime,
+    StepExecutionPorts,
+)
 from app.services.orchestration.execution_step.reminders import (
     custom_tools_requested_by_message as _custom_tools_requested_by_message,
 )
@@ -86,6 +89,11 @@ from app.services.orchestration.execution_step.stream_bindings import (
     StepEventPublisher,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.resource_activation.contracts import (
+    reset_current_execution_resource_activation,
+    resource_activation_policy_from_config,
+    set_current_execution_resource_activation,
+)
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
 from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
@@ -401,9 +409,11 @@ class StepRunner:
         stream_open_task: asyncio.Task[MessageStreamWriter] | None = None
         assistant_write_task: asyncio.Task[bool] | None = None
         runtime_acquire_task: (
-            asyncio.Task[ThreadRuntimeLease[AgentEventSource]] | None
+            asyncio.Task[ThreadRuntimeLease[StepAgentRuntime]] | None
         ) = None
-        runtime_lease: ThreadRuntimeLease[AgentEventSource] | None = None
+        runtime_lease: ThreadRuntimeLease[StepAgentRuntime] | None = None
+        activation_freeze_task: asyncio.Task[ResourceActivationSnapshotRef] | None = None
+        activation_token = None
         job_token = agent_token = interruptible_phase_token = active_tool_name_token = None
         turn_scope = control_loop_stop_event = control_loop_task = None
         turn_scope_token = message_delta_token = execution_admission_token = None
@@ -441,6 +451,7 @@ class StepRunner:
                     stream_open_task,
                     assistant_write_task,
                     runtime_acquire_task,
+                    activation_freeze_task,
                 )
                 if task is not None
             )
@@ -610,10 +621,22 @@ class StepRunner:
                 )
             )
             runtime_lease = await asyncio.shield(runtime_acquire_task)
+            # root 冻结属于实际 active slot；取消时与已启动准入/建图一起排空。
+            activation_freeze_task = asyncio.create_task(
+                runtime_lease.runtime.resource_activation.freeze_execution(
+                    admission=admission,
+                    policy=resource_activation_policy_from_config(config_snapshot.to_dict()),
+                    checkpoint_ns=rollout_checkpoint_ns,
+                )
+            )
+            frozen_activation = await asyncio.shield(activation_freeze_task)
+            activation_token = set_current_execution_resource_activation(
+                frozen_activation, admission=admission,
+            )
             settled.set()
 
             retry_result = await run_agent_with_retries(
-                agent=runtime_lease.runtime,
+                agent=runtime_lease.runtime.agent,
                 session_id=session_id,
                 resolved_agent_id=resolved_agent_id,
                 job_id=job_id,
@@ -783,6 +806,8 @@ class StepRunner:
         finally:
             settled.clear()
             # ContextVar token 必须由创建它的原 task 复原；异步资源清理由独立 task 排空。
+            if activation_token is not None:
+                reset_current_execution_resource_activation(activation_token)
             if execution_admission_token is not None:
                 reset_current_execution_admission(execution_admission_token)
             if message_delta_token is not None:

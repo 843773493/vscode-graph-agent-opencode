@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -16,9 +17,35 @@ from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
 class StreamBlockAssemblyMixin:
+    async def prepare_tool_execution(self, model_call_id: str) -> None:
+        """工具只在原模型登记并提交 canonical 调用后执行，不另建注册链。"""
+        if self._model_call_registrar is None:
+            raise RuntimeError("工具执行前需要持久化 model-call registrar")
+        if model_call_id not in self._model_execution_ids:
+            pending = self._pending_model_starts.get(model_call_id)
+            if pending is None:
+                pending = asyncio.get_running_loop().create_future()
+                self._pending_model_starts[model_call_id] = pending
+            await asyncio.shield(pending)
+        async with self._stream_state_lock:
+            if self.current_model_call_id != model_call_id:
+                raise RuntimeError(
+                    f"工具 emitting model-call 与当前执行不一致: {model_call_id}"
+                )
+            await self._finish_model()
+
     async def start_model(self, model_call_id: str, model: str) -> None:
         async with self._stream_state_lock:
-            await self._start_model(model_call_id, model)
+            try:
+                await self._start_model(model_call_id, model)
+            except BaseException as error:
+                pending = self._pending_model_starts.pop(model_call_id, None)
+                if pending is not None:
+                    pending.set_exception(error)
+                raise
+            pending = self._pending_model_starts.pop(model_call_id, None)
+            if pending is not None:
+                pending.set_result(None)
 
     async def _start_model(self, model_call_id: str, model: str) -> None:
         previous_model_call_id = self.current_model_call_id

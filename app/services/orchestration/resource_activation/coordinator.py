@@ -17,17 +17,23 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Final
 
 from app.domain.itemized.errors import CodeCarryingError
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
     SourceLineageRef,
 )
+from app.services.infrastructure.resource_platform.derivation.types import (
+    ResourceSnapshot,
+)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
+    ResourceRegistryCapture,
 )
 from app.services.orchestration.resource_activation.contracts import (
     ACTIVATION_OWNER_SCOPE,
@@ -53,7 +59,7 @@ class ResourceActivationError(CodeCarryingError, RuntimeError):
         super().__init__(code, message)
 
 
-def _registry_generation(snapshots) -> int:
+def _registry_generation(snapshots: tuple[ResourceSnapshot, ...]) -> int:
     return max((item.generation for item in snapshots), default=0)
 
 
@@ -68,13 +74,13 @@ def _snapshot_id(
     snapshot_kind: str,
     owner_session_id: str,
     owner_thread_id: str,
-    turn_id: str,
+    execution_id: str,
     model_call_id: str | None,
 ) -> str:
-    if snapshot_kind == "turn":
-        return f"activation-turn:{owner_session_id}:{owner_thread_id}:{turn_id}"
+    if snapshot_kind == "execution":
+        return f"activation-execution:{owner_session_id}:{owner_thread_id}:{execution_id}"
     return (
-        f"activation-model-call:{owner_session_id}:{owner_thread_id}:{turn_id}:"
+        f"activation-model-call:{owner_session_id}:{owner_thread_id}:{execution_id}:"
         f"{model_call_id}"
     )
 
@@ -99,30 +105,61 @@ class ResourceActivationCoordinator:
         self._poll_seconds = poll_seconds
         self._sleep = sleep
 
-    async def freeze_turn(
+    async def freeze_execution(
         self,
         *,
-        owner_session_id: str,
-        owner_thread_id: str,
-        turn_id: str,
+        admission: ExecutionAdmission,
         policy: ResourceActivationPolicySnapshot,
         checkpoint_ns: str = "",
     ) -> ResourceActivationSnapshotRef:
-        """在 active execution slot 冻结 policy 和全部 turn-bound binding。"""
+        """active slot 先恢复唯一冻结事实；同用户 Turn retry 只建立新 execution 关联。"""
 
-        self._validate_policy_kinds(policy)
-        snapshots = await self._await_required_snapshots()
-        snapshot = self._build_snapshot(
-            snapshot_kind="turn",
-            owner_session_id=owner_session_id,
-            owner_thread_id=owner_thread_id,
-            turn_id=turn_id,
-            policy=policy,
-            snapshots=snapshots,
-            parent=None,
-            model_call_id=None,
-            checkpoint_ns=checkpoint_ns,
+        if not isinstance(admission, ExecutionAdmission):
+            raise TypeError("freeze_execution 必须使用真实 typed admission")
+        frozen = self._saver.frozen_resource_activation_for_admission(
+            admission, checkpoint_ns=checkpoint_ns
         )
+        if frozen is not None:
+            if (
+                frozen.snapshot_kind != "execution"
+                or frozen.owner_session_id != admission.session_id
+                or frozen.owner_thread_id != admission.thread_id
+                or frozen.turn_id != admission.turn_id
+            ):
+                raise ResourceActivationError(
+                    _CODE_PARENT_INVALID, "冻结 snapshot 与真实 admission owner 不一致"
+                )
+            if frozen.execution_id == admission.execution_id:
+                return frozen
+            if admission.execution_origin != "user_turn":
+                raise ResourceActivationError(
+                    _CODE_PARENT_INVALID, "internal execution 不得借用其它 execution 冻结事实"
+                )
+            snapshot = replace(
+                frozen,
+                activation_snapshot_id=_snapshot_id(
+                    snapshot_kind="execution",
+                    owner_session_id=admission.session_id,
+                    owner_thread_id=admission.thread_id,
+                    execution_id=admission.execution_id,
+                    model_call_id=None,
+                ),
+                execution_id=admission.execution_id,
+            )
+        else:
+            snapshots = await self._await_required_snapshots(policy, boundary="turn")
+            snapshot = self._build_snapshot(
+                snapshot_kind="execution",
+                owner_session_id=admission.session_id,
+                owner_thread_id=admission.thread_id,
+                execution_id=admission.execution_id,
+                turn_id=admission.turn_id,
+                policy=policy,
+                snapshots=snapshots,
+                parent=None,
+                model_call_id=None,
+                checkpoint_ns=checkpoint_ns,
+            )
         await self._saver.save_resource_activation_snapshot(snapshot)
         return snapshot
 
@@ -140,10 +177,10 @@ class ResourceActivationCoordinator:
         model-call binding 只允许追加，parent 的 turn-bound binding 逐字节复用。
         """
 
-        if parent.snapshot_kind != "turn":
+        if parent.snapshot_kind != "execution":
             raise ResourceActivationError(
                 _CODE_PARENT_INVALID,
-                f"model call preparation 的 parent 必须是 turn snapshot: {parent.snapshot_kind}",
+                f"model call preparation 的 parent 必须是 execution snapshot: {parent.snapshot_kind}",
             )
         if policy is not None and (
             policy.revision != parent.activation_policy_revision
@@ -153,60 +190,80 @@ class ResourceActivationCoordinator:
                 _CODE_POLICY_DRIFT,
                 "Turn 内 activation policy 不得漂移；新 policy 只对下一个 Turn 生效",
             )
-        # policy revision/hash 是 boundaries 的 JCS 派生值：同一 revision/hash
-        # 必然对应同一 boundaries，因此可以安全复用 caller 冻结的 policy。
-        turn_policy = policy if policy is not None else _policy_from_snapshot(parent)
-        if not turn_policy.has_model_call_boundary():
+        frozen_policy = parent.activation_policy
+        if not frozen_policy.has_model_call_boundary():
             return parent
-        snapshots = await self._await_required_snapshots()
+        snapshot_id = _snapshot_id(
+            snapshot_kind="model_call",
+            owner_session_id=parent.owner_session_id,
+            owner_thread_id=parent.owner_thread_id,
+            execution_id=parent.execution_id,
+            model_call_id=model_call_id,
+        )
+        frozen = self._saver.find_resource_activation_snapshot(
+            parent.owner_session_id, thread_id=parent.owner_thread_id,
+            activation_snapshot_id=snapshot_id, checkpoint_ns=checkpoint_ns,
+        )
+        if frozen is not None:
+            if frozen.parent != parent or frozen.model_call_id != model_call_id:
+                raise ResourceActivationError(
+                    _CODE_PARENT_INVALID, "model_call 冻结事实与 execution parent 不一致"
+                )
+            return frozen
+        snapshots = await self._await_required_snapshots(frozen_policy, boundary="model_call")
         snapshot = self._build_snapshot(
             snapshot_kind="model_call",
             owner_session_id=parent.owner_session_id,
             owner_thread_id=parent.owner_thread_id,
+            execution_id=parent.execution_id,
             turn_id=parent.turn_id,
-            policy=turn_policy,
+            policy=frozen_policy,
             snapshots=snapshots,
             parent=parent,
             model_call_id=model_call_id,
             checkpoint_ns=checkpoint_ns,
             reuse_parent_bindings=parent.bindings,
         )
-        if len(snapshot.bindings) == len(parent.bindings):
-            return parent
         await self._saver.save_resource_activation_snapshot(snapshot)
         return snapshot
 
-    def _validate_policy_kinds(self, policy: ResourceActivationPolicySnapshot) -> None:
-        registered_kinds = self._registry.resource_kinds()
-        unknown = set(policy.boundaries) - registered_kinds
+    def _validate_policy_kinds(
+        self, policy: ResourceActivationPolicySnapshot, capture: ResourceRegistryCapture
+    ) -> None:
+        unknown = set(policy.boundaries) - capture.resource_kinds
         if unknown:
             raise ResourceActivationError(
                 "unknown-resource-kind",
                 f"activation override 指向未登记 resource kind: {sorted(unknown)}",
             )
 
-    async def _await_required_snapshots(self):
-        """required resource 仍 dirty/gap/unavailable 时有界等待后 fail closed。"""
+    async def _await_required_snapshots(
+        self, policy: ResourceActivationPolicySnapshot, *, boundary: str
+    ) -> tuple[ResourceSnapshot, ...]:
+        """只等当前边界必需的内存发布；descriptor 缺 snapshot 也必须阻断。"""
 
         deadline = time.monotonic() + self._wait_seconds
         while True:
-            snapshots = self._registry.snapshots()
-            if snapshots:
-                unavailable = sorted(
-                    item.resource_id for item in snapshots if not item.available
-                )
-                if not unavailable:
-                    return snapshots
+            capture = self._registry.capture()
+            self._validate_policy_kinds(policy, capture)
+            snapshots = tuple(
+                item for item in capture.snapshots
+                if policy.effective_boundary(item.resource_kind) == boundary
+            )
+            required = {
+                item.resource_id for item in capture.descriptors
+                if policy.effective_boundary(item.resource_kind) == boundary
+            }
+            missing = required - {item.resource_id for item in snapshots}
+            unavailable = {
+                item.resource_id for item in snapshots if not item.available
+            } | missing
+            if not unavailable:
+                return capture.snapshots
             if time.monotonic() >= deadline:
-                if not snapshots:
-                    raise ResourceActivationError(
-                        "resource-registry-empty",
-                        "ResourceRegistry 没有 published snapshot，不能冻结 activation",
-                    )
                 raise ResourceActivationError(
                     "resource-unavailable",
-                    "ResourceRegistry 存在不可用 required snapshot: "
-                    f"{unavailable}",
+                    f"ResourceRegistry required snapshot 缺失或不可用: {sorted(unavailable)}",
                 )
             await self._sleep(self._poll_seconds)
 
@@ -216,9 +273,10 @@ class ResourceActivationCoordinator:
         snapshot_kind: str,
         owner_session_id: str,
         owner_thread_id: str,
-        turn_id: str,
+        execution_id: str,
+        turn_id: str | None,
         policy: ResourceActivationPolicySnapshot,
-        snapshots,
+        snapshots: tuple[ResourceSnapshot, ...],
         parent: ResourceActivationSnapshotRef | None,
         model_call_id: str | None,
         checkpoint_ns: str,
@@ -228,14 +286,14 @@ class ResourceActivationCoordinator:
             snapshot_kind=snapshot_kind,
             owner_session_id=owner_session_id,
             owner_thread_id=owner_thread_id,
-            turn_id=turn_id,
+            execution_id=execution_id,
             model_call_id=model_call_id,
         )
         new_bindings: list[ResourceProvenanceRef] = list(reuse_parent_bindings)
         ordinal = len(reuse_parent_bindings)
         for item in sorted(snapshots, key=lambda entry: entry.resource_id):
             boundary = policy.effective_boundary(item.resource_kind)
-            if snapshot_kind == "turn" and boundary != "turn":
+            if snapshot_kind == "execution" and boundary != "turn":
                 continue
             if snapshot_kind == "model_call" and boundary != "model_call":
                 continue
@@ -253,6 +311,11 @@ class ResourceActivationCoordinator:
                 payload=item.payload,
                 checkpoint_ns=checkpoint_ns,
             )
+            lineage = SourceLineageRef(
+                lineage_id=f"lineage:{item.resource_id}",
+                derivation_version="resource-derivation:v1",
+                sources=tuple(sorted(item.source_lineage)),
+            )
             new_bindings.append(
                 ResourceProvenanceRef(
                     resource_id=item.resource_id,
@@ -264,40 +327,29 @@ class ResourceActivationCoordinator:
                     availability="available",
                     content_length=len(canonical_json_bytes(item.payload)),
                     content_hash=sha256_jcs(item.payload),
-                    redacted_stable_digest=None,
-                    source_lineage_ref=SourceLineageRef(
-                        lineage_id=f"lineage:{item.resource_id}",
-                        derivation_version="resource-derivation:v1",
-                        sources=tuple(sorted(item.source_lineage)),
-                    ),
-                    source_lineage_digest=SourceLineageRef(
-                        lineage_id=f"lineage:{item.resource_id}",
-                        derivation_version="resource-derivation:v1",
-                        sources=tuple(sorted(item.source_lineage)),
-                    ).digest,
+                    source_lineage_ref=lineage,
+                    source_lineage_digest=lineage.digest,
                     activation_ordinal=ordinal,
                     effective_boundary=boundary,
                     captured_registry_generation=item.generation,
                     detail_ref=detail_ref,
+                    members=item.members,
                 )
             )
             ordinal += 1
-        if not new_bindings:
-            raise ResourceActivationError(
-                "resource-registry-empty",
-                "冻结 activation 至少需要一个 binding",
-            )
         return ResourceActivationSnapshotRef(
             activation_snapshot_id=snapshot_id,
             snapshot_kind=snapshot_kind,
             activation_policy_revision=policy.revision,
             activation_policy_hash=policy.hash,
+            activation_policy=policy,
             registry_generation=max(
                 _registry_generation(snapshots),
                 0 if parent is None else parent.registry_generation,
             ),
             owner_session_id=owner_session_id,
             owner_thread_id=owner_thread_id,
+            execution_id=execution_id,
             turn_id=turn_id,
             captured_at=_captured_at(),
             bindings=tuple(new_bindings),
@@ -305,26 +357,6 @@ class ResourceActivationCoordinator:
             model_call_id=model_call_id,
         )
 
-
-def _policy_from_snapshot(
-    snapshot: ResourceActivationSnapshotRef,
-) -> ResourceActivationPolicySnapshot:
-    """从已冻结 snapshot 还原 policy 关系；不读取当前配置。
-
-    冻结件只保存 policy revision/hash 与逐 binding 的 effective boundary。
-    model_call 决策只需要知道「是否存在 model-call kind」，这由已冻结 binding
-    与 policy hash 唯一决定，无需重读配置。
-    """
-
-    boundaries = {}
-    for binding in snapshot.bindings:
-        boundaries[binding.resource_kind] = binding.effective_boundary
-    return ResourceActivationPolicySnapshot(
-        revision=snapshot.activation_policy_revision,
-        hash=snapshot.activation_policy_hash,
-        default_boundary="turn",
-        boundaries=boundaries,
-    )
 
 
 __all__ = [

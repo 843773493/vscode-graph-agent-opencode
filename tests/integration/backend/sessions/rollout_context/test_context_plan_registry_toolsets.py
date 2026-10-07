@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
+from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.refs import ContextRef, ToolSetRef
-from app.domain.itemized.hash.request_hash import context_request_hash
 from app.domain.itemized.request_plan import ContextRequestPlan
 from app.services.infrastructure.rollout_context.assembly.plans.manifest import (
     validate_sealed_plan,
@@ -43,14 +43,17 @@ def run_context(request):
 
 @pytest.fixture
 def tool_draft(registry_db):
-    _saver, session, _connection, _accepted = registry_db
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
     return ContextRequestPlan(
         session_id=session,
+        thread_id=thread,
         plan_id="tool-plan",
         refs=(),
         tool_set_refs=tuple(
             ToolSetRef.from_tool_snapshot(
                 session_id=session,
+                thread_id=thread,
                 plan_id="tool-plan",
                 snapshot_id=name,
                 source_revision=f"{name}-revision",
@@ -68,6 +71,7 @@ def _snapshot(draft, accepted, omitted):
         plan=draft,
         assembly_id="tool-assembly",
         session_id=draft.session_id,
+        thread_id=draft.thread_id,
         turn_id=str(accepted["turn_id"]),
         execution_id=str(accepted["initial_execution_id"]),
         provider_version="registry-integration",
@@ -139,7 +143,7 @@ def test_toolsets_jsonl_sqlite_and_saver_restart(
         run_context.workspace_root / ".boxteam" / "sessions"
     )
     sealed = restarted.get_context_plan_registration(
-        session, plan_id=tool_draft.plan_id
+        session, thread_id=tool_draft.thread_id, plan_id=tool_draft.plan_id
     )
     assert sealed.plan_state == "sealed"
     assert sealed.draft == registered.draft
@@ -205,6 +209,7 @@ def test_seal_rejects_self_consistent_but_different_tool_manifest(
     options = {
         "snapshot_id": "unknown" if mutation == "missing_tag" else original.ref_id,
         "session_id": session,
+        "thread_id": tool_draft.thread_id,
         "plan_id": tool_draft.plan_id,
         "source_revision": "changed"
         if mutation == "source_revision"
@@ -214,6 +219,8 @@ def test_seal_rejects_self_consistent_but_different_tool_manifest(
         else original.tools,
         "tool_policy": {"mode": "changed"}
         if mutation == "policy"
+        else {**original.tool_policy, "wire_tool_order": ["changed"]}
+        if mutation == "content"
         else original.tool_policy,
         "tool_set_schema_version": "changed"
         if mutation == "schema"
@@ -239,7 +246,7 @@ def test_seal_rejects_self_consistent_but_different_tool_manifest(
         )
     assert tuple(connection.iterdump()) == before
     assert (
-        saver.get_context_plan_registration(session, plan_id=tool_draft.plan_id)
+        saver.get_context_plan_registration(session, thread_id=tool_draft.thread_id, plan_id=tool_draft.plan_id)
         == registered
     )
 
@@ -250,7 +257,7 @@ def test_omitted_tool_identity_does_not_resolve_to_request_only_tag(
     saver, session, connection, accepted = registry_db
     ref = ContextRef.request_only_ref(
         "z",
-        session_id=session, thread_id="thread-1",
+        session_id=session, thread_id=tool_draft.thread_id,
         plan_id=tool_draft.plan_id,
         source_revision="request-revision",
         content="另一种 tagged source",
@@ -336,7 +343,7 @@ def test_sealed_selection_semantics_cannot_change_after_restart(
         run_context.workspace_root / ".boxteam" / "sessions"
     )
     sealed = restarted.get_context_plan_registration(
-        session, plan_id=tool_draft.plan_id
+        session, thread_id=tool_draft.thread_id, plan_id=tool_draft.plan_id
     )
     assert sealed.plan_state == "sealed"
     changed = _jsonl_roundtrip(changed, run_context)
@@ -351,7 +358,7 @@ def test_sealed_selection_semantics_cannot_change_after_restart(
         )
     assert tuple(connection.iterdump()) == before
     assert (
-        restarted.get_context_plan_registration(session, plan_id=tool_draft.plan_id)
+        restarted.get_context_plan_registration(session, thread_id=tool_draft.thread_id, plan_id=tool_draft.plan_id)
         == sealed
     )
 
@@ -392,7 +399,7 @@ def test_recovery_rejects_tampered_tool_registry_rows(
         run_context.workspace_root / ".boxteam" / "sessions"
     )
     with pytest.raises(ValueError, match="source-mismatch"):
-        restarted.get_context_plan_registration(session, plan_id=tool_draft.plan_id)
+        restarted.get_context_plan_registration(session, thread_id=tool_draft.thread_id, plan_id=tool_draft.plan_id)
     assert tuple(connection.iterdump()) == before
 
 
@@ -400,7 +407,7 @@ def test_same_raw_id_keeps_request_and_tool_selection_separate(registry_db, tool
     saver, session, connection, accepted = registry_db
     request_ref = ContextRef.request_only_ref(
         "z",
-        session_id=session, thread_id="thread-1",
+        session_id=session, thread_id=tool_draft.thread_id,
         plan_id=tool_draft.plan_id,
         source_revision="request-revision",
         content="不会读取的 request-only 正文",
@@ -429,6 +436,6 @@ def test_same_raw_id_keeps_request_and_tool_selection_separate(registry_db, tool
             seal_input_hash=sha256_jcs("storage-seal-test-input"),
         )
     assert (
-        saver.get_context_plan_registration(session, plan_id=draft.plan_id).plan_state
+        saver.get_context_plan_registration(session, thread_id=draft.thread_id, plan_id=draft.plan_id).plan_state
         == "sealed"
     )

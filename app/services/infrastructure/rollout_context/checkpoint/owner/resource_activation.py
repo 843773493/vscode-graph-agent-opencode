@@ -5,17 +5,38 @@
 selection/plan hash，同时提供幂等重试的只读核对。它不做 stat/scan/read/HTTP
 fetch/memory-provider lookup，也不回退当前 Registry。
 
-未注入 ``ResourceActivationStore`` 时（尚未接入 activation 的部署/测试），
-``_resource_activation_store`` 为 None，seal 行为与接入前完全一致。
+每个 Saver 始终持有基于同一 storage/detail store 的唯一 activation store。
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from uuid import UUID
 
+from app.core.execution_admission_context import require_current_execution_admission
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.identity.detail_ref import DetailRef
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
+)
+from app.domain.itemized.records import parse_item_projection_manifest
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
+    ResourceProvenanceRef,
+)
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    extension_dispatch_from_activation,
+)
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogUnavailableError,
+    ExtensionDispatchBindingRef,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
 )
 from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
     ResourceActivationStore,
@@ -69,48 +90,171 @@ class _ActivationBinding:
 class ResourceActivationOwnerMixin:
     """Saver 对 activation catalog 的 owner 边界。"""
 
-    #: 未注入时为 None；由 ``attach_resource_activation_store`` 或测试显式赋予。
-    _resource_activation_store: ResourceActivationStore | None = None
-
-    def attach_resource_activation_store(self, store: ResourceActivationStore) -> None:
-        """显式注入 activation catalog owner；不在构造期隐式建 schema。"""
-
-        if not isinstance(store, ResourceActivationStore):
-            raise TypeError(
-                "attach_resource_activation_store 需要 ResourceActivationStore"
-            )
-        self._resource_activation_store = store
-
-    @property
-    def supports_resource_activation(self) -> bool:
-        return self._resource_activation_store is not None
+    _resource_activation_store: ResourceActivationStore
 
     def _activation_store(self) -> ResourceActivationStore:
-        store = self._resource_activation_store
-        if store is None:
-            raise RuntimeError(
-                "resource-activation-schema-unavailable: Saver 未注入 "
-                "ResourceActivationStore"
-            )
-        return store
+        return self._resource_activation_store
 
-    def bootstrap_resource_activation_schema(
-        self, session_id: str, *, checkpoint_ns: str = ""
-    ) -> None:
-        """显式为全新会话库建立 activation schema；普通 seal 路径不得调用。"""
+    def read_resource_activation_payload(
+        self, snapshot: ResourceActivationSnapshotRef, binding: ResourceProvenanceRef, *, checkpoint_ns: str = "",
+    ) -> object:
+        """正文读取复用同一 storage/detail owner，不读当前 Registry 或来源。"""
+        return ResourceActivationBodyStore(self._storage, self._detail_store).read_payload(
+            snapshot=snapshot, binding=binding,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+        )
 
-        store = self._activation_store()
+    def load_tool_call_resource_activation(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str | None = None, checkpoint_ns: str = "",
+    ) -> tuple[ResourceActivationSnapshotRef, str]:
+        """tool_call 只按 canonical assistant provenance 定位原 model-call/assembly。"""
         checkpoint_ns = self._context_owner_namespace(checkpoint_ns)
-        thread_id = self._storage.main_thread_id(session_id)
-        with self._storage._lock(
-            thread_id, checkpoint_ns, session_id=session_id
-        ), self._storage._connect(
-            thread_id, checkpoint_ns, session_id=session_id
+        with self._storage._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True,
         ) as connection:
             self._storage._require_v2_runtime(connection)
-            connection.execute("BEGIN IMMEDIATE")
-            store.bootstrap_schema(connection)
-            connection.commit()
+            # raw ID 必须带 emitting assistant 的 model-call scope；重启读取
+            # 可直接用精确持久 ID。归一只消费同一 canonical typed owner。
+            call_rows = connection.execute(
+                "SELECT t.tool_call_id, i.projection_manifest_json "
+                "FROM tool_calls t JOIN messages m "
+                "ON m.message_sequence = t.assistant_message_sequence "
+                "JOIN item_catalog i ON i.jsonl_offset = m.jsonl_offset "
+                "AND i.jsonl_length = m.jsonl_length "
+                "WHERE m.role = 'assistant' AND "
+                "((? IS NULL AND t.tool_call_id = ?) OR "
+                "json_extract(i.projection_manifest_json, "
+                "'$.projection_identity.model_call_id') = ?)",
+                (model_call_id, tool_call_id, model_call_id),
+            ).fetchall()
+            model_call_ids: set[str] = set()
+            for stored_call_id, raw_manifest in call_rows:
+                manifest = parse_item_projection_manifest(json.loads(raw_manifest))
+                projection = manifest["projection_identity"]
+                identity = (
+                    ItemProjectionIdentity.from_dict(projection)
+                    if projection is not None else None
+                )
+                if identity is None or identity.model_call_id is None:
+                    if stored_call_id == tool_call_id:
+                        raise ExtensionCatalogUnavailableError(
+                            f"tool_call 缺少 typed model_call provenance: {tool_call_id}"
+                        )
+                    continue
+                raw_call_id = provider_tool_call_id(identity, tool_call_id)
+                if not raw_call_id or (model_call_id is None and raw_call_id == tool_call_id):
+                    raise ExtensionCatalogUnavailableError(
+                        "tool_call 无 model-call scope 时必须提供与 canonical typed owner "
+                        f"一致的非空 persisted scoped ID: {tool_call_id}"
+                    )
+                if matches_tool_call_id(identity, stored_call_id, tool_call_id):
+                    model_call_ids.add(identity.model_call_id)
+            if len(model_call_ids) != 1:
+                raise ExtensionCatalogUnavailableError(
+                    f"tool_call canonical assistant/model_call identity 缺失或歧义: {tool_call_id}"
+                )
+            model_call_id = model_call_ids.pop()
+            row = connection.execute(
+                "SELECT assembly_id FROM model_calls WHERE session_id = ? "
+                "AND thread_id = ? AND model_call_id = ?",
+                (session_id, thread_id, model_call_id),
+            ).fetchone()
+            if row is None or not row[0]:
+                raise ExtensionCatalogUnavailableError(
+                    f"tool_call 原 model-call 缺少 sealed assembly: {tool_call_id}"
+                )
+            assembly_id = row[0]
+        assembly = self._storage.get_context_assembly(
+            session_id, thread_id, assembly_id=assembly_id, checkpoint_ns=checkpoint_ns,
+        )
+        if assembly.model_call_id != model_call_id:
+            raise ExtensionCatalogUnavailableError("tool_call 原 assembly model-call identity 不一致")
+        snapshot = self.load_sealed_resource_activation(
+            session_id, thread_id=thread_id, assembly_id=assembly_id,
+            plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
+            checkpoint_ns=checkpoint_ns,
+        )
+        return snapshot, model_call_id
+
+    def resolve_extension_dispatch_for_tool_call(
+        self, session_id: str, *, thread_id: str, tool_call_id: str,
+        model_call_id: str | None = None, checkpoint_ns: str = "",
+    ) -> ExtensionDispatchBindingRef:
+        snapshot, model_call_id = self.load_tool_call_resource_activation(
+            session_id, thread_id=thread_id, tool_call_id=tool_call_id,
+            model_call_id=model_call_id, checkpoint_ns=checkpoint_ns,
+        )
+        parents = tuple(
+            binding for binding in snapshot.bindings
+            if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
+        )
+        if len(parents) != 1:
+            raise ExtensionCatalogUnavailableError("tool_call sealed snapshot 缺少唯一 MCP parent")
+        binding = parents[0]
+        return extension_dispatch_from_activation(
+            snapshot=snapshot, binding=binding,
+            payload=self.read_resource_activation_payload(snapshot, binding, checkpoint_ns=checkpoint_ns),
+            model_call_id=model_call_id,
+        )
+
+    def require_provider_resource_activation(
+        self,
+        snapshot: ResourceActivationSnapshotRef,
+        *,
+        session_id: str,
+        thread_id: str,
+        execution_id: str,
+        turn_id: str | None,
+        model_call_id: str,
+        checkpoint_ns: str = "",
+    ) -> None:
+        """正式 Provider seal 只消费同一 admission 下已经冻结的资源事实。"""
+
+        if not isinstance(model_call_id, str):
+            raise TypeError("provider context 需要真实 model_call UUID")
+        UUID(model_call_id)
+        if not isinstance(snapshot, ResourceActivationSnapshotRef):
+            raise TypeError("provider context 需要 typed frozen activation snapshot")
+        admission = require_current_execution_admission(langgraph_thread_id=thread_id)
+        expected = (session_id, thread_id, execution_id, turn_id)
+        if (admission.session_id, admission.thread_id, admission.execution_id, admission.turn_id) != expected:
+            raise RuntimeError("provider context 与当前 execution admission 不一致")
+        if (snapshot.owner_session_id, snapshot.owner_thread_id, snapshot.execution_id, snapshot.turn_id) != expected:
+            raise ValueError("resource-activation-snapshot-conflict: Provider snapshot owner 与 admission 不一致")
+        model_bound = snapshot.activation_policy.has_model_call_boundary()
+        if (snapshot.snapshot_kind == "model_call") != model_bound or (
+            model_bound and snapshot.model_call_id != model_call_id
+        ):
+            raise ValueError("resource-activation-snapshot-conflict: Provider snapshot 与真实 model-call 不一致")
+        frozen = self.read_resource_activation_snapshot(
+            session_id, thread_id=thread_id,
+            activation_snapshot_id=snapshot.activation_snapshot_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+        if frozen != snapshot:
+            raise ValueError("resource-activation-snapshot-conflict: Provider snapshot 与已冻结事实不一致")
+
+    def frozen_resource_activation_for_admission(
+        self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
+    ) -> ResourceActivationSnapshotRef | None:
+        return self._activation_store().frozen_for_admission(
+            admission, checkpoint_ns=self._context_owner_namespace(checkpoint_ns)
+        )
+
+    def find_resource_activation_snapshot(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str = "",
+    ) -> ResourceActivationSnapshotRef | None:
+        return self._activation_store().find_snapshot(
+            session_id, thread_id=thread_id,
+            activation_snapshot_id=activation_snapshot_id,
+            checkpoint_ns=self._context_owner_namespace(checkpoint_ns),
+        )
 
     def prepare_resource_activation_binding(
         self,
@@ -222,33 +366,6 @@ class ResourceActivationOwnerMixin:
                 f"与 assembly owner 不一致: {assembly_id}"
             )
         return snapshot
-
-    def read_sealed_resource_activation(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        assembly_id: str,
-        plan_hash: str,
-        request_hash: str,
-        checkpoint_ns: str = "",
-    ) -> ResourceActivationSnapshotRef | None:
-        """restore/projection 边界读取 sealed activation；未接入时返回 None。
-
-        未注入 ``ResourceActivationStore`` 时（接入前的部署/测试）保持既有行为；
-        一旦接入，sealed assembly 必须有可核对的 activation 事实，缺失即失败。
-        """
-
-        if self._resource_activation_store is None:
-            return None
-        return self.load_sealed_resource_activation(
-            session_id,
-            thread_id=thread_id,
-            assembly_id=assembly_id,
-            plan_hash=plan_hash,
-            request_hash=request_hash,
-            checkpoint_ns=checkpoint_ns,
-        )
 
     def verify_resource_activation_binding(
         self,

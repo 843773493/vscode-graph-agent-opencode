@@ -10,10 +10,10 @@ runtime 只打开当前 activation schema，否则 fail closed。
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.resource_activation import (
     ResourceActivationSnapshotRef,
@@ -39,13 +39,9 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_rea
     ResourceActivationReadMixin,
 )
 from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
-    RESOURCE_ACTIVATION_MIGRATION_NAME,
-    RESOURCE_ACTIVATION_SCHEMA_SQL,
-    RESOURCE_ACTIVATION_SCHEMA_VERSION,
-    create_resource_activation_schema,
+    require_resource_activation_schema,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
-    strict_non_negative_int,
     strict_text,
 )
 
@@ -61,81 +57,10 @@ class ResourceActivationStore(ResourceActivationReadMixin):
 
     # ---- schema 生命周期 -------------------------------------------------
 
-    @staticmethod
-    def _checksum() -> str:
-        return hashlib.sha256(
-            RESOURCE_ACTIVATION_SCHEMA_SQL.encode("utf-8")
-        ).hexdigest()
-
-    @staticmethod
-    def _read_schema_version(connection: sqlite3.Connection) -> int | None:
-        exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-            "AND name = 'resource_activation_schema_state'"
-        ).fetchone()
-        if exists is None:
-            return None
-        row = connection.execute(
-            "SELECT activation_schema_version FROM resource_activation_schema_state "
-            "WHERE singleton_id = 1"
-        ).fetchone()
-        if row is None:
-            raise ResourceActivationStoreError(
-                SCHEMA_CONFLICT_CODE,
-                "activation schema 缺少版本 marker row",
-            )
-        return strict_non_negative_int(
-            row[0],
-            field="resource_activation_schema_state.activation_schema_version",
-        )
-
     def require_schema(self, connection: sqlite3.Connection) -> None:
-        """正常 runtime 只接受当前版本 activation schema，否则 fail closed。"""
+        """当前 schema 是唯一读写入口；缺失/旧 marker 不会隐式修复。"""
 
-        version = self._read_schema_version(connection)
-        if version is None:
-            raise ResourceActivationStoreError(
-                SCHEMA_UNAVAILABLE_CODE,
-                "rollout 库尚未建立 activation schema，必须显式 bootstrap/upgrade",
-            )
-        if version != RESOURCE_ACTIVATION_SCHEMA_VERSION:
-            raise ResourceActivationStoreError(
-                SCHEMA_UNAVAILABLE_CODE,
-                "activation schema 版本不受支持: "
-                f"database={version}, supported={RESOURCE_ACTIVATION_SCHEMA_VERSION}",
-            )
-
-    def bootstrap_schema(self, connection: sqlite3.Connection) -> None:
-        """在调用方事务内建立当前版本 activation schema 与 marker。
-
-        只由显式 bootstrap/一次性迁移入口调用；普通 seal/read 路径不得自动
-        升级或补建对象。
-        """
-
-        if self._read_schema_version(connection) is not None:
-            raise ResourceActivationStoreError(
-                SCHEMA_CONFLICT_CODE,
-                "activation schema 已存在，不能重复 bootstrap",
-            )
-        create_resource_activation_schema(connection)
-        timestamp = _now()
-        connection.execute(
-            "INSERT INTO resource_activation_schema_state"
-            "(singleton_id, activation_schema_version, updated_at) VALUES (1, ?, ?)",
-            (RESOURCE_ACTIVATION_SCHEMA_VERSION, timestamp),
-        )
-        connection.execute(
-            "INSERT INTO resource_activation_schema_migrations"
-            "(from_version, to_version, migration_name, migration_checksum, status, "
-            "started_at, completed_at) VALUES (0, ?, ?, ?, 'completed', ?, ?)",
-            (
-                RESOURCE_ACTIVATION_SCHEMA_VERSION,
-                RESOURCE_ACTIVATION_MIGRATION_NAME,
-                self._checksum(),
-                timestamp,
-                timestamp,
-            ),
-        )
+        require_resource_activation_schema(connection)
 
     # ---- 写入 -----------------------------------------------------------
 
@@ -147,12 +72,27 @@ class ResourceActivationStore(ResourceActivationReadMixin):
     ) -> DetailRef:
         """先把受保护 lineage manifest 写入 body store，返回 typed DetailRef。
 
-        正文是内容寻址的不可变文件；即使随后的 catalog 事务失败，也只会留下
-        可重试的孤儿正文，不会产生指向 catalog 的悬空引用。parent 先递归准备。
+        正文是内容寻址的不可变文件；catalog 事务失败不会提交半绑定。parent 由独立冻结入口先提交。
         """
 
-        if snapshot.parent is not None:
-            self.prepare_lineage(snapshot.parent, checkpoint_ns=checkpoint_ns)
+        # execution 冻结已经持久化的 lineage 必须精确复用，seal 不能
+        # 再分配一份无 catalog 引用的同正文 detail。
+        session_id, thread_id = snapshot.owner_session_id, snapshot.owner_thread_id
+        with self._storage._lock(
+            thread_id, checkpoint_ns, session_id=session_id,
+        ), self._storage._connect(
+            thread_id, checkpoint_ns, session_id=session_id, read_only=True,
+        ) as connection:
+            self.require_schema(connection)
+            self._require_execution(connection, snapshot)
+            existing = self._select_existing(
+                connection, session_id=session_id, thread_id=thread_id,
+                activation_snapshot_id=snapshot.activation_snapshot_id,
+            )
+            if existing is not None:
+                return self._reuse_existing(
+                    existing, snapshot=snapshot, digest=lineage_manifest_digest(snapshot),
+                )
         body_ref = self._lineage_body.write_lineage_manifest(
             owner_session_id=snapshot.owner_session_id,
             owner_thread_id=snapshot.owner_thread_id,
@@ -179,8 +119,8 @@ class ResourceActivationStore(ResourceActivationReadMixin):
     ) -> None:
         """在既有 catalog 事务内写入 snapshot + binding 行（不提交）。
 
-        调用方持有 rollout owner 写锁与 ``BEGIN IMMEDIATE`` 事务；本方法先递归
-        写入 parent，再写自身，保证 FK 顺序。已提交的同 identity 快照按 hash
+        调用方持有 rollout owner 写锁与 ``BEGIN IMMEDIATE`` 事务；本方法先核对
+        已持久化的 execution parent，再写自身，保证真实 owner 与 FK。已提交的同 identity 快照按 hash
         幂等复用，不覆盖任何已冻结事实。
         """
 
@@ -194,11 +134,22 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                 SCHEMA_INVALID_CODE,
                 "lineage_detail_ref 必须是 typed DetailRef",
             )
+        self._require_execution(connection, snapshot)
         if snapshot.parent is not None:
-            self.persist_snapshot(
+            parent_row = self._select_existing(
                 connection,
-                snapshot.parent,
-                lineage_detail_ref=lineage_detail_ref,
+                session_id=snapshot.owner_session_id,
+                thread_id=snapshot.owner_thread_id,
+                activation_snapshot_id=snapshot.parent.activation_snapshot_id,
+            )
+            if parent_row is None:
+                raise ResourceActivationStoreError(
+                    SNAPSHOT_CONFLICT_CODE, "model_call 的 execution parent 尚未冻结"
+                )
+            self._reuse_existing(
+                parent_row,
+                snapshot=snapshot.parent,
+                digest=lineage_manifest_digest(snapshot.parent),
             )
         digest = lineage_manifest_digest(snapshot)
         existing = self._select_existing(
@@ -220,10 +171,12 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                 snapshot.owner_thread_id,
                 snapshot.activation_snapshot_id,
                 snapshot.snapshot_kind,
-                snapshot.parent_turn_snapshot_id,
+                snapshot.parent_execution_snapshot_id,
                 snapshot.activation_policy_revision,
                 snapshot.activation_policy_hash,
+                canonical_json_bytes(snapshot.activation_policy.to_dict()).decode("utf-8"),
                 snapshot.registry_generation,
+                snapshot.execution_id,
                 snapshot.turn_id,
                 snapshot.model_call_id,
                 snapshot.captured_at,
@@ -254,7 +207,6 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                     binding.availability,
                     binding.content_length,
                     binding.content_hash,
-                    binding.redacted_stable_digest,
                     binding.effective_boundary,
                     binding.captured_registry_generation,
                     binding.source_lineage_digest,
@@ -295,6 +247,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         ) as connection:
             self._storage._require_v2_runtime(connection)
             self.require_schema(connection)
+            self._require_execution(connection, snapshot)
             existing = self._select_existing(
                 connection,
                 session_id=session_id,
@@ -307,6 +260,8 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                     snapshot=snapshot,
                     digest=lineage_manifest_digest(snapshot),
                 )
+        if snapshot.parent is not None:
+            self.save_snapshot(snapshot.parent, checkpoint_ns=checkpoint_ns)
         body_ref = self.prepare_lineage(snapshot, checkpoint_ns=checkpoint_ns)
         with self._storage._lock(
             thread_id, checkpoint_ns, session_id=session_id
@@ -323,45 +278,70 @@ class ResourceActivationStore(ResourceActivationReadMixin):
         return body_ref
 
     @staticmethod
+    def _require_execution(
+        connection: sqlite3.Connection, snapshot: ResourceActivationSnapshotRef
+    ) -> None:
+        row = connection.execute(
+            "SELECT turn_id FROM executions WHERE session_id = ? "
+            "AND thread_id = ? AND execution_id = ?",
+            (snapshot.owner_session_id, snapshot.owner_thread_id, snapshot.execution_id),
+        ).fetchone()
+        if row != (snapshot.turn_id,):
+            raise ResourceActivationStoreError(
+                SNAPSHOT_CONFLICT_CODE,
+                f"activation 与真实 execution admission 不一致: {snapshot.execution_id}",
+            )
+
+    @staticmethod
     def _select_existing(
         connection: sqlite3.Connection,
         *,
         session_id: str,
         thread_id: str,
         activation_snapshot_id: str,
-    ) -> tuple[object, ...] | None:
+    ) -> dict[str, object] | None:
         row = connection.execute(
-            "SELECT bindings_hash, activation_provenance_hash, "
-            "lineage_manifest_digest, lineage_detail_ref "
-            "FROM resource_activation_snapshots WHERE session_id = ? "
-            "AND thread_id = ? AND activation_snapshot_id = ?",
+            f"SELECT {','.join(SNAPSHOT_COLUMNS)} FROM resource_activation_snapshots "
+            "WHERE session_id = ? AND thread_id = ? AND activation_snapshot_id = ?",
             (session_id, thread_id, activation_snapshot_id),
         ).fetchone()
-        return None if row is None else tuple(row)
+        return None if row is None else dict(zip(SNAPSHOT_COLUMNS, row, strict=True))
 
     @staticmethod
     def _reuse_existing(
-        existing: tuple[object, ...],
+        existing: dict[str, object],
         *,
         snapshot: ResourceActivationSnapshotRef,
         digest: str,
     ) -> DetailRef:
-        if existing[:2] != (
-            snapshot.bindings_hash,
-            snapshot.activation_provenance_hash,
-        ):
+        expected = {
+            "snapshot_kind": snapshot.snapshot_kind,
+            "parent_execution_snapshot_id": snapshot.parent_execution_snapshot_id,
+            "execution_id": snapshot.execution_id,
+            "turn_id": snapshot.turn_id,
+            "model_call_id": snapshot.model_call_id,
+            "activation_policy_revision": snapshot.activation_policy_revision,
+            "activation_policy_hash": snapshot.activation_policy_hash,
+            "activation_policy_json": canonical_json_bytes(
+                snapshot.activation_policy.to_dict()
+            ).decode("utf-8"),
+            "registry_generation": snapshot.registry_generation,
+            "captured_at": snapshot.captured_at,
+            "binding_count": len(snapshot.bindings),
+            "bindings_hash": snapshot.bindings_hash,
+            "activation_provenance_hash": snapshot.activation_provenance_hash,
+        }
+        if any(existing[key] != entry for key, entry in expected.items()):
             raise ResourceActivationStoreError(
                 SNAPSHOT_CONFLICT_CODE,
-                "activation_snapshot_id 已存在但 hash 不一致: "
-                f"{snapshot.activation_snapshot_id}",
+                f"activation_snapshot_id 已存在但冻结事实不一致: {snapshot.activation_snapshot_id}",
             )
-        if existing[2] != digest:
+        if existing["lineage_manifest_digest"] != digest:
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
-                "已提交 lineage digest 与重算结果不一致: "
-                f"{snapshot.activation_snapshot_id}",
+                f"已提交 lineage digest 与重算结果不一致: {snapshot.activation_snapshot_id}",
             )
-        return _detail_ref_from_key(existing[3], field="lineage_detail_ref")
+        return _detail_ref_from_key(existing["lineage_detail_ref"], field="lineage_detail_ref")
 
     def bind_assembly(
         self,
@@ -412,6 +392,18 @@ class ResourceActivationStore(ResourceActivationReadMixin):
                 "assembly binding 的 activation snapshot 未提交或 hash 不一致: "
                 f"{snapshot.activation_snapshot_id}",
             )
+        assembly = connection.execute(
+            "SELECT session_id, thread_id, execution_id, turn_id FROM context_assemblies "
+            "WHERE assembly_id = ?",
+            (assembly_id,),
+        ).fetchone()
+        if assembly != (
+            snapshot.owner_session_id, snapshot.owner_thread_id,
+            snapshot.execution_id, snapshot.turn_id,
+        ):
+            raise ResourceActivationStoreError(
+                SNAPSHOT_CONFLICT_CODE, f"assembly 与真实 activation owner 不一致: {assembly_id}"
+            )
         existing = connection.execute(
             f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
             "FROM resource_activation_assembly_bindings WHERE assembly_id = ?",
@@ -431,7 +423,7 @@ class ResourceActivationStore(ResourceActivationReadMixin):
             _now(),
         )
         if existing is not None:
-            if tuple(existing) != values:
+            if tuple(existing)[:-1] != values[:-1]:
                 raise ResourceActivationStoreError(
                     SNAPSHOT_CONFLICT_CODE,
                     f"assembly 已绑定其它 activation snapshot: {assembly_id}",

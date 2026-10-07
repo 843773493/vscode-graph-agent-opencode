@@ -7,12 +7,15 @@ lineage 缺失都必须 fail closed。
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping
 
+from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.resource_activation import (
     ResourceActivationContractError,
+    ResourceActivationPolicySnapshot,
     ResourceActivationSnapshotRef,
     ResourceProvenanceRef,
 )
@@ -25,29 +28,22 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_com
     HASH_MISMATCH_CODE,
     LINEAGE_BODY_UNAVAILABLE_CODE,
     SNAPSHOT_COLUMNS,
+    SNAPSHOT_CONFLICT_CODE,
     ResourceActivationStoreError,
     _detail_ref_from_key,
     _lineage_by_resource,
+    _member_bindings_for_resource,
     _optional_detail_ref_from_key,
     _source_lineage_ref_for_binding,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
+    require_resource_activation_schema,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_non_negative_int,
     strict_optional_text,
     strict_text,
 )
-
-
-def activation_tables_ready(connection: sqlite3.Connection) -> bool:
-    """activation catalog 是否已 bootstrap；未建立时该库没有 activation 事实。"""
-
-    return (
-        connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-            "AND name = 'resource_activation_assembly_bindings'"
-        ).fetchone()
-        is not None
-    )
 
 
 def read_activation_refs_for_turns(
@@ -60,10 +56,11 @@ def read_activation_refs_for_turns(
 
     rewind/compaction 边界用它把「旧 assembly 的精确 activation identity」写进
     control payload；这里只读已提交事实，不解析当前 URI、不访问 Registry。schema
-    未 bootstrap 时返回空，表示该库没有 activation 事实可保留。
+    当前 schema 的空 rows 表示无引用；schema 缺失或陈旧必须显式失败。
     """
 
-    if not turn_ids or not activation_tables_ready(connection):
+    require_resource_activation_schema(connection)
+    if not turn_ids:
         return ()
     placeholders = ",".join("?" for _ in turn_ids)
     rows = connection.execute(
@@ -127,6 +124,87 @@ class ResourceActivationReadMixin:
             )
         return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
 
+    def find_snapshot(
+        self,
+        session_id: str,
+        *,
+        thread_id: str,
+        activation_snapshot_id: str,
+        checkpoint_ns: str = "",
+    ) -> ResourceActivationSnapshotRef | None:
+        """精确 identity 查找；合法无行返回 None，schema 缺失仍失败。"""
+
+        with self._storage._connect(
+            self._storage._resolve_thread_identity(session_id, thread_id),
+            checkpoint_ns, session_id=session_id, read_only=True,
+        ) as connection:
+            self._storage._require_v2_runtime(connection)
+            self.require_schema(connection)
+            exists = connection.execute(
+                "SELECT 1 FROM resource_activation_snapshots WHERE session_id = ? "
+                "AND thread_id = ? AND activation_snapshot_id = ?",
+                (session_id, thread_id, activation_snapshot_id),
+            ).fetchone()
+            if exists is None:
+                return None
+            raw = self._read_raw_snapshot(
+                connection, session_id=session_id, thread_id=thread_id,
+                activation_snapshot_id=activation_snapshot_id,
+            )
+        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+
+    def frozen_for_admission(
+        self, admission: ExecutionAdmission, *, checkpoint_ns: str = ""
+    ) -> ResourceActivationSnapshotRef | None:
+        """唯一冻结 owner 查询本 execution，或同真实用户 Turn 的首次冻结事实。"""
+
+        with self._storage._connect(
+            admission.thread_id, checkpoint_ns, session_id=admission.session_id,
+            read_only=True,
+        ) as connection:
+            self._storage._require_v2_runtime(connection)
+            self.require_schema(connection)
+            execution = connection.execute(
+                "SELECT turn_id, execution_origin, job_id, admission_idempotency_key, "
+                "attempt, resumed_from_execution_id, replay_of_execution_id "
+                "FROM executions WHERE session_id = ? AND thread_id = ? AND execution_id = ?",
+                (admission.session_id, admission.thread_id, admission.execution_id),
+            ).fetchone()
+            if execution is None or tuple(execution[:4]) != (
+                admission.turn_id, admission.execution_origin, admission.job_id,
+                admission.admission_idempotency_key,
+            ):
+                raise ResourceActivationStoreError(
+                    SNAPSHOT_CONFLICT_CODE, "activation 查询与持久 admission 不一致"
+                )
+            row = connection.execute(
+                "SELECT activation_snapshot_id FROM resource_activation_snapshots "
+                "WHERE session_id = ? AND thread_id = ? AND snapshot_kind = 'execution' "
+                "AND execution_id = ?",
+                (admission.session_id, admission.thread_id, admission.execution_id),
+            ).fetchone()
+            if row is None and admission.turn_id is not None:
+                row = connection.execute(
+                    "SELECT s.activation_snapshot_id FROM resource_activation_snapshots s "
+                    "JOIN executions e ON e.execution_id = s.execution_id "
+                    "AND e.session_id = s.session_id AND e.thread_id = s.thread_id "
+                    "WHERE s.session_id = ? AND s.thread_id = ? AND s.turn_id = ? "
+                    "AND s.snapshot_kind = 'execution' ORDER BY e.attempt LIMIT 1",
+                    (admission.session_id, admission.thread_id, admission.turn_id),
+                ).fetchone()
+            if row is None:
+                if execution[4] > 1 or any(value is not None for value in execution[5:]):
+                    raise ResourceActivationStoreError(
+                        SNAPSHOT_CONFLICT_CODE, "retry/resume 缺失原 execution 冻结事实"
+                    )
+                return None
+            raw = self._read_raw_snapshot(
+                connection,
+                session_id=admission.session_id, thread_id=admission.thread_id,
+                activation_snapshot_id=strict_text(row[0], field="activation_snapshot_id"),
+            )
+        return self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+
     def read_assembly_binding(
         self,
         session_id: str,
@@ -157,18 +235,15 @@ class ResourceActivationReadMixin:
     ) -> Mapping[str, object] | None:
         """只读查找 assembly activation 绑定；无 activation 事实时返回 None。
 
-        schema 未 bootstrap 表示该库根本没有 activation 事实（接入前的 seal），
-        返回 None 而不报错；一旦 schema 存在但 hash 冲突、snapshot 缺失或正文被
-        retention 清理，仍显式失败，绝不静默返回替代 snapshot。
+        当前 schema 的无行表示该 assembly 未绑定；缺失/旧 marker、hash 冲突、
+        snapshot 缺失或正文被 retention 清理都显式失败。
         """
 
-        thread_id = self._storage.main_thread_id(session_id)
+        thread_id = self._storage._resolve_thread_identity(session_id, thread_id)
         with self._storage._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True
         ) as connection:
             self._storage._require_v2_runtime(connection)
-            if not activation_tables_ready(connection):
-                return None
             self.require_schema(connection)
             row = connection.execute(
                 f"SELECT {','.join(ASSEMBLY_BINDING_COLUMNS)} "
@@ -188,7 +263,19 @@ class ResourceActivationReadMixin:
                     field="activation_snapshot_id",
                 ),
             )
+            assembly_owner = connection.execute(
+                "SELECT session_id, thread_id, execution_id, turn_id FROM context_assemblies "
+                "WHERE assembly_id = ?",
+                (assembly_id,),
+            ).fetchone()
         snapshot = self._build_snapshot(raw, checkpoint_ns=checkpoint_ns)
+        if assembly_owner != (
+            snapshot.owner_session_id, snapshot.owner_thread_id,
+            snapshot.execution_id, snapshot.turn_id,
+        ):
+            raise ResourceActivationStoreError(
+                SNAPSHOT_CONFLICT_CODE, f"assembly 与 activation 真实 owner 不一致: {assembly_id}"
+            )
         if record["bindings_hash"] != snapshot.bindings_hash or record[
             "activation_provenance_hash"
         ] != snapshot.activation_provenance_hash:
@@ -220,8 +307,17 @@ class ResourceActivationReadMixin:
                 f"{activation_snapshot_id}"
             )
         record = dict(zip(SNAPSHOT_COLUMNS, tuple(row), strict=True))
+        execution = connection.execute(
+            "SELECT turn_id FROM executions WHERE session_id = ? AND thread_id = ? "
+            "AND execution_id = ?",
+            (session_id, thread_id, record["execution_id"]),
+        ).fetchone()
+        if execution != (record["turn_id"],):
+            raise ResourceActivationStoreError(
+                SNAPSHOT_CONFLICT_CODE, "activation catalog 与真实 execution admission 不一致"
+            )
         parent_key = strict_optional_text(
-            record["parent_turn_snapshot_id"], field="parent_turn_snapshot_id"
+            record["parent_execution_snapshot_id"], field="parent_execution_snapshot_id"
         )
         parent = (
             self._read_raw_snapshot(
@@ -268,7 +364,7 @@ class ResourceActivationReadMixin:
             record["lineage_detail_ref"], field="lineage_detail_ref"
         )
         thread_id = strict_text(record["thread_id"], field="thread_id")
-        body_ref.require_owner(session_id, thread_id)
+        body_ref.require_owner(session_id, thread_id, activation_snapshot_id)
         try:
             manifest = self._lineage_body.read_lineage_manifest(
                 detail_ref=body_ref, checkpoint_ns=checkpoint_ns
@@ -292,6 +388,10 @@ class ResourceActivationReadMixin:
         bindings = tuple(
             self._binding_from_row(row, lineages=lineages) for row in binding_rows
         )
+        if set(lineages) != {binding.resource_id for binding in bindings}:
+            raise ResourceActivationStoreError(
+                HASH_MISMATCH_CODE, "受保护 lineage manifest 与 binding 资源集合不一致",
+            )
         declared_count = strict_non_negative_int(
             record["binding_count"], field="binding_count"
         )
@@ -306,14 +406,18 @@ class ResourceActivationReadMixin:
                 {
                     "activation_snapshot_id": activation_snapshot_id,
                     "snapshot_kind": record["snapshot_kind"],
-                    "parent_turn_snapshot_id": record["parent_turn_snapshot_id"],
+                    "parent_execution_snapshot_id": record["parent_execution_snapshot_id"],
                     "activation_policy_revision": record[
                         "activation_policy_revision"
                     ],
                     "activation_policy_hash": record["activation_policy_hash"],
+                    "activation_policy": ResourceActivationPolicySnapshot.from_dict(
+                        json.loads(strict_text(record["activation_policy_json"], field="activation_policy_json"))
+                    ).to_dict(),
                     "registry_generation": record["registry_generation"],
                     "owner_session_id": session_id,
                     "owner_thread_id": record["thread_id"],
+                    "execution_id": record["execution_id"],
                     "turn_id": record["turn_id"],
                     "model_call_id": record["model_call_id"],
                     "captured_at": record["captured_at"],
@@ -325,7 +429,7 @@ class ResourceActivationReadMixin:
                 },
                 parent=parent,
             )
-        except ResourceActivationContractError as error:
+        except (ResourceActivationContractError, TypeError, ValueError) as error:
             raise ResourceActivationStoreError(
                 HASH_MISMATCH_CODE,
                 f"恢复 activation snapshot 失败: {error}",
@@ -377,9 +481,6 @@ class ResourceActivationReadMixin:
             content_hash=strict_optional_text(
                 record["content_hash"], field="content_hash"
             ),
-            redacted_stable_digest=strict_optional_text(
-                record["redacted_stable_digest"], field="redacted_stable_digest"
-            ),
             source_lineage_ref=lineage,
             source_lineage_digest=expected_digest,
             activation_ordinal=ordinal,
@@ -396,11 +497,11 @@ class ResourceActivationReadMixin:
             detail_ref=_optional_detail_ref_from_key(
                 record["detail_ref"], field="detail_ref"
             ),
+            members=_member_bindings_for_resource(lineages, resource_id=resource_id),
         )
 
 
 __all__ = [
     "ResourceActivationReadMixin",
-    "activation_tables_ready",
     "read_activation_refs_for_turns",
 ]

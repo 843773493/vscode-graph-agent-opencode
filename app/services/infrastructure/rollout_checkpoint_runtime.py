@@ -49,7 +49,6 @@ class RolloutCheckpointRuntime:
         sessions_dir: str | Path,
         *,
         serde: JsonPlusSerializer | None = None,
-        protected_detail_key: bytes | None = None,
         node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
         | None = None,
     ) -> None:
@@ -68,7 +67,6 @@ class RolloutCheckpointRuntime:
         self.history_reader = RolloutHistoryReader(self.context_reader)
         self.context_plan_detail_store = ContextPlanDetailStore(
             self.sessions_dir,
-            protected_key=protected_detail_key,
         )
         self.context_plan_composer = ContextPlanComposer()
         self.saver = RolloutCheckpointSaver(

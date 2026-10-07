@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
@@ -14,6 +15,7 @@ from app.domain.itemized.resource_activation.common import (
     _CODE_HASH_MISMATCH,
     _CODE_ORDINAL_CONFLICT,
     PROVENANCE_FIELD_ALIASES,
+    RESOURCE_MEMBER_BINDING_FIELDS,
     RESOURCE_PROVENANCE_FIELDS,
     ResourceActivationBoundary,
     ResourceActivationContractError,
@@ -29,6 +31,55 @@ from app.domain.itemized.resource_activation.common import (
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceMemberBinding:
+    """容器资源内的纯成员事实；server_id 只表示稳定成员身份，不是 locator。"""
+
+    member_id: str
+    member_kind: Literal["mcp", "custom"]
+    schema_hash: str
+    server_id: str | None
+    revision: str
+
+    def __post_init__(self) -> None:
+        _safe_identity(self.member_id, "ResourceMemberBinding.member_id")
+        _non_empty_string(self.revision, "ResourceMemberBinding.revision")
+        if self.member_kind not in {"mcp", "custom"}:
+            raise _schema_error("ResourceMemberBinding.member_kind 必须是 mcp|custom")
+        if (
+            not isinstance(self.schema_hash, str)
+            or not self.schema_hash.startswith("sha256:")
+            or len(self.schema_hash) != 71
+            or any(char not in "0123456789abcdef" for char in self.schema_hash[7:])
+        ):
+            raise _schema_error("ResourceMemberBinding.schema_hash 必须是 sha256 参数指纹")
+        if self.member_kind == "mcp":
+            _safe_identity(self.server_id, "ResourceMemberBinding.server_id")
+        elif self.server_id is not None:
+            raise _schema_error("custom member 的 server_id 必须为空")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "member_id": self.member_id,
+            "member_kind": self.member_kind,
+            "schema_hash": self.schema_hash,
+            "server_id": self.server_id,
+            "revision": self.revision,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ResourceMemberBinding:
+        if not isinstance(value, Mapping):
+            raise _schema_error("ResourceMemberBinding 必须是对象")
+        _reject_forbidden_fields(
+            value, allowed=RESOURCE_MEMBER_BINDING_FIELDS, aliases={},
+            where="ResourceMemberBinding",
+        )
+        if set(value) != RESOURCE_MEMBER_BINDING_FIELDS:
+            raise _schema_error("ResourceMemberBinding 字段必须完整")
+        return cls(**value)
+
+
+@dataclass(frozen=True, slots=True)
 class ResourceProvenanceRef:
     """一条已激活语义资源的 provenance；不含 payload、locator 或凭据。"""
 
@@ -41,7 +92,6 @@ class ResourceProvenanceRef:
     availability: str
     content_length: int
     content_hash: str | None
-    redacted_stable_digest: str | None
     source_lineage_ref: SourceLineageRef
     source_lineage_digest: str
     activation_ordinal: int
@@ -49,6 +99,7 @@ class ResourceProvenanceRef:
     captured_registry_generation: int
     snapshot_ref: DetailRef | None = None
     detail_ref: DetailRef | None = None
+    members: tuple[ResourceMemberBinding, ...] = ()
 
     def __post_init__(self) -> None:
         _safe_identity(self.resource_id, "ResourceProvenanceRef.resource_id")
@@ -94,6 +145,16 @@ class ResourceProvenanceRef:
             raise _schema_error(
                 "ResourceProvenanceRef 必须恰好携带 snapshot_ref 或 detail_ref"
             )
+        if not isinstance(self.members, tuple) or not all(
+            isinstance(member, ResourceMemberBinding) for member in self.members
+        ):
+            raise _schema_error("ResourceProvenanceRef.members 必须是 typed tuple")
+        member_ids = [member.member_id for member in self.members]
+        if len(set(member_ids)) != len(member_ids):
+            raise _schema_error("ResourceProvenanceRef.members 的 member_id 必须唯一")
+        object.__setattr__(
+            self, "members", tuple(sorted(self.members, key=lambda member: member.member_id)),
+        )
         require_manifest_token(self)
 
     def to_dict(self) -> dict[str, object]:
@@ -106,7 +167,6 @@ class ResourceProvenanceRef:
             "revision": self.revision,
             "content_length": self.content_length,
             "content_hash": self.content_hash,
-            "redacted_stable_digest": self.redacted_stable_digest,
             "snapshot_ref": (
                 self.snapshot_ref.to_dict() if self.snapshot_ref is not None else None
             ),
@@ -119,6 +179,7 @@ class ResourceProvenanceRef:
             "activation_ordinal": self.activation_ordinal,
             "effective_boundary": self.effective_boundary,
             "captured_registry_generation": self.captured_registry_generation,
+            "members": [member.to_dict() for member in self.members],
         }
 
     @classmethod
@@ -136,6 +197,10 @@ class ResourceProvenanceRef:
             raise _schema_error(
                 f"ResourceProvenanceRef 缺少必填字段: {sorted(missing)}"
             )
+        raw_members = value["members"]
+        if not isinstance(raw_members, list):
+            raise _schema_error("ResourceProvenanceRef.members 必须是数组")
+        members = tuple(ResourceMemberBinding.from_dict(member) for member in raw_members)
         lineage_raw = value["source_lineage_ref"]
         lineage = (
             lineage_raw
@@ -159,7 +224,6 @@ class ResourceProvenanceRef:
             availability=value["availability"],
             content_length=value["content_length"],
             content_hash=value["content_hash"],
-            redacted_stable_digest=value["redacted_stable_digest"],
             source_lineage_ref=lineage,
             source_lineage_digest=value["source_lineage_digest"],
             activation_ordinal=value["activation_ordinal"],
@@ -167,6 +231,7 @@ class ResourceProvenanceRef:
             captured_registry_generation=value["captured_registry_generation"],
             snapshot_ref=refs["snapshot_ref"],
             detail_ref=refs["detail_ref"],
+            members=members,
         )
 
 
@@ -201,7 +266,6 @@ def resource_bindings_hash(bindings: Sequence[ResourceProvenanceRef]) -> str:
                     "revision": binding.revision,
                     "content_length": binding.content_length,
                     "content_hash": binding.content_hash,
-                    "redacted_stable_digest": binding.redacted_stable_digest,
                     "availability": binding.availability,
                     "display_uri": binding.display_uri,
                 }

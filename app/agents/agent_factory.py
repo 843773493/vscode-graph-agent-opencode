@@ -94,6 +94,15 @@ from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
     ContextSourceEventPublisher,
 )
+from app.services.infrastructure.mcp.catalog_activation import (
+    McpCatalogResourcePublisher,
+)
+from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogBindingError,
+    ExtensionTargetResolutionError,
+    extension_schema_hash,
+)
 from app.services.infrastructure.node_debug.service import NodeDebugService
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
@@ -117,10 +126,20 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    SkillCatalogSnapshotConflict,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.skill_catalog import (
+    skill_catalog_from_activation,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
+    ResourceActivationStoreError,
+)
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.orchestration.communication.binding_lookup import (
     SessionControlStoreWaitBindingLookup,
 )
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
@@ -399,9 +418,12 @@ def create_my_deep_agent(
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
+    mcp_catalog_owner: McpCatalogOwner | None = None,
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
+    resource_registry: ResourceRegistry,
+    resource_activation: ResourceActivationCoordinator | None,
     workspace_root: Path,
     include_team_tools: bool = False,
     owns_thread: bool = True,
@@ -458,11 +480,10 @@ def create_my_deep_agent(
     resolved_bundled_skill_groups = resolve_bundled_skill_groups()
     # SkillCatalog 的语义 revision 由 ResourceRegistry 唯一发布;catalog 是
     # 不可变快照,重入装配时允许调用方复用已发布实例。
-    skill_registry = ResourceRegistry()
     resolved_skills = (
         build_workspace_skill_catalog(
             workspace_root,
-            registry=skill_registry,
+            registry=resource_registry,
             bundled_skill_groups=resolved_bundled_skill_groups,
         )
         if skill_catalog is None
@@ -534,6 +555,7 @@ def create_my_deep_agent(
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, object] = {}
     extension_tools: list[BaseTool] = []
+    custom_tools: list[BaseTool] = []
     extension_invoker: BaseTool | None = None
 
     def _absorb_builtin_tool(tool: BaseTool) -> None:
@@ -594,7 +616,6 @@ def create_my_deep_agent(
             communication_binding_lookup=communication_binding_lookup,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
-            context_source_manager=context_source_manager,
         )
         custom_tool_bundle = build_custom_tool_bundle(
             custom_tool_specs or [],
@@ -677,28 +698,94 @@ def create_my_deep_agent(
             _absorb_builtin_tool(tool)
     # 固定信封即使当前没有可执行 target 也必须存在；target 的启停只改变
     # 封存目录与执行准入，不改变 Provider 工具面。
+    target_resolver = None
+    skill_snapshot_resolver = None
+    if resource_activation is not None:
+        if not isinstance(checkpointer, RolloutCheckpointSaver) or mcp_catalog_owner is None:
+            raise RuntimeError("正式 runtime 需要唯一 Saver 与真实 MCP Owner")
+        if reactor_lifetime_scope is None:
+            raise RuntimeError("正式 MCP publication 订阅需要 generation LifetimeScope")
+
+        def enabled_extension(target: BaseTool) -> bool:
+            metadata = target.metadata or {}
+            origin = "mcp" if metadata.get("mcp_server_id") else "custom"
+            return target.name not in resolved_tool_denylist and _resolve_tool_policy(
+                policy_resolver, target, origin=origin,
+                execution_overrides=resolved_execution_overrides,
+                model_visibility_overrides=resolved_model_visibility_overrides,
+            ).execution_enabled
+
+        publisher = McpCatalogResourcePublisher(
+            registry=resource_registry, custom_tools=custom_tools,
+            tool_enabled=enabled_extension,
+        )
+        unsubscribe = mcp_catalog_owner.subscribe_publication(publisher.publish)
+        try:
+            reactor_lifetime_scope.register(unsubscribe, label="MCP catalog publication")
+        except BaseException:
+            unsubscribe()
+            raise
+
+        def resolve_skill_snapshot():
+            try:
+                snapshot, _model_call_id = checkpointer.load_tool_call_resource_activation(
+                    session_id, thread_id=thread_id,
+                    tool_call_id=tool_invocation_context.require_tool_call_id(),
+                    model_call_id=tool_invocation_context.require_model_call_id(),
+                )
+                frozen_catalog = skill_catalog_from_activation(snapshot, checkpointer.read_resource_activation_payload)
+            except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
+                raise SkillCatalogSnapshotConflict(
+                    "skill-catalog-snapshot-conflict: 原 tool-call 的冻结 Skill 正文无法恢复"
+                ) from error
+            if frozen_catalog is None:
+                raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 原 tool-call 缺少冻结 Skill catalog")
+            return frozen_catalog
+
+        skill_snapshot_resolver = resolve_skill_snapshot
+
+        def resolve_catalog():
+            return checkpointer.resolve_extension_dispatch_for_tool_call(
+                session_id, thread_id=thread_id,
+                tool_call_id=tool_invocation_context.require_tool_call_id(),
+                model_call_id=tool_invocation_context.require_model_call_id(),
+            ).binding_ref
+
+        initial_targets = {tool.name: tool for tool in extension_tools}
+
+        def resolve_target(binding):
+            initial = initial_targets.get(binding.target_id)
+            if initial is not None and extension_schema_hash(initial.args) == binding.schema_hash:
+                return initial
+            current = mcp_catalog_owner.publication_snapshot().tools.get(binding.target_id)
+            if current is None or extension_schema_hash(current.args) != binding.schema_hash:
+                raise ExtensionTargetResolutionError(
+                    f"sealed target 缺少匹配 schema 的执行 handle: {binding.target_id}"
+                )
+            return current
+
+        target_resolver = resolve_target
+        permission_check = enabled_extension
+    else:
+        resolve_catalog = seal_extension_catalog_binding_from_tools(extension_tools)
+        permission_check = lambda target: bool(
+            getattr(extension_policies.get(target.name), "execution_enabled", False)
+        )
     extension_invoker = create_extension_tool_invoker_tool(
         extension_tools,
-        # E4：旧 tool call 只按装配期封存 binding 解析；
-        # 正式 activation owner 接线前由快照封存承担 sealed ref。
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
-            extension_tools
-        ),
-        is_tool_execution_enabled=lambda target: bool(
-            getattr(
-                extension_policies.get(target.name),
-                "execution_enabled",
-                False,
-            )
-        ),
+        catalog_binding_resolver=resolve_catalog,
+        target_resolver=target_resolver,
+        is_tool_execution_enabled=permission_check,
         invocation_context=tool_invocation_context,
     )
     resolved_tools.append(extension_invoker)
-    if context_source_manager is not None and not any(
-        getattr(tool, "name", None) == "skill_load" for tool in resolved_tools
+    if (
+        context_source_manager is not None
+        and (tools is not None or "skill_load" not in resolved_tool_denylist)
+        and not any(getattr(tool, "name", None) == "skill_load" for tool in resolved_tools)
     ):
-        resolved_tools.append(
-            create_skill_load_tool(context_source_manager)
+        _absorb_builtin_tool(
+            create_skill_load_tool(context_source_manager, activation_snapshot_resolver=skill_snapshot_resolver)
         )
     if enabled_tool_names is not None:
         resolved_tools = [tool for tool in resolved_tools if getattr(tool, "name", "") in enabled_tool_names]
@@ -753,6 +840,7 @@ def create_my_deep_agent(
         workspace_root=workspace_root,
         permissions=permissions,
         resolved_skills=resolved_skills,
+        execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
         context_source_manager=context_source_manager,
         source_registry=workspace_file_resource_registry,
@@ -789,6 +877,7 @@ def create_my_deep_agent(
         checkpointer=checkpointer, session_id=session_id, thread_id=thread_id,
         context_source_manager=context_source_manager,
         tool_set_producer=tool_set_producer,
+        resource_activation=resource_activation,
     )
     deepagent_middleware.append(sealed_dispatch_bridge)
 
@@ -862,6 +951,7 @@ def create_runtime_deep_agent_for_session(
     session_target_resolver: SessionTargetResolverProtocol | None = None,
     session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
+    mcp_catalog_owner: McpCatalogOwner | None = None,
     name: str | None = None,
     override_model: Any = None,
     response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
@@ -870,6 +960,8 @@ def create_runtime_deep_agent_for_session(
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
+    resource_registry: ResourceRegistry,
+    resource_activation: ResourceActivationCoordinator | None,
     workspace_root: Path,
     include_team_tools: bool = False,
     graph_binding_store: GraphBindingStorePort,
@@ -961,9 +1053,12 @@ def create_runtime_deep_agent_for_session(
         session_message_delivery_service=session_message_delivery_service,
         communication_binding_lookup=communication_binding_lookup,
         mcp_tools=mcp_tools,
+        mcp_catalog_owner=mcp_catalog_owner,
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
+        resource_registry=resource_registry,
+        resource_activation=resource_activation,
         include_team_tools=include_team_tools,
         interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
         custom_tool_confirmation_names=custom_tool_confirmation_names,

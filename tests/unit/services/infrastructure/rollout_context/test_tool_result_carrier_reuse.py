@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,15 @@ from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
+    validate_tool_protocol_closure,
+)
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.infrastructure.rollout_context.storage.service import (
     RolloutStorage,
 )
@@ -114,7 +124,14 @@ def _request_carrier(
 def storage(tmp_path: Path, session_bundle_factory) -> RolloutStorage:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    return RolloutStorage(sessions_dir)
+    owner = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+    owner.accept_turn(
+        SESSION_ID, thread_id=owner.main_thread_id(SESSION_ID),
+        accepted_ingress_id="carrier-ingress", acceptance_idempotency_key="carrier-accept",
+        job_id="carrier-job", admission_idempotency_key="carrier-admission",
+        payload="工具结果复用合同", turn_id=TURN_ID, initial_execution_id=MODEL_CALL_ID,
+    )
+    return owner
 
 
 def _catalog_tool_result_ids(storage: RolloutStorage) -> list[str]:
@@ -140,8 +157,8 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutStorage):
     """带投影身份的 request carrier 不得被等价 live item 吞掉。"""
     live = _live_tool_result(sequence=1)
     carrier = _request_carrier(sequence=2, message_id="1b56a352-tool-msg")
-    live_commits = storage.append_items(SESSION_ID, (live,))
-    carrier_commits = storage.append_items(SESSION_ID, (carrier,))
+    live_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (live,), execution_id=MODEL_CALL_ID)
+    carrier_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (carrier,), execution_id=MODEL_CALL_ID)
     # 两个 item 都在 catalog：carrier 没有被“等价复用”成 live item。
     assert _catalog_tool_result_ids(storage) == [
         live.item_id,
@@ -156,7 +173,7 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutStorage):
     # 两个 item 都能按 catalog locator 完整回读。
     stored = {
         item.item_id: item
-        for item in storage.read_items(SESSION_ID)
+        for item in storage.read_items(SESSION_ID, storage.main_thread_id(SESSION_ID))
         if item.semantic_kind == SemanticKind.TOOL_RESULT
     }
     assert set(stored) == {live.item_id, carrier.item_id}
@@ -197,8 +214,8 @@ def test_equivalent_live_tool_results_still_reused(storage: RolloutStorage):
         message_group_id="message-other-execution",
         wire_role="tool",
     )
-    first_commits = storage.append_items(SESSION_ID, (first,))
-    second_commits = storage.append_items(SESSION_ID, (second,))
+    first_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (first,), execution_id=MODEL_CALL_ID)
+    second_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (second,), execution_id=MODEL_CALL_ID)
     # 第二个等价 live item 被复用：catalog 仍只有一个 tool_result。
     assert _catalog_tool_result_ids(storage) == [first.item_id]
     # 复用不产生新 commit：返回的是第一次 append 的 commit id。
@@ -218,8 +235,8 @@ def test_equivalent_request_carriers_still_reused(storage: RolloutStorage):
     target_carrier = _request_carrier(
         sequence=2, message_id="msg-target-shadow"
     )
-    first_commits = storage.append_items(SESSION_ID, (envelope_carrier,))
-    second_commits = storage.append_items(SESSION_ID, (target_carrier,))
+    first_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (envelope_carrier,), execution_id=MODEL_CALL_ID)
+    second_commits = storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (target_carrier,), execution_id=MODEL_CALL_ID)
     assert _catalog_tool_result_ids(storage) == [envelope_carrier.item_id]
     assert second_commits == first_commits
 
@@ -236,7 +253,82 @@ def test_conflicting_request_carrier_still_rejected(storage: RolloutStorage):
         message_id="msg-conflicting",
         content='{"child_session_id": "ses_other", "status": "failed"}',
     )
-    storage.append_items(SESSION_ID, (live,))
+    storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (live,), execution_id=MODEL_CALL_ID)
     with pytest.raises(ItemSchemaError, match="tool_result 正文发生变化"):
-        storage.append_items(SESSION_ID, (conflicting,))
+        storage.append_items(SESSION_ID, storage.main_thread_id(SESSION_ID), (conflicting,), execution_id=MODEL_CALL_ID)
     assert _catalog_tool_result_ids(storage) == [live.item_id]
+
+
+@pytest.fixture
+def carrier_saver(storage: RolloutStorage) -> Iterator[RolloutCheckpointSaver]:
+    with RolloutCheckpointSaver(storage.sessions_dir, storage=storage) as saver:
+        yield saver
+
+
+@pytest.mark.parametrize("result_order, expected_stream_result", [
+    ("stream_first", f"{LIVE_EXECUTION_ID}-result-{SCOPED_TOOL_CALL_ID}"),
+    ("checkpoint_first", "request-result"),
+])
+def test_tool_pairing_survives_selected_carrier_replacement(
+    storage: RolloutStorage, carrier_saver: RolloutCheckpointSaver, result_order: str,
+    expected_stream_result: str,
+) -> None:
+    """两个 sink 的真实结果按任意顺序提交后，所选 checkpoint 工具组仍闭合。"""
+    thread_id = storage.main_thread_id(SESSION_ID)
+    stream_call = CanonicalItemRecord.create(
+        item_sequence=1, item_id="item-live-call", semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "provider", "producer_id": "live-call", "invocation_id": MODEL_CALL_ID},
+        payload={"tool_call_id": SCOPED_TOOL_CALL_ID, "name": "task", "args": {}},
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL_ID),
+        turn_id=TURN_ID, turn_scope=TurnScope.TURN_MEMBER, message_group_id="message-live-call",
+        wire_role="assistant",
+    )
+    checkpoint_call = CanonicalItemRecord.create(
+        item_sequence=2, item_id="item-request-call", semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "provider", "producer_id": "request-call", "invocation_id": MODEL_CALL_ID},
+        payload={"tool_calls": [{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}]},
+        projection_identity=ItemProjectionIdentity(
+            projection_message_id="request-call", model_call_id=MODEL_CALL_ID,
+        ),
+        turn_id=TURN_ID, turn_scope=TurnScope.TURN_MEMBER, message_group_id="message-request-call",
+        wire_role="assistant",
+    )
+    for call in (stream_call, checkpoint_call):
+        storage.append_items(SESSION_ID, thread_id, (call,), execution_id=MODEL_CALL_ID)
+    stream_result = _live_tool_result(3)
+    checkpoint_result = _request_carrier(4, message_id="request-result")
+    ordered_results = (
+        (stream_result, checkpoint_result) if result_order == "stream_first"
+        else (checkpoint_result, stream_result)
+    )
+    for result in ordered_results:
+        storage.append_items(SESSION_ID, thread_id, (result,), execution_id=MODEL_CALL_ID)
+
+    with carrier_saver._context_reader.open_snapshot(SESSION_ID, thread_id) as snapshot:
+        sequences = carrier_saver.selected_context_message_sequences(snapshot)
+        selected_messages = {
+            message_id
+            for sequence, message_id in snapshot.connection.execute(
+                "SELECT message_sequence, message_id FROM messages"
+            )
+            if sequence in sequences
+        }
+        assert "request-call" in selected_messages
+        assert "request-result" in selected_messages
+        assert "live-call" not in selected_messages
+        assert f"{LIVE_EXECUTION_ID}-result-{SCOPED_TOOL_CALL_ID}" not in selected_messages
+        validate_tool_protocol_closure(snapshot.connection, sequences, len(sequences))
+        all_sequences = [row[0] for row in snapshot.connection.execute(
+            "SELECT message_sequence FROM messages ORDER BY message_sequence"
+        )]
+        validate_tool_protocol_closure(snapshot.connection, all_sequences, len(all_sequences))
+        pairings = dict(snapshot.connection.execute(
+            "SELECT call.tool_call_id, result.message_id FROM tool_calls AS call "
+            "JOIN messages AS result ON result.message_sequence = call.result_message_sequence"
+        ))
+        assert pairings == {
+            SCOPED_TOOL_CALL_ID: expected_stream_result,
+            PROVIDER_TOOL_CALL_ID: "request-result",
+        }

@@ -995,20 +995,6 @@ class RolloutExecutionsMixin(
                         raise RuntimeError(
                             "terminal convergence Turn message projection 更新失败"
                         )
-                    view_turn_update = connection.execute(
-                        "UPDATE context_view_turns SET final_message_sequence = ? "
-                        "WHERE turn_id = ?",
-                        (final_message_sequence, turn_id),
-                    )
-                    if view_turn_update.rowcount != 1:
-                        # checkpoint-origin Turn 可能只有 view membership，尚未
-                        # 建立 context_view_turns。先按已更新的 turns 坐标补齐
-                        # 当前 active view，再执行同一事务内的 final pointer 更新。
-                        self._ensure_active_view_turn(
-                            connection,
-                            checkpoint_ns=checkpoint_ns,
-                            turn_id=turn_id,
-                        )
                     self._ensure_active_view_turn(
                         connection,
                         checkpoint_ns=checkpoint_ns,

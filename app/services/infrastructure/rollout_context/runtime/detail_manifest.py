@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.detail_ref import DetailRef
 
 
@@ -24,61 +21,6 @@ def detail_relative_path(detail_ref: DetailRef) -> Path:
     return Path(
         "rollout", "context-plan-details", detail_ref.assembly_id, detail_ref.detail_id
     )
-
-
-def protected_detail_relative_path(detail_ref: DetailRef) -> Path:
-    detail_relative_path(detail_ref)
-    return Path(
-        "rollout",
-        "context-plan-details-protected",
-        detail_ref.assembly_id,
-        f"{detail_ref.detail_id}.bin",
-    )
-
-
-def redacted_detail_payload(
-    detail: object, *, session_key: bytes, detail_kind: str
-) -> tuple[dict[str, object], str]:
-    """保持既有 session v1 摘要算法；不能因 locator 迁移改变摘要含义。"""
-    _manifest_string(detail_kind, field="detail_kind")
-    raw = canonical_json_bytes(detail)
-    digest = session_detail_digest(detail, session_key=session_key)
-    return {
-        "redacted": True,
-        "redacted_stable_digest": digest,
-        "value_type": detail_value_type(detail),
-        "detail_kind": detail_kind,
-        "length": len(raw),
-    }, digest
-
-
-def session_detail_digest(detail: object, *, session_key: bytes) -> str:
-    """统一既有 session v1 摘要；迁移验真不必伪造 marker 的业务分类。"""
-    return (
-        "hmac-sha256:session:v1:"
-        + hmac.new(
-            session_key,
-            canonical_json_bytes(detail),
-            hashlib.sha256,
-        ).hexdigest()
-    )
-
-
-def detail_value_type(detail: object) -> str:
-    """仅描述 JSON 类型；敏感业务分类使用调用方显式传入的 detail_kind。"""
-    if detail is None:
-        return "null"
-    if isinstance(detail, bool):
-        return "boolean"
-    if isinstance(detail, str):
-        return "string"
-    if isinstance(detail, (int, float)):
-        return "number"
-    if isinstance(detail, Mapping):
-        return "object"
-    if isinstance(detail, (list, tuple)):
-        return "array"
-    raise TypeError("detail 必须是 JSON value")
 
 
 def _manifest_string(value: object, *, field: str) -> str:
@@ -130,7 +72,6 @@ class DetailRecord:
     status: str
     expires_at: str | None = None
     checkpoint_ns: str = ""
-    redacted_stable_digest: str | None = None
     protection: str = "public"
     availability: str = "available"
 
@@ -175,14 +116,6 @@ class DetailRecord:
             raise DetailUnavailableError(
                 "detail manifest sensitive 与 protection 不一致"
             )
-        if self.sensitive:
-            _manifest_string(
-                self.redacted_stable_digest, field="redacted_stable_digest"
-            )
-        elif self.redacted_stable_digest is not None:
-            raise DetailUnavailableError(
-                "非敏感 detail 不得携带 redacted_stable_digest"
-            )
         expiry_time(self.expires_at)
 
 
@@ -216,7 +149,6 @@ def detail_record_from_mapping(raw: Mapping[str, object]) -> DetailRecord:
         "status",
         "expires_at",
         "checkpoint_ns",
-        "redacted_stable_digest",
         "protection",
         "availability",
     }
@@ -224,6 +156,11 @@ def detail_record_from_mapping(raw: Mapping[str, object]) -> DetailRecord:
     if missing:
         raise DetailUnavailableError(
             "detail manifest 缺少字段: " + ",".join(sorted(missing))
+        )
+    unknown = set(raw) - required_fields - {"detail_ref", "created_at"}
+    if unknown:
+        raise DetailUnavailableError(
+            "detail manifest 存在未知字段: " + ",".join(sorted(unknown))
         )
     values = {name: raw[name] for name in required_fields}
     for name in ("required", "sensitive"):
@@ -245,6 +182,4 @@ __all__ = [
     "DetailUnavailableError",
     "detail_record_from_mapping",
     "detail_relative_path",
-    "protected_detail_relative_path",
-    "redacted_detail_payload",
 ]

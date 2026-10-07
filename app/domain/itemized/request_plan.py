@@ -92,7 +92,6 @@ class ContextContribution:
     contribution_kind: str = "prompt"
     body: object | None = None
     content_length: int | None = None
-    redacted_stable_digest: str | None = None
     visibility: str = "internal"
     protection: str = "public"
     assembly_id: str | None = None
@@ -193,24 +192,10 @@ class ContextContribution:
             or self.content_length < 0
         ):
             raise ItemSchemaError("ContextContribution.content_length 必须是非负整数")
-        if self.redacted_stable_digest is not None:
-            validate_hash_token(
-                self.redacted_stable_digest,
-                "ContextContribution.redacted_stable_digest",
-                redacted=True,
-            )
-            if self.protection == DetailProtection.PUBLIC:
-                raise ItemSchemaError(
-                    "ContextContribution.redacted_stable_digest 不得用于 public protection"
-                )
         if self.content_hash is not None:
             validate_hash_token(self.content_hash, "ContextContribution.content_hash")
-        if (self.content_hash is None) == (self.redacted_stable_digest is None):
-            raise ItemSchemaError(
-                "ContextContribution 必须恰好包含 content_hash 或 redacted_stable_digest"
-            )
-        if self.body is not None and self.redacted_stable_digest is not None:
-            raise ItemSchemaError("带正文的 ContextContribution 不得使用 redacted digest")
+        if self.content_hash is None:
+            raise ItemSchemaError('ContextContribution 必须包含 content_hash ')
         if self.contribution_ordinal is not None and (
             self.assembly_id is None
             or not isinstance(self.contribution_ordinal, int)
@@ -599,10 +584,7 @@ class ContextRequestPlan:
                     raise ItemSchemaError("contribution/ref source_revision 不一致")
                 if contribution.content_length != ref.content_length:
                     raise ItemSchemaError("contribution/ref content_length 不一致")
-                if contribution.content_hash != ref.content_hash or (
-                    contribution.redacted_stable_digest
-                    != ref.redacted_stable_digest
-                ):
+                if contribution.content_hash != ref.content_hash:
                     raise ItemSchemaError("contribution/ref hash token 不一致")
                 if (
                     contribution.visibility != ref.visibility
@@ -683,7 +665,6 @@ class ContextRequestPlan:
                 tool_policy_version=tool_ref.tool_policy_version,
                 content_length=tool_ref.content_length,
                 content_hash=tool_ref.content_hash,
-                redacted_stable_digest=tool_ref.redacted_stable_digest,
                 protection=tool_ref.protection,
                 availability=tool_ref.availability,
                 tool_policy=tool_ref.tool_policy,
@@ -712,7 +693,6 @@ class ContextRequestPlan:
                 contribution_kind=contribution.contribution_kind,
                 body=contribution.body,
                 content_length=contribution.content_length,
-                redacted_stable_digest=contribution.redacted_stable_digest,
                 visibility=contribution.visibility,
                 protection=contribution.protection,
                 root_placement=contribution.root_placement,

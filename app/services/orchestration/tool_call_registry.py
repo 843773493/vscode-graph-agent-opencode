@@ -365,7 +365,9 @@ class StreamToolRegistryMixin:
                         "tool_invocation_id": payload["tool_invocation_id"],
                         "tool_attempt_id": tool_execution_id,
                         "result_id": tool_execution_id,
-                        "name": tool_name,
+                        # canonical 结果沿用已登记的 provider 调用名称；
+                        # target 展示名称仍由上面的工具生命周期事件承载。
+                        "name": self._tool_call_names_by_id[tool_call_id],
                         "content": result,
                         "tool_outcome": result_outcome,
                         "execution_confirmed": result_outcome != "unknown",

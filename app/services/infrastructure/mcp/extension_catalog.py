@@ -31,6 +31,7 @@ from app.domain.itemized.hashing import (
     canonical_json_bytes,
     sha256_jcs,
 )
+from app.domain.itemized.resource_activation import ResourceMemberBinding
 
 # 固定 Provider 信封的 binding identity。信封名称/参数形状变化必须产生新的
 # provider_binding_identity，才允许进入 ToolSet hard rebase 合同（E3/E4 边界）。
@@ -124,51 +125,6 @@ def payload_digest(
     return sha256_token(payload_bytes)
 
 
-def _encode_targets(
-    targets: Mapping[str, ExtensionTargetBinding],
-) -> list[dict[str, object]]:
-    """target 集合的唯一 canonical 形状；两个 binding 的 preimage 与恢复共用。"""
-    return [
-        {
-            "target_id": target.target_id,
-            "origin": target.origin,
-            "server_id": target.server_id,
-            "schema_hash": target.schema_hash,
-        }
-        for target in sorted(targets.values(), key=lambda item: item.target_id)
-    ]
-
-
-def _decode_targets(value: object) -> dict[str, ExtensionTargetBinding]:
-    """从封存 preimage 的 targets 形状重建 typed target 集合。
-
-    缺失或非法形状一律显式 ``extension-catalog-unavailable``；不得回退当前
-    MCP 目录或同名 target。
-    """
-    if not isinstance(value, list) or not value:
-        # 空目录是合法目录，但 dispatch binding 至少应携带自身 target 集合形状；
-        # 缺失（None/非 list）才是损坏，空 list 视为空目录 envelope。
-        if value == []:
-            return {}
-        raise ExtensionCatalogUnavailableError(
-            "历史 extension dispatch binding 缺少 targets 集合"
-        )
-    targets: dict[str, ExtensionTargetBinding] = {}
-    for entry in value:
-        if not isinstance(entry, Mapping):
-            raise ExtensionCatalogUnavailableError(
-                "历史 extension dispatch binding target 必须是对象"
-            )
-        target_id = str(entry.get("target_id", ""))
-        targets[target_id] = ExtensionTargetBinding(
-            target_id=target_id,
-            origin=str(entry.get("origin", "")),
-            schema_hash=str(entry.get("schema_hash", "")),
-            server_id=entry.get("server_id"),
-        )
-    return targets
-
-
 @dataclass(frozen=True, slots=True)
 class ExtensionTargetBinding:
     """一个扩展 target 在 sealed binding 中的不可变条目。"""
@@ -205,7 +161,7 @@ class ExtensionCatalogBindingRef:
     catalog_revision: str
     generation: int
     provider_binding_identity: str
-    targets: Mapping[str, ExtensionTargetBinding]
+    members: tuple[ResourceMemberBinding, ...]
     binding_hash: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -221,12 +177,16 @@ class ExtensionCatalogBindingRef:
             raise ValueError(
                 "ExtensionCatalogBindingRef.provider_binding_identity 不能为空"
             )
-        for target_id, target in self.targets.items():
-            if target.target_id != target_id:
-                raise ValueError(
-                    "ExtensionCatalogBindingRef.targets 键必须等于 target_id: "
-                    f"key={target_id!r} target_id={target.target_id!r}"
-                )
+        if not isinstance(self.members, tuple) or not all(
+            isinstance(member, ResourceMemberBinding) for member in self.members
+        ):
+            raise TypeError("ExtensionCatalogBindingRef.members 必须是领域成员元组")
+        member_ids = [member.member_id for member in self.members]
+        if len(member_ids) != len(set(member_ids)):
+            raise ExtensionTargetConflictError("extension catalog member_id 必须唯一")
+        object.__setattr__(
+            self, "members", tuple(sorted(self.members, key=lambda member: member.member_id)),
+        )
         try:
             binding_hash = sha256_jcs(self.binding_preimage())
         except ItemSchemaError as error:
@@ -234,6 +194,18 @@ class ExtensionCatalogBindingRef:
                 f"extension catalog binding 载荷无法 canonical 编码: {error}"
             ) from error
         object.__setattr__(self, "binding_hash", binding_hash)
+
+    @property
+    def targets(self) -> Mapping[str, ExtensionTargetBinding]:
+        """从唯一 members 构造执行只读视图；不保存第二套 target 权威集合。"""
+
+        return MappingProxyType({
+            member.member_id: ExtensionTargetBinding(
+                target_id=member.member_id, origin=member.member_kind,
+                schema_hash=member.schema_hash, server_id=member.server_id,
+            )
+            for member in self.members
+        })
 
     def binding_preimage(self) -> dict[str, object]:
         """本 ref 的版本化 canonical payload；``binding_hash`` 的唯一来源。"""
@@ -243,7 +215,7 @@ class ExtensionCatalogBindingRef:
             "catalog_revision": self.catalog_revision,
             "generation": self.generation,
             "provider_binding_identity": self.provider_binding_identity,
-            "targets": _encode_targets(self.targets),
+            "members": [member.to_dict() for member in self.members],
         }
 
     def resolve(self, tool_name: str) -> ExtensionTargetBinding:
@@ -275,25 +247,39 @@ def build_extension_catalog_binding(
     provider_binding_identity: str = EXTENSION_TOOL_ENVELOPE_IDENTITY,
 ) -> ExtensionCatalogBindingRef:
     """从已验证目录条目构建 sealed binding；同名冲突发布前显式拒绝。"""
-    entries: dict[str, ExtensionTargetBinding] = {}
+    entries: dict[str, ResourceMemberBinding] = {}
     for item in targets:
         if item.target_id in entries:
             raise ExtensionTargetConflictError(
                 "扩展 target 公共名称冲突，发布前必须显式拒绝: "
                 f"target_id={item.target_id!r}"
             )
-        entries[item.target_id] = ExtensionTargetBinding(
-            target_id=item.target_id,
-            origin=item.origin,
+        entries[item.target_id] = ResourceMemberBinding(
+            member_id=item.target_id,
+            member_kind=item.origin,
             schema_hash=extension_schema_hash(item.args),
             server_id=item.server_id,
+            revision=catalog_revision,
         )
     return ExtensionCatalogBindingRef(
         binding_id=f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}",
         catalog_revision=catalog_revision,
         generation=generation,
         provider_binding_identity=provider_binding_identity,
-        targets=MappingProxyType(entries),
+        members=tuple(entries.values()),
+    )
+
+
+def extension_catalog_binding_from_members(
+    *, catalog_revision: str, generation: int,
+    members: tuple[ResourceMemberBinding, ...],
+    provider_binding_identity: str = EXTENSION_TOOL_ENVELOPE_IDENTITY,
+) -> ExtensionCatalogBindingRef:
+    """typed members 是唯一集合；restore 不读取 live tools 或重建 schema。"""
+    return ExtensionCatalogBindingRef(
+        binding_id=f"{_BINDING_ID_PREFIX}:{generation}:{catalog_revision}",
+        catalog_revision=catalog_revision, generation=generation,
+        provider_binding_identity=provider_binding_identity, members=members,
     )
 
 
@@ -317,7 +303,8 @@ class ExtensionDispatchBindingRef:
     activation_policy_revision: str
     owner_session_id: str
     owner_thread_id: str
-    turn_id: str
+    execution_id: str
+    turn_id: str | None
     model_call_id: str | None = None
     # 受保护 catalog snapshot/detail 的 typed ref；冷历史只保留验证 ref。
     catalog_snapshot_ref: str | None = None
@@ -334,13 +321,17 @@ class ExtensionDispatchBindingRef:
             "activation_policy_revision",
             "owner_session_id",
             "owner_thread_id",
-            "turn_id",
+            "execution_id",
         ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(
                     f"ExtensionDispatchBindingRef.{name} 必须是非空字符串"
                 )
+        if self.turn_id is not None and (
+            not isinstance(self.turn_id, str) or not self.turn_id
+        ):
+            raise ValueError("ExtensionDispatchBindingRef.turn_id 必须是非空字符串或 None")
         if self.model_call_id is not None and (
             not isinstance(self.model_call_id, str) or not self.model_call_id
         ):
@@ -372,7 +363,7 @@ class ExtensionDispatchBindingRef:
             "provider_binding_identity": self.binding_ref.provider_binding_identity,
             "guidance_revision": self.guidance_revision,
             "activation_policy_revision": self.activation_policy_revision,
-            "targets": _encode_targets(self.binding_ref.targets),
+            "members": [member.to_dict() for member in self.binding_ref.members],
         }
 
     def verify(self) -> ExtensionDispatchBindingRef:
@@ -405,14 +396,20 @@ class ExtensionDispatchBindingRef:
             "activation_policy_revision",
             "owner_session_id",
             "owner_thread_id",
+            "execution_id",
             "turn_id",
+            "members",
+            "extension_dispatch_binding_hash",
         }
         missing = required - set(value)
         if missing:
             raise ExtensionCatalogUnavailableError(
                 "历史 extension dispatch binding 缺少字段: " f"{sorted(missing)}"
             )
-        targets = _decode_targets(value.get("targets"))
+        raw_members = value["members"]
+        if not isinstance(raw_members, list):
+            raise ExtensionCatalogUnavailableError("历史 extension binding members 必须是数组")
+        members = tuple(ResourceMemberBinding.from_dict(member) for member in raw_members)
         model_call_id = value.get("model_call_id")
         catalog_snapshot_ref = value.get("catalog_snapshot_ref")
         try:
@@ -424,7 +421,7 @@ class ExtensionDispatchBindingRef:
                     provider_binding_identity=str(
                         value["provider_binding_identity"]
                     ),
-                    targets=MappingProxyType(targets),
+                    members=members,
                 ),
                 guidance_revision=str(value["guidance_revision"]),
                 activation_policy_revision=str(
@@ -432,7 +429,8 @@ class ExtensionDispatchBindingRef:
                 ),
                 owner_session_id=str(value["owner_session_id"]),
                 owner_thread_id=str(value["owner_thread_id"]),
-                turn_id=str(value["turn_id"]),
+                execution_id=value["execution_id"],
+                turn_id=value["turn_id"],
                 model_call_id=(
                     None if model_call_id is None else str(model_call_id)
                 ),
@@ -464,9 +462,10 @@ class ExtensionDispatchBindingRef:
             "activation_policy_revision": self.activation_policy_revision,
             "owner_session_id": self.owner_session_id,
             "owner_thread_id": self.owner_thread_id,
+            "execution_id": self.execution_id,
             "turn_id": self.turn_id,
             "model_call_id": self.model_call_id,
             "catalog_snapshot_ref": self.catalog_snapshot_ref,
             "extension_dispatch_binding_hash": self.dispatch_binding_hash,
-            "targets": _encode_targets(self.binding_ref.targets),
+            "members": [member.to_dict() for member in self.binding_ref.members],
         }

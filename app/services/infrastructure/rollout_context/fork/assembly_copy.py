@@ -50,6 +50,7 @@ def validate_source_assemblies(
         service._validate_context_assembly_manifest(
             connection,
             snapshot,
+            registration=read_registration(connection, session_id, thread_id, snapshot.plan_id),
             header_detail_ref=detail_ref,
             checkpoint_ns=checkpoint_ns,
         )

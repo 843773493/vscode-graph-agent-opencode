@@ -90,7 +90,6 @@ class ContextPlanComposer:
                     payload_kind=PayloadKind.STRUCTURED_CONTENT.value,
                     content_length=contribution.content_length,
                     content_hash_value=contribution.content_hash,
-                    redacted_stable_digest=contribution.redacted_stable_digest,
                     source_ref=contribution.contribution_id,
                     protection=contribution.protection,
                     visibility=contribution.visibility,
@@ -224,7 +223,6 @@ class ContextPlanComposer:
                 contribution_kind=contribution.contribution_kind,
                 body=contribution.body,
                 content_length=contribution.content_length,
-                redacted_stable_digest=contribution.redacted_stable_digest,
                 visibility=contribution.visibility,
                 protection=contribution.protection,
                 root_placement=contribution.root_placement,
@@ -293,7 +291,6 @@ class ContextPlanComposer:
                     source_revision=ref.source_revision,
                     content_length=ref.content_length,
                     content_hash=ref.content_hash,
-                    redacted_stable_digest=ref.redacted_stable_digest,
                     detail_ref=(
                         detail_refs.get(ref.ref_id)
                         if ref.ref_type == "request_only" and included else None
@@ -329,7 +326,6 @@ class ContextPlanComposer:
                 tool_policy_version=tool_ref.tool_policy_version,
                 content_length=tool_ref.content_length,
                 content_hash=tool_ref.content_hash,
-                redacted_stable_digest=tool_ref.redacted_stable_digest,
                 protection=tool_ref.protection,
                 availability=tool_ref.availability,
                 tool_policy=tool_ref.tool_policy,
@@ -373,7 +369,6 @@ class ContextPlanComposer:
                     source_revision=bound.source_revision,
                     content_length=bound.content_length,
                     content_hash=bound.content_hash,
-                    redacted_stable_digest=bound.redacted_stable_digest,
                     detail_ref=None,
                     contribution_id=None,
                 )

@@ -30,7 +30,6 @@ from app.agents.tools.session_wait import (
     CommunicationWaitBindingLookupPort,
     create_wait_for_session_tool,
 )
-from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.tools.team import create_team_tools
 from app.agents.tools.terminal import (
     create_exec_command_tool,
@@ -41,9 +40,6 @@ from app.agents.tools.terminal import (
 from app.agents.tools.testing import create_test_tool
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
-    ContextSourceManager,
-)
 
 if TYPE_CHECKING:
     from app.services.business.session_goal_service import SessionGoalService
@@ -72,7 +68,6 @@ def build_default_tools(
     communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
-    context_source_manager: ContextSourceManager | None = None,
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
@@ -148,8 +143,6 @@ def build_default_tools(
             include_team_tools=include_team_tools,
         ),
     ]
-    if context_source_manager is not None:
-        tools.append(create_skill_load_tool(context_source_manager))
     if goal_service is not None:
         tools.extend(
             create_goal_tools(session_id=session_id, goal_service=goal_service)

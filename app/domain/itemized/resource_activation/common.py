@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Literal
 
 from app.domain.itemized.enums import DetailAvailability
 from app.domain.itemized.errors import CodeCarryingError, ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
 
-ResourceActivationBoundary = str
+ResourceActivationBoundary = Literal["turn", "model_call"]
 _BOUNDARIES: Final[frozenset[str]] = frozenset({"turn", "model_call"})
-_SNAPSHOT_KINDS: Final[frozenset[str]] = _BOUNDARIES
+_SNAPSHOT_KINDS: Final[frozenset[str]] = frozenset({"execution", "model_call"})
 _AVAILABILITIES: Final[frozenset[str]] = frozenset(
     item.value for item in DetailAvailability
 )
@@ -75,12 +76,14 @@ RESOURCE_ACTIVATION_SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "activation_snapshot_id",
         "snapshot_kind",
-        "parent_turn_snapshot_id",
+        "parent_execution_snapshot_id",
         "activation_policy_revision",
         "activation_policy_hash",
+        "activation_policy",
         "registry_generation",
         "owner_session_id",
         "owner_thread_id",
+        "execution_id",
         "turn_id",
         "model_call_id",
         "captured_at",
@@ -100,7 +103,6 @@ RESOURCE_PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
         "revision",
         "content_length",
         "content_hash",
-        "redacted_stable_digest",
         "snapshot_ref",
         "detail_ref",
         "source_lineage_ref",
@@ -109,7 +111,12 @@ RESOURCE_PROVENANCE_FIELDS: Final[frozenset[str]] = frozenset(
         "activation_ordinal",
         "effective_boundary",
         "captured_registry_generation",
+        "members",
     }
+)
+
+RESOURCE_MEMBER_BINDING_FIELDS: Final[frozenset[str]] = frozenset(
+    {"member_id", "member_kind", "schema_hash", "server_id", "revision"}
 )
 
 SOURCE_LINEAGE_REF_FIELDS: Final[frozenset[str]] = frozenset(
@@ -126,8 +133,8 @@ SNAPSHOT_FIELD_ALIASES: Final[Mapping[str, str]] = {
     "session_id": "owner_session_id",
     "thread_id": "owner_thread_id",
     "created_at": "captured_at",
-    "parent_id": "parent_turn_snapshot_id",
-    "parent_snapshot_id": "parent_turn_snapshot_id",
+    "parent_id": "parent_execution_snapshot_id",
+    "parent_snapshot_id": "parent_execution_snapshot_id",
     "model_call_identity": "model_call_id",
     "provenance_hash": "activation_provenance_hash",
 }
@@ -229,6 +236,7 @@ LEGACY_FIELDS: Final[frozenset[str]] = frozenset(
         "metadata",
         "effective_boundary_v1",
         "snapshot_kind_v1",
+        "parent_turn_snapshot_id",
     }
 )
 
@@ -498,3 +506,59 @@ class SourceLineageRef:
                 "source_lineage_ref.digest 与来源向量/派生版本不一致",
             )
         return lineage
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceActivationPolicySnapshot:
+    """不可变的完整冻结 policy；未选 kind 的 override 也必须可精确恢复。"""
+
+    default_boundary: ResourceActivationBoundary
+    boundaries: Mapping[str, ResourceActivationBoundary]
+    revision: str = field(init=False)
+    hash: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.default_boundary not in _BOUNDARIES:
+            raise ValueError("activation_policy.default_boundary 必须是 turn|model_call")
+        if not isinstance(self.boundaries, Mapping):
+            raise TypeError("activation_policy.overrides 必须是对象")
+        normalized = {}
+        for kind, boundary in sorted(self.boundaries.items()):
+            _token(kind, "activation_policy.overrides.kind")
+            if boundary not in _BOUNDARIES:
+                raise ValueError(f"activation_policy.overrides.{kind} 必须是 turn|model_call")
+            normalized[kind] = boundary
+        object.__setattr__(self, "boundaries", MappingProxyType(normalized))
+        content_hash = sha256_jcs(self.to_dict())
+        object.__setattr__(self, "hash", content_hash)
+        object.__setattr__(
+            self,
+            "revision",
+            "resource-activation-policy:v1:" + content_hash.removeprefix("sha256:jcs:v1:"),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "default_boundary": self.default_boundary,
+            "overrides": dict(self.boundaries),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ResourceActivationPolicySnapshot:
+        if not isinstance(value, Mapping):
+            raise TypeError("activation_policy 必须是对象")
+        if set(value) != {"default_boundary", "overrides"}:
+            raise ValueError(
+                "activation_policy 字段必须为 default_boundary/overrides: "
+                f"{sorted(value)}"
+            )
+        return cls(
+            default_boundary=value["default_boundary"],
+            boundaries=value["overrides"],
+        )
+
+    def effective_boundary(self, resource_kind: str) -> ResourceActivationBoundary:
+        return self.boundaries.get(resource_kind, self.default_boundary)
+
+    def has_model_call_boundary(self) -> bool:
+        return self.default_boundary == "model_call" or "model_call" in self.boundaries.values()

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
+from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
 
@@ -23,6 +24,35 @@ def runtime(item_sink: AsyncMock) -> MessageStreamRuntime:
     return MessageStreamRuntime(writer, canonical_item_sink=item_sink, canonical_turn_id="turn_1")
 
 
+@pytest.fixture
+async def active_provider_tool(runtime: MessageStreamRuntime) -> str:
+    await runtime.start_model("model_1", "test")
+    await runtime.accept_message_chunk(
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[{
+                "index": 0,
+                "id": "call_1",
+                "name": EXTENSION_TOOL_INVOKER_NAME,
+                "args": '{"tool_name":"shell","arguments":{"command":"pwd"}}',
+            }],
+        )
+    )
+    await runtime.finish_model()
+    tool_call_id = runtime.claim_tool_call_id(
+        EXTENSION_TOOL_INVOKER_NAME,
+        {"command": "pwd"},
+        target_tool_name="shell",
+    )
+    assert tool_call_id == "model_1:tool-call:call_1"
+    await runtime.start_tool(
+        tool_execution_id="exec_1",
+        tool_call_id=tool_call_id,
+        tool_name="shell",
+    )
+    return tool_call_id
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "outcome", "error", "expected"),
@@ -36,16 +66,15 @@ def runtime(item_sink: AsyncMock) -> MessageStreamRuntime:
 async def test_tool_result_separates_payload_status_from_execution_outcome(
     runtime: MessageStreamRuntime,
     item_sink: AsyncMock,
+    active_provider_tool: str,
     status: str,
     outcome: str,
     error: str | None,
     expected: str,
 ) -> None:
-    await runtime.start_model("model_1", "test")
-    await runtime.start_tool(tool_execution_id="exec_1", tool_call_id="call_1", tool_name="shell")
     await runtime.complete_tool(
         tool_execution_id="exec_1",
-        tool_call_id="call_1",
+        tool_call_id=active_provider_tool,
         tool_name="shell",
         status=status,
         outcome=outcome,
@@ -53,12 +82,88 @@ async def test_tool_result_separates_payload_status_from_execution_outcome(
         result="工具结果",
     )
 
-    item_sink.assert_awaited_once()
-    item = item_sink.await_args.args[0][0]
+    assert item_sink.await_count == 2
+    tool_call, = item_sink.await_args_list[0].args[0]
+    item, = item_sink.await_args_list[1].args[0]
+    assert tool_call.semantic_kind == "tool_call"
+    assert tool_call.payload["tool_call_id"] == active_provider_tool
+    assert tool_call.payload["name"] == EXTENSION_TOOL_INVOKER_NAME
+    assert item.payload["tool_call_id"] == active_provider_tool
+    assert item.payload["name"] == tool_call.payload["name"]
+    assert item.projection_identity.model_call_id == "model_1"
     assert item.status == "completed"
     assert item.payload["tool_outcome"] == expected
     assert item.payload["result_id"] == "exec_1"
-    assert item.metadata["execution_confirmed"] is (expected != "unknown")
+    assert item.payload["execution_confirmed"] is (expected != "unknown")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_path", ["execution_lost", "user_interrupt"])
+async def test_unknown_tool_terminal_paths_keep_registered_provider_identity(
+    runtime: MessageStreamRuntime,
+    item_sink: AsyncMock,
+    active_provider_tool: str,
+    terminal_path: str,
+) -> None:
+    if terminal_path == "user_interrupt":
+        await runtime.finalize_interruption_facts()
+    else:
+        await runtime.fail_active_tool_executions(
+            completion_reason=terminal_path,
+            error="工具执行中断",
+        )
+
+    assert item_sink.await_count == 2
+    tool_call, = item_sink.await_args_list[0].args[0]
+    result, = item_sink.await_args_list[1].args[0]
+    assert result.payload["tool_call_id"] == tool_call.payload["tool_call_id"] == active_provider_tool
+    assert result.payload["name"] == tool_call.payload["name"] == EXTENSION_TOOL_INVOKER_NAME
+    assert result.payload["tool_outcome"] == "unknown"
+    assert result.payload["execution_confirmed"] is False
+    assert result.status == "completed"
+    assert result.projection_identity.model_call_id == "model_1"
+    assert isinstance(runtime.writer, MagicMock)
+    terminal_events = [
+        call.args[1]
+        for call in runtime.writer.commit.await_args_list
+        if call.args[0] == "tool.completed"
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["tool_name"] == "shell"
+    assert terminal_events[0]["outcome"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical_mode", ["no_sink", "disabled"])
+async def test_display_tool_completion_without_provider_registration(
+    runtime: MessageStreamRuntime,
+    item_sink: AsyncMock,
+    canonical_mode: str,
+) -> None:
+    writer = runtime.writer
+    assert isinstance(writer, MagicMock)
+    display_runtime = MessageStreamRuntime(writer) if canonical_mode == "no_sink" else runtime
+    await display_runtime.start_model("display_model", "test")
+    await display_runtime.start_tool(
+        tool_execution_id="display_exec",
+        tool_call_id="display_call",
+        tool_name="shell",
+    )
+    await display_runtime.complete_tool(
+        tool_execution_id="display_exec",
+        tool_call_id="display_call",
+        tool_name="shell",
+        status="succeeded",
+        result="展示结果",
+        persist_canonical=canonical_mode != "disabled",
+    )
+
+    item_sink.assert_not_awaited()
+    event_type, payload = writer.commit.await_args.args
+    assert event_type == "tool.completed"
+    assert payload["tool_name"] == "shell"
+    assert payload["result"] == "展示结果"
+    assert payload["outcome"] == "success"
 
 
 @pytest.mark.asyncio
@@ -157,7 +262,7 @@ async def test_tool_result_completion_is_serialized_across_tool_end_and_provider
     assert item.producer_ref["invocation_id"] == "model_1"
     assert item.payload["tool_invocation_id"] == "tool-invocation:model_1:call_1"
     assert item.payload["tool_attempt_id"] == "exec_1"
-    assert item.metadata["model_call_id"] == "model_1"
+    assert item.projection_identity.model_call_id == "model_1"
     assert [
         call.args[0]
         for call in writer.commit.await_args_list
@@ -377,9 +482,9 @@ async def test_reused_provider_block_id_is_scoped_per_model_call() -> None:
     first_item = item_sink.await_args_list[0].args[0][0]
     second_item = item_sink.await_args_list[1].args[0][0]
     assert first_item.item_id != second_item.item_id
-    assert first_item.metadata["block_id"] != second_item.metadata["block_id"]
-    assert first_item.metadata["model_call_id"] == "model_1"
-    assert second_item.metadata["model_call_id"] == "model_2"
+    assert first_item.projection_identity.block_id != second_item.projection_identity.block_id
+    assert first_item.projection_identity.model_call_id == "model_1"
+    assert second_item.projection_identity.model_call_id == "model_2"
 
 
 @pytest.mark.asyncio

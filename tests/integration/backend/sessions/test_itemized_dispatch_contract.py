@@ -47,6 +47,9 @@ from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.tool_test import ToolTestStartRequest
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     ToolProtocolBoundaryConflict,
 )
@@ -69,8 +72,12 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.registry import ToolTestRegistry
 from app.tool_testing.service import ToolTestService
@@ -130,6 +137,10 @@ def dispatch_bridge(dispatch_saver, registered_tool_set_producer_factory):
             thread_id=thread,
             context_source_manager=manager,
             tool_set_producer=producer,
+            resource_activation=ResourceActivationCoordinator(
+                registry=ResourceRegistry(), saver=saver,
+                body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+            ),
         )
 
     return create
@@ -536,13 +547,15 @@ async def test_new_seals_bind_effective_parameters_and_profile_over_real_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("checkpoint_ns", ["", "model:namespace-contract"])
+@pytest.mark.parametrize(
+    "checkpoint_ns, owner_namespace", [("", ""), ("model:namespace-contract", "")]
+)
 @pytest.mark.parametrize("missing_assembly", [False, True])
 async def test_dispatch_reads_committed_owner_namespace_before_real_provider_http(
     dispatch_saver, native_http_server, dispatch_bridge, monkeypatch,
-    checkpoint_ns, missing_assembly,
+    checkpoint_ns, owner_namespace, missing_assembly,
 ) -> None:
-    """真实 prepare/getter/send 共享 namespace；已提交记录缺失时发网前明确失败。"""
+    """真实 prepare/storage/send 共用 rollout owner；读回失败时发网前暴露原始错误。"""
     saver, session_id, turn_id, sessions = dispatch_saver
     state, endpoint = native_http_server
     thread = saver._storage.main_thread_id(session_id)
@@ -562,30 +575,32 @@ async def test_dispatch_reads_committed_owner_namespace_before_real_provider_htt
             task_id="namespace-contract",
         )),
     )
-    original_getter = saver.get_context_assembly
-    missing = KeyError("injected committed assembly lookup loss")
-    seen_namespaces = []
+    original_getter = saver._storage.get_context_assembly
+    missing = KeyError(f"injected committed assembly lookup loss: namespace={owner_namespace!r}")
+    seen_owners = []
 
     def checked_getter(*args, **kwargs):
-        seen_namespaces.append(kwargs["checkpoint_ns"])
+        seen_owners.append((args[0], args[1], kwargs["checkpoint_ns"], kwargs["assembly_id"]))
         if missing_assembly:
             raise missing
         return original_getter(*args, **kwargs)
 
-    monkeypatch.setattr(saver, "get_context_assembly", checked_getter)
+    # prepare 从真实 storage 读回同一已提交 snapshot，dispatch 直接消费该事实。
+    monkeypatch.setattr(saver._storage, "get_context_assembly", checked_getter)
 
     async def send_actual_request(prepared: ModelRequest) -> ModelResponse:
         return ModelResponse(result=[await prepared.model.ainvoke(prepared.messages)])
 
     with dispatch_execution_scope(saver, session_id, turn_id):
         if missing_assembly:
-            with pytest.raises(ValueError, match="source-mismatch.*assembly.*namespace") as error:
+            with pytest.raises(KeyError, match="committed assembly lookup loss") as error:
                 await bridge.awrap_model_call(request, send_actual_request)
-            assert error.value.__cause__ is missing
+            assert error.value is missing
         else:
             await bridge.awrap_model_call(request, send_actual_request)
-    assert seen_namespaces == [checkpoint_ns]
     (snapshot,) = saver.list_context_assemblies(session_id, thread)
+    assert seen_owners
+    assert set(seen_owners) == {(session_id, thread, owner_namespace, snapshot.assembly_id)}
     with RolloutCheckpointSaver(sessions) as restarted:
         restored = restarted.get_context_assembly(
             session_id, thread, assembly_id=snapshot.assembly_id, checkpoint_ns=checkpoint_ns,
@@ -888,7 +903,6 @@ async def test_chat_rejects_unknown_overlay_before_assembly_and_provider_http(
     thread_root = saver._storage._path_resolver.resolve_thread_node(session_id, thread)
     detail_dirs = (
         thread_root / "rollout" / "context-plan-details",
-        thread_root / "rollout" / "context-plan-details-protected",
     )
     detail_files_before = {
         path.relative_to(thread_root): path.read_bytes()
@@ -2000,17 +2014,17 @@ async def test_real_prepare_observes_completed_unknown_canonical_terminal_notifi
     )
     projected_tool_results = []
     projected_message_lists = []
-    original_projection = case.bridge._prepare_projection
+    original_projection = case.bridge._project_prepared
 
-    def record_projection(request):
-        actual = original_projection(request)
+    def record_projection(request, prepared):
+        actual = original_projection(request, prepared)
         projected_message_lists.append(list(actual[1]))
         projected_tool_results.extend(
             message for message in actual[1] if isinstance(message, ToolMessage)
         )
         return actual
 
-    monkeypatch.setattr(case.bridge, "_prepare_projection", record_projection)
+    monkeypatch.setattr(case.bridge, "_project_prepared", record_projection)
     changed = await case.dispatch("toolset-completed-unknown-next")
     projected_tool_result, = projected_tool_results
     projected_messages, = projected_message_lists

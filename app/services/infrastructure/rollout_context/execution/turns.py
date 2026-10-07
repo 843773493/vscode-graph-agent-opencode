@@ -632,8 +632,8 @@ class RolloutTurnsMixin:
                 # Turn logical ordinal；否则 replay_as_new_turn/新输入虽然
                 # 已经有 root，却会在即时 history/root lookup 中暂时消失，
                 # 直到下一次 checkpoint 偶然重建派生索引。
-                if active_view is not None and active_view[0] is not None:
-                    view_id = strict_text(active_view[0], field="branches.head_view_id")
+                view_id = self._active_context_view_id(connection, checkpoint_ns, branch_value)
+                if view_id is not None:
                     existing_view_turn = connection.execute(
                         "SELECT logical_turn_ordinal, root_input_item_id FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
                         (view_id, turn_value),

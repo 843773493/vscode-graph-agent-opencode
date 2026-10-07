@@ -13,12 +13,14 @@ import rfc8785
 from app.domain.itemized.errors import ItemSchemaError
 
 _SHA256_JCS_PATTERN = re.compile(r"^sha256:jcs:v1:[0-9a-f]{64}$")
-_REDACTED_DIGEST_PATTERN = re.compile(r"^hmac-sha256:session:v1:[0-9a-f]{64}$")
+_UNICODE_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
 
 
 def _ensure_json_value(value: object, path: str = "value") -> None:
-    if isinstance(value, str) and any(0xD800 <= ord(char) <= 0xDFFF for char in value):
-        raise ItemSchemaError(f"{path!r} 包含非法 Unicode surrogate")
+    if isinstance(value, str):
+        if _UNICODE_SURROGATE_PATTERN.search(value) is not None:
+            raise ItemSchemaError(f"{path!r} 包含非法 Unicode surrogate")
+        return
     if isinstance(value, float) and not math.isfinite(value):
         raise ItemSchemaError(f"{path} 包含非有限浮点数")
     if isinstance(value, Mapping):
@@ -32,7 +34,7 @@ def _ensure_json_value(value: object, path: str = "value") -> None:
         for index, child in enumerate(value):
             _ensure_json_value(child, f"{path}[{index}]")
         return
-    if value is None or isinstance(value, (str, int, bool)):
+    if value is None or isinstance(value, (int, bool)):
         return
     if isinstance(value, float):
         return
@@ -79,23 +81,10 @@ def sha256_jcs(value: object) -> str:
     return "sha256:jcs:v1:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
-def validate_hash_token(
-    value: object,
-    field_name: str,
-    *,
-    redacted: bool = False,
-) -> str:
-    """校验 manifest 中可跨进程恢复的 hash token 语法。"""
-    if not isinstance(value, str) or not value:
-        raise ItemSchemaError(f"{field_name} 必须是非空字符串")
-    pattern = _REDACTED_DIGEST_PATTERN if redacted else _SHA256_JCS_PATTERN
-    if pattern.fullmatch(value) is None:
-        expected = (
-            "hmac-sha256:session:v1:<64位小写hex>"
-            if redacted
-            else "sha256:jcs:v1:<64位小写hex>"
-        )
-        raise ItemSchemaError(f"{field_name} 必须符合 {expected}")
+def validate_hash_token(value: object, field_name: str) -> str:
+    """校验内部唯一 content_hash 的跨进程 token 语法。"""
+    if not isinstance(value, str) or _SHA256_JCS_PATTERN.fullmatch(value) is None:
+        raise ItemSchemaError(f"{field_name} 必须符合 sha256:jcs:v1:<64位小写hex>")
     return value
 
 

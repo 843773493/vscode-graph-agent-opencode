@@ -72,7 +72,9 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
     produced: list[InstructionProducerSpec] = []
     projections = []
     resolve = GRAPH_FACTORY_REGISTRY.resolve
-    project = SealedAssemblyDispatchBridge._prepare_projection
+    prepare_projection = SealedAssemblyDispatchBridge._prepare_projection
+    project = SealedAssemblyDispatchBridge._project_prepared
+    wrap = SealedAssemblyDispatchBridge.awrap_model_call
     first_record = None
     first_snapshot = None
     first_admission = None
@@ -101,7 +103,7 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
             if state.source_id == source_id
         )
 
-    def record_projection(bridge, request):
+    def check_retry(bridge):
         nonlocal retry_checked
         if first_record is not None and not retry_checked:
             assert first_snapshot is not None and first_admission is not None
@@ -138,7 +140,8 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
                     ),
                 ):
                     retry_patch.setattr(manager, "prepare_sources", count_source_reads)
-                    retry, messages, tools = project(bridge, saved_request)
+                    retry_patch.setattr(SealedAssemblyDispatchBridge, "_project_prepared", project)
+                    retry, messages, tools = prepare_projection(bridge, saved_request)
                 assert source_reads == 0
                 assert retry["assembly_id"] == first_snapshot.assembly_id
                 assert canonical_json_bytes(retry["snapshot"].to_dict()) == first_seal_bytes
@@ -153,7 +156,12 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
                     assembly_id=first_snapshot.assembly_id,
                     checkpoint_ns=checkpoint_ns,
                 )
-        prepared, messages, tools = project(bridge, request)
+    async def record_call(bridge, request, handler):
+        check_retry(bridge)
+        return await wrap(bridge, request, handler)
+
+    def record_projection(bridge, request, prepared):
+        prepared, messages, tools = project(bridge, request, prepared)
         projections.append((
             bridge, request.override(messages=deepcopy(request.messages)),
             prepared["snapshot"], deepcopy(messages), deepcopy(tools),
@@ -161,7 +169,8 @@ async def test_real_config_reload_refreshes_r01_generation_without_rewriting_sea
         return prepared, messages, tools
 
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", record_generation)
-    monkeypatch.setattr(SealedAssemblyDispatchBridge, "_prepare_projection", record_projection)
+    monkeypatch.setattr(SealedAssemblyDispatchBridge, "awrap_model_call", record_call)
+    monkeypatch.setattr(SealedAssemblyDispatchBridge, "_project_prepared", record_projection)
     session_id, thread_id = await _session(case.runner)
     first_admission = await _complete_job(case, session_id, thread_id)
     assert len(projections) == len(produced) == len(case.compiled) == 1

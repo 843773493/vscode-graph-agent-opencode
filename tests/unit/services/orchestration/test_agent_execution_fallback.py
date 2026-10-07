@@ -20,8 +20,18 @@ from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     UserExecutionIdentity,
 )
+from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.config.snapshot import build_config_snapshot
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    McpCatalogResourcePublisher,
+)
+from app.services.infrastructure.mcp.catalog_owner import McpCatalogPublication
+from app.services.infrastructure.mcp.extension_catalog import (
+    build_extension_catalog_binding,
+)
 from app.services.infrastructure.message_stream_store import MessageStreamTerminalError
 from app.services.orchestration.agent_execution_service import (
     AgentExecutionService,
@@ -40,7 +50,9 @@ from app.services.orchestration.execution_step.reminders import (
 from app.services.orchestration.execution_step.reminders import (
     has_valid_session_question_reply as _has_valid_session_question_reply,
 )
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -51,7 +63,10 @@ pytestmark = pytest.mark.usefixtures("workspace_scope")
 def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """创建一组共用的 mock 依赖。"""
     config_service = MagicMock()
-    config_service.get_snapshot.return_value = build_config_snapshot({}, source_paths=())
+    config_service.get_snapshot.return_value = build_config_snapshot(
+        {"context": read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")["context"]},
+        source_paths=(),
+    )
     config_service.get_revision.return_value = config_service.get_snapshot.return_value.revision
     config_service.use_snapshot.side_effect = lambda _snapshot: nullcontext()
     config_service.resolve_agent_id.return_value = "test_agent"
@@ -114,8 +129,38 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
             "get_canonical_item",
             "converge_execution",
             "mark_execution_lost",
+            "frozen_resource_activation_for_admission",
+            "save_resource_activation_snapshot",
         ]
     )
+    saver.frozen_resource_activation_for_admission.return_value = None
+    saver.save_resource_activation_snapshot = AsyncMock()
+    activation_body_store = MagicMock()
+    def write_activation_body(
+        *, owner_session_id, owner_thread_id, activation_snapshot_id,
+        resource_id, activation_ordinal, payload, checkpoint_ns,
+    ):
+        assert resource_id == MCP_TOOL_CATALOG_RESOURCE_ID
+        assert activation_ordinal == 0 and payload == {"content": ""}
+        assert checkpoint_ns == ""
+        return DetailRef(
+            owner_session_id, owner_thread_id, activation_snapshot_id, "detail-empty-mcp",
+        )
+
+    activation_body_store.write_resource_body.side_effect = write_activation_body
+
+    def activation_factory(resource_registry):
+        publisher = McpCatalogResourcePublisher(registry=resource_registry)
+        publisher.publish(McpCatalogPublication(
+            binding_ref=build_extension_catalog_binding(
+                catalog_revision=sha256_jcs([]), generation=1, targets=(),
+            ),
+            descriptors=(), tools={}, status="available",
+        ))
+        return ResourceActivationCoordinator(
+            registry=resource_registry, saver=saver, body_store=activation_body_store,
+        )
+
     saver.consume_prepared_context_for_dispatch.return_value = {
         "assembly_id": "assembly_test",
         "execution_id": "execution_test",
@@ -151,6 +196,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
             item_sequence=1,
             item_id=f"item-{message_id}",
             semantic_kind="assistant_output",
+            wire_role="assistant",
             payload_kind="text",
             status="completed",
             producer_ref={"producer_kind": "provider", "producer_id": "model_test"},
@@ -199,6 +245,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
     return {
         "graph_binding_store": graph_store,
         "residency_tracker": ThreadResidencyTracker(),
+        "resource_activation_factory": activation_factory,
         "config_service": config_service,
         "registry": registry,
         "msg_bus": msg_bus,
@@ -294,6 +341,7 @@ def _make_service(deps):
     return AgentExecutionService(
         graph_binding_store=deps["graph_binding_store"],
         residency_tracker=deps["residency_tracker"],
+        resource_activation_factory=deps["resource_activation_factory"],
         config_service=deps["config_service"],
         background_task_registry=deps["registry"],
         background_message_bus=deps["msg_bus"],
@@ -323,7 +371,6 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
     缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
     """
     service = _make_service(mock_dependencies)
-    mock_dependencies["dependency_provider"].get_mcp_tools.return_value = []
     mock_dependencies["config_service"].get_revision.side_effect = [
         "revision-a",
         "revision-a",
@@ -365,7 +412,10 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
     mock_dependencies,
 ):
     service = _make_service(mock_dependencies)
-    snapshot = build_config_snapshot({"test": "pinned"}, source_paths=())
+    snapshot = build_config_snapshot({
+        "test": "pinned",
+        "context": mock_dependencies["config_service"].get_snapshot.return_value.to_dict()["context"],
+    }, source_paths=())
     active_snapshot: ContextVar[object | None] = ContextVar(
         "test_config_snapshot", default=None
     )
@@ -1875,21 +1925,24 @@ async def test_generation_reactor_release_is_isolated_per_thread(mock_dependenci
         first, active = await asyncio.gather(
             acquire("ses_a", "job_a"), acquire("ses_b", "job_b")
         )
-        first_value = first.runtime
-        first.release()
-        again = await acquire("ses_a", "job_a2")
-        assert again.runtime is first_value
-        assert set(reactors) == {"ses_a", "ses_b"}
-        reactors["ses_a"].assert_not_awaited()
-        again.release()
-        state = tracker._states[("ses_a", "thr_test")]
-        await tracker._start_runtime_unload(state, state.runtime)
-        reactors["ses_a"].assert_awaited_once()
-        reactors["ses_b"].assert_not_awaited()
-        rebuilt = await acquire("ses_a", "job_a3")
-        assert rebuilt.generation == 2
-        assert rebuilt.runtime is not first_value
-        rebuilt.release()
-        active.release()
-        await service.shutdown()
-        reactors["ses_b"].assert_awaited_once()
+        async with first, active:
+            first_value = first.runtime
+            first.release()
+            again = await acquire("ses_a", "job_a2")
+            async with again:
+                assert again.runtime is first_value
+                assert set(reactors) == {"ses_a", "ses_b"}
+                reactors["ses_a"].assert_not_awaited()
+                again.release()
+                state = tracker._states[("ses_a", "thr_test")]
+                await tracker._start_runtime_unload(state, state.runtime)
+                reactors["ses_a"].assert_awaited_once()
+                reactors["ses_b"].assert_not_awaited()
+                rebuilt = await acquire("ses_a", "job_a3")
+                async with rebuilt:
+                    assert rebuilt.generation == max(first.generation, active.generation) + 1
+                    assert rebuilt.runtime is not first_value
+                    rebuilt.release()
+                    active.release()
+                    await service.shutdown()
+                    reactors["ses_b"].assert_awaited_once()

@@ -188,9 +188,8 @@ class RolloutTurnLifecycleMixin:
                         turn_id,
                     ),
                 )
-                connection.execute(
-                    "UPDATE context_view_turns SET final_message_sequence = ? WHERE turn_id = ?",
-                    (final_message_sequence, turn_id),
+                self._ensure_active_view_turn(
+                    connection, checkpoint_ns=checkpoint_ns, turn_id=turn_id
                 )
                 self._insert_control(
                     connection,

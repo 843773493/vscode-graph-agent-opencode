@@ -39,6 +39,9 @@ from app.services.infrastructure.rollout_context.storage.catalog.integrity impor
     validate_catalog_body,
     validate_catalog_projection,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_schema import (
+    require_resource_activation_schema,
+)
 from app.services.infrastructure.rollout_context.storage.serialization import (
     canonical_json_line as _v2_json_line,
 )
@@ -235,21 +238,15 @@ def prepare_full_copy_remap(
         ),
     )
     collect("assembly", rows("assembly_id", "context_plan_details"))
-    # activation 行的 owner/catalog identity 也必须 target-local；activation
-    # snapshot 是 lineage detail 的 assembly 段，因此必须先收集，再并入 detail
-    # 的 assembly mapping。schema 未 bootstrap 时该库没有 activation 事实。
-    activation_table = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-        "AND name = 'resource_activation_snapshots'"
-    ).fetchone()
-    if activation_table is not None:
-        collect(
-            "activation_snapshot",
-            rows("activation_snapshot_id", "resource_activation_snapshots"),
-        )
+    # activation root 的 execution identity 与 lineage detail 都必须 target-local。
+    require_resource_activation_schema(connection)
+    collect(
+        "activation_snapshot",
+        rows("activation_snapshot_id", "resource_activation_snapshots"),
+    )
     detail_assembly_map = {
         **maps["assembly"],
-        **maps.get("activation_snapshot", {}),
+        **maps["activation_snapshot"],
     }
     maps["detail"] = collect_detail_mappings(
         connection,

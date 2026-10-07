@@ -23,6 +23,7 @@ from app.domain.itemized.schema import (
     validate_selection_compatibility,
 )
 from app.domain.itemized.selection import ContextSelectionEntry
+from app.domain.itemized.serde.registry import parse_context_ref
 
 
 def test_production_compatibility_matrix_is_closed() -> None:
@@ -177,28 +178,28 @@ def test_jcs_rejects_non_finite_invalid_unicode_and_invalid_json_shape(
 
 
 @pytest.mark.parametrize(
-    ("value", "redacted"),
+    "value",
     [
-        ("sha256:jcs:v1:" + "a" * 64, False),
-        ("hmac-sha256:session:v1:" + "b" * 64, True),
-        ("sha256:jcs:v1:" + "A" * 64, False),
-        ("sha256:jcs:v1:short", False),
-        ("redacted:known", True),
+        "sha256:jcs:v1:" + "a" * 64,
+        "hmac-sha256:session:v1:" + "b" * 64,
+        "sha256:jcs:v1:" + "A" * 64,
+        "sha256:jcs:v1:short",
+        "redacted:known",
     ],
 )
-def test_manifest_hash_token_syntax_is_closed(value: str, redacted: bool) -> None:
+def test_manifest_hash_token_syntax_is_closed(value: str) -> None:
     prefix, suffix = value.rsplit(":", 1)
     valid_hex = (
         len(suffix) == 64
         and suffix == suffix.lower()
         and all(character in "0123456789abcdef" for character in suffix)
     )
-    expected_prefix = "hmac-sha256:session:v1" if redacted else "sha256:jcs:v1"
+    expected_prefix = "sha256:jcs:v1"
     if prefix == expected_prefix and valid_hex:
-        validate_hash_token(value, "token", redacted=redacted)
+        validate_hash_token(value, "token")
     else:
         with pytest.raises(ItemSchemaError):
-            validate_hash_token(value, "token", redacted=redacted)
+            validate_hash_token(value, "token")
 
 
 @pytest.mark.parametrize("producer_kind", sorted(PRODUCER_KINDS))
@@ -280,16 +281,26 @@ def test_context_ref_and_tool_set_ref_are_disjoint_selection_union(
             loss=("union-mismatch",),
             availability="unavailable",
         )
-    with pytest.raises(ItemSchemaError):
-        ContextRef.request_only_ref(
-            "request-1",
-            session_id="session-1", thread_id="thread-1",
-            plan_id="plan-1",
-            source_revision="revision-1",
-            content="body",
-            redacted_stable_digest="hmac-sha256:session:v1:" + "b" * 64,
-            protection="public",
-        )
+    request_ref = ContextRef.request_only_ref(
+        "request-1",
+        session_id="session-1", thread_id="thread-1",
+        plan_id="plan-1",
+        source_revision="revision-1",
+        content="body",
+        protection="public",
+    )
+    manifest = request_ref.to_dict()
+    assert request_ref.content_length == 6
+    assert request_ref.content_hash == (
+        "sha256:jcs:v1:bfd4d039e9f8aca33b52a877ded02f73846f28f9095c2bba178316be62ef7c1f"
+    )
+    assert "content" not in manifest and "body" not in manifest
+    assert parse_context_ref(manifest) == request_ref
+    for field in ("content", "body"):
+        with pytest.raises(
+            ItemSchemaError, match="^ContextRef 含未知或不属于 ref 的字段$"
+        ):
+            parse_context_ref({**manifest, field: "body"})
 
 
 def test_provenance_detail_reference_is_typed() -> None:

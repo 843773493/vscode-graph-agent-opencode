@@ -2,27 +2,98 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+
+from app.domain.itemized.resource_activation import (
+    ResourceActivationSnapshotRef,
+    ResourceProvenanceRef,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.delta import (
-        _revision,
+    _revision,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
-        ContextSourceDescriptor,
-        ContextSourceTrackingStateConflict,
-        SkillCatalogActivationSnapshot,
-        SkillCatalogBinding,
-        SkillCatalogSnapshotConflict,
-        SkillLoadAppendStatus,
-        SkillLoadMode,
-        SkillLoadReceipt,
-        SkillLoadStatus,
-        _normalize_skill_name,
+    ContextSourceDescriptor,
+    ContextSourceTrackingStateConflict,
+    SkillCatalogActivationSnapshot,
+    SkillCatalogBinding,
+    SkillCatalogSnapshotConflict,
+    SkillLoadAppendStatus,
+    SkillLoadMode,
+    SkillLoadReceipt,
+    SkillLoadStatus,
+    _normalize_skill_name,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.state import (
-        SourceState,
+    SourceState,
 )
+
+
+def skill_catalog_from_activation(
+    activation: ResourceActivationSnapshotRef,
+    read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],
+) -> SkillCatalogActivationSnapshot | None:
+    """从同一冻结 activation 的 catalog/metadata/正文恢复 exact Skill binding。"""
+    by_id = {binding.resource_id: binding for binding in activation.bindings if binding.resource_kind == "skill"}
+    catalogs = tuple(binding for binding in by_id.values() if binding.facet == "catalog")
+    if not catalogs:
+        if by_id:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill facets 缺少冻结 catalog")
+        return None
+    if len(catalogs) != 1:
+        raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill catalog 不唯一")
+    payload = read_payload(activation, catalogs[0])
+    if not isinstance(payload, Mapping) or set(payload) != {"entries"} or not isinstance(payload["entries"], list):
+        raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill catalog 正文非法")
+    entries = {}
+    for entry in payload["entries"]:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "name", "layer", "entry_identity", "display_uri", "metadata_resource_id",
+            "activation_resource_id", "metadata_revision", "activation_revision",
+        }:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill catalog entry 非法")
+        metadata_ref = by_id.get(entry["metadata_resource_id"])
+        activation_ref = by_id.get(entry["activation_resource_id"])
+        if metadata_ref is None or activation_ref is None or (
+            metadata_ref.facet != "metadata" or activation_ref.facet != "activation"
+            or metadata_ref.revision != entry["metadata_revision"]
+            or activation_ref.revision != entry["activation_revision"]
+            or metadata_ref.display_uri != entry["display_uri"]
+            or activation_ref.display_uri != entry["display_uri"]
+        ):
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: catalog 与冻结 Skill facets 不一致")
+        metadata = read_payload(activation, metadata_ref)
+        body = read_payload(activation, activation_ref)
+        if not isinstance(metadata, Mapping) or set(metadata) != {"name", "description", "display_uri", "entry_identity"} or (
+            metadata["name"] != entry["name"] or metadata["display_uri"] != entry["display_uri"]
+            or metadata["entry_identity"] != entry["entry_identity"]
+            or not isinstance(metadata["description"], str)
+        ) or not isinstance(body, Mapping) or set(body) != {"body"} or not isinstance(body["body"], str):
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill metadata/activation 正文非法")
+        name = entry["name"]
+        if name in entries:
+            raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: Skill name 重复")
+        entries[name] = SkillCatalogBinding(
+            name=name, resource_id=activation_ref.resource_id, entry_identity=entry["entry_identity"],
+            display_uri=entry["display_uri"], activation_revision=activation_ref.revision,
+            body=body["body"], description=metadata["description"],
+        )
+    return SkillCatalogActivationSnapshot(catalog_revision=catalogs[0].revision, entries=entries)
 
 
 class SkillCatalogMixin:
+        def frozen_skill_catalog(self) -> SkillCatalogActivationSnapshot:
+            if self._skill_activation_snapshot is None:
+                raise SkillCatalogSnapshotConflict("skill-catalog-snapshot-conflict: 尚无冻结 Skill catalog")
+            return self._skill_activation_snapshot
+
+        def register_skill_binding(self, binding: SkillCatalogBinding, *, catalog_revision: str) -> None:
+            """entry identity 决定 registration；同名新 entry 保留原 tracked registration。"""
+            self.register(ContextSourceDescriptor(
+                source_id=f"skill:{binding.entry_identity}", source_kind="skill",
+                name=binding.name, description=binding.description, internal_locator=binding.display_uri,
+                resource_uri=binding.display_uri,
+            ), binding_revision=catalog_revision)
+
         def install_skill_activation_snapshot(
             self,
             snapshot: SkillCatalogActivationSnapshot,
@@ -40,9 +111,9 @@ class SkillCatalogMixin:
                 )
             self._skill_activation_snapshot = snapshot
 
-        def _resolve_activation_binding(self, name: str) -> SkillCatalogBinding:
+        def _resolve_activation_binding(self, name: str, snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillCatalogBinding:
             """从冻结 snapshot 解析 exact binding；缺失/不一致 fail closed。"""
-            snapshot = self._skill_activation_snapshot
+            snapshot = self._skill_activation_snapshot if snapshot is None else snapshot
             if snapshot is None:
                 raise SkillCatalogSnapshotConflict(
                     "skill-catalog-snapshot-conflict: 尚无冻结 SkillCatalog "
@@ -73,12 +144,17 @@ class SkillCatalogMixin:
                 )
             return binding
 
-        def load_skill(self, name: str, mode: SkillLoadMode = "snapshot") -> SkillLoadReceipt:
+        def load_skill(self, name: str, mode: SkillLoadMode = "snapshot", *, activation_snapshot: SkillCatalogActivationSnapshot | None = None) -> SkillLoadReceipt:
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("skill_load.name 必须是非空字符串")
             if mode not in {"snapshot", "tracked", "untrack"}:
                 raise ValueError("skill_load.mode 只能是 snapshot、tracked 或 untrack")
             normalized = _normalize_skill_name(name)
+            if mode != "untrack" and activation_snapshot is not None:
+                frozen_binding = activation_snapshot.entries.get(normalized)
+                if frozen_binding is None:
+                    raise KeyError(f"Skill 不存在: name={normalized}")
+                self.register_skill_binding(frozen_binding, catalog_revision=activation_snapshot.catalog_revision)
             source_id = self._source_ids_by_name.get(normalized)
             if source_id is None:
                 raise KeyError(f"Skill 不存在: name={normalized}")
@@ -141,7 +217,7 @@ class SkillCatalogMixin:
 
             # snapshot/tracked 只从冻结 Turn/ModelCall SkillCatalogSnapshot 的
             # exact binding 解析；同名 catalog 新 revision 不影响已冻结调用。
-            binding = self._resolve_activation_binding(normalized)
+            binding = self._resolve_activation_binding(normalized, activation_snapshot)
             source_rebound = False
             if state.latest_revision is None:
                 self.activate_skill_content(
@@ -312,4 +388,4 @@ class SkillCatalogMixin:
 
 
 
-__all__ = ["SkillCatalogMixin"]
+__all__ = ["SkillCatalogMixin", "skill_catalog_from_activation"]

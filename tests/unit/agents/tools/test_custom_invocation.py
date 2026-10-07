@@ -9,6 +9,7 @@ import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import ToolMessage
+from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
@@ -17,6 +18,7 @@ from app.agents.policy import DEBUGGING_TOOL_GROUP, parse_custom_tool_specs
 from app.agents.policy.tool_groups import DEBUGGING_TOOL_NAMES
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import (
+    ThreadRuntimeBinding,
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
@@ -105,7 +107,7 @@ class _RuntimeCatalog:
 def _idle_state() -> NodeDebugStateDTO:
     return NodeDebugStateDTO(
         session_id="ses_envelope",
-        thread_id="main",
+        thread_id="thr_00000000400070008000000000000002",
         status="idle",
     )
 
@@ -175,7 +177,9 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target(
         session_id="ses_envelope",
         workspace_root=tmp_path,
         node_debug_service=service,
-        invocation_context=ToolInvocationContext(),
+        invocation_context=ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+            "ses_envelope", "thr_01a100c4a1897a2d8d40b568d23fcbe6",
+        )),
     )
     envelope = create_extension_tool_invoker_tool(
         tools,
@@ -389,7 +393,9 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
     service.record_tool_action = AsyncMock()
     # 生产装配把同一个 ToolInvocationContext 交给工具与 middleware；
     # 工具身份配对依赖这条唯一上下文。
-    context = ToolInvocationContext()
+    context = ToolInvocationContext(thread_binding=ThreadRuntimeBinding(
+        "ses_envelope", "thr_01a100c4a1897a2d8d40b568d23fcbe6",
+    ))
     tools = create_debugging_tools(
         session_id="ses_envelope",
         workspace_root=tmp_path,
@@ -402,17 +408,14 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
         invocation_context=context,
     )
     middleware = ToolInvocationContextMiddleware(context)
-    request = type(
-        "Request",
-        (),
-        {
-            "tool_call": {
-                "id": "call_debug_envelope",
-                "name": EXTENSION_TOOL_INVOKER_NAME,
-                "args": {"tool_name": "list_breakpoints", "arguments": {}},
-            }
+    request = ToolCallRequest(
+        tool_call={
+            "id": "call_debug_envelope", "name": EXTENSION_TOOL_INVOKER_NAME,
+            "args": {"tool_name": "list_breakpoints", "arguments": {}},
+            "type": "tool_call",
         },
-    )()
+        tool=envelope, state={}, runtime=None,
+    )
 
     async def handler(request_value):
         content = await envelope.ainvoke(request_value.tool_call["args"])
@@ -432,7 +435,7 @@ async def test_envelope_preserves_original_tool_call_id_pairing(
     }
     assert recorded_call_ids == {"call_debug_envelope"}
     assert all(
-        call_args.kwargs["thread_id"] == "main"
+        call_args.kwargs["thread_id"] == "thr_01a100c4a1897a2d8d40b568d23fcbe6"
         for call_args in service.record_tool_action.await_args_list
     )
     recorded_bindings = [
@@ -465,7 +468,7 @@ def _extension_binding_inputs(tools):
             ExtensionTargetBindingInput(
                 target_id=tool_item.name,
                 origin="mcp" if server_id else "custom",
-                args={},
+                args=tool_item.args,
                 server_id=server_id,
             )
         )

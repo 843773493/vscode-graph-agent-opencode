@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -332,7 +333,7 @@ def _admit(
 @pytest.mark.parametrize(
     "status,outcome", [("cancelled", "cancelled"), ("timed_out", "interrupted")]
 )
-async def test_control_corrects_execution_lost_and_failed_preserves_recovery(
+async def test_control_corrects_execution_lost_and_failed_preserves_recovery(frozen_provider_activation,
     frozen_provider_wire, runner_case: RunnerCase,
     origin: str,
     status: str,
@@ -340,7 +341,7 @@ async def test_control_corrects_execution_lost_and_failed_preserves_recovery(
 ) -> None:
     session_id, thread_id = await _session(runner_case)
     admission = _admit(runner_case, session_id, thread_id, origin)
-    model_call_id = create_prefixed_id("mc")
+    model_call_id = str(uuid4())
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(session_id, thread_id),
         control_state_port=runner_case.saver,
@@ -359,6 +360,7 @@ async def test_control_corrects_execution_lost_and_failed_preserves_recovery(
             seal_idempotency_key=f"cancellation-seal:{model_call_id}",
             context_source_manager=manager, tool_set_supplier=lambda: selected,
             **frozen_provider_wire("runner-cancellation", "chat_completions"),
+            **frozen_provider_activation(runner_case.saver, plan_creation_idempotency_key=f'cancellation-create:{model_call_id}', model_call_id=model_call_id),
         )
     assembly_id = str(prepared["assembly_id"])
     runner_case.saver.register_model_call(

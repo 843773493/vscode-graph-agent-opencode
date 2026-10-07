@@ -75,6 +75,67 @@ class RolloutViewAnchorMixin:
         )
         if any(value == 0 for value in sequence_values):
             raise ValueError("messages.message_sequence 必须为正数")
+        if view_kind == "active":
+            if parent_view_id is None or sequence_values:
+                raise ValueError("active successor 必须严格复制一个既有 parent view")
+            # active writer 的 successor 只复制已冻结的 view-local 事实；
+            # 不从全局 Turn/item catalog 重投影，避免夹带 checkpoint 后的新事实。
+            header = connection.execute(
+                "INSERT INTO context_views(view_id, branch_id, parent_view_id, view_kind, "
+                "head_turn_id, head_message_sequence, logical_turn_count, control_sequence, created_at) "
+                "SELECT ?, ?, ?, 'active', head_turn_id, head_message_sequence, "
+                "logical_turn_count, control_sequence, ? FROM context_views WHERE view_id = ?",
+                (view_id, branch_id, parent_view_id, timestamp, parent_view_id),
+            )
+            if header.rowcount != 1:
+                raise RuntimeError(f"active successor parent view 不存在: {parent_view_id}")
+            connection.execute(
+                "INSERT INTO context_view_items(view_id, item_id, logical_item_ordinal, visible, source_kind) "
+                "SELECT ?, item_id, logical_item_ordinal, visible, source_kind "
+                "FROM context_view_items WHERE view_id = ?",
+                (view_id, parent_view_id),
+            )
+            connection.execute(
+                "INSERT INTO context_view_turns(view_id, turn_id, logical_turn_ordinal, "
+                "user_message_sequence, final_message_sequence, root_input_item_id, fork_lineage_json) "
+                "SELECT ?, turn_id, logical_turn_ordinal, user_message_sequence, "
+                "final_message_sequence, root_input_item_id, fork_lineage_json "
+                "FROM context_view_turns WHERE view_id = ?",
+                (view_id, parent_view_id),
+            )
+            connection.execute(
+                "INSERT INTO context_view_ranges(view_id, range_index, source_kind, source_view_id, "
+                "start_message_sequence, end_message_sequence, source_start_turn_ordinal, "
+                "source_end_turn_ordinal, logical_start_turn_ordinal, logical_end_turn_ordinal, "
+                "range_ordinal, source_start_ordinal, source_end_ordinal, message_start_sequence, "
+                "message_end_sequence, logical_start_ordinal, logical_end_ordinal) "
+                "SELECT ?, range_index, source_kind, source_view_id, start_message_sequence, "
+                "end_message_sequence, source_start_turn_ordinal, source_end_turn_ordinal, "
+                "logical_start_turn_ordinal, logical_end_turn_ordinal, range_ordinal, "
+                "source_start_ordinal, source_end_ordinal, message_start_sequence, "
+                "message_end_sequence, logical_start_ordinal, logical_end_ordinal "
+                "FROM context_view_ranges WHERE view_id = ?",
+                (view_id, parent_view_id),
+            )
+            parent_by_view = dict(connection.execute(
+                "SELECT view_id, parent_view_id FROM context_views"
+            ).fetchall())
+            level = 0
+            while True:
+                ancestor = view_id
+                for _ in range(2**level):
+                    ancestor = parent_by_view.get(ancestor)
+                    if ancestor is None:
+                        break
+                if ancestor is None:
+                    break
+                connection.execute(
+                    "INSERT INTO context_view_jumps(view_id, jump_level, ancestor_view_id, ancestor_depth) "
+                    "VALUES (?, ?, ?, ?)",
+                    (view_id, level, ancestor, 2**level),
+                )
+                level += 1
+            return view_id
         materialized_sequences = sequence_values
         if parent_view_id and view_kind == "checkpoint":
             # 新 checkpoint 的 visible_sequences 可能只是本次 delta；Turn

@@ -296,9 +296,7 @@ def test_failure_records_control_and_keeps_draft_correctable(
             (path.relative_to(detail_root).as_posix(), path.read_bytes())
             for path in sorted(detail_root.rglob("*"))
             if path.is_file() and (
-                path.name == ".context-redaction-key"
-                or "context-plan-details" in path.parts
-                or "context-plan-details-protected" in path.parts
+                "context-plan-details" in path.parts
             )
         )
 
@@ -374,8 +372,9 @@ def test_lost_response_never_removes_committed_source_detail(
     assert _state(saver, session, connection) == before
 
 
-def test_prepare_registers_final_filter_and_restarts_without_recompose(
-    frozen_provider_wire, registry_db, draft, monkeypatch, source_manager
+@pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+def test_prepare_registers_final_filter_and_restarts_without_recompose(frozen_provider_activation,
+     frozen_provider_wire, registry_db, draft, monkeypatch, source_manager
 ):
     saver, session, connection, accepted = registry_db
     saver.register_context_contribution(
@@ -396,7 +395,8 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(
         "seal_idempotency_key": "prepare-seal",
     }
     first = saver.prepare_context_for_provider(
-        session, saver._storage.main_thread_id(session), **options
+        session, saver._storage.main_thread_id(session), **options,
+        **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']),
     )
     plan = first["plan"]
     registered = saver.get_context_plan_registration(
@@ -421,6 +421,7 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(
                     "producer_id": "schema4-test",
                 },
                 payload="后续 active view 输出不能改变旧请求",
+                wire_role="assistant",
                 turn_id=accepted["turn_id"],
                 turn_scope="turn_member",
             ),
@@ -428,19 +429,23 @@ def test_prepare_registers_final_filter_and_restarts_without_recompose(
         thread_id=saver._storage.main_thread_id(session),
     )
     before = _state(saver, session, connection)
-    with RolloutCheckpointSaver(saver._detail_store.sessions_dir) as restarted:
+    with RolloutCheckpointSaver(
+        saver._detail_store.sessions_dir,
+    ) as restarted:
         monkeypatch.setattr(restarted, "compose_committed_context_plan", _no_allocation)
         monkeypatch.setattr(restarted._detail_store, "write", _no_allocation)
         monkeypatch.setattr(restarted._detail_store, "prepare", _no_allocation)
         retry = restarted.prepare_context_for_provider(
-            session, restarted._storage.main_thread_id(session), **options
+            session, restarted._storage.main_thread_id(session), **options,
+            **frozen_provider_activation(restarted, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']),
         )
         assert retry["assembly_id"] == first["assembly_id"]
         assert retry["plan"].selection == plan.selection
     assert _state(saver, session, connection) == before
 
 
-def test_dispatch_attempt_identity_reuses_registered_source(
+@pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+def test_dispatch_attempt_identity_reuses_registered_source(frozen_provider_activation,
     frozen_provider_wire, registry_db,
     monkeypatch,
     source_manager,
@@ -457,12 +462,12 @@ def test_dispatch_attempt_identity_reuses_registered_source(
         "plan_creation_idempotency_key": "schema4-call:create",
         "seal_idempotency_key": "schema4-call:seal",
     }
-    first = saver.prepare_context_for_provider(session, thread, **options)
+    first = saver.prepare_context_for_provider(session, thread, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
     before = _state(saver, session, connection)
     monkeypatch.setattr(saver, "compose_committed_context_plan", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "write", _no_allocation)
     monkeypatch.setattr(saver._detail_store, "prepare", _no_allocation)
-    retry = saver.prepare_context_for_provider(session, thread, **options)
+    retry = saver.prepare_context_for_provider(session, thread, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
     assert retry["assembly_id"] == first["assembly_id"]
     assert retry["plan"].selection == first["plan"].selection
     with pytest.raises(ValueError, match="assembly-idempotency-conflict"):
@@ -470,6 +475,7 @@ def test_dispatch_attempt_identity_reuses_registered_source(
             session,
             thread,
             **{**options, **frozen_provider_wire("changed", "responses")},
+            **frozen_provider_activation(saver, plan_creation_idempotency_key=({**options, **frozen_provider_wire('changed', 'responses')})['plan_creation_idempotency_key']),
         )
     assert _state(saver, session, connection) == before
 
@@ -534,10 +540,11 @@ def test_changed_registered_manifest_cannot_reuse_seal(registry_db, draft):
     assert _state(saver, session, connection) == before
 
 
+@pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 @pytest.mark.parametrize(
     "change", ["messages", "turn", "execution", "provider", "target"]
 )
-def test_prepare_rejects_different_input_without_source_side_effects(
+def test_prepare_rejects_different_input_without_source_side_effects(frozen_provider_activation,
     frozen_provider_wire, registry_db, draft, monkeypatch, change, source_manager
 ):
     saver, session, connection, accepted = registry_db
@@ -552,7 +559,8 @@ def test_prepare_rejects_different_input_without_source_side_effects(
         "seal_idempotency_key": "prepare-input-seal",
     }
     saver.prepare_context_for_provider(
-        session, saver._storage.main_thread_id(session), **options
+        session, saver._storage.main_thread_id(session), **options,
+        **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']),
     )
     if change == "messages":
         options["request_messages"] = (HumanMessage(content="changed", id="changed"),)
@@ -572,13 +580,15 @@ def test_prepare_rejects_different_input_without_source_side_effects(
         (RuntimeError, ValueError), match="admission|assembly-idempotency-conflict"
     ):
         saver.prepare_context_for_provider(
-            session, saver._storage.main_thread_id(session), **options
+            session, saver._storage.main_thread_id(session), **options,
+            **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']),
         )
     assert _state(saver, session, connection) == before
 
 
+@pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 @pytest.mark.parametrize("change", ["source", "tools"])
-def test_sealed_prepare_retry_keeps_binding_and_pending_desired(
+def test_sealed_prepare_retry_keeps_binding_and_pending_desired(frozen_provider_activation,
     frozen_provider_wire, registry_db,
     source_manager,
     monkeypatch,
@@ -617,7 +627,7 @@ def test_sealed_prepare_retry_keeps_binding_and_pending_desired(
         "context_source_manager": source_manager,
         "tool_set_supplier": tool_set,
     }
-    first = saver.prepare_context_for_provider(session, thread, **options)
+    first = saver.prepare_context_for_provider(session, thread, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
     if change == "source":
         source_manager.observe(
             "instructions:retry", "尚未发送说明", revision="instructions:2"
@@ -631,7 +641,7 @@ def test_sealed_prepare_retry_keeps_binding_and_pending_desired(
     before = _state(saver, session, connection)
     with monkeypatch.context() as retry_patch:
         retry_patch.setattr(source_manager, "prepare_sources", _no_allocation)
-        retry = saver.prepare_context_for_provider(session, thread, **options)
+        retry = saver.prepare_context_for_provider(session, thread, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
     assert retry["assembly_id"] == first["assembly_id"]
     assert retry["plan"].selection == first["plan"].selection
     assert retry["messages"] == first["messages"] and retry["tools"] == first["tools"]
@@ -640,6 +650,7 @@ def test_sealed_prepare_retry_keeps_binding_and_pending_desired(
     assert _state(saver, session, connection) == before
 
 
+@pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 @pytest.mark.asyncio
 async def test_real_middleware_registers_current_schema_before_native_http(
     registry_db, native_http_server

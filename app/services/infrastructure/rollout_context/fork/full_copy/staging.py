@@ -19,7 +19,6 @@ class FullCopyStagingStorage(RolloutStorage):
         target: str,
         root: Path,
         capability: ForkDetailCapability,
-        target_session_key: bytes,
     ) -> None:
         super().__init__(
             owner.sessions_dir, serde=owner._serde, message_codec=owner._message_codec
@@ -29,7 +28,6 @@ class FullCopyStagingStorage(RolloutStorage):
         self._target = target
         self._stage_root = root
         self._capability = capability
-        self._target_session_key = target_session_key
 
     def root(
         self,
@@ -76,5 +74,4 @@ class FullCopyStagingStorage(RolloutStorage):
             connection,
             **kwargs,
             detail_capability=self._capability,
-            target_session_key=self._target_session_key,
         )

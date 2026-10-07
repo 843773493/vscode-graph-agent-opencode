@@ -32,6 +32,9 @@ from app.domain.itemized.request_plan import (
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     ContextAssemblyManifestMixin,
 )
+from app.services.infrastructure.rollout_context.assembly.plans.registry import (
+    read_registration,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -197,6 +200,9 @@ def _validate(case: AssemblyCase, snapshot: ContextAssemblySnapshot) -> None:
     ContextAssemblyManifestMixin()._validate_context_assembly_manifest(
         case.connection,
         snapshot,
+        registration=read_registration(
+            case.connection, case.session_id, case.thread_id, snapshot.plan_id,
+        ),
     )
 
 

@@ -98,6 +98,12 @@ from app.services.infrastructure.rollout_context.runtime.reconciliation import (
 from app.services.infrastructure.rollout_context.storage.append_writer import (
     RolloutAppendWriter,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_lineage import (
+    ActivationLineageBodyStore,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_store import (
+    ResourceActivationStore,
+)
 from app.services.infrastructure.rollout_context.storage.service import (
     RolloutStorage,
 )
@@ -227,7 +233,6 @@ class RolloutCheckpointSaver(
         context_reader: RolloutContextReader | None = None,
         history_reader: RolloutHistoryReader | None = None,
         detail_store: ContextPlanDetailStore | None = None,
-        protected_detail_key: bytes | None = None,
         node_debug_store: NodeDebugSessionStore | None = None,
         node_debug_workspace_config: Callable[[], NodeDebugWorkspaceForkConfig]
         | None = None,
@@ -252,11 +257,11 @@ class RolloutCheckpointSaver(
 
             history_reader = RolloutHistoryReader(self._context_reader)
         self._history_reader = history_reader
-        if detail_store is not None and protected_detail_key is not None:
-            raise ValueError("detail_store 与 protected_detail_key 不能同时传入")
         self._detail_store = detail_store or ContextPlanDetailStore(
             sessions_dir,
-            protected_key=protected_detail_key,
+        )
+        self._resource_activation_store = ResourceActivationStore(
+            self._storage, ActivationLineageBodyStore(self._storage, self._detail_store),
         )
         self._node_debug_store = node_debug_store or NodeDebugSessionStore(
             get_session_path_resolver(Path(sessions_dir).resolve())

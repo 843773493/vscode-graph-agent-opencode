@@ -160,7 +160,7 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
     ]
     assert assistant_item.status == "failed"
     assert assistant_item.turn_id is None
-    assert assistant_item.metadata["execution_id"] == "execution_internal"
+    assert assistant_item.item_id.startswith("item-execution_internal-model-model_internal_failure-block-")
     outcome_sink.assert_awaited_once_with("model_internal_failure", "failed")
     checkpointer.mark_execution_lost.assert_called_once_with(
         "session",
@@ -243,7 +243,7 @@ async def test_writerless_internal_user_cancel_converges_tool_result_and_executi
     assert len(tool_result_items) == 1
     assert tool_call_items[0].turn_id is None
     assert tool_result_items[0].turn_id is None
-    assert tool_result_items[0].metadata["tool_execution_id"] == "tool_run_internal"
+    assert tool_result_items[0].payload["tool_attempt_id"] == "tool_run_internal"
     assert tool_result_items[0].payload["tool_outcome"] == "unknown"
     outcome_sink.assert_awaited_with("model_internal_cancel", "cancelled")
     checkpointer.mark_execution_lost.assert_called_once_with(

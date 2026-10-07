@@ -17,7 +17,7 @@ def saver() -> MagicMock:
 
 @pytest.fixture
 def sink(saver: MagicMock) -> CanonicalItemSink:
-    return CanonicalItemSink(saver, session_id="session_1", checkpoint_ns="agent")
+    return CanonicalItemSink(saver, session_id="session_1", thread_id="thr_00000000400070008000000000000002", checkpoint_ns="agent")
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def item() -> CanonicalItemRecord:
 
 def test_sink_requires_persistence_port() -> None:
     with pytest.raises(TypeError, match="必须绑定 Saver append_items"):
-        CanonicalItemSink(object(), session_id="session_1", checkpoint_ns="")
+        CanonicalItemSink(object(), session_id="session_1", thread_id="thr_00000000400070008000000000000002", checkpoint_ns="")
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_sink_routes_original_items_without_retaining_a_copy(
     sink: CanonicalItemSink, saver: MagicMock, item: CanonicalItemRecord
 ) -> None:
     await sink.append([item])
-    saver.append_items.assert_called_once_with("session_1", (item,), checkpoint_ns="agent")
+    saver.append_items.assert_called_once_with("session_1", (item,), thread_id="thr_00000000400070008000000000000002", checkpoint_ns="agent")
     assert not hasattr(sink, "items")
 
 

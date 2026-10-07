@@ -1,4 +1,4 @@
-"""复制后 plan 的 canonical manifest 与 session-scoped digest 本地化。"""
+"""复制后 plan 的 canonical manifest 与 target-local identity 本地化。"""
 
 from __future__ import annotations
 
@@ -25,15 +25,6 @@ def localize_plan_value(state, value: object) -> object:
             "body",
         }:
             result[key] = child
-        elif key == "redacted_stable_digest" and child is not None:
-            if (
-                child not in state.detail_digests
-                and child not in state.detail_digests.values()
-            ):
-                raise ValueError(
-                    "detail-unavailable: fork 无法认证并重新生成 source session digest"
-                )
-            result[key] = state.detail_digests.get(child, child)
         else:
             result[key] = localize_plan_value(state, child)
     if result.get("ref_type") == "canonical_item":

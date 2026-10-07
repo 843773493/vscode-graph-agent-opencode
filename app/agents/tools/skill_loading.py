@@ -15,6 +15,7 @@ tracked 命中同 normalized name 的旧 active registration 且 effective entry
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceTrackingStateConflict,
     SkillCatalogSnapshotConflict,
     SkillLoadMode,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    SkillCatalogActivationSnapshot,
 )
 
 
@@ -58,12 +62,16 @@ def _error_result(name: str, mode: str, code: str, message: str) -> str:
     )
 
 
-def create_skill_load_tool(manager: ContextSourceManager) -> BaseTool:
+def create_skill_load_tool(
+    manager: ContextSourceManager, *,
+    activation_snapshot_resolver: Callable[[], SkillCatalogActivationSnapshot] | None = None,
+) -> BaseTool:
     @tool("skill_load", args_schema=SkillLoadInput)
     def skill_load(name: str, mode: SkillLoadMode = "snapshot") -> str:
         """按冻结 activation snapshot 解析 Skill binding；正文不经文件工具读取。"""
         try:
-            receipt = manager.load_skill(name, mode)
+            frozen = None if mode == "untrack" or activation_snapshot_resolver is None else activation_snapshot_resolver()
+            receipt = manager.load_skill(name, mode, activation_snapshot=frozen)
         except KeyError as error:
             return _error_result(name, mode, "skill-not-found", str(error))
         except SkillCatalogSnapshotConflict as error:

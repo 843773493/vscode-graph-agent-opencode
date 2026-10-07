@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from langchain_core.messages import AIMessage
 
+from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ProjectionPartRef,
@@ -13,6 +14,10 @@ from app.domain.itemized.identity.item_projection import (
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.business.reasoning_checkpoint_service import (
     _rewrite_latest_assistant_message,
+)
+from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
+    CANONICAL_GROUP_FIELD,
+    TOOL_BINDING_FIELD,
 )
 from app.services.infrastructure.rollout_context.checkpoint.fork_compaction import (
     ForkCompactionMixin,
@@ -310,3 +315,116 @@ def test_tool_group_companions_keep_empty_message_identity_after_roundtrip(
     assert [item.projection_manifest() for item in restored] == [
         item.projection_manifest() for item in original
     ]
+
+
+@pytest.fixture(params=[None, "attempt-explicit"])
+def stream_tool_projection_item(request, stream_projection_item):
+    payload = {
+        "tool_call_id": "model-call-1:tool-call:provider-call-1",
+        "tool_invocation_id": "invocation-explicit",
+        "name": "read_file",
+        "args": {"path": "保留原正文.txt"},
+    }
+    if request.param is not None:
+        payload["tool_attempt_id"] = request.param
+    return replace(
+        stream_projection_item,
+        semantic_kind="tool_call", payload_kind="tool_call", payload=payload,
+        content_hash=content_hash("tool_call", payload),
+    )
+
+
+def test_stream_tool_projection_preserves_exact_payload_hash_and_lifecycle(
+    projection_codec, stream_tool_projection_item,
+):
+    item = stream_tool_projection_item
+    projected = projection_codec.project_message((item,))
+    binding = projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]
+    assert set(binding) <= {"tool_call_id", "tool_invocation_id", "tool_attempt_id"}
+    assert binding["tool_invocation_id"] == "invocation-explicit"
+    carrier = projection_codec.from_dict(projected)
+    restored = projection_codec.items_for_message(
+        carrier, item_sequence=item.item_sequence,
+        message_id=projection_codec.message_id(carrier, 0), turn_id=item.turn_id,
+        execution_id="execution-1", timestamp=item.created_at,
+    )
+    assert restored[0].payload == item.payload
+    assert restored[0].content_hash == item.content_hash
+    assert restored[0].projection_manifest() == item.projection_manifest()
+    assert projection_codec.project_message(restored) == projected
+
+
+def test_stream_tool_projection_rejects_changed_binding_call_id(
+    projection_codec, stream_tool_projection_item,
+):
+    item = stream_tool_projection_item
+    projected = projection_codec.project_message((item,))
+    projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]["tool_call_id"] = "another-call"
+    carrier = projection_codec.from_dict(projected)
+    with pytest.raises(ValueError, match="tool-call binding"):
+        projection_codec.items_for_message(
+            carrier, item_sequence=item.item_sequence,
+            message_id=projection_codec.message_id(carrier, 0), turn_id=item.turn_id,
+            execution_id="execution-1", timestamp=item.created_at,
+        )
+
+
+@pytest.fixture(params=[
+    (outcome, attempt) for outcome in ("success", "failure", "unknown")
+    for attempt in (None, "result-attempt-explicit")
+])
+def stream_tool_result_projection_item(request, stream_projection_item):
+    outcome, attempt = request.param
+    payload = {
+        "tool_call_id": "model-call-1:tool-call:provider-call-1",
+        "tool_invocation_id": "result-invocation-explicit",
+        "result_id": "result-explicit",
+        "name": "read_file",
+        "content": "真实工具结果 Ω 001  \n",
+        "tool_outcome": outcome,
+        "execution_confirmed": outcome != "unknown",
+    }
+    if attempt is not None:
+        payload["tool_attempt_id"] = attempt
+    return replace(
+        stream_projection_item,
+        item_id="item-result-explicit-scoped-call",
+        semantic_kind="tool_result", payload_kind="tool_result", payload=payload,
+        content_hash=content_hash("tool_result", payload), wire_role="tool",
+        projection_identity=ItemProjectionIdentity(model_call_id="model-call-1"),
+    )
+
+
+def test_stream_tool_result_projection_preserves_exact_payload_hash_and_lifecycle(
+    projection_codec, stream_tool_result_projection_item,
+):
+    item = stream_tool_result_projection_item
+    projected = projection_codec.project_message((item,))
+    binding = projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]
+    assert set(binding) <= {"tool_call_id", "tool_invocation_id", "tool_attempt_id", "result_id"}
+    assert binding["result_id"] == "result-explicit"
+    carrier = projection_codec.from_dict(projected)
+    restored = projection_codec.items_for_message(
+        carrier, item_sequence=item.item_sequence,
+        message_id=projection_codec.message_id(carrier, 0), turn_id=item.turn_id,
+        execution_id="execution-1", timestamp=item.created_at,
+    )
+    assert restored[0].payload == item.payload
+    assert restored[0].content_hash == item.content_hash
+    assert restored[0].projection_manifest() == item.projection_manifest()
+    assert projection_codec.project_message(restored) == projected
+
+
+def test_stream_tool_result_projection_rejects_body_in_binding(
+    projection_codec, stream_tool_result_projection_item,
+):
+    item = stream_tool_result_projection_item
+    projected = projection_codec.project_message((item,))
+    projected["data"]["response_metadata"][CANONICAL_GROUP_FIELD][0][TOOL_BINDING_FIELD]["content"] = "注入伪造正文"
+    carrier = projection_codec.from_dict(projected)
+    with pytest.raises(ValueError, match="tool-result binding"):
+        projection_codec.items_for_message(
+            carrier, item_sequence=item.item_sequence,
+            message_id=projection_codec.message_id(carrier, 0), turn_id=item.turn_id,
+            execution_id="execution-1", timestamp=item.created_at,
+        )

@@ -344,9 +344,7 @@ class RolloutMaintenanceOwner(
             if self._is_removed_rollout_layout(root):
                 raise RuntimeError(f"rollout 使用了已移除的旧布局: {root}")
             # 正常 runtime 只接收显式声明的 v2 rollout；旧格式必须重建。
-            existing_index = self._host.index_path(
-                session_id, checkpoint_ns, thread_id=thread_id
-            )
+            existing_index = root / "index.sqlite"
             needs_schema = True
             if existing_index.is_file() and existing_index.stat().st_size > 0:
                 with self._existing_index_connection(
@@ -467,12 +465,7 @@ class RolloutMaintenanceOwner(
                                 field="database_meta.rollout_format_version",
                             )
                         )
-                        self._validate_schema_state(
-                            existing_connection
-                        )
-            path = self._host.jsonl_path(
-                session_id, checkpoint_ns, thread_id=thread_id
-            )
+            path = root / "rollout.jsonl"
             # 只读历史请求会频繁经过 initialize；已有文件不能重复 touch，
             # 否则会改变 rollout.jsonl 的 mtime，触发工作区文件监听并造成
             # 无意义的资源刷新。首次创建时才建立空的 canonical 文件。

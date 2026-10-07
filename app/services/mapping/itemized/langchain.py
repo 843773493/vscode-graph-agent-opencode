@@ -165,7 +165,6 @@ def project_context_plan(
             else ref.source_ref,
             "source_revision": ref.source_revision,
             "content_hash": ref.content_hash,
-            "redacted_stable_digest": ref.redacted_stable_digest,
             "content_length": ref.content_length,
             "detail_ref": entry.detail_ref.to_dict() if entry.detail_ref else None,
             "request_only": True,

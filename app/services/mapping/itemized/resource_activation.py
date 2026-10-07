@@ -37,6 +37,9 @@ SAFE_RESOURCE_PROJECTION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "activation_snapshot_id",
         "snapshot_kind",
+        "execution_id",
+        "turn_id",
+        "parent_execution_snapshot_id",
         "effective_boundary",
         "activation_ordinal",
         "display_uri",
@@ -62,6 +65,9 @@ class SafeResourceProjection:
 
     activation_snapshot_id: str
     snapshot_kind: str
+    execution_id: str
+    turn_id: str | None
+    parent_execution_snapshot_id: str | None
     effective_boundary: str
     activation_ordinal: int
     display_uri: str
@@ -75,6 +81,9 @@ class SafeResourceProjection:
         return {
             "activation_snapshot_id": self.activation_snapshot_id,
             "snapshot_kind": self.snapshot_kind,
+            "execution_id": self.execution_id,
+            "turn_id": self.turn_id,
+            "parent_execution_snapshot_id": self.parent_execution_snapshot_id,
             "effective_boundary": self.effective_boundary,
             "activation_ordinal": self.activation_ordinal,
             "display_uri": self.display_uri,
@@ -124,6 +133,9 @@ def project_sealed_resource_refs(
         SafeResourceProjection(
             activation_snapshot_id=snapshot.activation_snapshot_id,
             snapshot_kind=snapshot.snapshot_kind,
+            execution_id=snapshot.execution_id,
+            turn_id=snapshot.turn_id,
+            parent_execution_snapshot_id=snapshot.parent_execution_snapshot_id,
             effective_boundary=binding.effective_boundary,
             activation_ordinal=binding.activation_ordinal,
             display_uri=binding.display_uri,

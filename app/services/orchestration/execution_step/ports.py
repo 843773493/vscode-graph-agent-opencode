@@ -23,6 +23,17 @@ if TYPE_CHECKING:
         ExternalResourceLeaseLedger,
     )
     from app.services.infrastructure.message_stream_store import MessageStreamStore
+    from app.services.orchestration.resource_activation import (
+        ResourceActivationCoordinator,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StepAgentRuntime:
+    """同一 thread generation 的 Agent 与显式 activation 端口；生命周期由 lease 持有。"""
+
+    agent: AgentEventSource
+    resource_activation: ResourceActivationCoordinator
 
 
 class StepAgentFactory(Protocol):
@@ -37,7 +48,7 @@ class StepAgentFactory(Protocol):
         model_visibility_overrides: Mapping[str, bool],
         preferred_provider_id: str | None,
         include_team_tools: bool,
-    ) -> ThreadRuntimeLease[AgentEventSource]: ...
+    ) -> ThreadRuntimeLease[StepAgentRuntime]: ...
 
 
 @dataclass(frozen=True, slots=True)

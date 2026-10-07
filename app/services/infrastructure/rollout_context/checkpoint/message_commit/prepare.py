@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.execution_admission_context import require_current_execution_admission
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.services.infrastructure.rollout_context.storage.catalog.message_groups import (
     read_message_group,
 )
@@ -44,6 +44,7 @@ class MessageBatch:
     prepared: list[PreparedMessage] = field(default_factory=list)
     visible_sequences: list[int] = field(default_factory=list)
     item_ids: list[str] = field(default_factory=list)
+    display_only_item_ids: list[str] = field(default_factory=list)
 
 
 def _compare_group(
@@ -222,6 +223,14 @@ def prepare_messages(
             if stored:
                 _compare_group(group, stored)
             batch.item_ids.extend(item.item_id for item in group)
+            for item in group:
+                if (
+                    item.semantic_kind == "runtime_notice"
+                    and isinstance(item.payload, Mapping)
+                    and "display_part" in item.payload
+                ):
+                    RuntimeNoticePayload.from_dict(item.payload)
+                    batch.display_only_item_ids.append(item.item_id)
             if indexed is not None:
                 batch.visible_sequences.append(indexed[0])
                 continue

@@ -27,10 +27,14 @@ def hash_scope_for_plan(
             for ref in plan.refs
             if selection_ref_identity(ref) in selected_keys
         )
+        included_keys = {
+            selection_ref_identity(entry.ref)
+            for entry in plan.selection if entry.included
+        }
         tool_set_refs_for_hash = tuple(
             ref
             for ref in plan.tool_set_refs
-            if any(entry.included and entry.ref == ref for entry in plan.selection)
+            if selection_ref_identity(ref) in included_keys
         )
         contribution_ids = {
             entry.contribution_id

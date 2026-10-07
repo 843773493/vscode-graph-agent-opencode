@@ -51,9 +51,10 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
     ResourceUriResolveError,
     require_scope_binding,
 )
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
-    ContextSourceManager,
-)
+from tests.unit.services.infrastructure.rollout_context.conftest import source_seal_case
+
+__all__ = ["source_seal_case"]
+
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -737,7 +738,7 @@ async def test_custom_tool_invoker_preserves_container_injected_invocation_conte
     assert result == "call_from_outer_invoker"
 
 
-def _workspace_agents_stack(tmp_path, monkeypatch):
+def _workspace_agents_stack(tmp_path, monkeypatch, source_seal_case):
     # 构建唯一 CSM 消费链：registry + CSM + reactor + 统一中间件。
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
@@ -746,7 +747,7 @@ def _workspace_agents_stack(tmp_path, monkeypatch):
         workspace_root=tmp_path,
         watch_service=watch_service,
     )
-    manager = ContextSourceManager()
+    manager = source_seal_case.manager()
     lifetime_scope = LifetimeScope("d3b-test")
     reactor = ContextSourceReactor(
         sources=registry,
@@ -765,86 +766,86 @@ def _workspace_agents_stack(tmp_path, monkeypatch):
 
 
 def test_workspace_agents_first_activation_flows_through_unique_csm_chain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_seal_case
 ):
-    (tmp_path / "AGENTS.md").write_text("# 指令\n\n使用新规则。\n", encoding="utf-8")
+    content = "# 指令\n\n使用新规则。\n"
+    (tmp_path / "AGENTS.md").write_text(content, encoding="utf-8")
     middleware, _registry, manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch
+        tmp_path, monkeypatch, source_seal_case,
     )
-
     middleware.before_agent({}, MagicMock(), None)
-    update = middleware.before_model({}, MagicMock())
-
-    assert update is not None
-    messages = update["messages"]
-    assert len(messages) == 1
-    message = messages[0]
-    assert "使用新规则。" in message.text
-    assert message.response_metadata["context_source_id"] == "agents:workspace"
-    assert message.response_metadata["context_source_kind"] == "workspace_agents"
-    assert message.response_metadata["context_wire_role"] == "user"
-    # 唯一消费链：提交后 pending 清空，不再重复注入。
+    assert middleware.before_model({}, MagicMock()) is None
+    batch = manager.prepare_pending()
+    assert batch is not None
+    assert batch.deltas[0].content == content
+    receipt, binding = source_seal_case.seal(manager)
+    assert receipt.deltas == batch.deltas
+    assert binding.root is not None and "使用新规则。" in binding.root.content
+    sources = [source for source in binding.root.sources
+               if source.source_identity == "agents:workspace"]
+    assert len(sources) == 1
+    assert sources[0].source_kind == "workspace_agents"
+    assert sources[0].revision == batch.deltas[0].revision
+    frames = [frame for frame in binding.prefix.state.frames if frame.role == "system"]
+    assert len(frames) == 1 and frames[0].content == binding.root.content
     assert manager.pending_observation_count() == 0
+    assert manager.prepare_pending() is None
     assert middleware.before_model({}, MagicMock()) is None
 
 
 def test_workspace_agents_change_is_typed_observation_not_direct_injection(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_seal_case
 ):
     agents_path = tmp_path / "AGENTS.md"
     agents_path.write_text("# 指令\n\n使用旧规则。\n", encoding="utf-8")
     middleware, registry, manager, reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch
+        tmp_path, monkeypatch, source_seal_case,
     )
     middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is not None
+    assert middleware.before_model({}, MagicMock()) is None
+    _, first = source_seal_case.seal(manager)
 
     agents_path.write_text("# 指令\n\n使用新规则。\n", encoding="utf-8")
     registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
-
-    # 来源变化只形成 typed observation；正文经权威内存快照进入 CSM pending。
     observations = list(reactor.drain())
     assert [o.source_id for o in observations] == ["agents:workspace"]
     for observation in observations:
         manager.observe(
-            observation.source_id,
-            reactor.content_for(observation),
+            observation.source_id, reactor.content_for(observation),
             revision=observation.revision,
         )
     batch = manager.prepare_pending()
     assert batch is not None
     delta = batch.deltas[0]
-    assert delta.source_kind == "workspace_agents"
-    assert delta.kind == "delta"
-    assert "+使用新规则。" in delta.content
-    assert "-使用旧规则。" in delta.content
-
-    # 中间件消费同一 pending，产出带 provenance 的上下文 item。
-    update = middleware.before_model({}, MagicMock())
-    assert update is not None
-    message = update["messages"][0]
-    assert "+使用新规则。" in message.text
-    assert message.response_metadata["context_source_id"] == "agents:workspace"
+    assert delta.source_kind == "workspace_agents" and delta.kind == "delta"
+    assert "+使用新规则。" in delta.content and "-使用旧规则。" in delta.content
+    assert middleware.before_model({}, MagicMock()) is None
+    receipt, binding = source_seal_case.seal(manager)
+    assert receipt.deltas == batch.deltas and binding.root == first.root
+    frames = [frame for frame in binding.prefix.state.frames
+              if frame.item_ref.source_identity == delta.source_id
+              and frame.item_ref.source_revision == delta.revision]
+    assert len(frames) == 1 and frames[0].role == "user"
+    assert frames[0].content == delta.content
+    assert manager.prepare_pending() is None
     assert middleware.before_model({}, MagicMock()) is None
 
 
 def test_workspace_agents_request_boundary_avoids_file_reads_and_legacy_chain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_seal_case
 ):
     (tmp_path / "AGENTS.md").write_text("# 指令\n\n使用规则。\n", encoding="utf-8")
-    middleware, registry, _manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch
+    middleware, registry, manager, _reactor = _workspace_agents_stack(
+        tmp_path, monkeypatch, source_seal_case,
     )
     middleware.before_agent({}, MagicMock(), None)
-    assert middleware.before_model({}, MagicMock()) is not None
+    assert middleware.before_model({}, MagicMock()) is None
+    source_seal_case.seal(manager)
 
     import app.agents.skill_runtime as skill_runtime_module
 
-    # 旧注入入口已物理删除。
     assert not hasattr(skill_runtime_module, "WorkspaceAgentsMiddleware")
     assert not hasattr(skill_runtime_module, "WorkspaceAgentsState")
-
-    # 请求边界零文件读取：无 pending 时 before_model 不触碰 registry 快照。
     snapshot_calls = []
     original_snapshot = registry.snapshot
 
@@ -855,29 +856,28 @@ def test_workspace_agents_request_boundary_avoids_file_reads_and_legacy_chain(
     monkeypatch.setattr(registry, "snapshot", _counting_snapshot)
     assert middleware.before_model({}, MagicMock()) is None
     assert snapshot_calls == []
-
-    # AGENTS 内容不再进入 system prompt：modify_request 只处理 skills metadata。
-    request = MagicMock()
-    request.state = {"skills_metadata": []}
-    request.system_message = None
-    request.override.side_effect = lambda **kwargs: kwargs
-    assert middleware.modify_request(request) is request
+    assert not hasattr(middleware, "modify_request")
 
 
 def test_workspace_agents_source_late_appearance_still_uses_csm_chain(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_seal_case
 ):
-    middleware, registry, _manager, _reactor = _workspace_agents_stack(
-        tmp_path, monkeypatch
+    middleware, registry, manager, _reactor = _workspace_agents_stack(
+        tmp_path, monkeypatch, source_seal_case,
     )
     middleware.before_agent({}, MagicMock(), None)
-    # AGENTS.md 尚不存在：无首帧注入。
     assert middleware.before_model({}, MagicMock()) is None
+    assert manager.prepare_pending() is None
 
     (tmp_path / "AGENTS.md").write_text("# 迟到指令\n", encoding="utf-8")
     registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
-    update = middleware.before_model({}, MagicMock())
-    assert update is not None
-    message = update["messages"][0]
-    assert "迟到指令" in message.text
-    assert message.response_metadata["context_source_kind"] == "workspace_agents"
+    assert middleware.before_model({}, MagicMock()) is None
+    batch = manager.prepare_pending()
+    assert batch is not None and batch.deltas[0].content == "# 迟到指令\n"
+    _, binding = source_seal_case.seal(manager)
+    assert binding.root is not None and "迟到指令" in binding.root.content
+    sources = [source for source in binding.root.sources
+               if source.source_identity == "agents:workspace"]
+    assert len(sources) == 1 and sources[0].source_kind == "workspace_agents"
+    assert sources[0].revision == batch.deltas[0].revision
+    assert manager.prepare_pending() is None

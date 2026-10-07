@@ -106,21 +106,15 @@ def test_draft_restore_checks_registry_hash(draft, field):
         unsealed_context_plan_from_dict(raw)
 
 
-def test_digest_only_draft_never_restores_plaintext(draft):
-    digest = "hmac-sha256:session:v1:" + "a" * 64
-    contribution = replace(
-        draft.contributions[0], body=None, content_hash=None, redacted_stable_digest=digest,
-        protection="protected",
-    )
-    ref = replace(
-        draft.refs[0], content_hash=None, redacted_stable_digest=digest, protection="protected",
-    )
-    protected = replace(draft, refs=(ref,), contributions=(contribution,))
-    raw = protected.to_dict()
+def test_sensitive_draft_keeps_exact_hash_without_embedded_body(draft):
+    contribution = replace(draft.contributions[0], body=None, protection="protected")
+    ref = replace(draft.refs[0], protection="protected")
+    sensitive = replace(draft, refs=(ref,), contributions=(contribution,))
+    raw = sensitive.to_dict()
     assert raw["contributions"][0]["body"] is None
     restored = unsealed_context_plan_from_dict(raw)
     assert restored.contributions[0].body is None
-    assert restored.contributions[0].redacted_stable_digest == digest
+    assert restored.contributions[0].content_hash == contribution.content_hash
 
 
 def test_draft_source_ref_rejects_final_detail_field(draft):

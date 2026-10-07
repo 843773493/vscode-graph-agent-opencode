@@ -1,629 +1,297 @@
-"""McpCatalogActivationBinder focused 合同测试（OpenSpec E4 第二段）。
-
-覆盖：binding+指引原子冻结、默认 Turn 不漂移、model_call 下一安全边界刷新、
-relist 失败 fail closed、revision 冲突显式拒绝、未启动显式失败。
-"""
+"""唯一 MCP Owner 发布的 guidance/member 双通道；不建立独立 activation writer。"""
 
 from __future__ import annotations
 
+import shutil
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from langchain_core.tools import BaseTool, StructuredTool
+from pydantic import Field, create_model
 
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.lifecycle import LifetimeScope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.mcp import (
-    MCP_GUIDANCE_SOURCE_ID,
-    DurableMcpCatalogActivationSaver,
-    McpCatalogActivationBinder,
-    McpCatalogActivationConflictError,
-    McpCatalogActivationSnapshot,
     McpCatalogOwner,
-    McpCatalogRelistError,
-    McpToolGuidanceProducer,
-    McpToolGuidanceSourceRegistration,
-    build_extension_catalog_binding,
-    mcp_catalog_activation_payload,
+    McpCatalogResourcePublisher,
 )
-from app.services.infrastructure.mcp.extension_catalog import (
-    ExtensionCatalogUnavailableError,
-    ExtensionDispatchBindingMismatchError,
-    ExtensionDispatchBindingRef,
+from app.services.infrastructure.mcp.catalog_activation import (
+    EXTENSION_CATALOG_SOURCE_ID,
+    MCP_GUIDANCE_SOURCE_ID,
+    MCP_OWNER_CATALOG_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
 )
-from app.services.orchestration.resource_activation.contracts import (
-    ResourceActivationPolicySnapshot,
+from app.services.infrastructure.mcp.config import McpServerConfig
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
 )
-from tests.support.mcp_session_doubles import (
-    FakeMcpSessionFactory as _FakeSessionFactory,
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
-from tests.support.mcp_session_doubles import (
-    drain_pending_relists as _drain_pending_relists,
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
+    ContextSourceManager,
+    ContextSourceOwnerKey,
 )
+from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.itemized_dispatch_helpers import EMPTY_TOOL_SET
+from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径隔离 SQLite fixture
+)
+from tests.support.mcp_session_doubles import drain_pending_relists
 
 
-class _MemorySaver:
+class CatalogSession:
     def __init__(self) -> None:
-        self.snapshots: list[McpCatalogActivationSnapshot] = []
-
-    async def save_mcp_catalog_activation_snapshot(
-        self, snapshot: McpCatalogActivationSnapshot
-    ) -> None:
-        self.snapshots.append(snapshot)
-
-
-class _GuidancePort:
-    def __init__(self) -> None:
-        self.registrations: list[McpToolGuidanceSourceRegistration] = []
+        self.minimum = 1
+        self.description = "回显给定文本"
         self.error: Exception | None = None
+        self.list_calls = 0
 
-    def register_tail_only_guidance(
-        self, registration: McpToolGuidanceSourceRegistration
-    ) -> None:
+    async def initialize(self) -> None:
+        return None
+
+    def supports_tool_list_changed(self) -> bool:
+        return True
+
+    async def list_tools(self) -> list[BaseTool]:
+        self.list_calls += 1
         if self.error is not None:
             raise self.error
-        self.registrations.append(registration)
+
+        async def echo(text: str) -> str:
+            return text
+
+        return [StructuredTool.from_function(
+            coroutine=echo, name="echo", description=self.description,
+            args_schema=create_model("EchoInput", text=(str, Field(min_length=self.minimum))),
+        )]
 
 
-def _policy(overrides: dict[str, str] | None = None) -> ResourceActivationPolicySnapshot:
-    return ResourceActivationPolicySnapshot.from_config(
-        {
-            "context": {
-                "resource_activation": {
-                    "default_boundary": "turn",
-                    "overrides": overrides or {},
-                }
-            }
-        }
-    )
-
-
-def _stdio_server(server_id: str = "mini") -> dict[str, object]:
-    return {
-        server_id: {
-            "enabled": True,
-            "transport": "stdio",
-            "command": "fake-server",
-        }
-    }
-
-
-def _make_owner(
-    tmp_path: Path,
-    factory: _FakeSessionFactory,
-    servers: dict[str, object] | None = None,
-) -> McpCatalogOwner:
-    return McpCatalogOwner(
-        raw_config={"servers": servers if servers is not None else _stdio_server()},
-        workspace_root=tmp_path,
-        event_service=EventChannelService(),
-        session_factory=factory,
-    )
-
-
-async def test_freeze_turn_seals_binding_and_guidance_atomically(
-    tmp_path: Path,
-) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
-    )
-    try:
-        snapshot = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        # 原子性：同一 snapshot 内 binding 与指引 revision 逐字段一致。
-        assert snapshot.snapshot_kind == "turn"
-        assert snapshot.effective_boundary == "turn"
-        assert snapshot.binding_ref.catalog_revision == snapshot.guidance.catalog_revision
-        assert snapshot.binding_ref.catalog_revision == owner.catalog_revision()
-        assert snapshot.binding_ref.generation == owner.catalog_generation()
-        assert [
-            entry.tool_id for entry in snapshot.guidance.entries
-        ] == ["mcp__mini__echo"]
-        assert snapshot.activation_provenance_hash.startswith("sha256:")
-        assert len(saver.snapshots) == 1
-    finally:
-        await owner.shutdown()
-
-
-async def test_freeze_registers_tail_only_guidance_before_saving_snapshot(
-    tmp_path: Path,
-) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    guidance_port = _GuidancePort()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner,
-        policy=_policy(),
-        saver=saver,
-        guidance_source_port=guidance_port,
-    )
-    try:
-        snapshot = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        assert len(guidance_port.registrations) == 1
-        registration = guidance_port.registrations[0]
-        assert registration.source_id == MCP_GUIDANCE_SOURCE_ID
-        assert registration.activation_snapshot_id == snapshot.activation_snapshot_id
-        assert registration.catalog_revision == snapshot.binding_ref.catalog_revision
-        assert registration.guidance_revision == snapshot.guidance.guidance_revision
-        assert registration.root_placement == "tail_only"
-        assert len(saver.snapshots) == 1
-    finally:
-        await owner.shutdown()
-
-
-async def test_guidance_registration_failure_blocks_snapshot_save(
-    tmp_path: Path,
-) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    guidance_port = _GuidancePort()
-    guidance_port.error = RuntimeError("guidance owner unavailable")
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner,
-        policy=_policy(),
-        saver=saver,
-        guidance_source_port=guidance_port,
-    )
-    try:
-        with pytest.raises(RuntimeError, match="guidance owner unavailable"):
-            await binder.freeze_turn_activation(
-                owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-            )
-        assert saver.snapshots == []
-    finally:
-        await owner.shutdown()
-
-
-async def test_default_turn_model_call_reuses_parent(tmp_path: Path) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
-    )
-    try:
-        parent = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        prepared = await binder.prepare_model_call_activation(
-            parent=parent, model_call_id="mc_1"
-        )
-        # 默认 turn 策略：同一 Turn 内 snapshot 不漂移，不重复冻结。
-        assert prepared is parent
-        assert len(saver.snapshots) == 1
-        # 通知能力 server 不参与无通知 relist：list_tools 仅 startup 一次。
-        assert factory.sessions["mini"].list_calls == 1
-    finally:
-        await owner.shutdown()
-
-
-async def test_model_call_boundary_refreshes_at_next_safe_boundary(
-    tmp_path: Path,
-) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner,
-        policy=_policy({"mcp_tool_catalog": "model_call"}),
-        saver=saver,
-    )
-    try:
-        parent = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        assert parent.effective_boundary == "model_call"
-        # 目录在两个 model call 之间发布新增 target。
-        factory.sessions["mini"].tool_names.append("extra")
-        factory.notify_callbacks["mini"]()
-        await _drain_pending_relists(owner)
-
-        prepared = await binder.prepare_model_call_activation(
-            parent=parent, model_call_id="mc_2"
-        )
-        assert prepared is not parent
-        assert prepared.snapshot_kind == "model_call"
-        assert prepared.parent_activation_id == parent.activation_snapshot_id
-        assert prepared.model_call_id == "mc_2"
-        assert prepared.binding_ref.catalog_revision == owner.catalog_revision()
-        assert prepared.binding_ref.generation > parent.binding_ref.generation
-        assert prepared.guidance.added_tool_ids == ("mcp__mini__extra",)
-        assert len(saver.snapshots) == 2
-    finally:
-        await owner.shutdown()
-
-
-async def test_relist_failure_fails_closed(tmp_path: Path) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    factory.sessions["mini"].supports_notifications = False
-    factory.sessions["mini"].relist_error = RuntimeError("relist 爆炸")
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
-    )
-    try:
-        with pytest.raises(McpCatalogRelistError):
-            await binder.freeze_turn_activation(
-                owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-            )
-        assert saver.snapshots == []
-    finally:
-        await owner.shutdown()
-
-
-def test_snapshot_rejects_binding_guidance_revision_mismatch() -> None:
-
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=1,
-        targets=[],
-    )
-    guidance = McpToolGuidanceProducer().produce(
-        catalog_revision="sha256:" + "1" * 64,
-        descriptors=[],
-        tools_by_id={},
-    )
-    with pytest.raises(McpCatalogActivationConflictError):
-        McpCatalogActivationSnapshot(
-            activation_snapshot_id="mcp-activation:s:thr:turn",
-            snapshot_kind="turn",
-            owner_session_id="ses_1",
-            owner_thread_id="thr_1",
-            turn_id="turn_1",
-            effective_boundary="turn",
-            binding_ref=binding,
-            guidance=guidance,
-            dispatch_binding=ExtensionDispatchBindingRef(
-                binding_ref=binding,
-                guidance_revision=guidance.guidance_revision,
-                activation_policy_revision="resource-activation-policy:v1:test",
-                owner_session_id="ses_1",
-                owner_thread_id="thr_1",
-                turn_id="turn_1",
-            ),
-        )
-
-
-async def test_freeze_before_owner_start_fails_closed(tmp_path: Path) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
-    )
-    with pytest.raises(RuntimeError):
-        await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-    assert saver.snapshots == []
-
-
-class _MemoryBodyStore:
-    """受保护 body store 的内存替身：只保存 typed identity -> 正文映射。"""
-
+class CatalogSessionFactory:
     def __init__(self) -> None:
-        self.bodies: dict[tuple[str, str, str], dict[str, object]] = {}
-        self.fail_next_write: Exception | None = None
+        self.session = CatalogSession()
+        self.notify: Callable[[], None] | None = None
 
-    def write_activation_snapshot(
-        self,
-        *,
-        owner_session_id: str,
-        owner_thread_id: str,
-        activation_snapshot_id: str,
-        checkpoint_ns: str,
-        body: object,
-    ) -> None:
-        if self.fail_next_write is not None:
-            error = self.fail_next_write
-            self.fail_next_write = None
-            raise error
-        self.bodies[(owner_session_id, owner_thread_id, activation_snapshot_id)] = dict(
-            body  # type: ignore[arg-type]
-        )
+    @asynccontextmanager
+    async def __call__(
+        self, server: McpServerConfig, notify: Callable[[], None],
+    ) -> AsyncIterator[CatalogSession]:
+        assert server.server_id == "mini"
+        self.notify = notify
+        yield self.session
 
-    def read_activation_snapshot(
-        self,
-        *,
-        owner_session_id: str,
-        owner_thread_id: str,
-        activation_snapshot_id: str,
-        checkpoint_ns: str,
-    ) -> dict[str, object] | None:
-        return self.bodies.get(
-            (owner_session_id, owner_thread_id, activation_snapshot_id)
-        )
+    def changed(self) -> None:
+        assert self.notify is not None
+        self.notify()
 
 
-async def test_freeze_seals_dispatch_binding_with_own_hash(tmp_path: Path) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    saver = _MemorySaver()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
+@pytest.fixture
+def catalog_workspace(request: pytest.FixtureRequest) -> Path:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    shutil.rmtree(context.workspace_root)
+    shutil.copytree(
+        context.project_root / "tests/fixtures/workspaces/default_test_workspace",
+        context.workspace_root,
     )
+    return context.workspace_root
+
+
+@pytest.fixture
+async def catalog_runtime(catalog_workspace):
+    factory = CatalogSessionFactory()
+    owner = McpCatalogOwner(
+        raw_config={"servers": {"mini": {"enabled": True, "transport": "stdio", "command": "controlled-server"}}},
+        workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
+    )
+    await owner.start()
+    registry = ResourceRegistry(
+        publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture,
+    )
+    publisher = McpCatalogResourcePublisher(registry=registry)
+    scope = LifetimeScope("catalog-runtime-test")
+    scope.register(owner.subscribe_publication(publisher.publish), label="mcp-resource-publication")
     try:
-        snapshot = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        dispatch = snapshot.dispatch_binding
-        assert isinstance(dispatch, ExtensionDispatchBindingRef)
-        # 独立 hash 使用 domain JCS 合同，且与 binding_hash 分离。
-        assert dispatch.dispatch_binding_hash.startswith("sha256:jcs:v1:")
-        assert dispatch.dispatch_binding_hash != snapshot.binding_ref.binding_hash
-        assert dispatch.binding_ref.binding_hash == snapshot.binding_ref.binding_hash
-        assert dispatch.guidance_revision == snapshot.guidance.guidance_revision
-        assert dispatch.activation_policy_revision == _policy().revision
-        # 冻结的 dispatch 与 snapshot provenance 原子绑定：provenance 覆盖 hash。
-        assert snapshot.activation_provenance_hash.startswith("sha256:")
-        assert dispatch.verify() is dispatch
+        yield owner, factory, registry, scope
+    finally:
+        await scope.close()
+        await owner.shutdown()
+
+
+async def test_owner_schema_only_change_preserves_selected_guidance_bytes(catalog_runtime):
+    owner, factory, registry, _scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    original_publication = owner.publication_snapshot()
+    factory.session.minimum = 5
+    factory.changed()
+    assert not registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID).available
+    await drain_pending_relists(owner)
+    after = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    publication = owner.publication_snapshot()
+    assert after.available
+    assert canonical_json_bytes(after.payload) == canonical_json_bytes(before.payload)
+    assert after.revision == before.revision == sha256_jcs(before.payload)
+    assert len(canonical_json_bytes(after.payload)) == len(canonical_json_bytes(before.payload))
+    assert after.members != before.members
+    assert after.members[0].schema_hash != before.members[0].schema_hash
+    assert publication.binding_ref.catalog_revision != original_publication.binding_ref.catalog_revision
+    assert after.generation == before.generation + 1
+    assert dict(after.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID] == publication.binding_ref.catalog_revision
+    assert dict(after.source_lineage)[EXTENSION_CATALOG_SOURCE_ID] != dict(before.source_lineage)[EXTENSION_CATALOG_SOURCE_ID]
+    assert set(after.payload) == {"content"}
+
+
+async def test_owner_description_change_updates_actual_guidance(catalog_runtime):
+    owner, factory, registry, _scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    factory.session.description = "新的真实指引正文"
+    factory.changed()
+    await drain_pending_relists(owner)
+    after = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert after.payload != before.payload
+    assert "新的真实指引正文" in after.payload["content"]
+    assert after.revision != before.revision
+
+
+async def test_relist_failure_blocks_registry_and_preserves_last_valid(catalog_runtime):
+    owner, factory, registry, _scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    factory.session.error = RuntimeError("controlled tools/list failed")
+    factory.changed()
+    await drain_pending_relists(owner)
+    unavailable = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert not unavailable.available
+    assert unavailable.payload is None
+    assert "controlled tools/list failed" in unavailable.error
+    assert registry.last_valid_snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
+    assert unavailable.members == before.members
+    assert unavailable.retained_revision == before.revision
+
+
+async def test_subscription_is_released_by_runtime_scope(catalog_runtime):
+    owner, factory, registry, scope = catalog_runtime
+    before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    await scope.close()
+    factory.session.description = "scope 关闭后的新指引"
+    factory.changed()
+    await drain_pending_relists(owner)
+    assert owner.catalog_revision() != dict(before.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID]
+    assert registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID) == before
+
+
+async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(catalog_workspace):
+    owner = McpCatalogOwner(
+        raw_config={"servers": {}}, workspace_root=catalog_workspace,
+        event_service=EventChannelService(),
+    )
+
+    def custom(text: str) -> str:
+        return text
+
+    tool = StructuredTool.from_function(custom, name="local_echo", description="本地 custom target")
+    await owner.start()
+    try:
+        registry = ResourceRegistry()
+        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=(tool,))
+        publisher.publish(owner.publication_snapshot())
+        resource = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert resource.payload == {"content": ""}
+        assert len(resource.members) == 1
+        assert resource.members[0].member_id == "local_echo"
+        assert resource.members[0].member_kind == "custom"
+        assert resource.members[0].server_id is None
+        assert dict(resource.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID] == owner.catalog_revision()
+        assert dict(resource.source_lineage)[EXTENSION_CATALOG_SOURCE_ID].startswith("sha256:")
+        assert len(registry.capture().descriptors) == 1
     finally:
         await owner.shutdown()
 
 
-async def test_dispatch_hash_changes_when_guidance_policy_changes(
-    tmp_path: Path,
-) -> None:
-    """同一 catalog binding 下，指引/策略变化必须改变独立 dispatch hash。"""
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=1,
-        targets=[],
+async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
+    catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire, monkeypatch,
+):
+    _owner, factory, registry, _scope = catalog_runtime
+    saver, session, _connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    admission = saver.execution_admission(
+        session, thread_id=thread, execution_id=accepted["initial_execution_id"],
     )
-    base = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision="sha256:" + "1" * 64,
-        activation_policy_revision="resource-activation-policy:v1:aaa",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(session, thread), control_state_port=saver,
+        mutation_intent_port=saver,
     )
-    # 指引 revision 变化 → dispatch hash 变化，但 binding_hash 不变。
-    guidance_changed = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision="sha256:" + "2" * 64,
-        activation_policy_revision="resource-activation-policy:v1:aaa",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
+    policy = ResourceActivationPolicySnapshot(
+        default_boundary="turn", boundaries={"mcp_tool_catalog": "model_call"},
     )
-    assert guidance_changed.dispatch_binding_hash != base.dispatch_binding_hash
-    assert guidance_changed.binding_ref.binding_hash == base.binding_ref.binding_hash
-    # 策略 revision 变化 → dispatch hash 变化。
-    policy_changed = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision="sha256:" + "1" * 64,
-        activation_policy_revision="resource-activation-policy:v1:bbb",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
-    )
-    assert policy_changed.dispatch_binding_hash != base.dispatch_binding_hash
-    # 运行 identity 不进入内容 hash：仅 owner/turn 变化不改变 dispatch hash。
-    identity_changed = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision="sha256:" + "1" * 64,
-        activation_policy_revision="resource-activation-policy:v1:aaa",
-        owner_session_id="ses_2",
-        owner_thread_id="thr_2",
-        turn_id="turn_2",
-    )
-    assert identity_changed.dispatch_binding_hash == base.dispatch_binding_hash
 
-
-async def test_durable_saver_persists_and_restores_dispatch_binding(
-    tmp_path: Path,
-) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    body_store = _MemoryBodyStore()
-    saver = DurableMcpCatalogActivationSaver(body_store=body_store)
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner, policy=_policy(), saver=saver
-    )
-    try:
-        snapshot = await binder.freeze_turn_activation(
-            owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
-        )
-        key = ("ses_1", "thr_1", snapshot.activation_snapshot_id)
-        assert key in body_store.bodies
-        restored = saver.load_mcp_catalog_activation_snapshot(
-            owner_session_id="ses_1",
-            owner_thread_id="thr_1",
-            activation_snapshot_id=snapshot.activation_snapshot_id,
-        )
-        assert restored.dispatch_binding_hash == (
-            snapshot.dispatch_binding.dispatch_binding_hash
-        )
-        # 恢复只读受保护 snapshot：不访问当前 MCP 目录，同名新 target 不生效。
-        factory.sessions["mini"].tool_names.append("smuggled")
-        factory.notify_callbacks["mini"]()
-        await _drain_pending_relists(owner)
-        again = saver.load_mcp_catalog_activation_snapshot(
-            owner_session_id="ses_1",
-            owner_thread_id="thr_1",
-            activation_snapshot_id=snapshot.activation_snapshot_id,
-        )
-        assert again.dispatch_binding_hash == restored.dispatch_binding_hash
-        assert "mcp__mini__smuggled" not in {
-            target.target_id for target in again.binding_ref.targets.values()
-        }
-    finally:
-        await owner.shutdown()
-
-
-async def test_missing_history_binding_raises_extension_catalog_unavailable(
-    tmp_path: Path,
-) -> None:
-    """历史 binding 丢失必须显式 extension-catalog-unavailable，不回退当前目录。"""
-    body_store = _MemoryBodyStore()
-    saver = DurableMcpCatalogActivationSaver(body_store=body_store)
-    with pytest.raises(ExtensionCatalogUnavailableError) as error:
-        saver.load_mcp_catalog_activation_snapshot(
-            owner_session_id="ses_x",
-            owner_thread_id="thr_x",
-            activation_snapshot_id="mcp-activation:missing",
-        )
-    assert error.value.code == "extension-catalog-unavailable"
-    assert "extension-catalog-unavailable" in str(error.value)
-    # 不完整/损坏的封存正文同样显式拒绝。
-    body_store.bodies[("ses_x", "thr_x", "mcp-activation:broken")] = {
-        "schema": "mcp-catalog-activation:v1"
-    }
-    with pytest.raises(ExtensionCatalogUnavailableError):
-        saver.load_mcp_catalog_activation_snapshot(
-            owner_session_id="ses_x",
-            owner_thread_id="thr_x",
-            activation_snapshot_id="mcp-activation:broken",
-        )
-
-
-async def test_durable_saver_failure_never_half_publishes(tmp_path: Path) -> None:
-    factory = _FakeSessionFactory(initial_tools={"mini": ["echo"]})
-    owner = _make_owner(tmp_path, factory)
-    await owner.start()
-    body_store = _MemoryBodyStore()
-    body_store.fail_next_write = RuntimeError("body store unavailable")
-    saver = DurableMcpCatalogActivationSaver(body_store=body_store)
-    guidance_port = _GuidancePort()
-    binder = McpCatalogActivationBinder(
-        catalog_owner=owner,
-        policy=_policy(),
-        saver=saver,
-        guidance_source_port=guidance_port,
-    )
-    try:
-        with pytest.raises(RuntimeError, match="body store unavailable"):
-            await binder.freeze_turn_activation(
-                owner_session_id="ses_1", owner_thread_id="thr_1", turn_id="turn_1"
+    def prepare(key):
+        with (
+            session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            activation = frozen_provider_activation(
+                saver, plan_creation_idempotency_key=key, registry=registry, policy=policy,
             )
-        # 持久化失败：没有任何 snapshot 正文落盘，也没有可恢复的 binding。
-        assert body_store.bodies == {}
-        with pytest.raises(ExtensionCatalogUnavailableError):
-            saver.load_mcp_catalog_activation_snapshot(
-                owner_session_id="ses_1",
-                owner_thread_id="thr_1",
-                activation_snapshot_id="mcp-activation:ses_1:thr_1:turn_1",
+            result = saver.prepare_context_for_provider(
+                session, thread, turn_id=admission.turn_id, execution_id=admission.execution_id,
+                plan_creation_idempotency_key=key, seal_idempotency_key="seal:" + key,
+                request_messages=(), context_source_manager=manager,
+                tool_set_supplier=lambda: EMPTY_TOOL_SET,
+                **frozen_provider_wire("fixture-model", "chat_completions"), **activation,
             )
-    finally:
-        await owner.shutdown()
+        return result, activation["activation_snapshot"]
 
+    first, before = prepare("owner-guidance-first")
+    parent = next(binding for binding in before.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    original_body = saver.read_resource_activation_payload(before, parent)
+    original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
+    assert any(
+        original_body["content"] in message.content
+        for message in first["messages"]
+        if isinstance(message.content, str)
+    )
+    guidance = tuple(
+        frame for frame in original.seal_binding.prefix.state.frames
+        if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID
+    )
+    assert len(guidance) == 1
+    assert guidance[0].role == "user"
+    assert guidance[0].content == original_body["content"]
 
-def test_snapshot_rejects_dispatch_binding_mismatch() -> None:
-    """dispatch binding 与 binding/指引不一致时必须拒绝原子冻结（不做半发布）。"""
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=1,
-        targets=[],
-    )
-    guidance = McpToolGuidanceProducer().produce(
-        catalog_revision="sha256:" + "0" * 64,
-        descriptors=[],
-        tools_by_id={},
-    )
-    other_binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=2,
-        targets=[],
-    )
-    with pytest.raises(McpCatalogActivationConflictError):
-        McpCatalogActivationSnapshot(
-            activation_snapshot_id="mcp-activation:s:thr:turn",
-            snapshot_kind="turn",
-            owner_session_id="ses_1",
-            owner_thread_id="thr_1",
-            turn_id="turn_1",
-            effective_boundary="turn",
-            binding_ref=binding,
-            guidance=guidance,
-            dispatch_binding=ExtensionDispatchBindingRef(
-                binding_ref=other_binding,
-                guidance_revision=guidance.guidance_revision,
-                activation_policy_revision="resource-activation-policy:v1:test",
-                owner_session_id="ses_1",
-                owner_thread_id="thr_1",
-                turn_id="turn_1",
-            ),
+    factory.session.minimum = 5
+    factory.changed()
+    await drain_pending_relists(_owner)
+    second, after = prepare("owner-guidance-schema-only")
+    changed = next(binding for binding in after.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert parent.revision == changed.revision
+    assert parent.content_hash == changed.content_hash
+    assert before.bindings_hash == after.bindings_hash
+    assert parent.members[0].schema_hash != changed.members[0].schema_hash
+    assert saver.read_resource_activation_payload(after, changed) == original_body
+    later = saver.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
+    assert later.plan_hash == original.plan_hash
+    assert later.request_hash == original.request_hash
+    assert second["messages"] == first["messages"]
+
+    def forbid_live_capture():
+        raise AssertionError("sealed retry 不得读取 live Registry")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "capture", forbid_live_capture)
+        retry, restored_activation = prepare("owner-guidance-first")
+    assert retry["messages"] == first["messages"]
+    assert restored_activation == before
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+        restored = restarted.load_sealed_resource_activation(
+            session, thread_id=thread, assembly_id=second["assembly_id"],
+            plan_hash=later.plan_hash, request_hash=later.request_hash,
         )
-
-
-def test_payload_round_trip_carries_dispatch_hash() -> None:
-    """受保护正文必须携带可恢复的 dispatch binding 与独立 hash。"""
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=1,
-        targets=[],
-    )
-    guidance = McpToolGuidanceProducer().produce(
-        catalog_revision="sha256:" + "0" * 64,
-        descriptors=[],
-        tools_by_id={},
-    )
-    dispatch = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision=guidance.guidance_revision,
-        activation_policy_revision="resource-activation-policy:v1:test",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
-    )
-    snapshot = McpCatalogActivationSnapshot(
-        activation_snapshot_id="mcp-activation:s:thr:turn",
-        snapshot_kind="turn",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
-        effective_boundary="turn",
-        binding_ref=binding,
-        guidance=guidance,
-        dispatch_binding=dispatch,
-    )
-    payload = mcp_catalog_activation_payload(snapshot)
-    restored = ExtensionDispatchBindingRef.from_sealed_snapshot(
-        payload["extension_dispatch_binding"]
-    )
-    assert restored.dispatch_binding_hash == dispatch.dispatch_binding_hash
-    assert payload["activation_provenance_hash"] == snapshot.activation_provenance_hash
-
-
-def test_from_sealed_snapshot_rejects_tampered_dispatch_hash() -> None:
-    """封存正文 hash 被篡改时必须显式拒绝 dispatch。"""
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:" + "0" * 64,
-        generation=1,
-        targets=[],
-    )
-    dispatch = ExtensionDispatchBindingRef(
-        binding_ref=binding,
-        guidance_revision="sha256:" + "1" * 64,
-        activation_policy_revision="resource-activation-policy:v1:test",
-        owner_session_id="ses_1",
-        owner_thread_id="thr_1",
-        turn_id="turn_1",
-    )
-    tampered = dispatch.to_dict()
-    tampered["extension_dispatch_binding_hash"] = "sha256:jcs:v1:" + "0" * 64
-    with pytest.raises(ExtensionDispatchBindingMismatchError):
-        ExtensionDispatchBindingRef.from_sealed_snapshot(tampered)
-
-
-def test_from_sealed_snapshot_rejects_non_mapping_and_missing_fields() -> None:
-    with pytest.raises(ExtensionCatalogUnavailableError):
-        ExtensionDispatchBindingRef.from_sealed_snapshot(None)
-    with pytest.raises(ExtensionCatalogUnavailableError):
-        ExtensionDispatchBindingRef.from_sealed_snapshot({"binding_id": "x"})
+        ref = next(binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert ref.members == changed.members
+        assert restarted.read_resource_activation_payload(restored, ref) == original_body

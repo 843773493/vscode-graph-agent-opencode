@@ -5,9 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from app.domain.itemized.enums import (
-    DetailProtection,
-)
 from app.domain.itemized.epoch.seal_binding import ContextSealBinding
 from app.domain.itemized.epoch.tool_set import tool_set_manifest_compatibility_key
 from app.domain.itemized.errors import ItemSchemaError
@@ -285,8 +282,6 @@ class ContextAssemblySnapshot:
                     contribution.source_revision != entry.source_revision
                     or contribution.content_length != entry.content_length
                     or contribution.content_hash != entry.content_hash
-                    or contribution.redacted_stable_digest
-                    != entry.redacted_stable_digest
                     or contribution.visibility != entry.visibility
                     or contribution.protection != entry.protection
                     or contribution.contribution_ordinal != entry.contribution_ordinal
@@ -297,13 +292,11 @@ class ContextAssemblySnapshot:
                         entry.source_revision,
                         entry.content_length,
                         entry.content_hash,
-                        entry.redacted_stable_digest,
                     )
                     actual_manifest = (
                         contribution.source_revision,
                         contribution.content_length,
                         contribution.content_hash,
-                        contribution.redacted_stable_digest,
                     )
                     if any(
                         expected is not None and expected != actual
@@ -433,10 +426,8 @@ class ContextAssemblySnapshot:
 
     def to_dict(self) -> dict[str, object]:
         """以规范 envelope 序列化，避免 dataclasses.asdict 泄漏旧别名。"""
-        # ToolSetRef 是工具定义的唯一 sealed registry。旧的
-        # ``tool_snapshot`` 字段仅保留兼容投影，并且只能从已绑定的 public
-        # manifest 派生；不能把未选中的候选工具或受保护 manifest 的原文
-        # 随 assembly snapshot 写入 SQLite。
+        # ToolSetRef 是工具定义的唯一 sealed manifest；tool_snapshot 从已选
+        # manifest 完整派生。访问分类只影响对外检查投影，不删改内部封存正文。
         selected_tool_ref_ids = {
             entry.ref.ref_id
             for entry in self.selection
@@ -455,7 +446,6 @@ class ContextAssemblySnapshot:
         persisted_tool_snapshot = [
             dict(tool)
             for tool_ref in persisted_tool_refs
-            if tool_ref.protection == DetailProtection.PUBLIC
             for tool in tool_ref.tools
         ]
         return {

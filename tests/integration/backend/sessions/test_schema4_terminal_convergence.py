@@ -127,7 +127,7 @@ def _assistant_item(case: TerminalCase, item_id: str, payload: str) -> Canonical
     )
 
 
-def _assemble_and_register_model_call(frozen_provider_wire, case: TerminalCase) -> str:
+def _assemble_and_register_model_call(frozen_provider_activation, frozen_provider_wire, case: TerminalCase) -> str:
     manager = ContextSourceManager(
         owner=ContextSourceOwnerKey(case.session_id, case.thread_id),
         control_state_port=case.saver,
@@ -140,13 +140,16 @@ def _assemble_and_register_model_call(frozen_provider_wire, case: TerminalCase) 
         seal_idempotency_key=f"terminal-seal:{case.execution_id}",
         context_source_manager=manager, tool_set_supplier=lambda: selected,
         **frozen_provider_wire("schema4-terminal-test", "chat_completions"),
+        **frozen_provider_activation(case.saver, plan_creation_idempotency_key=f'terminal-create:{case.execution_id}'),
     )
     assembly_id = str(prepared["assembly_id"])
     case.saver.register_model_call(
         case.session_id,
         thread_id=case.thread_id,
         execution_id=case.execution_id,
-        model_call_id=f"model-call-{case.execution_id}",
+        model_call_id=case.saver.get_context_assembly(
+            case.session_id, case.thread_id, assembly_id=assembly_id,
+        ).model_call_id,
         attempt=1,
         provider="terminal-test-provider",
         assembly_id=assembly_id,
@@ -316,11 +319,11 @@ def test_pre_model_failure_keeps_accepted_user_turn_visible(
         ).fetchone() == (1, None)
 
 
-def test_item_bearing_terminal_is_one_barrier_and_one_transaction(
+def test_item_bearing_terminal_is_one_barrier_and_one_transaction(frozen_provider_activation, frozen_provider_wire,
     terminal_case: TerminalCase,
 ) -> None:
     case = terminal_case
-    assembly_id = _assemble_and_register_model_call(case)
+    assembly_id = _assemble_and_register_model_call(frozen_provider_activation, frozen_provider_wire, case)
     output = _assistant_item(case, f"item-output-{case.execution_id}", "终态正文")
     before = case.jsonl.read_bytes()
 
@@ -397,13 +400,13 @@ def test_item_bearing_terminal_is_one_barrier_and_one_transaction(
         ("execution_lost", "unknown"),
     ],
 )
-def test_metadata_only_terminal_does_not_move_offset_and_replays_idempotently(
+def test_metadata_only_terminal_does_not_move_offset_and_replays_idempotently(frozen_provider_activation, frozen_provider_wire,
     terminal_case: TerminalCase,
     outcome: str,
     turn_status: str,
 ) -> None:
     case = terminal_case
-    assembly_id = _assemble_and_register_model_call(case)
+    assembly_id = _assemble_and_register_model_call(frozen_provider_activation, frozen_provider_wire, case)
     before = case.jsonl.read_bytes()
     first = case.saver.converge_execution(
         case.session_id,

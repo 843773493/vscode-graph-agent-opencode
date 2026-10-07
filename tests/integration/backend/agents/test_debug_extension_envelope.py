@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,15 @@ pytest_plugins = (
 )
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.domain.itemized.assembly_snapshot import (
+    ContextAssemblySnapshot,
+    context_request_hash,
+)
+from app.domain.itemized.epoch.prefix_epoch import (
+    ParentAssemblyRef,
+    verify_stable_prefix,
+)
+from app.domain.itemized.serialization import normalize_wire_request
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -177,7 +187,7 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
     saver = RolloutCheckpointSaver(
         sessions_dir=workspace_root / ".boxteam" / "sessions"
     )
-    assemblies = saver.list_context_assemblies(session_id)
+    assemblies = saver.list_context_assemblies(session_id, main_thread_id)
     assert assemblies
     tool_refs = [
         ref
@@ -194,13 +204,35 @@ async def test_fixed_extension_envelope_seals_binding_and_preserves_toolset_pref
         }
     ) == 1
 
-    same_epoch = {}
-    for assembly in assemblies:
-        if assembly.request_hash_preimage is None:
-            continue
-        same_epoch.setdefault(assembly.source_overlay_epoch, []).append(
-            assembly.request_hash_preimage
+    assert len(assemblies) == len(requests)
+    same_epoch: dict[int, list[ContextAssemblySnapshot]] = {}
+    for assembly, request in zip(assemblies, requests, strict=True):
+        wire = normalize_wire_request(request)
+        assert assembly.request_hash_preimage == wire
+        assert assembly.request_hash == context_request_hash(
+            assembly.as_sealed_plan(), assembly.provider_version,
+            projector_id=assembly.projector_id, projector_version=assembly.projector_version,
+            target_format=assembly.target_format, wire_request=wire,
         )
-    for wire_values in same_epoch.values():
-        if len(wire_values) > 1:
-            assert wire_values[0] == wire_values[-1]
+        binding = assembly.seal_binding
+        assert binding is not None
+        same_epoch.setdefault(binding.prefix.state.epoch.ordinal, []).append(assembly)
+    assert any(len(epoch_assemblies) > 1 for epoch_assemblies in same_epoch.values())
+    for epoch_assemblies in same_epoch.values():
+        for previous, current in pairwise(epoch_assemblies):
+            previous_binding, current_binding = previous.seal_binding, current.seal_binding
+            assert previous_binding is not None and current_binding is not None
+            previous_prefix, current_prefix = previous_binding.prefix, current_binding.prefix
+            parent = ParentAssemblyRef(
+                assembly_id=previous.assembly_id,
+                epoch_ordinal=previous_prefix.state.epoch.ordinal,
+                prefix_byte_length=previous_prefix.prefix_byte_length,
+                prefix_hash=previous_prefix.prefix_hash,
+            )
+            assert verify_stable_prefix(parent, current_prefix.state.frames) == len(
+                previous_prefix.state.frames
+            )
+            assert current_binding.root == previous_binding.root
+            assert current_binding.applied_toolset_revision == previous_binding.applied_toolset_revision
+            assert current_prefix.state.tool_compatibility_key == previous_prefix.state.tool_compatibility_key
+            assert current_prefix.state.provider_profile == previous_prefix.state.provider_profile

@@ -21,9 +21,10 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
-    ContextSourceManager,
-)
+from tests.unit.services.infrastructure.rollout_context.conftest import source_seal_case
+
+__all__ = ["source_seal_case"]
+
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -57,7 +58,7 @@ class _CountingRegistry(WorkspaceFileResourceRegistry):
         return super().snapshot(uri)
 
 
-def _build_middleware(tmp_path: Path):
+def _build_middleware(tmp_path: Path, source_seal_case):
     workspace = tmp_path / "workspace"
     _write_skill(workspace, "demo v1\n")
     watch_service = WorkspaceFileWatchService(workspace_root=workspace)
@@ -66,7 +67,7 @@ def _build_middleware(tmp_path: Path):
         watch_service=watch_service,
         project_root=tmp_path,
     )
-    manager = ContextSourceManager()
+    manager = source_seal_case.manager()
     lifetime_scope = LifetimeScope("test-agent")
     reactor = ContextSourceReactor(
         sources=registry,
@@ -93,10 +94,10 @@ def _build_middleware(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_before_model_consumes_event_driven_observation_only(
-    tmp_path: Path,
+    tmp_path: Path, source_seal_case,
 ) -> None:
     middleware, registry, manager, reactor, lifetime_scope, watch_service, skill_uri = (
-        _build_middleware(tmp_path)
+        _build_middleware(tmp_path, source_seal_case)
     )
     try:
         # before_agent 用真实 workspace backend 解析 metadata、注册来源并
@@ -113,15 +114,23 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert receipt.display_uri == skill_uri
         reads_after_load = registry.snapshot_reads
 
-        first = middleware.before_model({}, None)
+        assert middleware.before_model({}, None) is None
+        first = manager.prepare_pending()
         assert first is not None
-        first_message = first["messages"][0]
-        assert "demo v1" in first_message.content
-        assert first_message.response_metadata["context_source_id"] == "skill:demo"
+        first_delta = next(delta for delta in first.deltas if delta.source_id == "skill:demo")
+        assert "demo v1" in first_delta.content and first_delta.source_kind == "skill"
         # 请求路径只读取已绑定来源的内存快照：一次解析 observation revision，
         # 一次取正文；skill_load 本身零读取（正文来自冻结 binding）。
         assert reads_after_load == 2
         assert registry.snapshot_reads == reads_after_load + 2
+        receipt, binding = source_seal_case.seal(manager)
+        assert receipt.deltas == first.deltas
+        frames = [frame for frame in binding.prefix.state.frames
+                  if frame.item_ref.source_identity == "skill:demo"]
+        assert len(frames) == 1 and frames[0].role == "user"
+        assert frames[0].content == first_delta.content
+        assert frames[0].item_ref.source_revision == first_delta.revision
+        assert manager.prepare_pending() is None
         reads_after_first = registry.snapshot_reads
 
         # 没有来源事件时 before_model 不再读取任何来源快照。
@@ -135,13 +144,21 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert reactor.ingest_notifications() == 1
         assert manager.pending_observation_count() == 1
 
-        second = middleware.before_model({}, None)
+        assert middleware.before_model({}, None) is None
+        second = manager.prepare_pending()
         assert second is not None
-        second_message = second["messages"][0]
-        assert "demo v2" in second_message.content
-        assert "-demo v1" in second_message.content
+        second_delta = next(delta for delta in second.deltas if delta.source_id == "skill:demo")
+        assert "demo v2" in second_delta.content and "-demo v1" in second_delta.content
+        assert registry.snapshot_reads == reads_after_first + 2
+        receipt, second_binding = source_seal_case.seal(manager)
+        assert receipt.deltas == second.deltas
+        frames = [frame for frame in second_binding.prefix.state.frames
+                  if frame.item_ref.source_identity == "skill:demo"
+                  and frame.item_ref.source_revision == second_delta.revision]
+        assert len(frames) == 1 and frames[0].role == "user"
+        assert frames[0].content == second_delta.content
+        assert manager.prepare_pending() is None
         reads_after_second = registry.snapshot_reads
-        assert reads_after_second == reads_after_first + 2
 
         # 事件已经消费完毕，后续请求保持零快照读取。
         assert middleware.before_model({}, None) is None
@@ -154,39 +171,22 @@ async def test_before_model_consumes_event_driven_observation_only(
 
 
 @pytest.mark.asyncio
-async def test_unknown_source_kind_is_rejected(tmp_path: Path) -> None:
-    """未知 source_kind 必须显式失败，不回退到通用措辞。"""
-    from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
-        ContextSourceDelta,
-    )
-
-    middleware, _registry, _manager, _reactor, _scope, watch_service, _uri = (
-        _build_middleware(tmp_path)
+async def test_unregistered_source_is_rejected_before_body_consumption(
+    tmp_path: Path, source_seal_case,
+) -> None:
+    """未登记来源必须显式失败；来源种类由 typed descriptor 声明。"""
+    middleware, _registry, manager, _reactor, scope, watch_service, _uri = (
+        _build_middleware(tmp_path, source_seal_case)
     )
     try:
-        unknown = ContextSourceDelta(
-            source_id="mystery:1",
-            source_name="mystery",
-            source_kind="mystery_kind",
-            revision="rev_1",
-            previous_revision=None,
-            content="正文",
-            content_hash="hash_1",
-        )
-        with pytest.raises(RuntimeError, match="未知 context source kind"):
-            middleware._build_source_delta_message(unknown)
-
-        known = ContextSourceDelta(
-            source_id="agents:workspace",
-            source_name="AGENTS.md",
-            source_kind="workspace_agents",
-            revision="rev_2",
-            previous_revision=None,
-            content="已知正文",
-            content_hash="hash_2",
-        )
-        message = middleware._build_source_delta_message(known)
-        assert message.content == "已知正文"
-        assert message.response_metadata["context_source_kind"] == "workspace_agents"
+        middleware.before_agent({}, None, {})
+        before = manager.prepare_pending()
+        with pytest.raises(RuntimeError, match="观察来源缺少 descriptor: source_id=mystery:1"):
+            middleware._source_body("mystery:1", "正文")
+        assert manager.prepare_pending() == before
+        assert middleware._source_body("agents:workspace", "已知正文") == "已知正文"
+        descriptors = {descriptor.source_id: descriptor for descriptor in manager.descriptors()}
+        assert descriptors["agents:workspace"].source_kind == "workspace_agents"
+        await scope.close()
     finally:
         await watch_service.shutdown()

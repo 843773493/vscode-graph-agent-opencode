@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from typing import cast
 
 from app.abstractions.session_context import SessionContextAssemblySourceProtocol
+from app.domain.itemized.selection import ContextSelectionEntry
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
@@ -22,6 +24,27 @@ from app.services.business.session_context_resource import (
     require_session_context_revision,
     session_context_read_operation,
 )
+
+
+def _project_selection(entry: ContextSelectionEntry) -> dict[str, object]:
+    """默认检查投影隐藏敏感正文及内部 hash，不改写封存 manifest。"""
+    data = entry.to_dict()
+    if entry.protection == "public":
+        return data
+    reference = cast(dict[str, object], data["ref"])
+    for name in (
+        "content_hash",
+        "source_revision",
+        "overlay_from_revision",
+        "overlay_to_revision",
+        "overlay_diff_hash",
+    ):
+        data[name] = None
+        if name in reference:
+            reference[name] = None
+    reference.pop("tools", None)
+    reference.pop("tool_policy", None)
+    return data
 
 
 class SessionContextAssemblyQueryService:
@@ -47,10 +70,7 @@ class SessionContextAssemblyQueryService:
             "assemblies:"
             + hashlib.sha256(
                 json.dumps(
-                    [
-                        (snapshot.assembly_id, snapshot.plan_hash)
-                        for snapshot in snapshots
-                    ]
+                    sorted(snapshot.assembly_id for snapshot in snapshots)
                 ).encode("utf-8")
             ).hexdigest()
         )
@@ -84,7 +104,6 @@ class SessionContextAssemblyQueryService:
                     "session_id": snapshot.session_id,
                     "assembly_id": snapshot.assembly_id,
                     "plan_id": snapshot.plan_id,
-                    "plan_hash": snapshot.plan_hash,
                     "history_view_revision": snapshot.history_view_revision,
                     "source_overlay_epoch": snapshot.source_overlay_epoch,
                     "selection_count": len(snapshot.selection),
@@ -136,9 +155,8 @@ class SessionContextAssemblyQueryService:
         include_hash = hashlib.sha256(
             json.dumps(sorted(set(request.include))).encode("utf-8")
         ).hexdigest()
-        revision = (
-            f"assembly:{snapshot.assembly_id}:{snapshot.plan_hash}:{include_hash}"
-        )
+        # assembly 不可变；检查面 revision 只绑定结构身份和 projection 参数。
+        revision = f"assembly:{snapshot.assembly_id}:{include_hash}"
         require_session_context_revision(request.revision, revision)
         offset, char_offset = SessionContextCursorCodec.decode(
             request.cursor,
@@ -173,8 +191,6 @@ class SessionContextAssemblyQueryService:
                     "session_id": snapshot.session_id,
                     "assembly_id": snapshot.assembly_id,
                     "plan_id": snapshot.plan_id,
-                    "plan_hash": snapshot.plan_hash,
-                    "request_hash": snapshot.request_hash,
                     "compiler_version": snapshot.compiler_version,
                     "provider_version": snapshot.provider_version,
                     "projector_id": snapshot.projector_id,
@@ -200,7 +216,7 @@ class SessionContextAssemblyQueryService:
                 scope=resource.scope,
                 assembly_ref=request.assembly_ref,
                 record_index=entry.plan_ordinal,
-                data=entry.to_dict(),
+                data=_project_selection(entry),
             )
             for entry in snapshot.selection
         )

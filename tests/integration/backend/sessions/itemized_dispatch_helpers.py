@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,13 +26,19 @@ from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.checkpoint_config import build_checkpoint_config
-from app.core.execution_admission_context import execution_admission_scope
+from app.core.execution_admission_context import (
+    execution_admission_scope,
+)
 from app.core.identifier import create_uuid_hex
 from app.core.job_context import reset_current_job_id, set_current_job_id
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+    ResourceRegistry,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -40,7 +49,15 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+    ResourceActivationBodyStore,
+)
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
+from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.resource_activation.contracts import (
+    reset_current_execution_resource_activation,
+    set_current_execution_resource_activation,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
@@ -68,7 +85,24 @@ def dispatch_execution_scope(
             ),
             execution_admission_scope(admission, langgraph_thread_id=thread),
         ):
-            yield thread
+            coordinator = ResourceActivationCoordinator(
+                registry=ResourceRegistry(), saver=saver,
+                body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+            )
+            # 同步 scope 在独立线程运行真实 async freeze，并保留当前执行授权。
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                parent = executor.submit(
+                    copy_context().run, asyncio.run,
+                    coordinator.freeze_execution(
+                        admission=admission,
+                        policy=ResourceActivationPolicySnapshot(default_boundary="turn", boundaries={}),
+                    ),
+                ).result()
+            activation_token = set_current_execution_resource_activation(parent, admission=admission)
+            try:
+                yield thread
+            finally:
+                reset_current_execution_resource_activation(activation_token)
     finally:
         reset_current_job_id(token)
 
@@ -438,6 +472,10 @@ async def invoke_provider_dispatch(
         policy_resolver=ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={}),
         tools=(), metadata={},
     )
+    coordinator = ResourceActivationCoordinator(
+        registry=ResourceRegistry(), saver=saver,
+        body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+    )
     agent = create_dispatch_agent(
         model,
         middleware=[
@@ -447,6 +485,7 @@ async def invoke_provider_dispatch(
                 thread_id=thread,
                 context_source_manager=manager,
                 tool_set_producer=producer,
+                resource_activation=coordinator,
             )
         ],
         checkpointer=saver,

@@ -9,6 +9,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
@@ -26,18 +27,17 @@ class _ToolBindingFakeModel(FakeMessagesListChatModel):
         return self
 
 
-def _request(tool_call_id: str, *, args: dict[str, object] | None = None):
-    return type(
-        "Request",
-        (),
-        {
-            "tool_call": {
-                "id": tool_call_id,
-                "name": "test_tool",
-                "args": args or {},
-            }
-        },
-    )()
+def _request(
+    tool_call_id: str, *, args: dict[str, object] | None = None,
+    model_call_id: str | None = None,
+) -> ToolCallRequest:
+    call = {
+        "id": tool_call_id, "name": "test_tool", "args": args or {}, "type": "tool_call",
+    }
+    messages = [] if model_call_id is None else [
+        AIMessage(content="", id=f"lc_run--{model_call_id}", tool_calls=[call]),
+    ]
+    return ToolCallRequest(tool_call=call, tool=None, state={"messages": messages}, runtime=None)
 
 
 @pytest.mark.asyncio
@@ -45,27 +45,34 @@ async def test_tool_invocation_context_is_isolated_for_parallel_calls():
     context = ToolInvocationContext()
     middleware = ToolInvocationContextMiddleware(context)
 
-    async def invoke(tool_call_id: str) -> str:
+    async def invoke(tool_call_id: str, model_call_id: str) -> str:
         async def handler(_request_value):
             before = context.require_tool_call_id()
+            before_model = context.require_model_call_id()
             await asyncio.sleep(0)
             after = context.require_tool_call_id()
             assert before == after == tool_call_id
+            assert before_model == context.require_model_call_id() == model_call_id
             return ToolMessage(content="ok", tool_call_id=tool_call_id)
 
         result = await middleware.awrap_tool_call(
-            _request(tool_call_id),
+            _request(tool_call_id, model_call_id=model_call_id),
             handler,
         )
         assert isinstance(result, ToolMessage)
         return result.tool_call_id
 
-    assert await asyncio.gather(invoke("call_a"), invoke("call_b")) == [
+    assert await asyncio.gather(
+        invoke("call_a", "00000000-0000-4000-8000-000000000001"),
+        invoke("call_b", "00000000-0000-4000-8000-000000000002"),
+    ) == [
         "call_a",
         "call_b",
     ]
     with pytest.raises(RuntimeError, match="缺少 tool_call_id"):
         context.require_tool_call_id()
+    with pytest.raises(RuntimeError, match="model_call_id"):
+        context.require_model_call_id()
 
 
 @pytest.mark.asyncio
@@ -252,7 +259,9 @@ def test_thread_runtime_binding_carries_exact_trusted_identity():
     with pytest.raises(ValueError, match="thread_id"):
         ThreadRuntimeBinding(session_id="ses_binding", thread_id="")
 
-    binding = ThreadRuntimeBinding(session_id="ses_binding", thread_id="child")
+    binding = ThreadRuntimeBinding(
+        session_id="ses_binding", thread_id="thr_00000000400070008000000000000002",
+    )
     context = ToolInvocationContext(thread_binding=binding)
 
     assert context.thread_binding == binding

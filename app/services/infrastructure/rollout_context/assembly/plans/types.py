@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.request_plan import ContextRequestPlan
 
 
@@ -25,3 +26,4 @@ class ContextPlanRegistration:
     source_provenance: Mapping[str, object] | None = None
     seal_input_hash: str | None = None
     source_manifest: Mapping[str, object] | None = None
+    sealed_snapshot: ContextAssemblySnapshot | None = field(default=None, compare=False, repr=False)

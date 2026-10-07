@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from app.domain.itemized.resource_activation import ResourceMemberBinding
+
 _SNAPSHOT_ERROR_CODES = frozenset(
     {
         "dependency-missing",
@@ -95,7 +97,8 @@ class ResourceSnapshot:
     revision 是语义 revision(payload 的 sha256:jcs:v1),与来源 raw
     revision 分离;source_lineage 记录本次发布消费的全部依赖 revision。
     unavailable 时 payload 为 None,revision/retained_revision 保留旧
-    valid 事实以供审计。
+    valid 事实以供审计。members 是独立 typed 成员事实，不进入选中 payload
+    或语义 revision；无成员的普通资源保持空 tuple。
     """
 
     resource_id: str
@@ -110,6 +113,7 @@ class ResourceSnapshot:
     error: str | None = None
     error_code: str | None = None
     retained_revision: str | None = None
+    members: tuple[ResourceMemberBinding, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("resource_id", "resource_kind", "facet", "display_uri"):
@@ -136,6 +140,16 @@ class ResourceSnapshot:
             raise ValueError(
                 "ResourceSnapshot.source_lineage 必须是 (identity, revision) 元组"
             )
+        if not isinstance(self.members, tuple) or not all(
+            isinstance(member, ResourceMemberBinding) for member in self.members
+        ):
+            raise ValueError("ResourceSnapshot.members 必须是 typed tuple")
+        member_ids = [member.member_id for member in self.members]
+        if len(set(member_ids)) != len(member_ids):
+            raise ValueError("ResourceSnapshot.members 的 member_id 必须唯一")
+        object.__setattr__(
+            self, "members", tuple(sorted(self.members, key=lambda member: member.member_id))
+        )
         if self.available:
             if (
                 not self.revision

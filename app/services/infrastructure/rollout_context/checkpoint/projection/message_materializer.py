@@ -71,10 +71,14 @@ class RolloutMessageMaterializerMixin:
                     connection=owned_connection,
                 )
         rows = connection.execute(
-            "SELECT message_sequence, message_id, turn_id, created_at, jsonl_offset, jsonl_length FROM messages WHERE message_sequence IN ("
+            "SELECT m.message_sequence, m.message_id, m.turn_id, m.created_at, "
+            "m.jsonl_offset, m.jsonl_length, f.source_session_id FROM messages AS m "
+            "LEFT JOIN fork_identity_mappings AS f ON f.target_session_id = ? "
+            "AND f.entity_type = 'message' AND f.target_local_id = m.message_id "
+            "WHERE m.message_sequence IN ("
             + ",".join("?" for _ in sequence_values)
-            + ") ORDER BY message_sequence",
-            sequence_values,
+            + ") ORDER BY m.message_sequence",
+            (session_id, *sequence_values),
         ).fetchall()
         found_sequences: set[int] = set()
         with self.jsonl_path(
@@ -89,6 +93,7 @@ class RolloutMessageMaterializerMixin:
                 created_at,
                 offset_value,
                 length_value,
+                fork_source_session_id,
             ) in rows:
                 sequence = strict_non_negative_int(
                     sequence_value,
@@ -141,6 +146,10 @@ class RolloutMessageMaterializerMixin:
                         message_id=message_id,
                         turn_id=turn_id,
                         created_at=created_at,
+                        fork_source_session_id=strict_optional_text(
+                            fork_source_session_id,
+                            field="fork_identity_mappings.source_session_id",
+                        ),
                     )
                 )
         missing_sequences = tuple(
@@ -242,6 +251,7 @@ class RolloutMessageMaterializerMixin:
         message_id: str,
         turn_id: str | None,
         created_at: str,
+        fork_source_session_id: str | None = None,
     ) -> dict[str, object]:
         """把 SQLite 的 canonical identity 回填到 LangChain 消息。
 
@@ -249,6 +259,7 @@ class RolloutMessageMaterializerMixin:
         和持久化时间重复写入 response_metadata。SQLite 是这些字段的权威
         来源；读取 checkpoint、Replay 和 Fork 时必须把它们恢复到
         BaseMessage，否则同一条消息在 Web DTO 和 replay 定位中会失去身份。
+        fork 来源只取 target message 的唯一 fork_identity_mappings 事实。
         该回填只发生在内存中的反序列化副本，不改变 JSONL canonical 内容。
         """
         hydrated = dict(message)
@@ -258,6 +269,8 @@ class RolloutMessageMaterializerMixin:
         data = dict(raw_data)
         raw_metadata = data.get("response_metadata")
         metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+        if fork_source_session_id is not None:
+            metadata["context_fork_source_session_id"] = fork_source_session_id
         metadata["message_id"] = message_id
         metadata["created_at"] = created_at
         metadata["updated_at"] = created_at
@@ -359,9 +372,16 @@ class RolloutMessageMaterializerMixin:
         connection = self._snapshot_connection(snapshot)
         self._require_v2_runtime(connection)
         row = connection.execute(
-            "SELECT view_id, message_sequence FROM checkpoints WHERE checkpoint_ns = ? AND message_sequence = ? ORDER BY commit_id DESC LIMIT 1",
+            "SELECT c.view_id, c.message_sequence, cv.control_sequence "
+            "FROM checkpoints AS c LEFT JOIN context_views AS cv ON cv.view_id = c.view_id "
+            "WHERE c.checkpoint_ns = ? AND c.message_sequence = ? "
+            "ORDER BY cv.control_sequence DESC LIMIT 1",
             (snapshot.checkpoint_ns, message_sequence),
         ).fetchone()
+        if row is not None:
+            strict_non_negative_int(
+                row[2], field="checkpoint context_views.control_sequence"
+            )
         if row is None:
             row = connection.execute(
                 "SELECT cv.view_id, cv.head_message_sequence "

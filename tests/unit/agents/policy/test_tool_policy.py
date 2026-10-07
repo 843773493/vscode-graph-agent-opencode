@@ -144,6 +144,7 @@ def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
     assert policy.execution_locked is True
 
 
+@pytest.mark.usefixtures("workspace_scope")
 def test_policy_default_names_match_actual_agent_graph_tools(
     tmp_path: Path,
 ) -> None:

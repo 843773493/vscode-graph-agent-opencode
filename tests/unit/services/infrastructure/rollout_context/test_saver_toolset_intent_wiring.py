@@ -53,7 +53,7 @@ def _main_thread_id(saver: RolloutCheckpointSaver) -> str:
 
 
 @pytest.fixture
-def sealed_toolset_context(saver, frozen_provider_wire):
+def sealed_toolset_context(frozen_provider_activation, saver, frozen_provider_wire):
     """只包装真实 ingress/admission/prepare，不代写 owner 或 assembly。"""
     @contextmanager
     def enter(*, thread_id=None, name="toolset-contract", accepted=None):
@@ -80,6 +80,7 @@ def sealed_toolset_context(saver, frozen_provider_wire):
                 tool_set_supplier=supplier if supplier is not None else lambda: tool_set,
                 plan_creation_idempotency_key=f"{name}-create-{key}",
                 seal_idempotency_key=f"{name}-seal-{key}",
+                **frozen_provider_activation(saver, plan_creation_idempotency_key=f'{name}-create-{key}'),
             )
             return result, saver.get_context_assembly(SESSION_ID, thread, assembly_id=result["assembly_id"])
 
@@ -114,7 +115,7 @@ def test_successful_seal_advances_only_manifest_changes(sealed_toolset_context, 
         assert saver.list_context_assemblies(SESSION_ID, thread) == (first, unchanged, changed)
 
 
-def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
+def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(frozen_provider_activation,
     frozen_provider_wire, saver: RolloutCheckpointSaver,
 ) -> None:
     thread_id = _main_thread_id(saver)
@@ -151,7 +152,7 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
         session_thread_owner_scope(owner, langgraph_thread_id=thread_id),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        first = saver.prepare_context_for_provider(SESSION_ID, thread_id, **options)
+        first = saver.prepare_context_for_provider(SESSION_ID, thread_id, **options, **frozen_provider_activation(saver, plan_creation_idempotency_key=(options)['plan_creation_idempotency_key']))
         first_snapshot = saver._storage.get_context_assembly(
             SESSION_ID, thread_id, assembly_id=first["assembly_id"],
         )
@@ -167,6 +168,7 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
                "tool_set_supplier": lambda: tools_b,
                "plan_creation_idempotency_key": "toolset-create-b",
                "seal_idempotency_key": "toolset-seal-b"},
+            **frozen_provider_activation(saver, plan_creation_idempotency_key=({**options, 'tool_set_supplier': lambda: tools_b, 'plan_creation_idempotency_key': 'toolset-create-b', 'seal_idempotency_key': 'toolset-seal-b'})['plan_creation_idempotency_key']),
         )
         second_snapshot = saver._storage.get_context_assembly(
             SESSION_ID, thread_id, assembly_id=second["assembly_id"],
@@ -182,6 +184,7 @@ def test_prepare_boundary_switches_and_sealed_retry_keeps_applied(
         retry = saver.prepare_context_for_provider(
             SESSION_ID, thread_id,
             **{**options, "tool_set_supplier": refuse_supplier},
+            **frozen_provider_activation(saver, plan_creation_idempotency_key=({**options, 'tool_set_supplier': refuse_supplier})['plan_creation_idempotency_key']),
         )
     assert retry["assembly_id"] == first["assembly_id"]
     assert saver._storage.get_context_assembly(
@@ -214,14 +217,16 @@ def test_unregistered_thread_cannot_prepare_or_receive_applied_toolset(
         control.close()
 
 
-def test_sealed_retry_after_saver_restart_keeps_revision_and_bytes(
+def test_sealed_retry_after_saver_restart_keeps_revision_and_bytes(frozen_provider_activation,
     sealed_toolset_context, saver, frozen_provider_wire,
 ) -> None:
     tools_a = ToolSetSnapshot(selection_revision=_desired_key(TOOLS_A), tools=TOOLS_A)
     with sealed_toolset_context(name="restart") as (thread, accepted, prepare, _manager):
         first_result, first = prepare(tools_a, key="a")
         frozen = first.to_dict()
-        with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
+        with RolloutCheckpointSaver(
+            saver._storage.sessions_dir,
+        ) as restarted:
             admission = restarted.execution_admission(
                 SESSION_ID, thread_id=thread, execution_id=accepted["initial_execution_id"],
             )
@@ -242,6 +247,7 @@ def test_sealed_retry_after_saver_restart_keeps_revision_and_bytes(
                     **frozen_provider_wire("toolset-provider", "responses"),
                     context_source_manager=manager, tool_set_supplier=refuse_supplier,
                     plan_creation_idempotency_key="restart-create-a", seal_idempotency_key="restart-seal-a",
+                    **frozen_provider_activation(restarted, plan_creation_idempotency_key='restart-create-a'),
                 )
             restored = restarted.get_context_assembly(SESSION_ID, thread, assembly_id=replay["assembly_id"])
             assert replay["assembly_id"] == first_result["assembly_id"]

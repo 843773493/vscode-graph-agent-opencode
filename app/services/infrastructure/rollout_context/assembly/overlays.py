@@ -76,9 +76,7 @@ def _validate_source_overlay_row(
         "base_source_revision",
         "delta_source_revision",
         "base_content_hash",
-        "base_redacted_stable_digest",
         "delta_content_hash",
-        "delta_redacted_stable_digest",
         "delta_from_revision",
         "delta_to_revision",
         "delta_diff_hash",
@@ -103,7 +101,6 @@ def _validate_source_overlay_row(
                 f"{role}_source_revision",
                 f"{role}_content_length",
                 f"{role}_content_hash",
-                f"{role}_redacted_stable_digest",
             )
         ):
             raise RuntimeError(f"source overlay {role} manifest 没有对应 ref")
@@ -141,11 +138,9 @@ class ContextOverlayStorageMixin:
                 "base_source_revision",
                 "base_content_length",
                 "base_content_hash",
-                "base_redacted_stable_digest",
                 "delta_source_revision",
                 "delta_content_length",
                 "delta_content_hash",
-                "delta_redacted_stable_digest",
                 "delta_from_revision",
                 "delta_to_revision",
                 "delta_diff_hash",
@@ -187,9 +182,7 @@ class ContextOverlayStorageMixin:
             "base_source_revision",
             "delta_source_revision",
             "base_content_hash",
-            "base_redacted_stable_digest",
             "delta_content_hash",
-            "delta_redacted_stable_digest",
             "delta_from_revision",
             "delta_to_revision",
             "delta_diff_hash",
@@ -207,7 +200,6 @@ class ContextOverlayStorageMixin:
             source_revision_key = f"{role}_source_revision"
             length_key = f"{role}_content_length"
             hash_key = f"{role}_content_hash"
-            digest_key = f"{role}_redacted_stable_digest"
             values[source_revision_key] = (
                 values[source_revision_key]
                 if values[source_revision_key] is not None
@@ -230,24 +222,17 @@ class ContextOverlayStorageMixin:
                     raise ValueError(
                         f"source overlay {role} content_hash 与正文不一致: {ref}"
                     )
-                if values[digest_key] is not None:
-                    raise ValueError(
-                        f"source overlay {role} 正文不得同时使用 redacted digest: {ref}"
-                    )
                 values[length_key] = actual_length
                 values[hash_key] = actual_hash
-                values[digest_key] = None
             else:
                 length = values[length_key]
                 token = values[hash_key]
-                redacted_digest = values[digest_key]
-                if length is None or (token is None) == (redacted_digest is None):
+                if length is None or token is None:
                     raise ValueError(
                         f"source overlay {role} 缺少完整 manifest，无法安全恢复: {ref}"
                     )
                 values[length_key] = length
                 values[hash_key] = token
-                values[digest_key] = redacted_digest
         for name in (
             "base_source_revision",
             "delta_source_revision",
@@ -286,15 +271,9 @@ class ContextOverlayStorageMixin:
                     "base_source_revision": values["base_source_revision"],
                     "base_content_length": values["base_content_length"],
                     "base_content_hash": values["base_content_hash"],
-                    "base_redacted_stable_digest": values[
-                        "base_redacted_stable_digest"
-                    ],
                     "delta_source_revision": values["delta_source_revision"],
                     "delta_content_length": values["delta_content_length"],
                     "delta_content_hash": values["delta_content_hash"],
-                    "delta_redacted_stable_digest": values[
-                        "delta_redacted_stable_digest"
-                    ],
                     "delta_from_revision": values["delta_from_revision"],
                     "delta_to_revision": values["delta_to_revision"],
                     "delta_diff_hash": values["delta_diff_hash"],
@@ -310,7 +289,7 @@ class ContextOverlayStorageMixin:
             ) as connection:
                 self._require_v2_runtime(connection)
                 existing = connection.execute(
-                    "SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?",
+                    'SELECT session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key FROM source_overlays WHERE overlay_id = ? AND session_id = ? AND thread_id = ?',
                     (overlay_id, session_id, thread_id),
                 ).fetchone()
                 expected = (
@@ -325,11 +304,9 @@ class ContextOverlayStorageMixin:
                     values["base_source_revision"],
                     values["base_content_length"],
                     values["base_content_hash"],
-                    values["base_redacted_stable_digest"],
                     values["delta_source_revision"],
                     values["delta_content_length"],
                     values["delta_content_hash"],
-                    values["delta_redacted_stable_digest"],
                     values["delta_from_revision"],
                     values["delta_to_revision"],
                     values["delta_diff_hash"],
@@ -431,7 +408,7 @@ class ContextOverlayStorageMixin:
                     )
                     _assert_one_row(cursor, context="source overlay lineage 状态更新")
                 cursor = connection.execute(
-                    "INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    'INSERT INTO source_overlays(overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (
                         overlay_id,
                         session_id,
@@ -445,11 +422,9 @@ class ContextOverlayStorageMixin:
                         values["base_source_revision"],
                         values["base_content_length"],
                         values["base_content_hash"],
-                        values["base_redacted_stable_digest"],
                         values["delta_source_revision"],
                         values["delta_content_length"],
                         values["delta_content_hash"],
-                        values["delta_redacted_stable_digest"],
                         values["delta_from_revision"],
                         values["delta_to_revision"],
                         values["delta_diff_hash"],
@@ -512,7 +487,7 @@ class ContextOverlayStorageMixin:
         assert connection is not None
         try:
             self._require_v2_runtime(connection)
-            query = "SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, base_redacted_stable_digest, delta_source_revision, delta_content_length, delta_content_hash, delta_redacted_stable_digest, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?"
+            query = 'SELECT overlay_id, session_id, thread_id, checkpoint_ns, source_kind, source_revision, source_overlay_epoch, base_ref, delta_ref, base_source_revision, base_content_length, base_content_hash, delta_source_revision, delta_content_length, delta_content_hash, delta_from_revision, delta_to_revision, delta_diff_hash, supersedes_overlay_id, materializes_overlay_id, status, idempotency_key, created_at FROM source_overlays WHERE session_id = ? AND thread_id = ? AND checkpoint_ns = ?'
             params: list[object] = [session_id, thread_id, checkpoint_ns]
             if source_overlay_epoch is not None:
                 query += " AND source_overlay_epoch = ?"
@@ -535,11 +510,9 @@ class ContextOverlayStorageMixin:
             "base_source_revision",
             "base_content_length",
             "base_content_hash",
-            "base_redacted_stable_digest",
             "delta_source_revision",
             "delta_content_length",
             "delta_content_hash",
-            "delta_redacted_stable_digest",
             "delta_from_revision",
             "delta_to_revision",
             "delta_diff_hash",

@@ -436,8 +436,11 @@ class RolloutLangGraphCheckpointMixin:
     def release_fork_retentions(self, child_session_id: str) -> None:
         self._storage.release_fork_retentions(child_session_id)
 
-    def rollout_id(self, thread_id: str, checkpoint_ns: str = "") -> str:
-        return self._storage.rollout_id(thread_id, checkpoint_ns)
+    def rollout_id(self, session_id: str, checkpoint_ns: str = "") -> str:
+        owner = self.resolve_main_thread_owner(session_id)
+        return self._storage.rollout_id(
+            owner.thread_id, checkpoint_ns, session_id=owner.session_id,
+        )
 
     def pinned_fork_children(self, source_session_id: str) -> tuple[str, ...]:
         return self._storage.pinned_fork_children(source_session_id)

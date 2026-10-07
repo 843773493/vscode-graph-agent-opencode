@@ -346,7 +346,8 @@ def test_typed_detail_matches_independent_preimage(
 ):
     row = next(row for row in typed_detail_vectors["preimages"] if row["id"] == family)
     scenario = typed_detail_vectors["scenario"]
-    assert row["preimage"]["selection"][0]["detail_ref"] == scenario["detail_ref"]
+    assert "detail_ref" not in row["preimage"]["selection"][0]
+    assert row["preimage"]["selection"][0]["content_hash"] == typed_detail_plan.selection[0].content_hash
     assert canonical_json_bytes(row["preimage"]) == row["canonical"].encode("utf-8")
     assert sha256_jcs(row["preimage"]) == row["hash"]
     actual = (
@@ -362,15 +363,10 @@ def test_typed_detail_matches_independent_preimage(
     assert actual == row["hash"]
 
 
-def test_plan_hash_binds_final_detail_identity(typed_detail_plan):
+def test_plan_hash_excludes_detail_storage_identity(typed_detail_plan):
     entry = typed_detail_plan.selection[0]
-    changed = replace(
-        entry, detail_ref=replace(entry.detail_ref, detail_id="another-final")
-    )
-    assert (
-        replace(typed_detail_plan, selection=(changed,)).plan_hash()
-        != typed_detail_plan.plan_hash()
-    )
+    changed = replace(entry, detail_ref=replace(entry.detail_ref, detail_id="another-final"))
+    assert replace(typed_detail_plan, selection=(changed,)).plan_hash() == typed_detail_plan.plan_hash()
 
 
 def test_request_only_manifest_uses_body_hash_not_canonical_item_hash(

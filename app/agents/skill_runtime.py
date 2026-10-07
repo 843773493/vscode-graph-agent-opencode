@@ -99,15 +99,17 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         context_source_manager: ContextSourceManager | None = None,
         source_registry: WorkspaceFileResourceRegistry | None = None,
         context_source_reactor: ContextSourceReactor | None = None,
+        execution_owned_catalog: bool = False,
     ) -> None:
         if source_registry is not None and context_source_manager is None:
             raise RuntimeError("AGENTS 上下文来源注册需要 ContextSourceManager")
         self._catalog = catalog
+        self._execution_owned_catalog = execution_owned_catalog
         self._context_source_manager = context_source_manager
         self._source_registry = source_registry
         self._context_source_reactor = context_source_reactor
         self.system_prompt_template = system_prompt
-        if context_source_manager is not None and context_source_reactor is not None:
+        if context_source_manager is not None and (context_source_reactor is not None or execution_owned_catalog):
             context_source_manager.bind_published_revision_supplier(self._freeze_published_sources)
 
     def _freeze_published_sources(
@@ -116,15 +118,25 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> tuple[PublishedContextSourceRevision, ...]:
         """在真实 prepare 边界冻结 Registry 正文，再按来源语义提取完整注入载荷。"""
         reactor = self._context_source_reactor
-        if reactor is None:
+        skill_descriptors = tuple(source for source in descriptors if source.source_kind == "skill")
+        ordinary = tuple(source for source in descriptors if source.source_kind != "skill")
+        if not self._execution_owned_catalog:
+            ordinary = descriptors
+            skill_descriptors = ()
+        if ordinary and reactor is None:
             raise RuntimeError("tracked-source-unavailable: 未绑定 published Registry owner")
-        return tuple(
-            PublishedContextSourceRevision(
-                source.source_id, source.revision,
-                self._source_body(source.source_id, source.content),
-            )
-            for source in reactor.freeze_published_sources(descriptors)
-        )
+        frozen = [
+            PublishedContextSourceRevision(source.source_id, source.revision, self._source_body(source.source_id, source.content))
+            for source in (reactor.freeze_published_sources(ordinary) if ordinary else ())
+        ]
+        if skill_descriptors:
+            catalog = self._context_source_manager.frozen_skill_catalog()
+            for descriptor in skill_descriptors:
+                binding = catalog.entries.get(descriptor.name)
+                if binding is None or binding.display_uri != descriptor.resource_uri:
+                    raise RuntimeError("skill-catalog-snapshot-conflict: tracked source 不在冻结 catalog")
+                frozen.append(PublishedContextSourceRevision(descriptor.source_id, binding.activation_revision, binding.body))
+        return tuple(frozen)
 
     def _format_skills_list(self, skills: list[dict[str, Any]]) -> str:
         if not skills:
@@ -236,11 +248,16 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             if self._catalog is not None
             else [],
         }
-        update = self._register_context_sources(update)
+        if self._execution_owned_catalog:
+            # 正式 runtime 的 catalog/metadata/activation 只在 Saver 的真实冻结边界消费。
+            update = {"skills_metadata": []}
+        else:
+            update = self._register_context_sources(update)
         self._register_agents_source()
         self._sync_source_bindings()
-        self._install_activation_snapshot()
-        self._register_catalog_instructions()
+        if not self._execution_owned_catalog:
+            self._install_activation_snapshot()
+            self._register_catalog_instructions()
         return update
 
     def _register_agents_source(self) -> None:
@@ -296,7 +313,13 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
     def _sync_source_bindings(self) -> None:
         """在请求边界做零 I/O 的订阅对账（新注册来源、tracking 状态变化）。"""
         if self._context_source_reactor is not None:
-            self._context_source_reactor.sync_sources()
+            descriptors = None
+            if self._execution_owned_catalog:
+                descriptors = tuple(
+                    source for source in self._context_source_manager.descriptors()
+                    if source.source_kind != "skill"
+                )
+            self._context_source_reactor.sync_sources(descriptors=descriptors)
 
     def _observe_pending_sources(self) -> None:
         """只消费已排队的 observation；不遍历 descriptor、不读磁盘。"""
@@ -343,6 +366,33 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             self._observe_pending_sources()
         # before_model 只观察 desired；唯一 Saver seal 成功后才确认 applied。
         return None
+
+
+def install_frozen_skill_catalog(
+    manager: ContextSourceManager, snapshot: SkillCatalogActivationSnapshot, *,
+    include_instructions: bool,
+) -> None:
+    """只消费本次 Saver 已冻结的 exact facets；tracked 更新不读取 live Registry。"""
+    manager.install_skill_activation_snapshot(snapshot)
+    metadata = []
+    for binding in snapshot.entries.values():
+        manager.register_skill_binding(binding, catalog_revision=snapshot.catalog_revision)
+        descriptor = manager.descriptor_for_skill(binding.name)
+        tracking, _revision = manager.source_observation_state(descriptor.source_id)
+        if tracking == "tracked":
+            manager.observe(descriptor.source_id, binding.body, revision=binding.activation_revision)
+        metadata.append({"name": binding.name, "description": binding.description})
+    if not include_instructions or not metadata:
+        return
+    lines = "\n".join(
+        f'- **{entry["name"]}**: {entry["description"]}\n  -> 匹配后调用 `skill_load(name="...")` 激活正文'
+        for entry in metadata
+    ) or "(No skills available yet.)"
+    register_instruction_producer(manager, InstructionProducerSpec(
+        producer_id="R05", source_id="instruction:skill-catalog", source_kind="skill_catalog_metadata",
+        name="Skill catalog", root_placement="root_eligible",
+        content=SKILLS_SYSTEM_PROMPT.format(skills_list=lines), revision=snapshot.catalog_revision,
+    ))
 
 
 def resolve_bundled_skill_groups(
@@ -695,6 +745,7 @@ def append_skill_middlewares(
     context_source_manager: ContextSourceManager | None = None,
     source_registry: WorkspaceFileResourceRegistry | None = None,
     context_source_reactor: ContextSourceReactor | None = None,
+    execution_owned_catalog: bool = False,
 ) -> None:
     """集中维护 workspace Skill/AGENTS 上下文来源 middleware 顺序。"""
     if (catalog is not None and catalog.entries) or source_registry is not None:
@@ -705,5 +756,6 @@ def append_skill_middlewares(
                 context_source_manager=context_source_manager,
                 source_registry=source_registry,
                 context_source_reactor=context_source_reactor,
+                execution_owned_catalog=execution_owned_catalog,
             )
         )

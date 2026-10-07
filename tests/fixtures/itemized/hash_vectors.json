@@ -310,7 +310,7 @@
       },
       "payload": {
         "￿": 0,
-        "𐀀": 1e-7,
+        "𐀀": 1e-07,
         "numbers": [
           333333333.3333333,
           1e+21,
@@ -341,7 +341,7 @@
         "tool_id": "read_file",
         "description": "读取",
         "parameters": {
-          "𐀀": 1e-7,
+          "𐀀": 1e-07,
           "￿": 0
         }
       },
@@ -357,7 +357,7 @@
           "role": "user",
           "content": {
             "￿": 0,
-            "𐀀": 1e-7,
+            "𐀀": 1e-07,
             "numbers": [
               333333333.3333333,
               1e+21,
@@ -385,16 +385,72 @@
     "provider": "provider-golden",
     "projector_id": "golden-projector",
     "projector_version": "v1",
-    "target_format": "native"
+    "target_format": "native",
+    "tool_policy": {
+      "mode": "allow",
+      "wire_tool_order": [
+        "read_file",
+        "write_file"
+      ]
+    }
   },
   "preimages": [
+    {
+      "id": "plan-contribution-order",
+      "preimage": {
+        "schema": "context-plan-hash:v2",
+        "session_id": "session-order",
+        "thread_id": "thread-1",
+        "format_version": 2,
+        "active_view_id": null,
+        "history_view_revision": 0,
+        "source_overlay_epoch": 0,
+        "selection_policy": "active_view",
+        "refs": [],
+        "selection": [],
+        "tool_set_refs": [],
+        "compiler_version": "itemized-context-v1",
+        "contributions": [
+          {
+            "source_ordinal": 0,
+            "contribution_ordinal": null,
+            "contribution_id": "zzz",
+            "source_kind": "workspace",
+            "contribution_kind": "prompt",
+            "source_revision": "rev-1",
+            "content_length": 8,
+            "content_hash": "sha256:jcs:v1:b875e018b742fcfca3eda2b51cc6885cd0f64f9b848c6f3b83c4568fd6c4050f",
+            "request_only": true,
+            "visibility": "internal",
+            "protection": "public",
+            "root_placement": "tail_only"
+          },
+          {
+            "source_ordinal": 1,
+            "contribution_ordinal": null,
+            "contribution_id": "aaa",
+            "source_kind": "workspace",
+            "contribution_kind": "prompt",
+            "source_revision": "rev-1",
+            "content_length": 7,
+            "content_hash": "sha256:jcs:v1:2365d06c1efcef95b199478dd3ca01fb7fb92fcbc02f087a5dcb3bba65da9ef4",
+            "request_only": true,
+            "visibility": "internal",
+            "protection": "public",
+            "root_placement": "tail_only"
+          }
+        ]
+      },
+      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[{\"content_hash\":\"sha256:jcs:v1:b875e018b742fcfca3eda2b51cc6885cd0f64f9b848c6f3b83c4568fd6c4050f\",\"content_length\":8,\"contribution_id\":\"zzz\",\"contribution_kind\":\"prompt\",\"contribution_ordinal\":null,\"protection\":\"public\",\"request_only\":true,\"root_placement\":\"tail_only\",\"source_kind\":\"workspace\",\"source_ordinal\":0,\"source_revision\":\"rev-1\",\"visibility\":\"internal\"},{\"content_hash\":\"sha256:jcs:v1:2365d06c1efcef95b199478dd3ca01fb7fb92fcbc02f087a5dcb3bba65da9ef4\",\"content_length\":7,\"contribution_id\":\"aaa\",\"contribution_kind\":\"prompt\",\"contribution_ordinal\":null,\"protection\":\"public\",\"request_only\":true,\"root_placement\":\"tail_only\",\"source_kind\":\"workspace\",\"source_ordinal\":1,\"source_revision\":\"rev-1\",\"visibility\":\"internal\"}],\"format_version\":2,\"history_view_revision\":0,\"refs\":[],\"schema\":\"context-plan-hash:v2\",\"selection\":[],\"selection_policy\":\"active_view\",\"session_id\":\"session-order\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-1\",\"tool_set_refs\":[]}",
+      "hash": "sha256:jcs:v1:ced2c666af6ab5e42d07419a03e6745f4dfc106a1c0b90b1025352e941b15764"
+    },
     {
       "id": "content",
       "preimage": {
         "payload_kind": "structured_content",
         "payload": {
           "￿": 0,
-          "𐀀": 1e-7,
+          "𐀀": 1e-07,
           "numbers": [
             333333333.3333333,
             1e+21,
@@ -426,7 +482,7 @@
         "contribution_kind": "prompt",
         "body": {
           "￿": 0,
-          "𐀀": 1e-7,
+          "𐀀": 1e-07,
           "numbers": [
             333333333.3333333,
             1e+21,
@@ -454,7 +510,7 @@
             "tool_id": "read_file",
             "description": "读取",
             "parameters": {
-              "𐀀": 1e-7,
+              "𐀀": 1e-07,
               "￿": 0
             }
           },
@@ -464,262 +520,250 @@
           }
         ],
         "tool_policy": {
-          "mode": "allow"
+          "mode": "allow",
+          "wire_tool_order": [
+            "read_file",
+            "write_file"
+          ]
         }
       },
-      "canonical": "{\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tools\":[{\"description\":\"读取\",\"parameters\":{\"𐀀\":1e-7,\"￿\":0},\"tool_id\":\"read_file\"},{\"description\":\"写入\",\"tool_id\":\"write_file\"}]}",
-      "hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8"
+      "canonical": "{\"tool_policy\":{\"mode\":\"allow\",\"wire_tool_order\":[\"read_file\",\"write_file\"]},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tools\":[{\"description\":\"读取\",\"parameters\":{\"𐀀\":1e-7,\"￿\":0},\"tool_id\":\"read_file\"},{\"description\":\"写入\",\"tool_id\":\"write_file\"}]}",
+      "hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f"
     },
     {
       "id": "plan",
       "preimage": {
-        "schema": "context-plan-hash:v2",
-        "format_version": 2,
         "active_view_id": "view-golden",
+        "compiler_version": "itemized-context-v1",
+        "contributions": [],
+        "format_version": 2,
         "history_view_revision": 3,
-        "source_overlay_epoch": 0,
-        "selection_policy": "active_view",
         "refs": [
           {
+            "base_delta_role": "none",
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "content_length": 137,
+            "item_sequence": 1,
+            "overlay_diff_hash": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "payload_kind": "structured_content",
             "ref_id": "item-golden-jcs",
             "ref_type": "canonical_item",
             "semantic_kind": "user_input",
-            "payload_kind": "structured_content",
-            "status": "completed",
-            "item_sequence": 1,
-            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-            "redacted_stable_digest": null,
-            "content_length": 137,
-            "source_revision": "revision-golden",
-            "base_delta_role": "none",
-            "source_overlay_epoch": null,
-            "overlay_from_revision": null,
-            "overlay_to_revision": null,
-            "overlay_diff_hash": null,
             "session_id": "session-golden-jcs",
-            "plan_id": null,
+            "source_overlay_epoch": null,
+            "source_revision": "revision-golden",
+            "status": "completed",
             "thread_id": "thread-golden-jcs"
           }
         ],
+        "schema": "context-plan-hash:v2",
         "selection": [
           {
-            "plan_ordinal": 0,
-            "selection_kind": "canonical_history",
-            "included": true,
-            "omission_reason": null,
-            "loss": [],
-            "visibility": "internal",
-            "protection": "public",
             "availability": "available",
-            "source_revision": "revision-golden",
-            "content_length": 137,
-            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
-            "source_overlay_epoch": null,
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "content_length": 137,
+            "contribution_id": null,
+            "contribution_ordinal": null,
+            "included": true,
+            "loss": [],
+            "omission_reason": null,
+            "overlay_diff_hash": null,
             "overlay_from_revision": null,
             "overlay_to_revision": null,
-            "overlay_diff_hash": null,
-            "contribution_ordinal": null,
-            "detail_ref": null,
-            "contribution_id": null,
+            "plan_ordinal": 0,
+            "protection": "public",
             "ref": {
-              "ref_type": "canonical_item",
-              "ref_id": "item-golden-jcs",
-              "source_revision": "revision-golden",
-              "content_length": 137,
               "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-              "redacted_stable_digest": null,
+              "content_length": 137,
+              "overlay_diff_hash": null,
               "overlay_from_revision": null,
               "overlay_to_revision": null,
-              "overlay_diff_hash": null,
+              "ref_id": "item-golden-jcs",
+              "ref_type": "canonical_item",
               "session_id": "session-golden-jcs",
-              "plan_id": null,
+              "source_revision": "revision-golden",
               "thread_id": "thread-golden-jcs"
-            }
+            },
+            "selection_kind": "canonical_history",
+            "source_overlay_epoch": null,
+            "source_revision": "revision-golden",
+            "visibility": "internal"
           },
           {
-            "plan_ordinal": 1,
-            "selection_kind": "tool_set",
-            "included": true,
-            "omission_reason": null,
-            "loss": [],
-            "visibility": "internal",
-            "protection": "public",
             "availability": "available",
-            "source_revision": "tools-rev-golden",
-            "content_length": 264,
-            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
-            "source_overlay_epoch": null,
+            "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+            "content_length": 309,
+            "contribution_id": null,
+            "contribution_ordinal": null,
+            "included": true,
+            "loss": [],
+            "omission_reason": null,
+            "overlay_diff_hash": null,
             "overlay_from_revision": null,
             "overlay_to_revision": null,
-            "overlay_diff_hash": null,
-            "contribution_ordinal": null,
-            "detail_ref": null,
-            "contribution_id": null,
+            "plan_ordinal": 1,
+            "protection": "public",
             "ref": {
-              "ref_type": "tool_set",
-              "ref_id": "tools-golden",
-              "source_revision": "tools-rev-golden",
-              "content_length": 264,
-              "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-              "redacted_stable_digest": null,
+              "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+              "content_length": 309,
+              "overlay_diff_hash": null,
               "overlay_from_revision": null,
               "overlay_to_revision": null,
-              "overlay_diff_hash": null,
+              "ref_id": "tools-golden",
+              "ref_type": "tool_set",
               "session_id": "session-golden-jcs",
-              "plan_id": "plan-golden-jcs",
+              "source_revision": "tools-rev-golden",
               "thread_id": "thread-golden-jcs"
-            }
+            },
+            "selection_kind": "tool_set",
+            "source_overlay_epoch": null,
+            "source_revision": "tools-rev-golden",
+            "visibility": "internal"
           }
         ],
+        "selection_policy": "active_view",
+        "session_id": "session-golden-jcs",
+        "source_overlay_epoch": 0,
+        "thread_id": "thread-golden-jcs",
         "tool_set_refs": [
           {
-            "tool_set_snapshot_id": "tools-golden",
+            "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+            "content_length": 309,
+            "session_id": "session-golden-jcs",
             "source_revision": "tools-rev-golden",
-            "content_length": 264,
-            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-            "redacted_stable_digest": null,
+            "thread_id": "thread-golden-jcs",
+            "tool_policy": {
+              "mode": "allow",
+              "wire_tool_order": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            "tool_policy_version": "v1",
             "tool_set_schema": "example.tools",
             "tool_set_schema_version": "v1",
-            "tool_policy_version": "v1",
-            "tool_policy": {
-              "mode": "allow"
-            },
-            "session_id": "session-golden-jcs",
-            "plan_id": "plan-golden-jcs",
-            "thread_id": "thread-golden-jcs"
+            "tool_set_snapshot_id": "tools-golden"
           }
-        ],
-        "contributions": [],
-        "compiler_version": "itemized-context-v1",
-        "session_id": "session-golden-jcs",
-        "thread_id": "thread-golden-jcs"
+        ]
       },
-      "canonical": "{\"active_view_id\":\"view-golden\",\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":3,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\",\"thread_id\":\"thread-golden-jcs\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"revision-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":\"plan-golden-jcs\",\"redacted_stable_digest\":null,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-golden-jcs\",\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"plan_id\":\"plan-golden-jcs\",\"redacted_stable_digest\":null,\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\",\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}]}",
-      "hash": "sha256:jcs:v1:e4b3e27d83d18eaef95165b60b93689321934ae1222e3336c963c78135ab93c7"
+      "canonical": "{\"active_view_id\":\"view-golden\",\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":3,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\",\"thread_id\":\"thread-golden-jcs\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"revision-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-golden-jcs\",\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\",\"tool_policy\":{\"mode\":\"allow\",\"wire_tool_order\":[\"read_file\",\"write_file\"]},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}]}",
+      "hash": "sha256:jcs:v1:9d8dc913fa9bc86784180c1b11341b5a8069ad0b98bb3bb5de100da6326ef9ff"
     },
     {
       "id": "request",
       "preimage": {
-        "plan_hash": "sha256:jcs:v1:e4b3e27d83d18eaef95165b60b93689321934ae1222e3336c963c78135ab93c7",
-        "provider": "provider-golden",
+        "contributions": [],
+        "plan_hash": "sha256:jcs:v1:9d8dc913fa9bc86784180c1b11341b5a8069ad0b98bb3bb5de100da6326ef9ff",
         "projector_id": "golden-projector",
         "projector_version": "v1",
-        "target_format": "native",
+        "provider": "provider-golden",
         "refs": [
           {
+            "base_delta_role": "none",
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "content_length": 137,
+            "overlay_diff_hash": null,
+            "overlay_from_revision": null,
+            "overlay_to_revision": null,
+            "payload_kind": "structured_content",
             "ref_id": "item-golden-jcs",
             "ref_type": "canonical_item",
             "semantic_kind": "user_input",
-            "payload_kind": "structured_content",
-            "status": "completed",
-            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-            "redacted_stable_digest": null,
-            "content_length": 137,
-            "source_revision": "revision-golden",
-            "base_delta_role": "none",
-            "source_overlay_epoch": null,
-            "overlay_from_revision": null,
-            "overlay_to_revision": null,
-            "overlay_diff_hash": null,
             "session_id": "session-golden-jcs",
+            "source_overlay_epoch": null,
+            "source_revision": "revision-golden",
+            "status": "completed",
             "thread_id": "thread-golden-jcs"
-          }
-        ],
-        "contributions": [],
-        "tool_set_refs": [
-          {
-            "tool_set_snapshot_id": "tools-golden",
-            "source_revision": "tools-rev-golden",
-            "content_length": 264,
-            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-            "redacted_stable_digest": null,
-            "tool_set_schema": "example.tools",
-            "tool_set_schema_version": "v1",
-            "tool_policy_version": "v1",
-            "tool_policy": {
-              "mode": "allow"
-            }
           }
         ],
         "selection": [
           {
-            "plan_ordinal": 0,
-            "selection_kind": "canonical_history",
-            "included": true,
-            "omission_reason": null,
-            "loss": [],
-            "visibility": "internal",
-            "protection": "public",
             "availability": "available",
-            "source_revision": "revision-golden",
-            "content_length": 137,
-            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
-            "source_overlay_epoch": null,
+            "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
+            "content_length": 137,
+            "contribution_id": null,
+            "contribution_ordinal": null,
+            "included": true,
+            "loss": [],
+            "omission_reason": null,
+            "overlay_diff_hash": null,
             "overlay_from_revision": null,
             "overlay_to_revision": null,
-            "overlay_diff_hash": null,
-            "contribution_ordinal": null,
-            "detail_ref": null,
-            "contribution_id": null,
+            "plan_ordinal": 0,
+            "protection": "public",
             "ref": {
-              "ref_type": "canonical_item",
-              "ref_id": "item-golden-jcs",
-              "source_revision": "revision-golden",
-              "content_length": 137,
               "content_hash": "sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59",
-              "redacted_stable_digest": null,
+              "content_length": 137,
+              "ref_id": "item-golden-jcs",
+              "ref_type": "canonical_item",
               "session_id": "session-golden-jcs",
+              "source_revision": "revision-golden",
               "thread_id": "thread-golden-jcs"
-            }
+            },
+            "selection_kind": "canonical_history",
+            "source_overlay_epoch": null,
+            "source_revision": "revision-golden",
+            "visibility": "internal"
           },
           {
-            "plan_ordinal": 1,
-            "selection_kind": "tool_set",
-            "included": true,
-            "omission_reason": null,
-            "loss": [],
-            "visibility": "internal",
-            "protection": "public",
             "availability": "available",
-            "source_revision": "tools-rev-golden",
-            "content_length": 264,
-            "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
-            "source_overlay_epoch": null,
+            "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+            "content_length": 309,
+            "contribution_id": null,
+            "contribution_ordinal": null,
+            "included": true,
+            "loss": [],
+            "omission_reason": null,
+            "overlay_diff_hash": null,
             "overlay_from_revision": null,
             "overlay_to_revision": null,
-            "overlay_diff_hash": null,
-            "contribution_ordinal": null,
-            "detail_ref": null,
-            "contribution_id": null,
+            "plan_ordinal": 1,
+            "protection": "public",
             "ref": {
-              "ref_type": "tool_set",
+              "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+              "content_length": 309,
               "ref_id": "tools-golden",
-              "source_revision": "tools-rev-golden",
-              "content_length": 264,
-              "content_hash": "sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8",
-              "redacted_stable_digest": null,
+              "ref_type": "tool_set",
               "session_id": "session-golden-jcs",
+              "source_revision": "tools-rev-golden",
               "thread_id": "thread-golden-jcs"
-            }
+            },
+            "selection_kind": "tool_set",
+            "source_overlay_epoch": null,
+            "source_revision": "tools-rev-golden",
+            "visibility": "internal"
+          }
+        ],
+        "target_format": "native",
+        "tool_set_refs": [
+          {
+            "content_hash": "sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f",
+            "content_length": 309,
+            "source_revision": "tools-rev-golden",
+            "tool_policy": {
+              "mode": "allow",
+              "wire_tool_order": [
+                "read_file",
+                "write_file"
+              ]
+            },
+            "tool_policy_version": "v1",
+            "tool_set_schema": "example.tools",
+            "tool_set_schema_version": "v1",
+            "tool_set_snapshot_id": "tools-golden"
           }
         ],
         "tool_snapshot": [],
         "wire_request": {
-          "model": "model-golden",
           "messages": [
             {
-              "role": "user",
               "content": {
-                "￿": 0,
-                "𐀀": 1e-7,
                 "numbers": [
                   333333333.3333333,
                   1e+21,
@@ -727,26 +771,30 @@
                 ],
                 "parts": [
                   {
-                    "text": " é é 中文 😀 \r\n",
-                    "ordinal": 0
+                    "ordinal": 0,
+                    "text": " é é 中文 😀 \r\n"
                   }
-                ]
-              }
+                ],
+                "𐀀": 1e-07,
+                "￿": 0
+              },
+              "role": "user"
             }
           ],
-          "tools": [
-            {
-              "type": "function",
-              "name": "read_file"
-            }
-          ],
+          "model": "model-golden",
           "sampling": {
             "temperature": 0.1
-          }
+          },
+          "tools": [
+            {
+              "name": "read_file",
+              "type": "function"
+            }
+          ]
         }
       },
-      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:e4b3e27d83d18eaef95165b60b93689321934ae1222e3336c963c78135ab93c7\",\"projector_id\":\"golden-projector\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\",\"thread_id\":\"thread-golden-jcs\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"revision-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"redacted_stable_digest\":null,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:c28f2c3238f302c9415761e29bfeeac243e740a7d99d3352bdebbdeadad4e3e8\",\"content_length\":264,\"redacted_stable_digest\":null,\"source_revision\":\"tools-rev-golden\",\"tool_policy\":{\"mode\":\"allow\"},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}],\"tool_snapshot\":[],\"wire_request\":{\"messages\":[{\"content\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"role\":\"user\"}],\"model\":\"model-golden\",\"sampling\":{\"temperature\":0.1},\"tools\":[{\"name\":\"read_file\",\"type\":\"function\"}]}}",
-      "hash": "sha256:jcs:v1:7ac6b5bf7c876dd57d3e3e8ad4d0a93df2d49f1d0e2113329ad8141a46989b1a"
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:9d8dc913fa9bc86784180c1b11341b5a8069ad0b98bb3bb5de100da6326ef9ff\",\"projector_id\":\"golden-projector\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"structured_content\",\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden-jcs\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"status\":\"completed\",\"thread_id\":\"thread-golden-jcs\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:7a68a44392da1a58cf8ed60acf2d239e55b0fe96225817b64358259a87571b59\",\"content_length\":137,\"ref_id\":\"item-golden-jcs\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"revision-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"revision-golden\",\"visibility\":\"internal\"},{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"contribution_id\":null,\"contribution_ordinal\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":1,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"ref_id\":\"tools-golden\",\"ref_type\":\"tool_set\",\"session_id\":\"session-golden-jcs\",\"source_revision\":\"tools-rev-golden\",\"thread_id\":\"thread-golden-jcs\"},\"selection_kind\":\"tool_set\",\"source_overlay_epoch\":null,\"source_revision\":\"tools-rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[{\"content_hash\":\"sha256:jcs:v1:5eec064d27d088f5797244b60cf85a3464598f5a37e56c97b835dbd328a29d2f\",\"content_length\":309,\"source_revision\":\"tools-rev-golden\",\"tool_policy\":{\"mode\":\"allow\",\"wire_tool_order\":[\"read_file\",\"write_file\"]},\"tool_policy_version\":\"v1\",\"tool_set_schema\":\"example.tools\",\"tool_set_schema_version\":\"v1\",\"tool_set_snapshot_id\":\"tools-golden\"}],\"tool_snapshot\":[],\"wire_request\":{\"messages\":[{\"content\":{\"numbers\":[333333333.3333333,1e+21,100000000000000000000],\"parts\":[{\"ordinal\":0,\"text\":\" é é 中文 😀 \\r\\n\"}],\"𐀀\":1e-7,\"￿\":0},\"role\":\"user\"}],\"model\":\"model-golden\",\"sampling\":{\"temperature\":0.1},\"tools\":[{\"name\":\"read_file\",\"type\":\"function\"}]}}",
+      "hash": "sha256:jcs:v1:188a67129dab96a766c489bf6d1f225e7514ff554e61a4dba1633bb96b80c201"
     },
     {
       "id": "idempotency",
@@ -755,7 +803,7 @@
         "final_item_id": "item-golden-jcs",
         "coordinates": {
           "￿": 0,
-          "𐀀": 1e-7,
+          "𐀀": 1e-07,
           "numbers": [
             333333333.3333333,
             1e+21,
@@ -787,7 +835,7 @@
             "content": " é é 中文 😀 \r\n",
             "additional_kwargs": {
               "￿": 0,
-              "𐀀": 1e-7,
+              "𐀀": 1e-07,
               "numbers": [
                 333333333.3333333,
                 1e+21,
@@ -835,7 +883,6 @@
             "status": "completed",
             "item_sequence": 1,
             "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-            "redacted_stable_digest": null,
             "content_length": 12,
             "source_revision": "rev-golden",
             "base_delta_role": "none",
@@ -861,7 +908,6 @@
             "source_revision": "rev-golden",
             "content_length": 12,
             "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
             "source_overlay_epoch": null,
             "overlay_from_revision": null,
@@ -876,7 +922,6 @@
               "source_revision": "rev-golden",
               "content_length": 12,
               "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-              "redacted_stable_digest": null,
               "overlay_from_revision": null,
               "overlay_to_revision": null,
               "overlay_diff_hash": null,
@@ -892,13 +937,13 @@
         "session_id": "session-golden",
         "thread_id": "thread-1"
       },
-      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-1\",\"tool_set_refs\":[]}",
-      "hash": "sha256:jcs:v1:096dd69e5618021766f1dd10455d7d4d0887452d8aaafd983f5b3f0be65976a9"
+      "canonical": "{\"active_view_id\":null,\"compiler_version\":\"itemized-context-v1\",\"contributions\":[],\"format_version\":2,\"history_view_revision\":0,\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"item_sequence\":1,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"plan_id\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"schema\":\"context-plan-hash:v2\",\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_id\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"selection_policy\":\"active_view\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":0,\"thread_id\":\"thread-1\",\"tool_set_refs\":[]}",
+      "hash": "sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72"
     },
     {
       "id": "core-request",
       "preimage": {
-        "plan_hash": "sha256:jcs:v1:096dd69e5618021766f1dd10455d7d4d0887452d8aaafd983f5b3f0be65976a9",
+        "plan_hash": "sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72",
         "provider": "provider-golden",
         "projector_id": "itemized-context-provider",
         "projector_version": "v1",
@@ -911,7 +956,6 @@
             "payload_kind": "text",
             "status": "completed",
             "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-            "redacted_stable_digest": null,
             "content_length": 12,
             "source_revision": "rev-golden",
             "base_delta_role": "none",
@@ -938,7 +982,6 @@
             "source_revision": "rev-golden",
             "content_length": 12,
             "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-            "redacted_stable_digest": null,
             "base_delta_role": "none",
             "source_overlay_epoch": null,
             "overlay_from_revision": null,
@@ -953,7 +996,6 @@
               "source_revision": "rev-golden",
               "content_length": 12,
               "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-              "redacted_stable_digest": null,
               "session_id": "session-golden",
               "thread_id": "thread-1"
             }
@@ -972,7 +1014,6 @@
               "source_revision": "rev-golden",
               "content_length": 12,
               "content_hash": "sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491",
-              "redacted_stable_digest": null,
               "base_delta_role": "none",
               "source_overlay_epoch": null,
               "overlay_from_revision": null,
@@ -987,8 +1028,8 @@
           ]
         }
       },
-      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:096dd69e5618021766f1dd10455d7d4d0887452d8aaafd983f5b3f0be65976a9\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"redacted_stable_digest\":null,\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"redacted_stable_digest\":null,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\"}],\"target_format\":\"native\"}}",
-      "hash": "sha256:jcs:v1:02469d3d53892625c93de644395a56e44df3db293b0c4cd34d14827201f37959"
+      "canonical": "{\"contributions\":[],\"plan_hash\":\"sha256:jcs:v1:3117c04763e9396e9ae93e72f220568158f43f95a13a4f9121b59ee3c57bdf72\",\"projector_id\":\"itemized-context-provider\",\"projector_version\":\"v1\",\"provider\":\"provider-golden\",\"refs\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"payload_kind\":\"text\",\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"semantic_kind\":\"user_input\",\"session_id\":\"session-golden\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"status\":\"completed\",\"thread_id\":\"thread-1\"}],\"selection\":[{\"availability\":\"available\",\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"protection\":\"public\",\"ref\":{\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"session_id\":\"session-golden\",\"source_revision\":\"rev-golden\",\"thread_id\":\"thread-1\"},\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\",\"visibility\":\"internal\"}],\"target_format\":\"native\",\"tool_set_refs\":[],\"tool_snapshot\":[],\"wire_request\":{\"selection\":[{\"base_delta_role\":\"none\",\"content_hash\":\"sha256:jcs:v1:d199eed53b25cf22cd795f059ab78ace33d1c85fb9f488f198643d5c929e1491\",\"content_length\":12,\"contribution_id\":null,\"contribution_ordinal\":null,\"detail_ref\":null,\"included\":true,\"loss\":[],\"omission_reason\":null,\"overlay_diff_hash\":null,\"overlay_from_revision\":null,\"overlay_to_revision\":null,\"plan_ordinal\":0,\"ref_id\":\"item-golden-1\",\"ref_type\":\"canonical_item\",\"selection_kind\":\"canonical_history\",\"source_overlay_epoch\":null,\"source_revision\":\"rev-golden\"}],\"target_format\":\"native\"}}",
+      "hash": "sha256:jcs:v1:7e77208323181b313368eaea1366d2f9ba6aeea7350468954ea87f2080095b48"
     }
   ],
   "idempotency": {

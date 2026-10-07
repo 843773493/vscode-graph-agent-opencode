@@ -52,9 +52,9 @@ class ContextDetailOwnerMixin:
     ) -> ContextAssemblySnapshot:
         """只封存显式注册的 draft；重复请求在分配 detail 之前校验并返回。
 
-        ``activation_snapshot`` 是 activation coordinator 冻结的内存 snapshot；
-        它必须与 assembly 在同一次 ``assembly_sealed`` 提交原子绑定。为 None 时
-        不写 activation 行（尚未接入 activation 的调用方）。
+        正式 wire seal 必须提供当前 admission 的真实 model-call UUID 与
+        coordinator 已冻结的 activation snapshot，并在同一次 assembly 事务
+        原子绑定。显式不投影 wire 的低层 plan seal 保持纯 plan 合同。
         """
         self._require_context_plan_owner(session_id, thread_id, plan)
         return seal_registered_plan(

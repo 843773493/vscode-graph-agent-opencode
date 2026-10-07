@@ -17,7 +17,11 @@ import pytest
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
-from tests.support.processes import close_backend_process, start_backend_process
+from tests.support.processes import (
+    close_backend_process,
+    start_backend_process,
+    workspace_backend_id_for_root,
+)
 from tests.support.trace import get_trace_payload
 
 
@@ -342,12 +346,18 @@ def scripted_backend_process(
 async def scripted_client(
     scripted_backend_process: subprocess.Popen[str],
     integration_backend_port: int,
+    integration_workspace_root_path: str,
 ) -> AsyncIterator[httpx.AsyncClient]:
     del scripted_backend_process
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{integration_backend_port}",
         timeout=60,
-        headers={"X-Local-Token": "local-dev-token"},
+        headers={
+            "X-Local-Token": "local-dev-token",
+            "X-BoxTeam-Workspace-Id": workspace_backend_id_for_root(
+                integration_workspace_root_path
+            ),
+        },
     ) as client:
         yield client
 

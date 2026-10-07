@@ -113,6 +113,7 @@ def test_contribution_alias_is_resolved_from_explicit_source_metadata(
 
 def test_plan_hash_uses_canonical_contribution_order_key(
     prompt_contribution: ContextContribution,
+    hash_vectors: dict[str, object],
 ) -> None:
     """plan hash 的 contribution 顺序由 canonical key 决定，与入参元组顺序无关。"""
     later = replace(prompt_contribution, contribution_id="zzz", source_ordinal=0)
@@ -139,9 +140,12 @@ def test_plan_hash_uses_canonical_contribution_order_key(
         contributions=(earlier, later),
     )
     assert canonical.plan_hash() == reversed_input.plan_hash()
-    assert canonical.plan_hash() == (
-        "sha256:jcs:v1:93f6e6d3b44a2ce95ba68d24c76958436ae8b26cc00ec62f67fc35d45e34e8e7"
+    vector = next(
+        row for row in hash_vectors["preimages"]
+        if row["id"] == "plan-contribution-order"
     )
+    assert canonical_json_bytes(vector["preimage"]) == vector["canonical"].encode()
+    assert canonical.plan_hash() == vector["hash"]
     swapped_ordinals = ContextRequestPlan(
         session_id="session-order",
         thread_id="thread-1",
@@ -384,15 +388,78 @@ def test_sealed_plan_freezes_selection_and_contribution_ordinals(
         sealed.seal_for_assembly("assembly-2", selection=(selection,))
 
 
+@pytest.mark.parametrize(
+    "changed_field",
+    [None, "source_revision", "content_length", "content_hash", "visibility", "protection", "contribution_ordinal"],
+)
+def test_included_contribution_snapshot_restores_exact_manifest_and_rejects_drift(
+    omitted_snapshot: ContextAssemblySnapshot,
+    prompt_contribution: ContextContribution,
+    changed_field: str | None,
+) -> None:
+    contribution = replace(prompt_contribution, visibility="private", protection="protected")
+    ref = ContextRef.request_only_ref(
+        contribution.contribution_id,
+        session_id=omitted_snapshot.session_id, thread_id=omitted_snapshot.thread_id,
+        plan_id=omitted_snapshot.plan_id,
+        source_revision=contribution.source_revision,
+        content_length=contribution.content_length, content_hash_value=contribution.content_hash,
+        visibility=contribution.visibility, protection=contribution.protection,
+    )
+    entry = ContextSelectionEntry(
+        assembly_id=omitted_snapshot.assembly_id, plan_ordinal=0, ref=ref,
+        selection_kind=SelectionKind.REQUEST_ONLY,
+        source_revision=ref.source_revision, content_length=ref.content_length,
+        content_hash=ref.content_hash, visibility=ref.visibility, protection=ref.protection,
+        detail_ref=DetailRef(
+            omitted_snapshot.session_id, omitted_snapshot.thread_id,
+            omitted_snapshot.assembly_id, "included-contribution-detail",
+        ),
+        contribution_id=contribution.contribution_id, contribution_ordinal=0,
+    )
+    plan = ContextRequestPlan(
+        session_id=omitted_snapshot.session_id, thread_id=omitted_snapshot.thread_id,
+        plan_id=omitted_snapshot.plan_id, refs=(ref,), contributions=(contribution,),
+    ).seal_for_assembly(omitted_snapshot.assembly_id, selection=(entry,))
+    snapshot = replace(
+        omitted_snapshot, refs=plan.refs, contributions=plan.contributions, selection=plan.selection,
+        plan_hash=plan.plan_hash(),
+        request_hash=context_request_hash(
+            plan, omitted_snapshot.provider_version, target_format=omitted_snapshot.target_format,
+        ),
+    )
+    before = snapshot.to_dict()
+    restored = ContextAssemblySnapshot.from_dict(before)
+    assert restored.to_dict() == before
+    assert restored.selection[0].included
+    restored.validate_hashes()
+    if changed_field is None:
+        return
+
+    raw = snapshot.to_dict()
+    if changed_field == "contribution_ordinal":
+        raw["selection"][0][changed_field] = 1
+    else:
+        raw["contributions"][0][changed_field] = {
+            "source_revision": "different-source-revision",
+            "content_length": contribution.content_length + 1,
+            "content_hash": "sha256:jcs:v1:" + "b" * 64,
+            "visibility": "public",
+            "protection": "redacted",
+        }[changed_field]
+    with pytest.raises(ItemSchemaError, match="contribution_ordinal|selection contribution manifest"):
+        ContextAssemblySnapshot.from_dict(raw)
+    assert snapshot.to_dict() == before
+
+
 def test_contribution_security_manifest_survives_plan_serialization_and_hash_scope() -> (
     None
 ):
-    digest = "hmac-sha256:session:v1:" + "a" * 64
     contribution = ContextContribution(
         contribution_id="protected-contribution",
+        content_hash=contribution_content_hash("prompt", "精确正文"),
         source_kind="workspace_secret",
         source_revision="secret-revision",
-        redacted_stable_digest=digest,
         content_length=42,
         visibility="private",
         protection="redacted",
@@ -492,7 +559,6 @@ def test_assembly_restore_preserves_omitted_selection_without_ref_hash_fallback(
     assert restored.selection[0].included is False
     assert restored.selection[0].content_length is None
     assert restored.selection[0].content_hash is None
-    assert restored.selection[0].redacted_stable_digest is None
     restored.validate_hashes()
 
 

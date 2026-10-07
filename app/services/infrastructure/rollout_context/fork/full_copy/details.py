@@ -20,7 +20,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
     DetailUnavailableError,
     detail_record_from_mapping,
     detail_relative_path,
-    protected_detail_relative_path,
 )
 
 
@@ -36,9 +35,9 @@ def write_private(path: Path, raw: bytes) -> None:
 
 def materialize_details(state: FullCopyRemapState) -> None:
     capability = state.detail_capability
-    if capability is None or state.target_session_key is None:
+    if capability is None:
         raise DetailUnavailableError(
-            "detail-forbidden: fork staging 缺少显式 capability/key"
+            "detail-forbidden: fork staging 缺少显式正文 capability"
         )
     cursor = state.connection.execute(
         f"SELECT {','.join(_COLUMNS)} FROM context_plan_details "
@@ -67,7 +66,6 @@ def materialize_details(state: FullCopyRemapState) -> None:
             artifact = capability.prepare_detail(
                 source_record=source,
                 target_ref=target_ref,
-                target_session_key=state.target_session_key,
             )
         except DetailUnavailableError:
             if source.required:
@@ -90,18 +88,5 @@ def materialize_details(state: FullCopyRemapState) -> None:
                 state.session_root / detail_relative_path(target_ref),
                 artifact.manifest_bytes,
             )
-            if artifact.protected_bytes is not None:
-                write_private(
-                    state.session_root / protected_detail_relative_path(target_ref),
-                    artifact.protected_bytes,
-                )
-            if source.redacted_stable_digest is not None:
-                previous = state.detail_digests.setdefault(
-                    source.redacted_stable_digest, record.redacted_stable_digest
-                )
-                if previous != record.redacted_stable_digest:
-                    raise RuntimeError(
-                        "source-mismatch: fork target digest mapping 冲突"
-                    )
         state.detail_records[target_key] = record
         state.detail_hashes[target_key] = record.content_hash

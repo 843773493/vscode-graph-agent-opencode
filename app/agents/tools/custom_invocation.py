@@ -16,11 +16,16 @@ from app.agents.model_tool_schema import (
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.services.infrastructure.mcp.extension_catalog import (
+    ExtensionCatalogBindingError,
     ExtensionCatalogBindingRef,
     ExtensionTargetBinding,
     ExtensionTargetBindingInput,
     ExtensionTargetResolutionError,
     build_extension_catalog_binding,
+    extension_schema_hash,
+)
+from app.services.infrastructure.rollout_context.storage.resource_activation_common import (
+    ResourceActivationStoreError,
 )
 
 
@@ -88,13 +93,7 @@ def sealed_extension_catalog_binding_resolver(
 def seal_extension_catalog_binding_from_tools(
     tools: Sequence[BaseTool],
 ) -> ExtensionCatalogBindingResolver:
-    """从工具快照封存 binding ref 并适配为 typed resolve 端口。
-
-    装配期 interim owner：在 McpCatalogActivationBinder 生产接线前，工厂用
-    本函数把当次装配解析出的扩展工具集冻结为 sealed binding；revision 由
-    快照内容确定性导出，目录后续变化不影响已封存 ref。
-    TODO(E4 owner 接线): 激活边界 owner 落地后改由真实 catalog revision/generation 封存。
-    """
+    """纯工具面检查与独立 unit 构建；真实 runtime 使用 Saver 的 durable resolver。"""
     entries: list[dict[str, object]] = []
     for tool_item in tools:
         metadata = getattr(tool_item, "metadata", None)
@@ -142,6 +141,13 @@ def _assert_sealed_target_matches_registration(
     registered_server_id = (
         metadata.get("mcp_server_id") if isinstance(metadata, dict) else None
     )
+    registered_schema_hash = extension_schema_hash(target_tool.args)
+    if registered_schema_hash != sealed_target.schema_hash:
+        raise ExtensionTargetResolutionError(
+            "sealed target 与可执行注册参数 schema 不一致: "
+            f"tool_name={sealed_target.target_id!r}, sealed={sealed_target.schema_hash}, "
+            f"registered={registered_schema_hash}"
+        )
     expected_origin = "mcp" if sealed_target.server_id else "custom"
     registered_origin = "mcp" if registered_server_id else "custom"
     if expected_origin != registered_origin or (
@@ -185,6 +191,7 @@ def create_extension_tool_invoker_tool(
     is_tool_execution_enabled: Callable[[BaseTool], bool] | None = None,
     catalog_binding_resolver: ExtensionCatalogBindingResolver | None = None,
     invocation_context: ToolInvocationContext | None = None,
+    target_resolver: Callable[[ExtensionTargetBinding], BaseTool] | None = None,
 ) -> BaseTool:
     """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
@@ -208,21 +215,20 @@ def create_extension_tool_invoker_tool(
 
         # E4 第三段：旧 tool call 只按封存 ref 解析；live 目录后续增删改
         # 不参与解析，缺失 target 显式 paired failure，不回退 live 目录。
-        binding_ref = catalog_binding_resolver()
         try:
+            binding_ref = catalog_binding_resolver()
             sealed_target = binding_ref.resolve(resolved_tool_name)
-        except ExtensionTargetResolutionError as error:
-            raise ToolException(str(error)) from error
-        target_tool = tools_by_name.get(resolved_tool_name)
-        if target_tool is None:
-            raise ToolException(
-                "sealed extension catalog binding 中的 target 缺少可执行注册: "
-                f"tool_name={resolved_tool_name!r} "
-                f"binding_id={binding_ref.binding_id}"
+            target_tool = (
+                target_resolver(sealed_target) if target_resolver is not None
+                else tools_by_name.get(resolved_tool_name)
             )
-        try:
+            if target_tool is None:
+                raise ExtensionTargetResolutionError(
+                    "sealed extension catalog binding 中的 target 缺少可执行注册: "
+                    f"tool_name={resolved_tool_name!r} binding_id={binding_ref.binding_id}"
+                )
             _assert_sealed_target_matches_registration(sealed_target, target_tool)
-        except ExtensionTargetResolutionError as error:
+        except (ExtensionCatalogBindingError, ResourceActivationStoreError) as error:
             raise ToolException(str(error)) from error
         if is_tool_execution_enabled is not None and not is_tool_execution_enabled(
             target_tool

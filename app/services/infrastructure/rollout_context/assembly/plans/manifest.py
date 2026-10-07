@@ -17,9 +17,6 @@ from app.domain.itemized.request_plan import (
     resolve_contribution_for_ref,
 )
 from app.domain.itemized.serde.plan import unsealed_context_plan_from_dict
-from app.services.infrastructure.rollout_context.assembly.plans.privacy import (
-    validate_draft_privacy,
-)
 
 
 def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
@@ -28,7 +25,6 @@ def draft_manifest(plan: ContextRequestPlan) -> dict[str, object]:
         raise ValueError("plan-order-integrity: plan registry 只接收 unsealed draft")
     if not plan.plan_creation_idempotency_key:
         raise ValueError("plan-idempotency-conflict: 创建 draft 必须有显式幂等键")
-    validate_draft_privacy(plan)
     # frozen dataclass 不能阻止调用方修改嵌套 JSON；去正文前重新验证原始 body。
     for contribution in plan.contributions:
         replace(contribution)
@@ -61,39 +57,36 @@ def validate_sealed_plan(
 ) -> None:
     """只能将当前 draft 按给定 selection 封存，不能换入另一个 source registry。"""
     _validate_contribution_bindings(draft, snapshot)
-    # registry 顺序不是请求顺序；持久 snapshot 仅保留 included 工具定义。
-    # 先按 tagged identity 验证原始来源，再建立仅用于比较的无 omitted 正文视图。
-    draft, snapshot = _tool_comparison_view(draft, snapshot)
+    draft = _included_tool_draft(draft, snapshot)
     snapshot.validate_hashes()
     expected = draft.seal_for_assembly(
         snapshot.assembly_id, selection=snapshot.selection
     )
-    actual = snapshot.as_sealed_plan()
-    # creation key 属于独立 plan 生命周期；既有 snapshot 不持有它。
-    actual = replace(
-        actual, plan_creation_idempotency_key=draft.plan_creation_idempotency_key
-    )
-    expected = replace(
-        expected,
-        contributions=tuple(
-            replace(item, body=None) for item in expected.contributions
-        ),
-    )
-    actual = replace(
-        actual,
-        contributions=tuple(replace(item, body=None) for item in actual.contributions),
-    )
-    # 两侧共享 snapshot 的同一份 selection，其身份和哈希已在上方验证。
-    # 比较其余 manifest 字段，避免为 omitted 工具读取正文或伪造 public ref；
-    # tool_snapshot 与领域 to_dict 一致，不属于此 plan manifest。
+    included_tools = {
+        (entry.ref.ref_type, entry.ref.ref_id)
+        for entry in snapshot.selection
+        if entry.included and isinstance(entry.ref, ToolSetRef)
+    }
+    # snapshot 已通过完整 domain 校验；逐字段比较同一份 sealed manifest，
+    # 不再为比较重建多个相同 plan/snapshot 并重复计算完整 ToolSet hash。
+    # creation key 只属于 draft 生命周期；format_version 在两侧固定为 2。
     for field in fields(ContextRequestPlan):
-        if field.name in {"selection", "tool_snapshot"}:
+        if field.name in {"selection", "tool_snapshot", "plan_creation_idempotency_key"}:
             continue
         expected_value = getattr(expected, field.name)
-        actual_value = getattr(actual, field.name)
-        if field.name in {"refs", "tool_set_refs", "contributions"}:
+        actual_value = 2 if field.name == "format_version" else getattr(snapshot, field.name)
+        if field.name == "tool_set_refs":
+            actual_value = tuple(sorted(
+                (ref for ref in snapshot.tool_set_refs
+                 if (ref.ref_type, ref.ref_id) in included_tools),
+                key=lambda ref: (ref.ref_type, ref.ref_id),
+            ))
+        if field.name in {"refs", "tool_set_refs"}:
             expected_value = [item.to_dict() for item in expected_value]
             actual_value = [item.to_dict() for item in actual_value]
+        elif field.name == "contributions":
+            expected_value = [{**item.to_dict(), "body": None} for item in expected_value]
+            actual_value = [{**item.to_dict(), "body": None} for item in actual_value]
         if canonical_json_bytes(expected_value) != canonical_json_bytes(actual_value):
             raise ValueError(
                 "plan-order-integrity: sealed snapshot 与当前 draft registry 不一致"
@@ -114,7 +107,7 @@ def _validate_contribution_bindings(
         contribution = resolve_contribution_for_ref(source, draft.contributions)
         if contribution is None or contribution.contribution_id != entry.contribution_id:
             raise ValueError("plan-order-integrity: contribution binding 与 plan registry 不一致")
-        for field in ("source_revision", "content_length", "content_hash", "redacted_stable_digest"):
+        for field in ("source_revision", "content_length", "content_hash"):
             value = getattr(entry, field)
             if value is not None and value != getattr(contribution, field):
                 raise ValueError("source-mismatch: contribution binding manifest 不一致")
@@ -128,9 +121,9 @@ def _tool_identity(ref: ToolSetIdentityRef, assembly_id: str) -> dict[str, objec
     }
 
 
-def _tool_comparison_view(
+def _included_tool_draft(
     draft: ContextRequestPlan, snapshot: ContextAssemblySnapshot
-) -> tuple[ContextRequestPlan, ContextAssemblySnapshot]:
+) -> ContextRequestPlan:
     sources = {(ref.ref_type, ref.ref_id): ref for ref in draft.tool_set_refs}
     for ref in (
         *snapshot.tool_set_refs,
@@ -154,22 +147,7 @@ def _tool_comparison_view(
     }
     # 不改动持久 draft，也不从 snapshot 反向补造 source；included 正文仍由
     # 原始 draft 参与 domain manifest 校验与逐字段比较，selection 原序不变。
-    return (
-        replace(draft, tool_set_refs=tuple(sources[key] for key in sorted(included))),
-        replace(
-            snapshot,
-            tool_set_refs=tuple(
-                sorted(
-                    (
-                        ref
-                        for ref in snapshot.tool_set_refs
-                        if (ref.ref_type, ref.ref_id) in included
-                    ),
-                    key=lambda ref: (ref.ref_type, ref.ref_id),
-                )
-            ),
-        ),
-    )
+    return replace(draft, tool_set_refs=tuple(sources[key] for key in sorted(included)))
 
 
 def sealed_hash(snapshot: ContextAssemblySnapshot, detail_key: str | None) -> str:

@@ -62,6 +62,87 @@ def frozen_provider_wire() -> Callable[[str, str], dict[str, object]]:
     return create
 
 
+
+
+@pytest.fixture
+def frozen_provider_activation() -> Callable[..., dict[str, object]]:
+    """正式 prepare 的显式冻结前置；只消费测试已建立的真实 admission。"""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from uuid import UUID, uuid4
+
+    from app.core.execution_admission_context import require_current_execution_admission
+    from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+    from app.services.infrastructure.resource_platform.registry.semantic_registry import (
+        ResourceRegistry,
+    )
+    from app.services.infrastructure.rollout_context.storage.resource_activation_body import (
+        ResourceActivationBodyStore,
+    )
+    from app.services.orchestration.resource_activation import (
+        ResourceActivationCoordinator,
+    )
+
+    calls: dict[tuple[str, str, str, str], str] = {}
+
+    def create(
+        saver, *,
+        plan_creation_idempotency_key: str,
+        checkpoint_ns: str = "",
+        model_call_id: str | None = None,
+        registry: ResourceRegistry | None = None,
+        policy: ResourceActivationPolicySnapshot | None = None,
+    ) -> dict[str, object]:
+        admission = require_current_execution_admission()
+        sealed = saver.find_sealed_context_for_provider_creation(
+            admission.session_id, admission.thread_id,
+            plan_creation_idempotency_key=plan_creation_idempotency_key,
+            checkpoint_ns=checkpoint_ns,
+        )
+        if sealed is not None:
+            UUID(sealed.model_call_id)
+            if model_call_id is not None and model_call_id != sealed.model_call_id:
+                raise ValueError("测试 sealed retry 必须复用原 model-call UUID")
+            frozen = saver.load_sealed_resource_activation(
+                admission.session_id, thread_id=admission.thread_id,
+                assembly_id=sealed.assembly_id, plan_hash=sealed.plan_hash,
+                request_hash=sealed.request_hash, checkpoint_ns=checkpoint_ns,
+            )
+            return {"model_call_id": sealed.model_call_id, "activation_snapshot": frozen}
+        key = (
+            admission.session_id, admission.thread_id, admission.execution_id,
+            plan_creation_idempotency_key,
+        )
+        call_id = model_call_id if model_call_id is not None else calls.setdefault(key, str(uuid4()))
+        UUID(call_id)
+
+        async def freeze():
+            coordinator = ResourceActivationCoordinator(
+                registry=registry if registry is not None else ResourceRegistry(),
+                saver=saver,
+                body_store=ResourceActivationBodyStore(saver._storage, saver._detail_store),
+            )
+            parent = await coordinator.freeze_execution(
+                admission=admission,
+                policy=policy if policy is not None else ResourceActivationPolicySnapshot(
+                    default_boundary="turn", boundaries={},
+                ),
+                checkpoint_ns=checkpoint_ns,
+            )
+            return await coordinator.prepare_model_call(
+                parent=parent, model_call_id=call_id, checkpoint_ns=checkpoint_ns,
+            )
+
+        # 同步/异步测试共用真实 async Coordinator；复制原 scope，线程收敛并透传异常。
+        context = copy_context()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            frozen = executor.submit(context.run, asyncio.run, freeze()).result()
+        return {"model_call_id": call_id, "activation_snapshot": frozen}
+
+    return create
+
+
 @pytest.fixture
 def registered_tool_set_producer_factory(tmp_path):
     """按测试运行目录建立真实 selection owner，schema 仍由正式 producer 冻结。"""

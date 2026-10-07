@@ -32,10 +32,7 @@ def _tools(
     connection: sqlite3.Connection, snapshot: ContextAssemblySnapshot
 ) -> list[tuple[object, ...]]:
     return connection.execute(
-        "SELECT tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, "
-        "tool_set_schema_version, tool_policy_version, content_length, content_hash, "
-        "redacted_stable_digest, protection, availability, tool_policy_json, tools_json "
-        "FROM tool_set_snapshots WHERE session_id = ? AND thread_id = ? AND plan_id = ?",
+        'SELECT tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, content_length, content_hash, protection, availability, tool_policy_json, tools_json FROM tool_set_snapshots WHERE session_id = ? AND thread_id = ? AND plan_id = ?',
         (snapshot.session_id, snapshot.thread_id, snapshot.plan_id),
     ).fetchall()
 
@@ -69,10 +66,7 @@ def write_imported_rows(
             )
         return
     connection.executemany(
-        "INSERT INTO tool_set_snapshots(session_id, thread_id, plan_id, tool_set_snapshot_id, assembly_id, "
-        "source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, "
-        "content_length, content_hash, redacted_stable_digest, protection, availability, "
-        "tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        'INSERT INTO tool_set_snapshots(session_id, thread_id, plan_id, tool_set_snapshot_id, assembly_id, source_revision, tool_set_schema, tool_set_schema_version, tool_policy_version, content_length, content_hash, protection, availability, tool_policy_json, tools_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [(*identity, *row, timestamp) for row in expected],
     )
 

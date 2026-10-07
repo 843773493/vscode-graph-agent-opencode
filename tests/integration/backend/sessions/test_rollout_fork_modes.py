@@ -89,7 +89,7 @@ class ForkIntegrationContext:
 
 @pytest.fixture
 def fork_context(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> ForkIntegrationContext:
     workspace = prepare_rollout_workspace(request)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -257,6 +257,16 @@ async def _seed_source(context: ForkIntegrationContext):
         root_item_id="item-u2",
         initial_execution_id="execution-turn-2",
     )
+    # cp3 尚未写入时检查 source writer，避免 fork 端裁剪掩盖 checkpoint 污染。
+    frozen_cp2 = await _get_tuple(context, source.session_id, checkpoint_id="cp2")
+    active = await _get_tuple(context, source.session_id)
+    assert frozen_cp2 is not None and active is not None
+    assert [message.content for message in frozen_cp2.checkpoint["channel_values"]["messages"]] == [
+        "问题一", "回答一",
+    ]
+    assert [message.content for message in active.checkpoint["channel_values"]["messages"]] == [
+        "问题一", "回答一", "问题二",
+    ]
     second_admission = context.saver.execution_admission(
         source.session_id,
         thread_id=thread_id,
@@ -957,11 +967,9 @@ async def test_full_copy_localizes_detail_and_source_overlay_lineage(
         base_source_revision="policy-revision-1",
         base_content_length=None,
         base_content_hash=None,
-        base_redacted_stable_digest=None,
         delta_source_revision=None,
         delta_content_length=None,
         delta_content_hash=None,
-        delta_redacted_stable_digest=None,
         delta_from_revision=None,
         delta_to_revision=None,
         delta_diff_hash=None,
