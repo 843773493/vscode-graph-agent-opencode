@@ -9,15 +9,16 @@
 - `mcp.catalog/*` 目录事件合同的发布接线。
 - MCP Tool 名称映射和 LangChain 适配。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
-- MCP 工具指引派生（McpToolGuidanceProducer）与激活边界 binding/指引原子冻结（McpCatalogActivationBinder）。
-- 独立扩展 dispatch binding（ExtensionDispatchBindingRef）与其生产 saver（DurableMcpCatalogActivationSaver）在受保护 snapshot body store 之上的提交/恢复。
+- MCP 工具指引派生，以及经 `McpCatalogOwner` 的唯一发布回调把同 revision 的目录、指引和 typed members 组成单一 `mcp_tool_catalog` payload，发布到既有 ResourceRegistry。
+- 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
 
 # 不可修改内容
 
 - 不实现 Agent 编排、API 路由或前端展示。
 - 不在代码中硬编码 MCP Server 命令、URL、凭据或工作区路径。
 - 不把 MCP Server 运行状态写入 Gateway 全局目录。
-- 目录事件只携带 identity/revision，不得携带工具 schema 正文/credential，不得进入 job.events，也不得注册 ResourceRegistry source 或 CSM 来源。
+- 目录事件只携带 identity/revision，不得携带工具 schema 正文/credential，不得进入 job.events；事件消费者不得自行注册 ResourceRegistry source 或 CSM 来源。完整目录 payload 只能经唯一 owner 的发布回调进入 Registry。
+- 不建立独立的 MCP activation writer/catalog；execution/model-call snapshot、受保护正文与 assembly binding 的提交/恢复归既有 ResourceActivationCoordinator 和 Saver/ContextStore。
 - 不得绕过 `McpCatalogOwner` 建立第二套工具发现/刷新路径。
 - sealed binding ref 一经返回不可变；目录增删改/权限变化不得改写已封存 ref，旧 tool call 只按 sealed ref 解析。
 - `extension_dispatch_binding_hash` 只服务扩展 dispatch/restore 校验，不得混入 `context-plan-hash:v2`、Provider `ToolSetRef` manifest 或 `request_hash`；内层目录/指引变化不得制造 `toolset_changed` epoch。
@@ -31,6 +32,7 @@
 - 目录 generation 只在 revision 实际推进时递增；binding ref 的 binding_id/binding_hash 必须可重算核对。
 - `binding_hash` 与 `extension_dispatch_binding_hash` 必须复用 domain 的 `sha256_jcs` JCS token（`sha256:jcs:v1:<64hex>`），不得自造第二套 canonical 编码或摘要前缀。
 - 指引只从已验证目录派生并保持有界确定性；外部 description 是不可信数据；binding 与指引必须同 revision 原子冻结，relist/派生失败 fail closed，不半发布。
+- 安全 model-call preparation 只读取 Registry 已发布的 snapshot/revision，不在请求期 relist、读取文件或访问 MCP 网络；无通知 server 的显式刷新仍由目录 owner 在发布边界执行。
 - 历史 binding/快照丢失必须显式 `extension-catalog-unavailable` 并拒绝 dispatch，不从当前 MCP 目录、当前同名 target 或空目录恢复。
-- 不具备 `tools/list_changed` 通知能力的 server 只在显式激活边界 relist，不得谎称立即生效。
+- 不具备 `tools/list_changed` 通知能力的 server 由 owner 在显式目录刷新边界 relist并发布，不在 model-call preparation 临时刷新，不得谎称立即生效。
 - 凭据只允许通过环境变量引用解析，不得写入日志或模型工具描述。

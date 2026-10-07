@@ -28,7 +28,7 @@
 | ToolSet与终态 | 55fcaded：28path，ToolSet唯一sealed applied、canonical映射保model-call归属、非completed结果与真实terminal outcome分开。最后同tree三组18/39/81pass、actual0，1460–1463依赖前后不变，各组有重叠不相加。`r-toolset-sealed-owner-dispatch/`具名attempt |
 | 持久资源与Web | persistent 23/23，崩溃SIGKILL恢复、unknown窗口及正式Web5.2已集成；Web固定f29222的attempt16完整1pass/112依赖未变。只按已验入口复用。`persistent-crash-primary/`、`persistent-web-primary/` |
 
-开发服务上次完整恢复实际0：offset16，backend8026/frontend8027/Gateway8030；8027实际三API与浏览器均通过、request_id body/header一致、零page/request/console error。Chromium两次深TMPDIR socket失败及主错误猜测保raw；第三次out短别名指向原runtime通过后finally删除。本轮测试修改无需重启服务；生产变化后按受影响链路验证。
+开发服务上次完整恢复实际0：offset16，backend8026/frontend8027/Gateway8030；8027实际三API与浏览器均通过、request_id body/header一致、零page/request/console error。Chromium两次深TMPDIR socket失败及主错误猜测保raw；第三次out短别名指向原runtime通过后finally删除。A01生产overlay前已停止本任务开发unit，实际MainPID=0/inactive/dead；完整消费者可用后统一恢复全组，再验三API及受影响真实入口。
 
 ## R01 已验收，继续条件来源闭包
 
@@ -52,7 +52,7 @@ R01只验配置刷新，**不能勾完整context4.6**。条件来源切片仍由
 
 ## 待完成队列
 
-1. A01已派同Sol：baseline `54a6ee55`/tree `2e68e276`，初始40个精确caller及扩展1的5个ROOT/WT preimage一致，当前45源码/测试path及扩展2的2份目录职责文档（主维护）；租约`A/activation-execution-dispatch/lease.json`，作者产物TEMP/sol_vertical_implementer/artifacts/activation-execution，可建`rollout_context/activation/`测试目录。贯穿execution-owned activation身份/SQLite→真实Runner active slot freeze→model-call parent→Saver assembly binding，MCP catalog父payload/target members沿既定8.3-A收口；扩展1承接fresh唯一DDL/显式Step port/旧activation migration删除及两个字符串引用测试；仅作者编辑/Ruff、主冻结测试。策略值`turn|model_call`不改，snapshot kind平移`execution|model_call`、internal Turn可空；不伪造Turn或直接单测freeze→手工seal冒充生产接线。
+1. A01已派同Sol：初始baseline `54a6ee55`，当前freeze基线`e740de79`；扩展4后60源码/测试＋主维护3份AGENTS，共63精确path。租约`A/activation-execution-dispatch/lease.json`，作者产物TEMP/sol_vertical_implementer/artifacts/activation-execution，可建`rollout_context/activation/`测试目录。扩展4补真实callback UUID/retry、MCP发布及六runtime/factory/Bridge fixture；继承的itemized dispatch fixture先保存旧WT，再同步更强e740完整SQLite/detail bytes断言，主定向Ruff0，此成本不归Sol返工。贯穿execution-owned activation身份/SQLite→真实Runner active slot freeze→model-call parent→Saver assembly binding，MCP catalog父payload/typed members单一权威；仅作者编辑/Ruff、主冻结测试。策略值`turn|model_call`不改，snapshot kind平移`execution|model_call`、internal Turn可空；不伪造Turn或直接单测freeze→手工seal冒充生产接线。MCP职责文档已由主同步ROOT/WT，真实代码收口仍待完整候选。
 2. activation runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
 3. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
 4. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
@@ -74,3 +74,9 @@ A01静态发现旧policy恢复从已选binding反推default/overrides，会丢�
 A01准备审查曾误把context默认策略`turn`当旧snapshot身份，建议再次同步规范；主定点核现行design5.2/spec361已明确ExecutionResourceSnapshot与可空Turn，撤销该前置，未改规范或计作者返工。后续只按固定owner的现行正文解释策略轴与身份轴，历史批注不代合同。
 
 其它细则按需要读[条件性失败细则](delivery-failure-rules.md)；目录/Git/派单只读[共同流程](team-collaboration-workflow.md)。本轮原始失败、检查收据与独有源码保留，无源码副本或正式测试数据清理。
+
+P07为后续E06/E07准备曾递归全TEMP命中WIP，已透明报告并弃用输出；主限定显式历史report文件与固定e740 Git对象，修订入口既有路径/index规则，下一固定报告将核执行效果，不将此成本归Sol返工。
+
+A01公共28路径固定CBC/tree5ccd，已精确overlay。作者手造删除头产生额外dev/null，主拒绝该patch，仅用固定sources＋真实删除构造标准Git patch，严格重建28blob/tree一致；ROOT未生成dev/null，规则下一交付效果待验。首轮公共13文件actual4/2.286s在collection前暴露schema→activation schema→common→transaction→serialization→schema循环；Sol唯一initializer内导入修正，固定`0a4bdc6c`/tree`d3b23c44`，严格重建及ROOT Ruff0。二轮actual1/44.062s，115pass/28fail，2039运行依赖（含所有Python测试helper/nested conftest）前后不变，import已过，公共业务未绿。失败以MessageCodec/ToolSet/显式SessionThread owner等fixture前置为主，另有empty binding拒绝与允许空policy用例冲突、提前owner拒绝和旧fork签名；已交Sol公共fixture＋neutral members完整增量，不用删断言/生产alias求绿。证据`D/a01-public-unit-attempt-2/receipt.json`；下一增量从0a4导出。CBC后作者live已改五个公共path，固定sources重建不代live交付审计；完整机械审计待该增量停写，完整Runner/internal/tool-loop/retry未验，9.3未勾。
+
+P07公共审查确认fork P2：operational snapshot ID进入protected lineage manifest，但fork映射ID后仍复制旧正文/digest，target后续child save递归reuse parent会hash冲突。主选择删manifest运行ID、保稳定source向量/typed owner关联，已同步itemized规范和target后续操作Scenario；Sol在当前公共增量补修与真实fork parent→child save/restore用例，未验效果。0a4的ROOT overlay机械audit actual0、28delta、11精确defer，只证明ROOT承载候选，非Sol live完整交付；首次遗漏ROOT既有ignored产物defer为主盘点成本。

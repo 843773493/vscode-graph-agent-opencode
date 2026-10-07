@@ -1342,7 +1342,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 模型可见或普通history projection只能返回策略允许的display URI、resource kind/scope/facet、revision安全标识、availability和typed provenance ref；绝对路径、provider locator、network endpoint、credential、内部handle和受保护正文 MUST NOT进入JSONL、普通history、模型请求日志或工具结果。Skill source URI属于resource/context envelope而不是Skill metadata。正常v2 runtime不得从旧`.boxteam/.../SKILL.md`、`read_file_path`、middleware location字符串或当前catalog反推resource provenance，也不得双写兼容字段。
 
-额外的`source_lineage_digest/ref` MUST只进入`activation_provenance_hash`和受保护manifest完整性校验，不得进入`bindings_hash`、`plan_hash`、wire bytes或普通history字段；raw来源变化但被选择的语义facet未变时，既有binding的语义revision、lineage ref与plan hash均保持不变。required lineage缺失、digest不符或derivation版本无法验证时 MUST fail closed，不得从当前来源或Registry回填。
+额外的`source_lineage_digest/ref` MUST只进入`activation_provenance_hash`和受保护manifest完整性校验，不得进入`bindings_hash`、`plan_hash`、wire bytes或普通history字段；受保护来源manifest的正文与digest只覆盖有序resource/source lineage及派生版本，不包含operational activation snapshot、execution或model-call ID，归属由typed DetailRef和SQLite关联保护。raw来源变化但被选择的语义facet未变时，既有binding的语义revision、lineage ref与plan hash均保持不变。required lineage缺失、digest不符或derivation版本无法验证时 MUST fail closed，不得从当前来源或Registry回填。
 
 `ToolSetRef` 与普通 `ContextRef` MUST NOT 被当作 `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 的替代物或回退来源：`ToolSetRef` 只承载 Provider 可见 tools/tool-config 投影，普通 `ContextRef` 只承载 canonical/request-only/overlay selection，二者都不携带 registry generation、activation policy revision/hash、resource semantic revision、source lineage 或 target-local resource identity。当 plan/assembly 需要资源激活上下文而缺失 typed `ResourceActivationSnapshotRef`/`ResourceProvenanceRef` 时，系统 MUST fail closed，MUST NOT 以 tools 快照或 canonical ref 冒充资源激活事实、MUST NOT 从当前 Registry 或文件补造 provenance。
 
@@ -1375,6 +1375,11 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 - **WHEN** required resource binding的source lineage manifest缺失、digest不符或derivation版本冲突
 - **THEN** seal/restore/dispatch显式失败，不能按当前ResourceRegistry、display URI、文件或endpoint重建一个看似相同的历史binding
+
+#### Scenario: full-copy后目标继续创建model-call快照
+
+- **WHEN** full_rollout_copy已为activation snapshot及其detail分配target-local身份，随后目标execution复用该parent并保存新的model-call snapshot
+- **THEN** 来源manifest正文及digest保留同一来源向量，target parent复用与child保存/恢复均成功；所有operational引用仍指向target owner，不读当前Registry或source目录，不因source与target的snapshot ID不同产生hash冲突
 
 #### Scenario: model_call边界产生新快照
 
