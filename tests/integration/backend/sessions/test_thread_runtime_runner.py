@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents import agent_factory
@@ -20,6 +21,7 @@ from app.agents.graph_binding import (
     GraphBinding,
     compute_capability_profile_hash,
 )
+from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.core.execution_admission_context import (
     current_execution_admission,
     require_current_execution_admission,
@@ -38,6 +40,14 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
 from app.services.infrastructure.resource_platform.registry.context_source_reactor import (
     ContextSourceReactor,
 )
+from app.services.orchestration.session_title_service import SessionTitleService
+from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.rollout_test_workspace import (
+    prepare_rollout_workspace,
+)
+from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
+    _build_owned_container,
+)
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
     _admit,
@@ -45,22 +55,27 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
-from tests.integration.backend.sessions.test_runner_cancellation import (
-    runner_case as _runner_case,
-)
-
-runner_case = _runner_case
 
 
-class _AdmissionModel(FakeMessagesListChatModel):
-    admission_observer: Callable[[ExecutionAdmission], None]
-
-    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.admission_observer(require_current_execution_admission())
-        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+@pytest.fixture
+def runner_case(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> RunnerCase:
+    workspace = prepare_rollout_workspace(request)
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
+    container = _build_owned_container(workspace, monkeypatch, request)
+    monkeypatch.setattr(
+        SessionTitleService,
+        "maybe_auto_title_before_first_message",
+        AsyncMock(),
+    )
+    container.job_service._execution_cancel_timeout_seconds = 0.02
+    container.job_service._job_startup_timeout_seconds = 10
+    container.job_service._job_timeout_seconds = 10
+    return RunnerCase(container, workspace)
 
 
 @dataclass
@@ -110,20 +125,57 @@ async def runtime_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch)
         case.reactors.append(reactor)
         return reactor
 
-    def model_runtime(**kwargs):
-        return {
-            "model": _AdmissionModel(
-                name="BoxteamLiteLLMChatModel",
-                responses=[AIMessage(content="真实编译图回复")],
-                admission_observer=case.model_admissions.append,
-            ),
-            "system_prompt": "测试模型只返回固定回复。",
-            "model_routing": None,
-        }
+    class ModelReplyStream:
+        received_finish_reason: str | None = None
+
+        def __init__(self, payload: dict[str, object]):
+            self.logging_obj = SimpleNamespace(model_call_details={
+                "model": payload["model"],
+                "custom_llm_provider": payload["custom_llm_provider"],
+                "call_type": "acompletion",
+                "additional_args": {
+                    "api_base": payload.get("api_base"),
+                    "complete_input_dict": payload,
+                },
+            })
+
+        async def __aiter__(self) -> AsyncIterator[dict[str, object]]:
+            yield {
+                "choices": [{
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "真实编译图回复"},
+                }],
+            }
+            self.received_finish_reason = "stop"
+            yield {
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+
+    class RuntimeProtocolModel(BoxteamLiteLLMChatModel):
+        admission_observer: Callable[[ExecutionAdmission], None]
+
+        async def acompletion_with_retry(self, run_manager=None, **kwargs):
+            self._validate_completion_dispatch(kwargs)
+            self.admission_observer(require_current_execution_admission())
+            return ModelReplyStream(kwargs)
+
+    def model_from_provider(provider, runtime_config, **kwargs):
+        # 外部模型构造与响应受控；真实 binding、wire 参数及封存校验仍执行。
+        return RuntimeProtocolModel(
+            name="BoxteamLiteLLMChatModel",
+            model=provider["model"],
+            provider_id=provider["id"],
+            api_key="runtime-fixture-key",
+            api_base="http://127.0.0.1:1/v1",
+            custom_llm_provider="openai",
+            streaming=True,
+            max_retries=0,
+            admission_observer=case.model_admissions.append,
+        )
 
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", recording_resolve)
     monkeypatch.setattr(agent_factory, "ContextSourceReactor", recording_reactor)
-    monkeypatch.setattr(agent_factory, "build_runtime_for_agent", model_runtime)
+    monkeypatch.setattr(agent_factory, "build_model_from_provider", model_from_provider)
     await runner_case.container.mcp_catalog_owner.start()
     await runner_case.container.workspace_file_resource_registry.start()
     try:
@@ -540,7 +592,8 @@ async def test_worker_failure_still_closes_other_runtime_scopes_and_retains_fail
     assert str(failure.value.exceptions[0]) == "真实 residency worker 失败"
     assert failed_scope.state == "close_failed" and healthy_scope.state == "closed"
     assert case.tracker._states[(session_id, main_thread_id)].runtime.lifetime_scope is failed_scope
-    assert case.tracker._states[(session_id, child_id)].runtime is None
+    healthy = case.tracker.snapshot(session_id, child_id)
+    assert healthy.residency == "cold" and healthy.execution_state == "idle"
     assert all(reactor.released for reactor in case.reactors)
     allow_close.set()
     await asyncio.wait_for(service.shutdown(), 3)
@@ -636,7 +689,6 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from app import container as container_module
     from app import main
     from tests.integration.backend.sessions.test_navigation_worker_lifespan import (
         _isolate_non_navigation_services,
@@ -667,7 +719,6 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         lifespan_patch.setattr(service, "start", start)
         lifespan_patch.setattr(service, "shutdown", close_runtime)
         lifespan_patch.setattr(platform_type, "close", close_platform)
-        lifespan_patch.setattr(container_module, "build_app_container", lambda **_: container)
         lifespan_patch.setattr(main, "configure_application_logging", lambda **_: None)
         lifespan_patch.setattr(main, "_model_stream_controller", None)
         async with main.lifespan(main.app):

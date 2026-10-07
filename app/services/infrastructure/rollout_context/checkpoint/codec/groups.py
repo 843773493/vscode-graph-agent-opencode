@@ -31,6 +31,14 @@ _REASONING = {
 }
 
 
+def message_projection_id(item: CanonicalItemRecord) -> str:
+    """只取得临时 carrier 的展示 ID，不回填 canonical typed 身份。"""
+    identity = item.projection_identity
+    if identity is not None and identity.projection_message_id is not None:
+        return identity.projection_message_id
+    return item.item_id.removeprefix("item-")
+
+
 def expand_tool_message(
     primary: CanonicalItemRecord,
     content: object,
@@ -286,8 +294,17 @@ def restore_group_manifests(
         if candidate.projection_group != item.projection_group:
             raise ValueError("checkpoint canonical group manifest 有序坐标不一致")
         if candidate.projection_identity is not None:
+            # 只有 anchor 拥有 carrier 展示 ID；伴随成员保留空消息身份。
+            # 比较副本使用展示坐标，返回的 canonical typed 身份不变。
             visible_identity = replace(
-                candidate.projection_identity, block_id=None, block_index=None
+                candidate.projection_identity,
+                block_id=None,
+                block_index=None,
+                projection_message_id=(
+                    message_projection_id(candidate)
+                    if item is items[-1]
+                    else candidate.projection_identity.projection_message_id
+                ),
             )
             if visible_identity != item.projection_identity:
                 raise ValueError(

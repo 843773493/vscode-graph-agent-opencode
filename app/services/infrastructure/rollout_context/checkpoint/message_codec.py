@@ -48,6 +48,7 @@ from app.prompting.validation import internal_prompt_metadata, validate_internal
 from app.services.infrastructure.rollout_context.checkpoint.codec.groups import (
     expand_tool_message,
     group_content,
+    message_projection_id,
     restore_group_manifests,
     validate_group,
 )
@@ -479,13 +480,7 @@ class LangChainMessageCodec:
         items: Sequence[CanonicalItemRecord],
     ) -> dict[str, object]:
         item = validate_group(items)
-        message_id = (
-            item.projection_identity.projection_message_id
-            if item.projection_identity is not None
-            else None
-        )
-        if not isinstance(message_id, str) or not message_id:
-            message_id = item.item_id
+        message_id = message_projection_id(item)
         if item.semantic_kind == SemanticKind.USER_INPUT:
             message: BaseMessage = HumanMessage(
                 content=_message_content_value(
@@ -528,7 +523,7 @@ class LangChainMessageCodec:
                     response_metadata={"internal": True},
                 )
         elif item.semantic_kind == SemanticKind.TOOL_RESULT:
-            message = project_tool_result(item)
+            message = project_tool_result(item).model_copy(update={"id": message_id})
         elif item.semantic_kind == SemanticKind.TOOL_CALL:
             tool_calls: list[dict[str, object]] = []
             for group_item in items:
