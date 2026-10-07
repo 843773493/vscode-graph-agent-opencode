@@ -6,6 +6,8 @@
 
 ## What Changes
 
+- **BREAKING** 本地上下文 detail 删除 AES 加解密、旁挂密文、workspace/thread 密钥与 HMAC 生命周期，统一由原 detail owner 持久化单份精确正文；保留内部 hash/length/source/version/typed owner、retention 与 sealed 恢复。sensitive 只控制访问和默认 history/API 脱敏，不兼容或迁移旧开发密文。
+
 - 冻结 `Turn.status` 的闭合集合 `open|active|completed|completed_empty|interrupted|cancelled|failed|unknown` 与逐状态合法转移表；统一用 `completed_empty` 表示无 canonical output 的正常收敛，明确只有 `interrupted` 或 reason=`execution_lost` 的 `unknown` 可经显式 `resume_turn` 回到 active，`cancelled`（包括普通 cancelled 与 full rollout copy 的 cancelled historical）不可恢复。**BREAKING** `history_replay` 返回只读 `history_view_id`，不创建 execution、不替换执行 active branch/head；读取历史 selector 不消费或重绑 pending transition，执行写入明确拒绝；绑定原 Turn 的 `dispatch_replay` 对 cancelled 一律返回 `turn_not_resumable`；若保留重新执行能力，只能通过独立的 `replay_as_new_turn` 创建新的 Turn/root/acceptance/initial execution，并记录 `replay_of_turn_id`，不能在同一 API 语义中既返回错误又创建新 Turn。
 
 - 新增面向 rollout 的 `CanonicalItemRecord` 语义模型，以稳定 `item_id`、物理顺序、`semantic_kind`、`payload_kind`、Turn/group 关联、生命周期和 `producer_ref` 表达用户输入、assistant 输出、reasoning、tool call、tool result 及扩展项；v2 明确区分非空必填核心字段与按语义可空的 Turn/group/wire 关联字段，不再使用含义重叠的通用 `kind` 字段。

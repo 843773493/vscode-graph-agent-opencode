@@ -25,15 +25,18 @@ start_delegated_task({
 
 ## 当前授权与效率比较
 
-用户于2026-10-05指定一个 **gpt-6.1-sol/max** subagent贯穿实现，Luna只读审查；本轮覆盖上述默认配置，不为人数制造重复实现。实际创建与turn_context已核。主线程统一资源寻址术语，业务源码由唯一实现者修改，主串行冻结、测试和集成；已接手的caller/fixture与补救成本如实单列。
+用户于2026-10-05指定一个 **gpt-6.1-sol/max** subagent贯穿实现，Luna只读审查；本轮覆盖上述默认配置，不为人数制造重复实现。实际创建与turn_context已核。主线程统一资源寻址术语，业务源码由唯一实现者修改，主串行冻结、测试和集成；已接手的caller/fixture与补救成本如实单列。用户于2026-10-07要求本轮 Sol 一次完成当前闭包的全仓必要源码、调用方、DTO/schema 和 fixture，不逐小包冻结、逐路径等批或每改一点就跑测试；先少量核心测试调整到完整链路可用，再补边界细节测试。protected 路径与其他 owner 独占面仍有效，动态测试仍由主代理带进程外保护执行。
 
 分工按实践调整：独立业务可由一个实现者贯穿；共享接口由唯一提供者先交完整合同，再推进消费者。每个相近闭包比较首个完整候选耗时、真实入口遗漏、必要测试首次通过、返工、依赖等待及主补救量；接手前投入单列。当前没有同起点可比数据，不宣布Sol速度倍率或永久最优模型。
 
 ## 已证实会严重拖慢交付的失败
 
+- **主线程切包、协调和验证过细。** 频繁扩文件租约、冻结小包和重跑阻断了完整消费者交付。本轮同一闭包一次授权全调用方，一次交完整候选；批末统一静态分析，先真实入口/重启/fork 的少量核心测试，核心通过后补边界。未变固定检查复用，状态与规范集中更新，不为每条消息提交；最终完整验收门仍保留。调整已派单，实际提速效果待完整交付验证。
+- **同目录正文加密增加维护成本。** key 与密文均在 `.boxteam`，当前投入集中在 key 初始化、平台差异、复制及恢复。用户已取消该机制：删除 AES、两个 key 文件与 HMAC 的全调用闭包，不兼容旧开发数据；只保留原 detail owner 单份精确正文、内部完整性和默认 history/API 脱敏。联邦/SSH/认证密钥与 Provider opaque reasoning 另归原 owner。
+
 - **手筛补丁遗漏生产依赖。** 从固定Git树用[校验脚本](scripts/verify_delivery.py)导出并严格重建，核blob/hash及候选外差异；签名变化一次列齐API/UI、CLI、恢复、协议、间接kwargs和fixture。作者无Git权限时交manifest、固定postimage及真实删除，由主从这些字节构造tree并统一导出；手造删除头曾生成额外dev/null。固定sources的重建通过不等于作者live差异审计通过；后续增量改动同路径时分别记录两者。残缺交付被拒说明验收有效，不证明前置检查已充分。候选外defer按脚本当次盘点维护：其包含Git忽略的源码形态文件，git diff/ls-files --exclude-standard不足以替代，已提交的旧defer须移除。
 - **公共合同与基线错配。** live、HEAD和固定tree混读曾误派缺陷。先核完整tree、依赖和preimage；仅改文档的提交仍有完整源码tree，状态索引不代固定候选，领域同名字段不等于已删除的存储镜像。owner唯一，现行规范正文优先于历史批注，策略轴不代身份轴；消费者未完成字段不阻断取得已承诺前置。审查曾将旧factory重试测试判为强覆盖，但真实bind_tools未实现且spy字段已删除；先核共同fixture/真实hook再定证据等级；外部模型替身下沉须保持consumer实际使用的事件名和trace字段，遗漏会制造假空响应及次生重试错误，先复验受影响原入口。不加生产alias迁就测试。移除旧接口同步清spec与全部caller，不增alias求绿。
-- **helper通过，真实入口遗漏。** typed intent、mock commit和单owner绿灯曾漏admission、Provider转换、history写面及fork lineage；投影改查canonical时还漏同步checkpoint事务内调用顺序。核真实caller及其数据前置，再走producer→owner→seal/发送→restart；required backend曾仅在单测显式注入、生产container缺持久key，完整候选前核装配与跨重启依赖；初始化空态查权威行，展示列表会隐藏deleting，不能代替catalog为空；不临时随机补key求绿；hash隔离核producer的payload、revision和内容摘要完整依赖链，不能只从直接preimage删字段或用replace保持父摘要不变来证明。MCP成员曾经整payload hash间接污染bindings；公共合同修复须以真实发布→冻结验收。fork除复制/读取外，还验target上的parent复用与新child保存，曾只读成功却因operational ID进入来源摘要而无法继续执行。逆投影使用真实消息与生产归属解析，不手传已知身份替代其推导。未配对或非completed工具结果先拒绝source/seal；记录终态与执行outcome分开，unknown不能投影success。失败比较完整持久状态，不能仅比ID或几列。applied断言随唯一owner迁移，不恢复第二writer。来源验收核逻辑层，载体单列；按目标source及最终ToolSet policy核pending/applied，不能用其它未启用来源的pending判目标source重复注入。
+- **helper通过，真实入口遗漏。** typed intent、mock commit和单owner绿灯曾漏admission、Provider转换、history写面及fork lineage；投影改查canonical时还漏同步checkpoint事务内调用顺序。核真实caller及其数据前置，再走producer→owner→seal/发送→restart；detail曾只在单测装配而遗漏生产container，完整候选核真实装配与跨重启；本轮已取消正文加密，不再补key路线；hash隔离核producer的payload、revision和内容摘要完整依赖链，不能只从直接preimage删字段或用replace保持父摘要不变来证明。MCP成员曾经整payload hash间接污染bindings；公共合同修复须以真实发布→冻结验收。fork除复制/读取外，还验target上的parent复用与新child保存，曾只读成功却因operational ID进入来源摘要而无法继续执行。逆投影使用真实消息与生产归属解析，不手传已知身份替代其推导。未配对或非completed工具结果先拒绝source/seal；记录终态与执行outcome分开，unknown不能投影success。失败比较完整持久状态，不能仅比ID或几列。applied断言随唯一owner迁移，不恢复第二writer。来源验收核逻辑层，载体单列；按目标source及最终ToolSet policy核pending/applied，不能用其它未启用来源的pending判目标source重复注入。
 - **运行依赖错配与大批测试失控。** 固定生产/测试组合，tree从当次manifest取；每attempt保actual exit、raw与指纹。完整批超时不记绿，按业务组收终态；不增timeout、删原断言或迁golden来掩盖生产红灯。必需runtime曾直接调用POSIX API阻断Windows；按仓库支持的运行面前置核验，缺实机目标明确记未验，Linux绿灯与静态ABI审查不能代替原生运行。R03验收曾把多次历史投影放入真实Job的固定等待窗，超时后fixture又缺workspace上下文：先区分观测开销与业务阶段，调整重放位置时保留时序和全部断言，清理使用显式owner上下文；未采样耗时不冒充生产根因。Web先验实际路由、认证和可见控件，再跑昂贵模型场景。
 - **目录位置掩盖职责越界。** Saver/runtime曾做Provider映射，boundary模块曾直接SQL。早审实际差异、最近AGENTS、顶层依赖及真实I/O；报告标题和整包manifest不代审查范围，委托子状态不说明本文件无I/O。归入既有owner，不改指令或加shim。
 - **关闭、回执与恢复被假象遮蔽。** 根PID退出不证明子进程/drain完成，超时不等于未执行或已回滚。按精确owner、revision、终态及进程组成员核实；失败保重试句柄和unknown，不以列表或默认值清账。旧生成数据可删，fresh writer缺陷仍须修复。
