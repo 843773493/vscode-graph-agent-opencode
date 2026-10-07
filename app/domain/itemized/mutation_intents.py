@@ -206,6 +206,8 @@ class ApplySourceLifecycleDecision:
     # source 正文是 intent 的 typed 载体。它不进入 extensions，也不允许 owner
     # 从当前文件/事件重新读取；None 仅用于 track/untrack 等没有 item 的决策。
     content: str | None = None
+    runtime_notice_payload: Mapping[str, object] | None = None
+    execution_id: str | None = None
     item_id: str | None = None
     turn_scope: SourceItemTurnScope = "pending_next_turn"
     root_placement: RootPlacement = "tail_only"
@@ -274,6 +276,14 @@ class ApplySourceLifecycleDecision:
             )
         if self.content is not None and not isinstance(self.content, str):
             raise TypeError("ApplySourceLifecycleDecision.content 必须是字符串或 None")
+        if self.runtime_notice_payload is not None:
+            from app.domain.itemized.records import RuntimeNoticePayload
+
+            payload = RuntimeNoticePayload.from_dict(self.runtime_notice_payload)
+            if payload.prompt != self.content:
+                raise ValueError("source runtime notice prompt 与 content 不一致")
+        if self.execution_id is not None:
+            _require_non_empty(self.execution_id, "ApplySourceLifecycleDecision.execution_id")
         if self.item_id is not None and (
             not isinstance(self.item_id, str) or not self.item_id
         ):

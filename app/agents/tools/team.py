@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, StrictBool
 
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.job_context import get_current_job_id
 from app.schemas.internal_v2.team import (
     TeamTaskPhase,
@@ -39,25 +40,8 @@ class TeamIdInput(BaseModel):
     )
 
 
-class AttachTeamSessionInput(TeamIdInput):
-    session_id: str = Field(description="用户提供的现有 Session ID")
-    role: str = Field(description="加入团队后的角色，例如 reviewer")
-    instructions: str = Field(
-        default="",
-        description="补充团队职责；不会覆盖该 Session 已有上下文和对话历史",
-    )
-    work_mode: TeamWorkMode = Field(
-        default="read_only",
-        description="团队职责模式；read_only 是可信任务约束，不是操作系统级文件沙箱",
-    )
-    notify: StrictBool = Field(
-        default=True,
-        description="是否立即向现有 Session 发送可信团队激活消息",
-    )
-
-
 class AssignTeamTaskInput(TeamIdInput):
-    assignee_session_id: str = Field(description="任务负责人 Session ID")
+    assignee_thread_id: str = Field(description="当前 Session 内任务负责人 thread_id")
     title: str = Field(description="任务标题")
     description: str = Field(description="可独立执行的完整任务说明和验收标准")
     phase: TeamTaskPhase
@@ -69,7 +53,7 @@ class AssignTeamTaskInput(TeamIdInput):
     start_assignee: StrictBool = Field(
         default=True,
         description=(
-            "是否立即给负责人 Session 启动 Job；主会话给自己登记开发任务时必须为 false"
+            "是否立即给负责人线程 启动 Job；主会话给自己登记开发任务时必须为 false"
         ),
     )
 
@@ -98,21 +82,23 @@ def create_team_tools(
         """以当前 Session 为协调者创建持久化团队任务面板。"""
         board = await team_service.create_team(
             requester_session_id=current_session_id,
+            requester_thread_id=require_current_execution_admission().thread_id,
             name=name,
         )
         return board.model_dump(mode="json")
 
     @tool("list_my_teams")
     async def list_my_teams() -> dict[str, object]:
-        """列出当前 Session 已加入的团队，包括协调和手动加入的团队。"""
-        result = await team_service.list_teams(requester_session_id=current_session_id)
+        """列出当前 Session 已加入的团队，包括协调和受委派的团队。"""
+        result = await team_service.list_teams(requester_session_id=current_session_id, requester_thread_id=require_current_execution_admission().thread_id)
         return result.model_dump(mode="json")
 
     @tool("get_team_board", args_schema=TeamIdInput)
     async def get_team_board(team_id: str) -> dict[str, object]:
-        """按 team_id 读取成员 Session ID、角色、任务状态和最近团队事件。"""
+        """按 team_id 读取成员 thread_id、角色、任务状态和最近团队事件。"""
         board = await team_service.get_board(
             requester_session_id=current_session_id,
+            requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
         )
         return board.model_dump(mode="json")
@@ -145,13 +131,14 @@ def create_team_tools(
             Field(description="团队职责模式；审查和测试通常用 read_only，但它不是文件沙箱"),
         ] = "read_only",
     ) -> dict[str, object]:
-        """创建持久化团队成员 Session；后续由团队面板自动通知，禁止阻塞轮询等待。"""
+        """创建持久化团队成员 child thread；后续由团队面板自动通知，禁止阻塞轮询等待。"""
         parent_job_id = get_current_job_id()
         if not parent_job_id:
             raise RuntimeError("create_team_member 缺少当前 job_id")
         tool_call_id = invocation_context.require_tool_call_id()
         result = await team_service.create_member(
             requester_session_id=current_session_id,
+            requester_thread_id=require_current_execution_admission().thread_id,
             requester_agent_id=agent_id,
             requester_job_id=parent_job_id,
             requester_tool_call_id=tool_call_id,
@@ -163,31 +150,10 @@ def create_team_tools(
         )
         return _operation_payload(result)
 
-    @tool("attach_team_session", args_schema=AttachTeamSessionInput)
-    async def attach_team_session(
-        team_id: str,
-        session_id: str,
-        role: str,
-        instructions: str = "",
-        work_mode: TeamWorkMode = "read_only",
-        notify: bool = True,
-    ) -> dict[str, object]:
-        """把用户提供的现有 Session 加入团队；保留其历史上下文，不创建替代会话。"""
-        result = await team_service.attach_session(
-            requester_session_id=current_session_id,
-            team_id=team_id,
-            target_session_id=session_id,
-            role=role,
-            instructions=instructions,
-            work_mode=work_mode,
-            notify=notify,
-        )
-        return result.model_dump(mode="json")
-
     @tool("assign_team_task", args_schema=AssignTeamTaskInput)
     async def assign_team_task(
         team_id: str,
-        assignee_session_id: str,
+        assignee_thread_id: str,
         title: str,
         description: str,
         phase: TeamTaskPhase,
@@ -198,8 +164,9 @@ def create_team_tools(
         """登记并启动成员任务；完成状态会自动通知协调者，分派后不要阻塞轮询等待。"""
         result = await team_service.assign_task(
             requester_session_id=current_session_id,
+            requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
-            assignee_session_id=assignee_session_id,
+            assignee_thread_id=assignee_thread_id,
             title=title,
             description=description,
             phase=phase,
@@ -216,9 +183,10 @@ def create_team_tools(
         status: TeamTaskStatus,
         summary: str = "",
     ) -> dict[str, object]:
-        """更新当前 Session 负责的任务；重要状态会通过新 Job 通知团队协调者。"""
+        """更新当前线程负责的任务；重要状态会通过新 Job 通知团队协调者。"""
         result = await team_service.update_task(
             requester_session_id=current_session_id,
+            requester_thread_id=require_current_execution_admission().thread_id,
             team_id=team_id,
             task_id=task_id,
             status=status,
@@ -231,7 +199,6 @@ def create_team_tools(
         list_my_teams,
         get_team_board,
         create_team_member,
-        attach_team_session,
         assign_team_task,
         update_team_task,
     ]

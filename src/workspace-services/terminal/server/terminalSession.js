@@ -720,12 +720,27 @@ export class TerminalSession {
     this.touchUsage();
   }
 
-  claimSteering() {
+  assertSteeringIdentity({ completionEventId, commandStartSequence }) {
+    if (typeof completionEventId !== "string" || !completionEventId
+        || !Number.isInteger(commandStartSequence) || commandStartSequence < 0) {
+      throw new TypeError("Terminal completion 必须提供真实 event 和命令 generation");
+    }
+    if (this.completionEventId !== completionEventId
+        || this.commandStartSequence !== commandStartSequence) {
+      throw new Error(`Terminal completion event/generation 不匹配: ${this.id}`);
+    }
+  }
+
+  claimSteering(identity) {
+    this.assertSteeringIdentity(identity);
+    // 未结清的持久 claim 只恢复同一个 event/generation。
+    if (this.steeringDispatching) {
+      return true;
+    }
     const claimable = new Set(["running", "completed"]).has(this.status)
       && this.modelBackgrounded
       && this.lastCommandStatus === "completed"
       && !this.completionObservedByModel
-      && !this.steeringDispatching
       && !this.steeringDispatched;
     if (!claimable) {
       return false;
@@ -735,8 +750,15 @@ export class TerminalSession {
     return true;
   }
 
-  finishSteering({ dispatched }) {
+  finishSteering({ completionEventId, commandStartSequence, dispatched }) {
+    this.assertSteeringIdentity({ completionEventId, commandStartSequence });
+    if (typeof dispatched !== "boolean") {
+      throw new TypeError("dispatched 必须是布尔值");
+    }
     if (!this.steeringDispatching) {
+      if (this.steeringDispatched === dispatched) {
+        return;
+      }
       throw new Error(`终端 execution 没有待完成的 steering claim: ${this.id}`);
     }
     this.steeringDispatching = false;

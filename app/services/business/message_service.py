@@ -17,7 +17,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.identifier import create_prefixed_id
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.records import CanonicalItemRecord
+from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.schemas.internal_v2.common import CursorPage, MessageRole
 from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
@@ -99,7 +99,7 @@ class MessageService(MessageContentProjectionMixin):
                 return message
         raise ValueError(f"Message {message_id} not found in session {session_id}")
 
-    async def create(self, session_id: str, message_create: MessageCreateRequest) -> MessageDTO:
+    async def create(self, session_id: str, message_create: MessageCreateRequest, *, thread_id: str | None = None) -> MessageDTO:
         """创建一条用户消息 DTO。
 
         注意：实际的持久化由 LangGraph checkpoint 负责；此方法只生成 message_id
@@ -110,7 +110,7 @@ class MessageService(MessageContentProjectionMixin):
                 "创建并执行新一轮消息时 role 必须为 user；"
                 "委派、跨会话和团队消息的来源请写入 metadata"
             )
-        thread_id = self._resolve_main_thread_id(session_id)
+        thread_id = thread_id or self._resolve_main_thread_id(session_id)
         attachments = message_create.attachments
         if self._attachment_store is not None:
             attachments = await self._attachment_store.persist_inline(
@@ -250,10 +250,25 @@ class MessageService(MessageContentProjectionMixin):
             ),
         )
 
+    def execution_output_for_job(self, session_id: str, *, thread_id: str, job_id: str) -> tuple[str, InternalDisplayProvenance]:
+        if self._checkpointer is None:
+            raise RuntimeError("执行结果读取缺少 checkpoint owner")
+        admission = self.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id)
+        if admission is None:
+            raise RuntimeError(f"Job 缺少真实 execution admission: {job_id}")
+        return self._checkpointer.execution_output(session_id, thread_id, admission.execution_id)
+
+    def execution_admission_for_job(self, session_id: str, *, thread_id: str, job_id: str):
+        if self._checkpointer is None:
+            raise RuntimeError("MessageService 未配置 execution admission owner")
+        return self._checkpointer.execution_admission_for_job(session_id, thread_id=thread_id, job_id=job_id)
+
     def submit_system_reminder(
         self,
         *,
         session_id: str,
+        thread_id: str,
+        execution_id: str,
         reminder: str,
         response_metadata: dict[str, object],
         checkpoint_source: str,
@@ -264,11 +279,12 @@ class MessageService(MessageContentProjectionMixin):
         return submit_checkpoint_reminder(
             checkpointer=self._checkpointer,
             session_id=session_id,
-            thread_id=self._resolve_main_thread_id(session_id),
+            thread_id=thread_id,
             reminder=reminder,
             response_metadata=response_metadata,
             checkpoint_source=checkpoint_source,
             event_identity=event_identity,
+            execution_id=execution_id,
         )
 
     async def _load_raw_messages(

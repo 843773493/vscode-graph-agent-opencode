@@ -162,6 +162,8 @@ class SessionInterruptService:
 
         reminder_injected = self._append_user_interrupt_reminder(
             session_id=session_id,
+            thread_id=active_job.thread_id,
+            execution_id=self._message_service.execution_admission_for_job(session_id, thread_id=active_job.thread_id, job_id=active_job.job_id).execution_id,
             phase=phase,
             tool_name=tool_name,
             interrupted_at=interrupted_at,
@@ -180,6 +182,7 @@ class SessionInterruptService:
         await self._job_service.notify_boundary(
             session_id,
             "after_interrupt",
+            thread_id=active_job.thread_id,
             tool_result_available=False,
         )
 
@@ -211,6 +214,8 @@ class SessionInterruptService:
         self,
         *,
         session_id: str,
+        thread_id: str,
+        execution_id: str,
         phase: str,
         tool_name: str | None,
         interrupted_at: datetime,
@@ -232,6 +237,8 @@ class SessionInterruptService:
         }
         injected = self._message_service.submit_system_reminder(
             session_id=session_id,
+            thread_id=thread_id,
+            execution_id=execution_id,
             reminder=reminder,
             response_metadata=metadata,
             checkpoint_source="user_interrupt",

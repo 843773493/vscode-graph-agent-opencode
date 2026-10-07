@@ -107,6 +107,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         "删除失败不影响",
         current_provider_id="test-provider",
     )
+    target_thread_id = workspace.resolver.main_thread_id(target_session_id)
+    active_thread_id = workspace.resolver.main_thread_id(active_session_id)
 
     message_bus.emit(target_session_id, "default", "待清理消息")
     active_message = message_bus.emit(active_session_id, "default", "保留消息")
@@ -162,7 +164,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         await job_service.start_job(
             target_session_id,
             "late message",
-            job_id="job-late-deleted-session",
+            thread_id=target_thread_id,
+            execution_binding=job_service.reserve_user_execution_identity(),
             message_id="msg-late-deleted-session",
             message_created_at=datetime.now(UTC).isoformat(),
         )
@@ -176,7 +179,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         await job_service._start_job_prepared(
             target_session_id,
             "late prepared message",
-            job_id="job-late-prepared-deleted-session",
+            thread_id=target_thread_id,
+            execution_binding=job_service.reserve_user_execution_identity(),
             message_id="msg-late-prepared-deleted-session",
             message_created_at=datetime.now(UTC).isoformat(),
         )
@@ -206,7 +210,8 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     active_dispatch = await job_service.start_job(
         active_session_id,
         "active message",
-        job_id="job-active-session",
+        thread_id=active_thread_id,
+        execution_binding=job_service.reserve_user_execution_identity(),
         message_id="msg-active-session",
         message_created_at=datetime.now(UTC).isoformat(),
     )

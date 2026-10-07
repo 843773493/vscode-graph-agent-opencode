@@ -112,6 +112,8 @@ class ForkCloneMixin:
         source_checkpoint_id = optional_text(
             source_checkpoint_id, field="clone.source_checkpoint_id"
         )
+        if detail_capability is not None:
+            self._require_private_detail_staging()
         source = self.root(
             source_session_id,
             checkpoint_ns,

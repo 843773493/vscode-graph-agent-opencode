@@ -33,6 +33,7 @@ class SessionContextForkService:
         self,
         source_session_id: str,
         *,
+        source_thread_id: str | None = None,
         generation_origin: SessionGenerationOriginDTO | None = None,
         title: str | None = None,
         parent_node_id: str | None = None,
@@ -53,6 +54,7 @@ class SessionContextForkService:
         # 冻结调用方请求，不把隐式 latest 解析出的 source checkpoint 当成意图。
         request_intent: dict[str, object] = {
             "source_session_id": source_session_id,
+            "source_thread_id": source_thread_id,
             "title": title or None,
             "parent_node_id": physical_parent_node_id,
             "pinned": pinned,
@@ -107,12 +109,14 @@ class SessionContextForkService:
                         await self._abort_if_unpublished(existing, "generation fork prepared 未完成，已回滚")
                         raise RuntimeError("generation fork prepared 未完成，须使用新 generation run 重试")
             source_session = await self._session_service.get(source_session_id)
-            source_owner = self._checkpointer.resolve_main_thread_owner(source_session_id)
+            source_thread_id = source_thread_id or await self._session_service.resolve_main_thread(source_session_id)
+            self._session_service.path_resolver.resolve_thread_node(source_session_id, source_thread_id)
+            source_owner = self._checkpointer.resolve_thread_owner(source_session_id, source_thread_id)
             # context/history fork 的规范要求在创建目标 session/catalog 之前
             # 拒绝运行态 Turn、无 completed anchor 和非法 source checkpoint。
             # 预检只读 source，不创建 target journal；afork 随后会再次解析并在
             # target-local materialization 中提交同一份 source 合同。
-            await self._checkpointer.preflight_fork(
+            source_preflight = await self._checkpointer.preflight_fork(
                 source_session_id=source_session_id,
                 source_owner=source_owner,
                 mode=mode,
@@ -170,6 +174,7 @@ class SessionContextForkService:
                     anchor=anchor,
                     relationship="pinned" if pinned else "detached",
                     checkpoint_ns=checkpoint_ns,
+                    source_preflight=source_preflight,
                 )
                 proof = self._checkpointer.read_committed_fork_completion_proof(
                     record=creation_record,

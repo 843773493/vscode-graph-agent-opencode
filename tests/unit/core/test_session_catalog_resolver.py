@@ -110,7 +110,7 @@ def publish_child_thread(
                 manifest.encode("utf-8")
             ).hexdigest(),
         )
-        published = control.publish_thread_creation_record(key)
+        published = control.publish_thread_creation_record(key, session_id=session_dir.name)
         locator = published.final_relative_locator
     finally:
         control.close()

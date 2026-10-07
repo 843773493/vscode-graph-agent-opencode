@@ -167,11 +167,15 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
+from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
 from app.services.orchestration.session_title_service import SessionTitleService
 from app.services.orchestration.terminal_steering_service import TerminalSteeringService
+from app.services.orchestration.thread_initial_execution_service import (
+    ThreadInitialExecutionService,
+)
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
@@ -336,6 +340,8 @@ class AppContainer:
     context_compaction_service: ContextCompactionService
     session_service: SessionService
     session_orchestrator: SessionOrchestrator
+    runtime_source_dispatcher: RuntimeSourceDispatcher
+    thread_initial_execution_service: ThreadInitialExecutionService
     terminal_steering_service: TerminalSteeringService
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
@@ -748,12 +754,16 @@ def _build_app_container(
         trace_event_store=trace_event_store,
     )
     dependency_provider.set_job_service(job_service)
+    runtime_source_dispatcher = RuntimeSourceDispatcher(
+        saver=checkpointer, session_service=session_service, job_service=job_service,
+    )
     session_orchestrator = SessionOrchestrator(
         message_service=message_service,
         session_service=session_service,
         config_service=config_service,
         job_service=job_service,
         job_event_bus=job_event_bus,
+        runtime_source_dispatcher=runtime_source_dispatcher,
         idempotency_store=SessionMessageIdempotencyStore(
             path_resolver=session_path_resolver,
         ),
@@ -788,21 +798,22 @@ def _build_app_container(
         if isinstance(session_path_resolver, SessionCatalogPathResolver)
         else None,
     )
+    thread_initial_execution_service = ThreadInitialExecutionService(
+        factory=thread_creation_factory, sessions=session_service, saver=checkpointer,
+        jobs=job_service, dispatcher=runtime_source_dispatcher,
+    )
     session_subagent_service = SessionSubagentService(
-        parent_session_reader=session_service,
-        thread_creation_factory=thread_creation_factory,
-        # OpenSpec 8.5-B：真实 thread binder 尚未装配（§8.5 的 thread
-        # binder 装配链路不在本轮）。显式传 None 让 SessionSubagentService
-        # 对委派 fail closed 报告 unavailable，而不是创建永久 pending 的
-        # intent 并返回虚假 accepted。
-        initial_execution_binder=None,
+        parent_session_reader=session_service, thread_creation_factory=thread_creation_factory,
+        initial_execution_binder=thread_initial_execution_service.binder,
+        bind_owner=thread_initial_execution_service.bind_owner,
     )
     dependency_provider.set_session_subagent_service(session_subagent_service)
     team_service = TeamCoordinationService(
-        store=TeamStore(workspace_root=resolved_workspace_root),
+        store=TeamStore(path_resolver=session_path_resolver),
         session_service=session_service,
         session_orchestrator=session_orchestrator,
         session_subagent_service=session_subagent_service,
+        thread_creation_factory=thread_creation_factory,
     )
     dependency_provider.set_team_service(team_service)
     session_turn_replay_service = SessionTurnReplayService(
@@ -958,6 +969,8 @@ def _build_app_container(
         browser_resource_owner=browser_resource_owner,
         session_service=session_service,
         session_orchestrator=session_orchestrator,
+        runtime_source_dispatcher=runtime_source_dispatcher,
+        thread_initial_execution_service=thread_initial_execution_service,
         terminal_steering_service=terminal_steering_service,
         session_catalog_service=session_catalog_service,
         session_generation_service=session_generation_service,

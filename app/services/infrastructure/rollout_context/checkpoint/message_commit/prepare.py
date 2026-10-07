@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -224,12 +224,13 @@ def prepare_messages(
                 _compare_group(group, stored)
             batch.item_ids.extend(item.item_id for item in group)
             for item in group:
-                if (
-                    item.semantic_kind == "runtime_notice"
-                    and isinstance(item.payload, Mapping)
-                    and "display_part" in item.payload
-                ):
+                if item.turn_id is not None:
+                    continue
+                if item.semantic_kind == "runtime_notice":
+                    if "display_part" not in item.payload:
+                        continue
                     RuntimeNoticePayload.from_dict(item.payload)
+                if item.turn_scope is None or item.semantic_kind == "runtime_notice":
                     batch.display_only_item_ids.append(item.item_id)
             if indexed is not None:
                 batch.visible_sequences.append(indexed[0])

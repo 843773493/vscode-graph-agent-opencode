@@ -132,11 +132,10 @@ _STAGING_DIR_NAME = ".staging"
 # child node 结构文件（确定性内容；清单只覆盖文件，目录集单独断言）。
 _THREAD_MANIFEST_NAME = "thread.json"
 _ARTIFACT_MANIFEST_NAME = "artifact-manifest.json"
-_CONTEXT_STORE_RELATIVE_PATH = "rollout/context-store.json"
 _ARTIFACTS_DIR_NAME = "artifacts"
 
 # child node 必备目录集（runs/ 为初始 execution runs 占位空目录）。
-_EXPECTED_NODE_DIRS = ("artifacts", "rollout", "runs")
+_EXPECTED_NODE_DIRS = ("artifacts",)
 
 # thread.json 调用方侧字段闭集（session_metadata 的形态；R13 六字段闭集
 # 的 thread 版——GraphBinding/capability/seed/reference 必须显式提供，
@@ -373,16 +372,8 @@ def build_thread_node_files(
             else None
         ),
     }
-    context_store = {
-        "thread_id": record.child_thread_id,
-        "created_at": record.child_created_at,
-        # 初始 ContextStore 占位（空 item 集）；真实 ContextStore 落盘格式
-        # 归 8.5 接线，当前占位保证结构完整性与清单可校验。
-        "items": [],
-    }
     files: dict[str, bytes] = {
         _THREAD_MANIFEST_NAME: canonical_json_bytes(thread_manifest),
-        _CONTEXT_STORE_RELATIVE_PATH: canonical_json_bytes(context_store),
     }
     for rel_path, content in artifact_manifest.items():
         files[f"{_ARTIFACTS_DIR_NAME}/{rel_path}"] = content.encode("utf-8")
@@ -433,6 +424,7 @@ def verify_node_directory(
     inventory: dict[str, str],
     *,
     stage: str,
+    published: bool = False,
 ) -> None:
     """逐文件校验 staging/final 目录与预期一致；不一致 fail closed。
 
@@ -448,6 +440,14 @@ def verify_node_directory(
     actual_dirs: set[str] = set()
     for root, dir_names, file_names in os.walk(directory, followlinks=False):
         root_path = Path(root)
+        # 发布前清单严格闭集；发布后 rollout 由 execution owner 独立维护。
+        if published and root_path == directory:
+            for runtime_dir in ("rollout", "runs", "node-debug"):
+                entry = root_path / runtime_dir
+                if entry.is_symlink():
+                    raise RuntimeError(f"{stage}: runtime 目录不能是 symlink: {entry}")
+                if runtime_dir in dir_names:
+                    dir_names.remove(runtime_dir)
         for dir_name in dir_names:
             dir_entry = root_path / dir_name
             if dir_entry.is_symlink():
@@ -582,6 +582,11 @@ class ThreadCreationService:
         )
         self._key_locks = KeyLockPool()
 
+    @property
+    def control_store(self) -> SessionControlStore:
+        """Session execution worker 的唯一 control owner 端口。"""
+        return self._control_store
+
     # ------------------------------------------------------------------
     # 公开入口
     # ------------------------------------------------------------------
@@ -653,7 +658,7 @@ class ThreadCreationService:
                         self._control_store.register_collaboration_member(
                             delegation_id=delegation_id,  # type: ignore[arg-type]
                             coordinator_session_id=session_id,
-                            coordinator_thread_id=str(node.main_thread_id),
+                            coordinator_thread_id=str(session_metadata["task_reference"]["parent_thread_id"]),
                             role=str(collaboration_member["role"]),
                             subagent_type=str(collaboration_member["subagent_type"]),
                             title=str(collaboration_member["title"]),
@@ -731,6 +736,7 @@ class ThreadCreationService:
                     expected_files,
                     inventory,
                     stage="恢复(最终 locator 已存在)",
+                    published=record.state == "published",
                 )
                 if staging_dir.exists() or staging_dir.is_symlink():
                     raise RuntimeError(
@@ -1000,6 +1006,7 @@ class ThreadCreationService:
         inventory: dict[str, str],
         *,
         stage: str,
+        published: bool = False,
     ) -> None:
         """逐文件校验（委托模块级纯函数 ``verify_node_directory``）。"""
         verify_node_directory(
@@ -1007,6 +1014,7 @@ class ThreadCreationService:
             expected_files,
             inventory,
             stage=stage,
+            published=published,
         )
 
     # ------------------------------------------------------------------
@@ -1082,13 +1090,11 @@ class ThreadCreationService:
             )
         # 步骤 5：初始 execution admission intent（publish 后幂等写入；
         # 本轮不绑定真实 Job——state 恒 pending，8.5 幂等 worker 消费）。
-        intent = self._control_store.create_or_get_initial_execution_intent(
-            admission_idempotency_key=(published.thread_creation_idempotency_key),
-            session_id=session_id,
-            thread_id=published.child_thread_id,
-            initial_state=published.initial_state,
-            creation_idempotency_key=(published.thread_creation_idempotency_key),
+        intent = self._control_store.get_initial_execution_intent(
+            published.thread_creation_idempotency_key
         )
+        if intent.session_id != session_id or intent.thread_id != published.child_thread_id:
+            raise RuntimeError("publication 的初始 execution intent owner 不一致")
         # publish 后 staging 残留 = 外部改动（本流不变量：rename 后 staging
         # 必已不在，见 create 主流程）→ fail closed。
         staging_dir = session_dir / published.staging_locator
@@ -1105,6 +1111,7 @@ class ThreadCreationService:
             expected_files,
             inventory,
             stage="published 复验",
+            published=True,
         )
         self._control_store.mark_thread_creation_published(
             published.thread_creation_idempotency_key
@@ -1158,7 +1165,7 @@ class ThreadCreationService:
                         f"session_id={session_id!r}, state={node.state!r}"
                     )
                 published = self._control_store.publish_thread_creation_record(
-                    idempotency_key
+                    idempotency_key, session_id=session_id
                 )
         except SessionDeletionPendingError as error:
             # 2.3-D：删除先行的收敛 = 定点清理 + abort（取消原 operation），

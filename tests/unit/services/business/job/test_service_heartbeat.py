@@ -15,6 +15,10 @@ import pytest
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.runtime_state import JobRuntimeState
 from app.services.business.job.service import JobService, JobState
+from tests.support.job_thread_fixture import (
+    job_fixture_execution_binding,
+    job_fixture_thread_id,
+)
 
 
 def _make_job(status: JobStatus) -> JobState:
@@ -25,7 +29,7 @@ def _make_job(status: JobStatus) -> JobState:
         message_id="msg_heartbeat",
         message_created_at="2026-10-01T00:00:00+00:00",
         agent_id="default",
-        status=status,
+        status=status, execution_binding=job_fixture_execution_binding("job_heartbeat"), thread_id=job_fixture_thread_id("ses_heartbeat"),
     )
 
 
@@ -37,6 +41,8 @@ def _make_runtime_state(progress: int, current_step: str) -> JobRuntimeState:
         agent_id="default",
         message_id="msg_heartbeat",
         message_created_at="2026-10-01T00:00:00+00:00",
+        thread_id=job_fixture_thread_id("ses_heartbeat"),
+        execution_binding=job_fixture_execution_binding("job_heartbeat"),
         progress=progress,
         current_step=current_step,
     )

@@ -50,14 +50,13 @@ def test_default_team_tool_group_exposes_board_and_session_reuse_operations():
         "list_my_teams",
         "get_team_board",
         "create_team_member",
-        "attach_team_session",
         "assign_team_task",
         "update_team_task",
     ]
     schemas = {tool.name: tool.args for tool in tools}
     assert "startup_prompt" in schemas["create_team_member"]
     assert "session_id" not in schemas["create_team_member"]
-    assert "session_id" in schemas["attach_team_session"]
+    assert "attach_team_session" not in schemas
     assert schemas["assign_team_task"]["cycle"]["minimum"] == 1
     create_member = next(tool for tool in tools if tool.name == "create_team_member")
     assert "runtime" not in create_member.get_input_schema().model_fields

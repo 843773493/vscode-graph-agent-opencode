@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.abstractions.internal_message import PreparedInternalMessage
 from app.core.job_event_bus import EventType
-from app.domain.itemized.execution_admission import InternalExecutionIntent
+from app.domain.itemized.records import InternalDisplayProvenance
 from app.prompting import PromptSection, internal_message_factory
-from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionGenerationExecuteRequest,
@@ -192,14 +189,13 @@ class SessionGenerationReportingSupport:
                 else None
             )
             if report_terminal_status is None:
-                branch_result = await self._branch_result(generated_session_id)
+                branch_result, provenance = await self._branch_result(generated_session_id, generated_job_id)
                 report_back_job_id = await self._dispatch_report_back_message(
                     payload,
                     target_session_id,
                     self._report_back_message(
                         payload,
-                        generated_session_id=generated_session_id,
-                        generated_job_id=generated_job_id,
+                        provenance=provenance,
                         terminal_status=terminal_status,
                         branch_result=branch_result,
                     ),
@@ -216,11 +212,6 @@ class SessionGenerationReportingSupport:
                 session_id=target_session_id,
                 subscriber_kind="session_generation_report_back_completion",
                 run_id=payload.run_id,
-            )
-            self._delete_message_intent(
-                payload,
-                target_session_id,
-                "report_back",
             )
             if (
                 report_terminal_status == EventType.JOB_COMPLETED
@@ -260,105 +251,20 @@ class SessionGenerationReportingSupport:
         *,
         ledger_path: Path,
     ) -> str:
-        record = self._read_ledger(ledger_path)
-        raw_job_id = record.get("report_back_job_id")
-        raw_intent = record.get("report_back_execution_intent")
-        if "report_back_job_id" in record and (
-            not isinstance(raw_job_id, str) or not raw_job_id.strip()
-        ):
-            raise RuntimeError(
-                f"生成回报账本的 report_back_job_id 无效: {ledger_path}"
-            )
-
-        message = self._load_prepared_message(
-            payload=payload,
-            session_id=target_session_id,
-            phase="report_back",
+        target = self._require_target(payload)
+        if target.session_id != target_session_id:
+            raise RuntimeError("生成回报目标与冻结 origin 不一致")
+        accepted = await self._session_orchestrator.submit_runtime_event(
+            target_session_id, internal_message, thread_id=target.thread_id,
+            source_id=f"generation:{payload.generator_id}:{payload.run_id}:result",
+            idempotency_key=f"generation-report:{payload.generator_id}:{payload.run_id}",
         )
-        if message is None:
-            message = await self._session_orchestrator.prepare_internal_message(
-                target_session_id,
-                internal_message,
-            )
-            self._persist_prepared_message(payload, "report_back", message)
-        expected_intent = self._report_back_execution_intent(
-            payload,
-            target_session_id=target_session_id,
-            message_id=message.message_id,
-        )
-        if "report_back_job_id" not in record and "report_back_execution_intent" not in record:
-            job_id = self._session_orchestrator.reserve_internal_job_id()
-            if not isinstance(job_id, str) or not job_id.strip():
-                raise RuntimeError(
-                    f"生成回报预留的 Job ID 无效: {ledger_path}"
-                )
-            execution_intent = expected_intent
-            record["report_back_phase"] = "message_prepared"
-            record["report_back_message_id"] = message.message_id
-            record["report_back_job_id"] = job_id
-            record["report_back_execution_intent"] = asdict(execution_intent)
-            self._write_ledger(ledger_path, record)
-        elif isinstance(raw_job_id, str) and isinstance(raw_intent, dict):
-            try:
-                execution_intent = InternalExecutionIntent(**raw_intent)
-            except (TypeError, ValueError) as error:
-                raise RuntimeError(
-                    f"生成回报账本的 execution intent 无效: {ledger_path}: {error}"
-                ) from error
-            if execution_intent != expected_intent:
-                raise RuntimeError(
-                    "生成回报账本的 execution intent 与稳定业务事件不一致: "
-                    f"{ledger_path}"
-                )
-            if record.get("report_back_message_id") != message.message_id:
-                raise RuntimeError(
-                    f"生成回报账本的 message identity 不一致: {ledger_path}"
-                )
-            job_id = raw_job_id
-        else:
-            raise RuntimeError(
-                "生成回报账本没有完整、原子预留的 internal Job binding: "
-                f"{ledger_path}"
-            )
-        if self._persisted_terminal_status(
-            target_session_id,
-            job_id,
-            self._terminal_event_types(),
-        ) is None:
-            dispatch = await self._session_orchestrator.dispatch_existing_message(
-                target_session_id,
-                message,
-                execution_binding=execution_intent,
-                reserved_job_id=job_id,
-            )
-            if dispatch.job_id != job_id:
-                raise RuntimeError(
-                    "会话生成回报没有采用预留 Job ID: "
-                    f"reserved={job_id}, actual={dispatch.job_id}"
-                )
         record = self._read_ledger(ledger_path)
         record["report_back_phase"] = "job_dispatched"
-        record["report_back_job_id"] = job_id
+        record["report_back_message_id"] = accepted.message_id
+        record["report_back_job_id"] = accepted.job_id
         self._write_ledger(ledger_path, record)
-        return job_id
-
-    @staticmethod
-    def _report_back_execution_intent(
-        payload: SessionGenerationExecuteRequest,
-        *,
-        target_session_id: str,
-        message_id: str,
-    ) -> InternalExecutionIntent:
-        event_identity = (
-            f"{payload.generator_id}\0{payload.run_id}\0"
-            f"{target_session_id}\0report_back"
-        )
-        digest = hashlib.sha256(event_identity.encode("utf-8")).hexdigest()
-        return InternalExecutionIntent(
-            message_id=message_id,
-            execution_id=f"genexec_{digest}",
-            admission_idempotency_key=f"genadm_{digest}",
-        )
+        return accepted.job_id
 
     async def _wait_for_job_terminal(
         self,
@@ -453,19 +359,12 @@ class SessionGenerationReportingSupport:
             }
         )
 
-    async def _branch_result(self, generated_session_id: str) -> str:
-        messages = await self._message_service.list(
-            session_id=generated_session_id,
-            limit=50,
+    async def _branch_result(self, generated_session_id: str, generated_job_id: str) -> tuple[str, InternalDisplayProvenance]:
+        thread_id = await self._session_orchestrator.resolve_main_thread(generated_session_id)
+        content, provenance = self._message_service.execution_output_for_job(
+            generated_session_id, thread_id=thread_id, job_id=generated_job_id,
         )
-        assistant_messages = [
-            message.content.strip()
-            for message in messages.items
-            if message.role == MessageRole.assistant and message.content.strip()
-        ]
-        if not assistant_messages:
-            return "（分支会话没有产生可见的 Assistant 回复）"
-        return assistant_messages[-1][-16_384:]
+        return (content[-16_384:] if content else "（分支会话没有产生可见的 Assistant 回复）"), provenance
 
     def _update_report_ledger(
         self,
@@ -517,35 +416,16 @@ class SessionGenerationReportingSupport:
             )
 
     @staticmethod
-    def _report_back_prompt(
-        payload: SessionGenerationExecuteRequest,
-        *,
-        generated_session_id: str,
-        generated_job_id: str,
-        terminal_status: str,
-        branch_result: str,
-    ) -> str:
-        return SessionGenerationReportingSupport._report_back_message(
-            payload,
-            generated_session_id=generated_session_id,
-            generated_job_id=generated_job_id,
-            terminal_status=terminal_status,
-            branch_result=branch_result,
-        ).content
-
-    @staticmethod
     def _report_back_message(
         payload: SessionGenerationExecuteRequest,
         *,
-        generated_session_id: str,
-        generated_job_id: str,
+        provenance: InternalDisplayProvenance,
         terminal_status: str,
         branch_result: str,
     ) -> PreparedInternalMessage:
         context = {
             "report_back": payload.session_strategy.report_back,
-            "generated_session_id": generated_session_id,
-            "generated_job_id": generated_job_id,
+            **provenance.to_dict(),
             "terminal_status": terminal_status,
         }
         return internal_message_factory.build(
@@ -562,12 +442,8 @@ class SessionGenerationReportingSupport:
                 PromptSection("control_context", context),
                 PromptSection("generated_session_result", branch_result),
             ),
-            metadata={
-                "boxteam_generation_run_id": payload.run_id,
-                "boxteam_generator_id": payload.generator_id,
-                "boxteam_generation_phase": "report_back",
-            },
             display_content="生成分支已结束，主会话正在处理返回结果。",
+            display_provenance=provenance,
         )
 
     def _result(

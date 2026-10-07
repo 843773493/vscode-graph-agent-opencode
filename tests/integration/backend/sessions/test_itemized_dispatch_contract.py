@@ -30,6 +30,10 @@ from app.agents.providers.litellm_chat import BoxteamLiteLLMChatModel
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import chat_wire_profile, responses_wire_profile
 from app.agents.sealed_assembly_dispatch import read_sealed_assembly_dispatch
+from app.agents.tool_invocation_context import (
+    ToolInvocationContext,
+    ToolInvocationContextMiddleware,
+)
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import current_execution_admission
 from app.core.identifier import create_uuid_hex
@@ -144,6 +148,20 @@ def dispatch_bridge(dispatch_saver, registered_tool_set_producer_factory):
         )
 
     return create
+
+
+@pytest.fixture
+def emitting_identity_inspection():
+    context = ToolInvocationContext()
+    observations: list[tuple[str, str]] = []
+
+    @tool("inspect_file")
+    def inspect_with_identity(path: str) -> str:
+        """核验工具执行实际消费的 emitting model-call 身份。"""
+        observations.append((context.require_tool_call_id(), context.require_model_call_id()))
+        return f"inspected:{path}"
+
+    return context, inspect_with_identity, observations
 
 
 @pytest.mark.asyncio
@@ -310,12 +328,21 @@ async def test_concurrent_native_dispatch_does_not_share_context(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_native_http_tool_loop_replays_canonical_call_and_result(
-    dispatch_saver, native_http_server, dispatch_bridge
+    dispatch_saver, native_http_server, dispatch_bridge, emitting_identity_inspection, mode,
 ) -> None:
     saver, session_id, turn_id, sessions = dispatch_saver
     state, endpoint = native_http_server
     state.call_tool = True
+    context, inspection_tool, observations = emitting_identity_inspection
+    state.reasoning_item = {
+        "id": "rs-native", "type": "reasoning", "status": "completed",
+        "summary": [{"index": 0, "type": "summary_text", "text": ""}],
+        "content": [{"type": "reasoning_text", "text": "先核验工具调用身份。"}],
+        "encrypted_content": "encrypted-native-reasoning",
+        "provider_extension": {"trace_group": "native-group"},
+    }
     model = BoxteamOpenAIResponsesModel(
         model="openai/gpt-4.1",
         api_key=state.api_key,
@@ -326,22 +353,24 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
     )
     agent = create_dispatch_agent(
         model,
-        tools=[inspect_file],
+        tools=[inspection_tool],
         middleware=[
+            ToolInvocationContextMiddleware(context),
             dispatch_bridge(
                 session_id=session_id,
                 instruction="HTTP tool loop",
                 checkpointer=saver,
-                tools=(inspect_file,),
+                tools=(inspection_tool,),
             )
         ],
         checkpointer=saver,
     )
     with dispatch_execution_scope(saver, session_id, turn_id):
-        result = await agent.ainvoke(
-            {"messages": []},
-            build_checkpoint_config(saver._storage.main_thread_id(session_id)),
-        )
+        config = build_checkpoint_config(saver._storage.main_thread_id(session_id))
+        if mode == "sync":
+            result = agent.invoke({"messages": []}, config)
+        else:
+            result = await agent.ainvoke({"messages": []}, config)
     assert "native-http-result" in json.dumps(result["messages"][-1].content)
     assert len(state.requests) == 2
     with RolloutCheckpointSaver(sessions) as restarted:
@@ -357,6 +386,37 @@ async def test_native_http_tool_loop_replays_canonical_call_and_result(
             )
             for snapshot in snapshots
         ]
+        restored = restarted.get_tuple(build_checkpoint_config(saver._storage.main_thread_id(session_id)))
+        restored_messages = restored.checkpoint["channel_values"]["messages"]
+        (assistant,) = [message for message in restored_messages if isinstance(message, AIMessage) and message.tool_calls]
+        (tool_result,) = [message for message in restored_messages if isinstance(message, ToolMessage)]
+        codec = LangChainMessageCodec()
+        assert assistant.id.startswith("resp_")
+        assert assistant.content == [{"type": "reasoning_items", "reasoning_items": [state.reasoning_item]}]
+        assert codec.model_call_id(assistant) == codec.model_call_id(tool_result) == snapshots[0].model_call_id
+        assert observations == [("call-native", snapshots[0].model_call_id)]
+        (reasoning_carrier,) = [
+            item for item in restarted.read_canonical_items(session_id)
+            if item.semantic_kind == "reasoning" and item.payload_kind == "extension"
+            and item.payload["wire_type"] == "reasoning_items"
+        ]
+        assert reasoning_carrier.payload["value"] == assistant.content[0]
+        assert reasoning_carrier.projection_identity.model_call_id == snapshots[0].model_call_id
+        assert f"{reasoning_carrier.item_id}:reasoning/extension" in projections[1]["losses"]
+        index = restarted._storage._path_resolver.resolve_thread_node(
+            session_id, restarted._storage.main_thread_id(session_id),
+        ) / "rollout/index.sqlite"
+        with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
+            pairs = connection.execute(
+                "SELECT semantic_kind,tool_call_id,projection_manifest_json FROM item_catalog "
+                "WHERE semantic_kind IN ('tool_call','tool_result') ORDER BY item_sequence",
+            ).fetchall()
+        assert [kind for kind, _, _ in pairs] == ["tool_call", "tool_result"]
+        assert all(call_id == "call-native" for _, call_id, _ in pairs)
+        assert all(
+            json.loads(manifest)["projection_identity"]["model_call_id"] == snapshots[0].model_call_id
+            for _, _, manifest in pairs
+        )
     for request in state.requests:
         assert request["body"]["input"] in [
             projection["request"]["input"] for projection in projections

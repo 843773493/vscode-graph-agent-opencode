@@ -10,6 +10,10 @@ from typing import Any
 
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.core.job_event_bus import EventType
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 from app.services.orchestration.agent_stream_helpers import (
     unwrap_json_string_tool_result,
 )
@@ -36,7 +40,7 @@ from app.services.orchestration.execution_step.reminders import (
     has_valid_session_question_reply as _has_valid_session_question_reply,
 )
 from app.services.orchestration.execution_step.reminders import (
-    internal_retry_human_message as _internal_retry_human_message,
+    internal_retry_message,
 )
 
 EMPTY_RESPONSE_RETRY_LIMIT = 2
@@ -57,6 +61,8 @@ class StepAgentRetryResult:
 async def run_agent_with_retries(
     *,
     agent: AgentEventSource,
+    checkpointer: RolloutCheckpointSaver,
+    admission: ExecutionAdmission,
     session_id: str,
     job_id: str,
     turn_id: str | None,
@@ -79,6 +85,12 @@ async def run_agent_with_retries(
     question_sender_session_id: str | None,
     question_communication_id: str | None,
 ) -> StepAgentRetryResult:
+
+    def retry_input(*, message_id: str, kind: str, reminder: str, metadata: dict[str, object]) -> object:
+        return checkpointer.register_execution_retry_source(
+            admission, message_id=message_id,
+            message=internal_retry_message(kind=kind, reminder=reminder, metadata=metadata),
+        )
 
     logger = logging.getLogger(__name__)
 
@@ -206,7 +218,7 @@ async def run_agent_with_retries(
                 },
             )
             next_input_messages = [
-                _internal_retry_human_message(
+                retry_input(
                     message_id=f"{job_id}:missing_custom_tool_retry:{custom_tool_response_retries}",
                     kind="missing_custom_tool_retry",
                     reminder=reminder,
@@ -242,7 +254,7 @@ async def run_agent_with_retries(
                 },
             )
             next_input_messages = [
-                _internal_retry_human_message(
+                retry_input(
                     message_id=(
                         f"{job_id}:delegated_report_retry:{delegated_report_retries}"
                     ),
@@ -284,7 +296,7 @@ async def run_agent_with_retries(
                 },
             )
             next_input_messages = [
-                _internal_retry_human_message(
+                retry_input(
                     message_id=(
                         f"{job_id}:session_question_reply_retry:"
                         f"{delegated_report_retries}"
@@ -324,7 +336,7 @@ async def run_agent_with_retries(
             },
         )
         next_input_messages = [
-            _internal_retry_human_message(
+            retry_input(
                 message_id=f"{job_id}:empty_response_retry:{empty_response_retries}",
                 kind="empty_response_retry",
                 reminder=reminder,

@@ -647,6 +647,7 @@ def record_full_copy_lineage(state: FullCopyRemapState) -> None:
                         "full copy internal execution 缺少冻结 admission lineage"
                     )
                 internal_lineage = json.loads(admission[0])
+                lineage["admission_preimage"] = internal_lineage["admission_preimage"]
                 for side in ("source", "target"):
                     lineage[side].update(internal_lineage[side])
                 if (

@@ -152,6 +152,7 @@ class RolloutViewMembershipMixin:
                 turn_scope, field=f"item_catalog.turn_scope: {item_id}"
             )
             if turn_scope not in {
+                None,
                 "turn_root",
                 "turn_member",
                 "ambient",

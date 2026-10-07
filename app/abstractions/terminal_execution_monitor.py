@@ -5,10 +5,13 @@ from typing import Protocol
 
 
 class TerminalMonitorOperation(Protocol):
-    async def claim_terminal_steering(self, terminal_id: str) -> dict[str, object]: ...
+    async def claim_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+    ) -> dict[str, object]: ...
 
     async def finish_terminal_steering(
-        self, terminal_id: str, *, dispatched: bool,
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+        dispatched: bool,
     ) -> dict[str, object]: ...
 
 

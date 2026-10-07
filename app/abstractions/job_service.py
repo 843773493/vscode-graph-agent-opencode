@@ -135,5 +135,6 @@ class JobServiceProtocol(Protocol):
         session_id: str,
         boundary: DeliveryBoundary,
         *,
+        thread_id: str,
         tool_result_available: bool = True,
     ) -> PendingRequestListDTO: ...

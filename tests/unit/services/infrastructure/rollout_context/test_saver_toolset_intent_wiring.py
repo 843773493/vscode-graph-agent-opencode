@@ -286,7 +286,7 @@ def test_successful_seal_applies_toolset_to_published_child_thread(
             ).hexdigest(),
         )
         published = control.publish_thread_creation_record(
-            f"toolset-child-{child_thread_id}"
+            f"toolset-child-{child_thread_id}", session_id=session_dir.name
         )
         (session_dir / published.final_relative_locator).mkdir(parents=True)
     finally:

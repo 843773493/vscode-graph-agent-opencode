@@ -26,7 +26,6 @@ DEFAULT_AGENT_TOOL_NAMES = frozenset(
         "list_my_teams",
         "get_team_board",
         "create_team_member",
-        "attach_team_session",
         "assign_team_task",
         "update_team_task",
         "write_todos",

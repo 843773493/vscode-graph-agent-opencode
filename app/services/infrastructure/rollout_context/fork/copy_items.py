@@ -171,7 +171,9 @@ class ForkItemCopyMixin:
         if not selected:
             return ()
         fork_token = fork_id
-        source_turn_rows = self._fork_v2_turn_records(source_session_id, checkpoint_ns)
+        source_turn_rows = self._fork_v2_turn_records(
+            source_session_id, checkpoint_ns, source_thread_id=source_thread_id,
+        )
         source_by_turn = {row[2]: row for row in source_turn_rows}
         for turn_id in source_turn_ids:
             if turn_id not in source_by_turn:
@@ -413,6 +415,7 @@ class ForkItemCopyMixin:
             self._ensure_fork_v2_turn_records(
                 connection,
                 source_session_id=source_session_id,
+                source_thread_id=source_thread_id,
                 target_session_id=target_session_id,
                 target_thread_id=target_thread_id,
                 fork_id=fork_id,

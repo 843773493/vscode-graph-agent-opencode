@@ -352,6 +352,10 @@ def prepare_full_copy_remap(
         if value is None:
             return None
         text = required_text(value, field=f"full_rollout_copy.{entity_type}.id")
+        if entity_type == "source_identity":
+            # selection 与 prefix/root 必须共用同一来源映射；有控制状态的
+            # 逻辑资源键保留，普通 alias 跟随其 target-local request identity。
+            return text if text in context_source_ids else maps.get("request_ref", {}).get(text, text)
         if entity_type == "detail":
             return detail_ref_key(
                 mapped_detail_ref(
@@ -409,6 +413,7 @@ def prepare_full_copy_remap(
                     "tool_snapshot",
                     "tool_policy",
                     "body",
+                    "admission_preimage",
                 }:
                     # 工具 schema/policy 与正文不是 ContextRef；其中恰好同名的
                     # JSON property 不能被当作 operational identity 改写。
@@ -502,9 +507,8 @@ def prepare_full_copy_remap(
                     continue
                 elif key_text in {"contribution_id"}:
                     child = mapped("context_contribution", child)
-                elif key_text == "source_ref" and isinstance(child, str) and child in context_source_ids:
-                    # SourceBinding 指向 owner 内的逻辑 CSM source，而非 request item。
-                    pass
+                elif key_text == "source_ref":
+                    child = mapped("source_identity", child)
                 elif key_text in {
                     "overlay_id",
                     "supersedes_overlay_id",
@@ -512,7 +516,6 @@ def prepare_full_copy_remap(
                 }:
                     child = mapped("source_overlay", child)
                 elif key_text in {
-                    "source_ref",
                     "overlay_ref",
                     "base_ref",
                     "delta_ref",

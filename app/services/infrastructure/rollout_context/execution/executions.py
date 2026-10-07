@@ -66,6 +66,41 @@ class RolloutExecutionsMixin(
 ):
     """Execution attempt、resume/lost 与 terminal convergence owner。"""
 
+    def _converge_execution_assemblies(
+        self, connection, *, session_id: str, thread_id: str,
+        execution_id: str, latest_model_call_id: str | None,
+        outcome: str, timestamp: str, control_correction: bool,
+    ) -> None:
+        """与 execution 同事务闭合所有 assembly，保留旧 attempt 的真实终态。"""
+        assemblies = connection.execute(
+            "SELECT a.assembly_id, a.model_call_id, m.outcome "
+            "FROM context_assemblies a LEFT JOIN model_calls m "
+            "ON m.session_id=a.session_id AND m.thread_id=a.thread_id "
+            "AND m.execution_id=a.execution_id AND m.model_call_id=a.model_call_id "
+            "WHERE a.session_id=? AND a.thread_id=? AND a.execution_id=? "
+            "AND (a.status='sealed' OR (? AND a.status='terminal' "
+            "AND a.outcome IN ('unknown','execution_lost')))",
+            (session_id, thread_id, execution_id, control_correction),
+        ).fetchall()
+        for assembly_id, model_call_id, model_outcome in assemblies:
+            # Provider fallback 可以继续复用同一封存 assembly；只有 execution
+            # 最终收敛时才关闭它。独立重试的旧 assembly 保留对应调用的 outcome。
+            # 请求已发送但尚未收到响应时，封存 UUID 还没有 model-call 提交行；
+            # 该 assembly 随 execution 收口，不补造 Provider 响应事实。
+            terminal_outcome = (
+                outcome if model_call_id in {None, latest_model_call_id} or model_outcome is None
+                else strict_text(model_outcome, field=f"assembly model_call outcome: {assembly_id}")
+            )
+            if terminal_outcome not in {value.value for value in ControlOutcome}:
+                raise ValueError(f"assembly model_call outcome 非法: {assembly_id}")
+            updated = connection.execute(
+                "UPDATE context_assemblies SET status='terminal', outcome=?, terminal_at=? "
+                "WHERE session_id=? AND thread_id=? AND execution_id=? AND assembly_id=?",
+                (terminal_outcome, timestamp, session_id, thread_id, execution_id, assembly_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(f"terminal convergence assembly outcome 更新失败: {assembly_id}")
+
     def _converge_internal_execution(
         self,
         connection,
@@ -330,7 +365,7 @@ class RolloutExecutionsMixin(
             )
             model_call_update = connection.execute(
                 "UPDATE model_calls SET outcome = ?, dispatch_state = CASE "
-                "WHEN ? = 'completed' THEN 'completed' "
+                "WHEN ? IN ('completed','completed_empty') THEN 'completed' "
                 "WHEN ? IN ('failed', 'cancelled', 'interrupted') THEN 'failed' "
                 "ELSE 'unknown' END WHERE session_id = ? AND thread_id = ? "
                 "AND model_call_id = ? AND execution_id = ?",
@@ -348,33 +383,11 @@ class RolloutExecutionsMixin(
                 raise RuntimeError(
                     "internal terminal latest model-call outcome 更新失败"
                 )
-        if assembly_id is not None:
-            assembly_update = connection.execute(
-                "UPDATE context_assemblies SET status = 'terminal', outcome = ?, "
-                "terminal_at = ? WHERE assembly_id = ? AND session_id = ? "
-                "AND thread_id = ? AND execution_id = ? AND turn_id IS NULL "
-                "AND status = 'sealed'",
-                (
-                    outcome,
-                    timestamp,
-                    assembly_id,
-                    session_id,
-                    thread_id,
-                    execution_id,
-                ),
-            )
-            if assembly_update.rowcount != 1:
-                raise RuntimeError(
-                    "internal terminal assembly outcome 更新失败"
-                )
-        if assembly_id is None:
-            connection.execute(
-                "UPDATE context_assemblies SET status = 'terminal', outcome = ?, "
-                "terminal_at = ? WHERE session_id = ? AND thread_id = ? "
-                "AND execution_id = ? AND (status = 'sealed' OR "
-                "(? AND status = 'terminal' AND outcome IN ('unknown', 'execution_lost')))",
-                (outcome, timestamp, session_id, thread_id, execution_id, control_correction),
-            )
+        self._converge_execution_assemblies(
+            connection, session_id=session_id, thread_id=thread_id,
+            execution_id=execution_id, latest_model_call_id=model_call_id,
+            outcome=outcome, timestamp=timestamp, control_correction=control_correction,
+        )
         self._commit_connection(connection)
         return commit_id
 
@@ -890,7 +903,7 @@ class RolloutExecutionsMixin(
                     )
                     model_call_update = connection.execute(
                         "UPDATE model_calls SET outcome = ?, dispatch_state = CASE "
-                        "WHEN ? = 'completed' THEN 'completed' "
+                        "WHEN ? IN ('completed','completed_empty') THEN 'completed' "
                         "WHEN ? IN ('failed', 'cancelled', 'interrupted') THEN 'failed' "
                         "ELSE 'unknown' END WHERE session_id = ? AND thread_id = ? "
                         "AND model_call_id = ? AND execution_id = ?",
@@ -1008,33 +1021,10 @@ class RolloutExecutionsMixin(
                         "UPDATE turns SET status = ?, updated_at = ? WHERE turn_id = ?",
                         (history_status, timestamp, turn_id),
                     )
-                if assembly_id is not None:
-                    assembly_update = connection.execute(
-                        "UPDATE context_assemblies SET status = 'terminal', "
-                        "outcome = ?, terminal_at = ? WHERE assembly_id = ? "
-                        "AND session_id = ? AND thread_id = ? AND turn_id = ? "
-                        "AND execution_id = ? AND status = 'sealed'",
-                        (
-                            outcome,
-                            timestamp,
-                            assembly_id,
-                            session_id,
-                            owner_thread_id,
-                            turn_id,
-                            execution_id,
-                        ),
-                    )
-                    if assembly_update.rowcount != 1:
-                        raise RuntimeError(
-                            "terminal convergence assembly outcome 更新失败"
-                        )
-                if assembly_id is None:
-                    connection.execute(
-                        "UPDATE context_assemblies SET status = 'terminal', outcome = ?, "
-                        "terminal_at = ? WHERE session_id = ? AND thread_id = ? "
-                        "AND execution_id = ? AND (status = 'sealed' OR "
-                        "(? AND status = 'terminal' AND outcome IN ('unknown', 'execution_lost')))",
-                        (outcome, timestamp, session_id, owner_thread_id, execution_id, control_correction),
-                    )
+                self._converge_execution_assemblies(
+                    connection, session_id=session_id, thread_id=owner_thread_id,
+                    execution_id=execution_id, latest_model_call_id=latest_model_call_id,
+                    outcome=outcome, timestamp=timestamp, control_correction=control_correction,
+                )
                 self._commit_connection(connection)
                 return commit_id

@@ -1,6 +1,6 @@
 # 目录用途
 
-本目录维护 Job 状态规则、单会话调度队列和待处理请求业务状态。
+本目录维护 Job 状态规则、精确 Session/thread 调度队列和待处理请求业务状态。
 
 # 可修改内容
 
@@ -15,6 +15,7 @@
 
 # 规范
 
-- 同一会话最多只能有一个 active Job。
+- 同一 `(session_id, thread_id)` 最多只能有一个 active Job；同 Session 的不同 thread 可以并行，parent 等待 child 不得占用 child 的执行槽。
+- 队列、active 槽、幂等准入和恢复保持精确 thread 归属；会话查询、删除和排空仍聚合该 Session 的全部 thread。
 - 持久化能力通过 abstractions 协议注入。
 - 所有队列状态变更必须在调度锁内完成。

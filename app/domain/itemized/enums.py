@@ -65,6 +65,7 @@ class ControlOutcome(StrEnum):
 
 class CommitKind(StrEnum):
     ACCEPTANCE = "acceptance"
+    EXECUTION_ADMISSION = "execution_admission"
     ASSEMBLY_SEALED = "assembly_sealed"
     ITEM_CONVERGENCE = "item_convergence"
     TERMINAL_CONVERGENCE = "terminal_convergence"

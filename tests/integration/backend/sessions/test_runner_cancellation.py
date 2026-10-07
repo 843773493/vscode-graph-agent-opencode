@@ -211,7 +211,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
         assert job.status == JobStatus.cancelling
         assert job.task is not None and not job.task.done()
         assert (
-            runner_case.container.job_service._session_current_job[job.session_id]
+            runner_case.container.job_service._thread_current_job[(job.session_id, job.thread_id)]
             == job.job_id
         )
     finally:
@@ -232,7 +232,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
         )
     ]
     assert turns == ([(admission.turn_id, "cancelled")] if origin == "user" else [])
-    assert job.session_id not in runner_case.container.job_service._session_current_job
+    assert (job.session_id, job.thread_id) not in runner_case.container.job_service._thread_current_job
     await asyncio.sleep(0.04)
     assert _facts(runner_case, job.session_id, job.thread_id)[2] == commits
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 from app.core.session_catalog_store import (
@@ -13,6 +14,7 @@ from app.core.session_catalog_store import (
     SessionCatalogStore,
 )
 from app.core.sqlite_state import utc_now_text as _now
+from app.domain.itemized.enums import ControlOutcome
 from app.services.infrastructure.rollout_context.fork.validation import (
     json_mapping,
     non_negative_int,
@@ -20,10 +22,95 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     optional_text,
     required_text,
 )
+from app.services.infrastructure.rollout_context.storage.primitives import (
+    RolloutInternalForkAnchor,
+    RolloutReadSnapshot,
+)
+from app.services.infrastructure.rollout_context.storage.transaction import (
+    load_committed_storage_commit,
+)
 
 
 class ForkMetadataMixin:
     """fork identity mapping、lineage 和 source retention owner。"""
+
+    def resolve_completed_internal_fork_anchor(
+        self, snapshot: RolloutReadSnapshot,
+    ) -> RolloutInternalForkAnchor:
+        """仅在精确 owner 的 active lineage 无正常 Turn 时接受真实内部锚点。"""
+        connection = self._snapshot_connection(snapshot)
+        head = connection.execute(
+            "SELECT b.branch_id,b.head_checkpoint_id,b.head_view_id,c.commit_id,c.view_id,c.branch_id,c.metadata_json "
+            "FROM checkpoint_namespace_state n JOIN branches b ON b.branch_id=n.active_branch_id "
+            "LEFT JOIN checkpoints c ON c.checkpoint_id=b.head_checkpoint_id AND c.checkpoint_ns=n.checkpoint_ns "
+            "AND c.status='active' WHERE n.checkpoint_ns=? AND b.status='active'",
+            (snapshot.checkpoint_ns,),
+        ).fetchone()
+        if head is None or head[1] is None or head[2] is None or head[3] is None:
+            raise ValueError("fork_source_not_completed: source 没有已提交的内部 execution checkpoint")
+        branch_id, checkpoint_id, view_id = head[:3]
+        if (head[4], head[5]) != (view_id, branch_id):
+            raise RuntimeError("source-mismatch: internal fork checkpoint/view/branch 绑定不一致")
+        current_view = view_id
+        visited: set[str] = set()
+        while current_view is not None:
+            if current_view in visited:
+                raise RuntimeError("source-mismatch: internal fork active view lineage 成环")
+            visited.add(current_view)
+            normal = connection.execute(
+                "SELECT 1 FROM context_view_turns cvt JOIN turns t ON t.turn_id=cvt.turn_id "
+                "WHERE cvt.view_id=? AND t.turn_kind='normal' LIMIT 1", (current_view,),
+            ).fetchone()
+            if normal is not None:
+                raise ValueError("fork_source_not_completed: active lineage 含正常 Turn，不能改选内部 execution")
+            parent = connection.execute(
+                "SELECT parent_view_id FROM context_views WHERE view_id=?", (current_view,),
+            ).fetchone()
+            if parent is None:
+                raise RuntimeError("source-mismatch: internal fork active view 不存在")
+            current_view = parent[0]
+        terminal_outcomes = tuple(outcome.value for outcome in ControlOutcome)
+        active_execution = connection.execute(
+            "SELECT 1 FROM executions WHERE session_id=? AND thread_id=? AND outcome NOT IN ("
+            + ",".join("?" for _ in terminal_outcomes) + ") LIMIT 1",
+            (snapshot.session_id, snapshot.thread_id, *terminal_outcomes),
+        ).fetchone()
+        active_turn = connection.execute(
+            "SELECT 1 FROM turn_records WHERE session_id=? AND thread_id=? AND status IN ('open','active') LIMIT 1",
+            (snapshot.session_id, snapshot.thread_id),
+        ).fetchone()
+        unfinished_assembly = connection.execute(
+            "SELECT 1 FROM context_assemblies WHERE session_id=? AND thread_id=? AND status!='terminal' LIMIT 1",
+            (snapshot.session_id, snapshot.thread_id),
+        ).fetchone()
+        if active_execution is not None or active_turn is not None or unfinished_assembly is not None:
+            raise ValueError("fork_source_not_completed: source owner 仍有活动 execution/Turn 或未终态 assembly")
+        metadata = json.loads(head[6])
+        binding = metadata.get("boxteam_execution_binding")
+        if not isinstance(binding, dict):
+            raise RuntimeError("source-mismatch: internal fork checkpoint 缺少真实 execution/admission 绑定")  # noqa: TRY004
+        execution_id = required_text(binding.get("execution_id"), field="internal_fork.execution_id")
+        execution = connection.execute(
+            "SELECT execution_origin,turn_id,outcome,job_id,admission_idempotency_key,admission_payload_hash "
+            "FROM executions WHERE session_id=? AND thread_id=? AND execution_id=?",
+            (snapshot.session_id, snapshot.thread_id, execution_id),
+        ).fetchone()
+        if (execution is None or execution[:2] != ("internal", None)
+            or execution[2] not in {"completed", "completed_empty"}
+            or execution[3:] != (binding.get("job_id"), binding.get("admission_idempotency_key"), binding.get("admission_payload_hash"))):
+            raise ValueError("fork_source_not_completed: internal checkpoint 的 execution/admission 未完成或不一致")
+        self._validate_fork_internal_admission(
+            connection, session_id=snapshot.session_id, thread_id=snapshot.thread_id,
+            checkpoint_ns=snapshot.checkpoint_ns, execution_id=execution_id,
+            job_id=execution[3], admission_key=execution[4], admission_hash=execution[5],
+        )
+        load_committed_storage_commit(connection, commit_id=head[3])
+        return RolloutInternalForkAnchor(
+            session_id=snapshot.session_id, thread_id=snapshot.thread_id, checkpoint_ns=snapshot.checkpoint_ns,
+            checkpoint_id=checkpoint_id, branch_id=branch_id, view_id=view_id,
+            history_view_revision=snapshot.manifest.history_view_revision, execution_id=execution_id,
+            admission_idempotency_key=execution[4], admission_payload_hash=execution[5],
+        )
 
     def _catalog_store(self) -> SessionCatalogStore:
         """pinned claim 必须由当前 workspace 的唯一 catalog 承载。"""
@@ -251,6 +338,7 @@ class ForkMetadataMixin:
                 source_session_id,
                 source_checkpoint_id,
                 checkpoint_ns,
+                source_thread_id=self.main_thread_id(source_session_id),
             )
         fork_id = uuid4().hex
         with self._lock(
@@ -296,6 +384,8 @@ class ForkMetadataMixin:
         source_session_id: str,
         source_checkpoint_id: str | None,
         checkpoint_ns: str,
+        *,
+        source_thread_id: str,
     ) -> str | None:
         from app.services.infrastructure.rollout_context.storage.primitives import (
             _RolloutFileLock,
@@ -307,7 +397,8 @@ class ForkMetadataMixin:
         )
         if not isinstance(checkpoint_ns, str):
             raise TypeError("fork source checkpoint_ns 必须是字符串")
-        source_root = self.root(source_session_id, checkpoint_ns)
+        source_thread_id = self._resolve_thread_identity(source_session_id, source_thread_id)
+        source_root = self.root(source_session_id, checkpoint_ns, thread_id=source_thread_id)
         if not source_root.is_dir():
             return None
         source_lock = _RolloutFileLock(
@@ -315,12 +406,12 @@ class ForkMetadataMixin:
             exclusive=False,
         )
         source_lock.acquire()
-        source_owner_thread_id = self.main_thread_id(source_session_id)
         try:
             with self._connect(
-                source_owner_thread_id,
+                source_thread_id,
                 checkpoint_ns,
                 session_id=source_session_id,
+                read_only=True,
             ) as connection:
                 self._require_v2_runtime(connection)
                 row = (

@@ -54,7 +54,7 @@ class JobPendingRequestController:
         queue: JobPendingQueue,
         lock: asyncio.Lock,
         get_jobs: Callable[[], dict[str, PendingJob]],
-        get_current_jobs: Callable[[], dict[str, str]],
+        get_current_jobs: Callable[[], dict[tuple[str, str], str]],
     ) -> None:
         self._queue = queue
         self._lock = lock
@@ -69,7 +69,7 @@ class JobPendingRequestController:
                 return job
         raise ValueError(f"Session {session_id} 中不存在待处理消息 {message_id}")
 
-    def _dto(self, job: PendingJob, position: int) -> PendingRequestDTO:
+    def _dto(self, job: PendingJob, position: int, *, display: bool) -> PendingRequestDTO:
         entry = self._queue.entry(job.job_id)
         if job.delivery_policy is None:
             raise RuntimeError(f"待处理 Job 缺少 delivery_policy: job_id={job.job_id}")
@@ -91,7 +91,7 @@ class JobPendingRequestController:
             session_id=job.session_id,
             thread_id=job.thread_id,
             turn_id=turn_id,
-            content=display_projection.content,
+            content=display_projection.content if display else job.message,
             attachments=list(job.attachments),
             delivery_policy=entry.delivery_policy,
             enqueue_sequence=entry.enqueue_sequence,
@@ -103,15 +103,15 @@ class JobPendingRequestController:
             gateway_id=job.gateway_id,
             request_id=job.request_id,
             message_created_at=job.message_created_at,
-            message_metadata=display_projection.metadata,
+            message_metadata=display_projection.metadata if display else dict(job.message_metadata),
             created_at=job.created_at,
             updated_at=job.updated_at,
             snapshot_version=self._queue.snapshot_version(job.session_id),
         )
 
-    async def list(self, session_id: str) -> PendingRequestListDTO:
+    async def list(self, session_id: str, *, display: bool = True) -> PendingRequestListDTO:
         async with self._lock:
-            return self._snapshot_unlocked(session_id)
+            return self._snapshot_unlocked(session_id, display=display)
 
     async def list_summaries(
         self,
@@ -143,14 +143,14 @@ class JobPendingRequestController:
                 )
             return PendingRequestSummaryListDTO(
                 session_id=session_id,
-                active_job_id=self._get_current_jobs().get(session_id),
+                active_job_id=next((value for key, value in self._get_current_jobs().items() if key[0] == session_id), None),
                 requests=summaries,
                 request_count=len(job_ids),
                 snapshot_version=self._queue.snapshot_version(session_id),
                 truncated=len(summaries) < len(job_ids),
             )
 
-    def _snapshot_unlocked(self, session_id: str) -> PendingRequestListDTO:
+    def _snapshot_unlocked(self, session_id: str, *, display: bool = True) -> PendingRequestListDTO:
         jobs = self._get_jobs()
         requests = []
         for position, job_id in enumerate(self._queue.ids(session_id)):
@@ -159,10 +159,10 @@ class JobPendingRequestController:
                 raise RuntimeError(
                     f"FIFO 队列引用不存在的 Job: session_id={session_id}, job_id={job_id}"
                 )
-            requests.append(self._dto(job, position))
+            requests.append(self._dto(job, position, display=display))
         return PendingRequestListDTO(
             session_id=session_id,
-            active_job_id=self._get_current_jobs().get(session_id),
+            active_job_id=next((value for key, value in self._get_current_jobs().items() if key[0] == session_id), None),
             requests=requests,
             snapshot_version=self._queue.snapshot_version(session_id),
         )
@@ -180,6 +180,8 @@ class JobPendingRequestController:
             raise ValueError("待处理消息正文和附件不能同时为空")
         async with self._lock:
             job = self._job_by_message_id(session_id, message_id)
+            if isinstance(job.execution_binding, InternalExecutionIntent):
+                raise ValueError("已冻结 internal request 的正文不可编辑")  # noqa: TRY004
             job.message = normalized_content
             job.attachments = list(attachments)
             # JobState 沿用现有无时区本地时间字段约定。

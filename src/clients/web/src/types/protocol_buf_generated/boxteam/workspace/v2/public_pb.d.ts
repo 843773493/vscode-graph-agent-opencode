@@ -1438,6 +1438,11 @@ export declare type MessageRunAccepted = Message<"boxteam.workspace.v2.MessageRu
    * @generated from field: boxteam.workspace.v2.JobDispatchSnapshotDTO dispatch = 4;
    */
   dispatch?: JobDispatchSnapshotDTO | undefined;
+
+  /**
+   * @generated from field: string thread_id = 5;
+   */
+  threadId: string;
 };
 
 /**
@@ -6343,9 +6348,14 @@ export declare type TeamBoardDTO = Message<"boxteam.workspace.v2.TeamBoardDTO"> 
   name: string;
 
   /**
-   * @generated from field: string coordinator_session_id = 5;
+   * @generated from field: string session_id = 5;
    */
-  coordinatorSessionId: string;
+  sessionId: string;
+
+  /**
+   * @generated from field: string coordinator_thread_id = 10;
+   */
+  coordinatorThreadId: string;
 
   /**
    * @generated from field: int64 version = 6;
@@ -6394,9 +6404,14 @@ export declare type TeamEventDTO = Message<"boxteam.workspace.v2.TeamEventDTO"> 
   type: string;
 
   /**
-   * @generated from field: string actor_session_id = 4;
+   * @generated from field: string actor_thread_id = 4;
    */
-  actorSessionId: string;
+  actorThreadId: string;
+
+  /**
+   * @generated from field: string session_id = 7;
+   */
+  sessionId: string;
 
   /**
    * @generated from field: google.protobuf.Timestamp created_at = 5;
@@ -6436,9 +6451,14 @@ export declare const TeamListDTOSchema: GenMessage<TeamListDTO>;
  */
 export declare type TeamMemberDTO = Message<"boxteam.workspace.v2.TeamMemberDTO"> & {
   /**
-   * @generated from field: string session_id = 1;
+   * @generated from field: string thread_id = 1;
    */
-  sessionId: string;
+  threadId: string;
+
+  /**
+   * @generated from field: optional string delegation_id = 11;
+   */
+  delegationId?: string | undefined;
 
   /**
    * @generated from field: string role = 2;
@@ -6464,16 +6484,6 @@ export declare type TeamMemberDTO = Message<"boxteam.workspace.v2.TeamMemberDTO"
    * @generated from field: optional string status = 6;
    */
   status?: string | undefined;
-
-  /**
-   * @generated from field: optional string activation_job_id = 7;
-   */
-  activationJobId?: string | undefined;
-
-  /**
-   * @generated from field: optional string activation_error = 8;
-   */
-  activationError?: string | undefined;
 
   /**
    * @generated from field: google.protobuf.Timestamp joined_at = 9;
@@ -6507,19 +6517,19 @@ export declare type TeamMemberOperationDTO = Message<"boxteam.workspace.v2.TeamM
   member?: TeamMemberDTO | undefined;
 
   /**
-   * @generated from field: optional string child_session_id = 3;
+   * @generated from field: optional string child_thread_id = 6;
    */
-  childSessionId?: string | undefined;
+  childThreadId?: string | undefined;
 
   /**
-   * @generated from field: optional string child_message_id = 4;
+   * @generated from field: optional string child_delegation_id = 7;
    */
-  childMessageId?: string | undefined;
+  childDelegationId?: string | undefined;
 
   /**
-   * @generated from field: optional string child_job_id = 5;
+   * @generated from field: optional string child_admission_state = 8;
    */
-  childJobId?: string | undefined;
+  childAdmissionState?: string | undefined;
 };
 
 /**
@@ -6568,9 +6578,9 @@ export declare type TeamTaskDTO = Message<"boxteam.workspace.v2.TeamTaskDTO"> & 
   cycle: bigint;
 
   /**
-   * @generated from field: string assignee_session_id = 8;
+   * @generated from field: string assignee_thread_id = 8;
    */
-  assigneeSessionId: string;
+  assigneeThreadId: string;
 
   /**
    * @generated from field: string status = 9;
@@ -6598,9 +6608,9 @@ export declare type TeamTaskDTO = Message<"boxteam.workspace.v2.TeamTaskDTO"> & 
   error?: string | undefined;
 
   /**
-   * @generated from field: string updated_by_session_id = 14;
+   * @generated from field: string updated_by_thread_id = 14;
    */
-  updatedBySessionId: string;
+  updatedByThreadId: string;
 };
 
 /**

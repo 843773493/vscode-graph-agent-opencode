@@ -56,7 +56,7 @@ function blockedGenerator(): SessionGeneratorDefinition {
     execution_workspace_id: "gw_remote_projection",
     session_strategy: {
       mode: "continue_existing",
-      target: { workspace_id: "gw_remote_projection", session_id: "ses_test" },
+      target: { workspace_id: "gw_remote_projection", session_id: "ses_test", thread_id: "thr_test" },
       concurrency: "queue",
       report_back: "none",
     },

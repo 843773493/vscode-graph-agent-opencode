@@ -233,7 +233,7 @@ def capture_fork_rollout_snapshot(
                 "source-mismatch: fork source snapshot bytes 与冻结 source manifest 不一致"
             )
         copy_live_sqlite_snapshot(
-            source_rollout.parent, snapshot_session_node,
+            storage._resolve_session_node(source_session_id), snapshot_session_node,
             filenames=(CONTROL_DATABASE_NAME, CONTROL_DATABASE_NAME + "-wal",
                        CONTROL_DATABASE_NAME + "-journal"),
         )
@@ -249,13 +249,21 @@ def capture_fork_rollout_snapshot(
                 control_digest.update(path.read_bytes())
         control_sha256 = control_digest.hexdigest()
         with sqlite3.connect(control_path.as_uri() + "?mode=ro", uri=True) as connection:
-            main_threads = connection.execute(
-                "SELECT thread_id FROM thread_catalog WHERE kind = 'main'"
-            ).fetchall()
+            owner = connection.execute(
+                "SELECT kind FROM thread_catalog WHERE thread_id = ?", (source_thread_id,),
+            ).fetchone()
+            publication = (
+                connection.execute(
+                    "SELECT state FROM thread_creation_records WHERE child_thread_id = ?", (source_thread_id,),
+                ).fetchone()
+                if owner == ("child",) else None
+            )
             fence = connection.execute(
                 "SELECT state, generation FROM lifecycle_fence WHERE id = 1"
             ).fetchone()
-        if main_threads != [(source_thread_id,)] or fence is None or fence[0] != "active":
+        if (owner not in {("main",), ("child",)}
+            or (owner == ("child",) and publication != ("published",))
+            or fence is None or fence[0] != "active"):
             raise RuntimeError("source-mismatch: 冻结 session-control owner/fence 不一致")
         source_lifecycle_generation = fence[1]
         if type(source_lifecycle_generation) is not int or source_lifecycle_generation < 1:

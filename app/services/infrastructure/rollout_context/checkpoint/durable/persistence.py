@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
+from app.core.execution_admission_context import current_execution_admission
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.core.session_thread_context import require_current_session_thread_owner
 from app.core.sqlite_state import utc_now_text as _now
@@ -118,6 +119,23 @@ class RolloutCheckpointPersistenceMixin:
                     }
                 }
                 encoded_checkpoint_core = _json(checkpoint_core)
+                admission = current_execution_admission(langgraph_thread_id=thread_id)
+                if admission is not None and admission.execution_origin == "internal":
+                    binding = connection.execute(
+                        "SELECT admission_payload_hash FROM executions WHERE session_id=? AND thread_id=? "
+                        "AND execution_id=? AND job_id=? AND admission_idempotency_key=? "
+                        "AND execution_origin='internal' AND turn_id IS NULL",
+                        (owner.session_id, owner.thread_id, admission.execution_id, admission.job_id,
+                         admission.admission_idempotency_key),
+                    ).fetchone()
+                    if binding is None:
+                        raise RuntimeError("internal checkpoint 缺少同 owner 的真实 execution admission")
+                    metadata = {**metadata, "boxteam_execution_binding": {
+                        "execution_id": admission.execution_id,
+                        "job_id": admission.job_id,
+                        "admission_idempotency_key": admission.admission_idempotency_key,
+                        "admission_payload_hash": binding[0],
+                    }}
                 encoded_metadata = _json(metadata)
                 checkpoint_version_value = checkpoint_core.get("v", 2)
                 if (
@@ -355,8 +373,8 @@ class RolloutCheckpointPersistenceMixin:
                     self._insert_message_projection(
                         connection, sequence, message_value, timestamp
                     )
-                # typed display notice 与 checkpoint 在同一事务登记；fork 的
-                # target-local notice 也从已校验的 canonical group 恢复 membership。
+                # Turn-less 输出与 typed display notice 在同一事务登记；fork 的
+                # target-local item 也从已校验的 canonical group 恢复 membership。
                 self._append_context_view_items(
                     connection, checkpoint_ns=checkpoint_ns,
                     item_ids=batch.display_only_item_ids, branch_id=active_branch,

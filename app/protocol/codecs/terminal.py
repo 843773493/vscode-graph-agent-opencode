@@ -47,7 +47,7 @@ def terminal_session_to_proto(value: Mapping[str, object]) -> terminal_pb2.Termi
             if not isinstance(field_value, int):
                 raise ValueError(f"Terminal 会话退出码必须是整数: {field_name}")
             setattr(message, field_name, field_value)
-    for field_name in ("cols", "rows", "sequence", "transport_owner_revision"):
+    for field_name in ("cols", "rows", "sequence", "transport_owner_revision", "command_start_sequence"):
         field_value = value.get(field_name)
         if field_value is not None:
             if not isinstance(field_value, int) or field_value < 0:
@@ -66,7 +66,7 @@ def terminal_session_to_json(value: terminal_pb2.TerminalSession) -> dict[str, o
     result = cast(dict[str, object], raw)
     # Struct 的 JSON 数值会解为 float；transport fence 使用官方 uint64 字段。
     result["transport_owner_revision"] = value.transport_owner_revision
-    for field_name in ("exit_code", "last_command_exit_code"):
+    for field_name in ("exit_code", "last_command_exit_code", "command_start_sequence"):
         if value.HasField(field_name):
             result[field_name] = getattr(value, field_name)
     return result

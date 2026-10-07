@@ -33,9 +33,6 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
     PreparedDetail,
 )
-from app.services.infrastructure.rollout_context.storage.serialization import (
-    canonical_json_text as _json,
-)
 from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
@@ -247,91 +244,9 @@ class ContextAssemblySealMixin(ContextAssemblyManifestMixin):
                     ),
                 )
                 _assert_one_row(cursor, context="context assembly 写入")
-                selection_by_identity = {
-                    (entry.ref.ref_type, entry.ref.ref_id): entry
-                    for entry in snapshot.selection
-                }
-                for ordinal, ref in enumerate(snapshot.refs):
-                    selection_entry = selection_by_identity.get(
-                        (ref.ref_type, ref.ref_id)
-                    )
-                    cursor = connection.execute(
-                        'INSERT INTO assembly_item_refs(assembly_id, ref_ordinal, ref_type, ref_id, semantic_kind, payload_kind, status, content_hash, source_revision, content_length, detail_ref, contribution_id, visibility, protection, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (
-                            snapshot.assembly_id,
-                            ordinal,
-                            ref.ref_type,
-                            ref.ref_id,
-                            ref.semantic_kind,
-                            ref.payload_kind,
-                            ref.status,
-                            ref.content_hash,
-                            ref.source_revision,
-                            ref.content_length,
-                            optional_detail_ref_key(selection_entry.detail_ref) if selection_entry else None,
-                            selection_entry.contribution_id
-                            if selection_entry
-                            else None,
-                            ref.visibility,
-                            ref.protection,
-                            ref.availability,
-                        ),
-                    )
-                    _assert_one_row(cursor, context="assembly item ref 写入")
-                for ordinal, contribution in enumerate(snapshot.contributions):
-                    cursor = connection.execute(
-                        'INSERT INTO context_assembly_contributions(assembly_id, contribution_ordinal, contribution_id, source_kind, source_revision, content_hash, content_length, request_only, contribution_kind, visibility, protection, binding_manifest_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (
-                            snapshot.assembly_id,
-                            contribution.contribution_ordinal
-                            if contribution.contribution_ordinal is not None
-                            else ordinal,
-                            contribution.contribution_id,
-                            contribution.source_kind,
-                            contribution.source_revision,
-                            contribution.content_hash,
-                            contribution.content_length,
-                            int(contribution.request_only),
-                            contribution.contribution_kind,
-                            contribution.visibility,
-                            contribution.protection,
-                            _json(contribution.binding_manifest()),
-                        ),
-                    )
-                    _assert_one_row(cursor, context="assembly contribution 写入")
-                source_frontiers = self._context_source_cut_frontiers(
+                self._write_context_assembly_manifest(
                     connection, snapshot, checkpoint_ns=checkpoint_ns,
                 )
-                for entry in snapshot.selection:
-                    cursor = connection.execute(
-                        'INSERT INTO context_assembly_selections(assembly_id, plan_ordinal, selection_kind, ref_type, ref_id, included, omission_reason, loss_json, source_revision, content_length, content_hash, visibility, protection, availability, base_delta_role, source_overlay_epoch, overlay_from_revision, overlay_to_revision, overlay_diff_hash, detail_ref, contribution_id, contribution_ordinal, source_cut_position_kind, source_cut_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (
-                            snapshot.assembly_id,
-                            entry.plan_ordinal,
-                            entry.selection_kind,
-                            entry.ref.ref_type,
-                            entry.ref.ref_id,
-                            int(entry.included),
-                            entry.omission_reason,
-                            _json(list(entry.loss)),
-                            entry.source_revision,
-                            entry.content_length,
-                            entry.content_hash,
-                            entry.visibility,
-                            entry.protection,
-                            entry.availability,
-                            entry.base_delta_role,
-                            entry.source_overlay_epoch,
-                            entry.overlay_from_revision,
-                            entry.overlay_to_revision,
-                            entry.overlay_diff_hash,
-                            optional_detail_ref_key(entry.detail_ref),
-                            entry.contribution_id,
-                            entry.contribution_ordinal,
-                            *source_frontiers.get(entry.ref.ref_id, (None, None)),
-                        ),
-                    )
-                    _assert_one_row(cursor, context="assembly selection 写入")
                 registration = bind_sealed_registration(
                     connection,
                     snapshot,

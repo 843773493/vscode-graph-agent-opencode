@@ -79,41 +79,61 @@ class TerminalSteeringService:
     async def _dispatch_terminal(self, terminal: dict[str, object]) -> None:
         terminal_id = self._required_string(terminal, "terminal_id")
         owner_session_id = self._required_string(terminal, "session_id")
+        thread_id = self._required_string(terminal, "source_thread_id")
+        completion_event_id = self._required_string(terminal, "completion_event_id")
+        command_start_sequence = terminal.get("command_start_sequence")
+        if type(command_start_sequence) is not int or command_start_sequence < 0:
+            raise TypeError(f"终端 completion 记录缺少真实命令 generation: {terminal}")
         async with self._terminal_client.operation(
             session_id=owner_session_id,
-            thread_id=self._required_string(terminal, "source_thread_id"),
+            thread_id=thread_id,
             holder_id=f"terminal-monitor:{terminal_id}",
-            operation_id=self._required_string(terminal, "completion_event_id"),
+            operation_id=completion_event_id,
         ) as operation:
-            claim = await operation.claim_terminal_steering(terminal_id)
+            claim = await operation.claim_terminal_steering(
+                terminal_id, completion_event_id=completion_event_id,
+                command_start_sequence=command_start_sequence,
+            )
             if claim.get("claimed") is not True:
                 return
-            dispatched = False
+        # Session gate 不可重入。持久 claim 先落盘并退出短 operation，
+        # source/wakeup 再走自身唯一准入，最后按原 event/generation 结清。
+        dispatched = False
 
-            async def finish() -> None:
-                await operation.finish_terminal_steering(terminal_id, dispatched=dispatched)
-
-            try:
-                await self._session_orchestrator.create_and_run_internal(
-                    owner_session_id,
-                    internal_message_factory.build(
-                        kind="terminal_execution_completed",
-                        control=(
-                            "后台终端命令已经结束。使用 write_stdin 读取 session_id="
-                            f"{terminal_id} 的最终未消费输出，并根据结果继续完成当前任务。"
-                            "不要仅根据完成通知推断命令成功。"
-                        ),
-                        metadata={
-                            "terminal_completion_event_id": self._required_string(terminal, "completion_event_id"),
-                            "terminal_id": terminal_id,
-                        },
-                    ),
-                    delivery_policy="after_tool_result",
-                    thread_id=self._required_string(terminal, "source_thread_id"),
+        async def finish() -> None:
+            async with self._terminal_client.operation(
+                session_id=owner_session_id, thread_id=thread_id,
+                holder_id=f"terminal-monitor:{terminal_id}", operation_id=completion_event_id,
+            ) as completion:
+                await completion.finish_terminal_steering(
+                    terminal_id, completion_event_id=completion_event_id,
+                    command_start_sequence=command_start_sequence, dispatched=dispatched,
                 )
-                dispatched = True
-            finally:
-                await run_cleanup_shielded(finish)
+
+        try:
+            await self._session_orchestrator.submit_runtime_event(
+                owner_session_id,
+                internal_message_factory.build(
+                    kind="terminal_execution_completed",
+                    control=(
+                        "后台终端命令已经结束。使用 write_stdin 读取 session_id="
+                        f"{terminal_id} 的最终未消费输出，并根据结果继续完成当前任务。"
+                        "不要仅根据完成通知推断命令成功。"
+                    ),
+                    metadata={
+                        "terminal_completion_event_id": completion_event_id,
+                        "terminal_id": terminal_id,
+                        "command_start_sequence": command_start_sequence,
+                    },
+                ),
+                source_id=f"terminal:{terminal_id}:completion",
+                idempotency_key=completion_event_id,
+                delivery_policy="after_tool_result",
+                thread_id=thread_id,
+            )
+            dispatched = True
+        finally:
+            await run_cleanup_shielded(finish)
 
     async def _run(self) -> None:
         while True:
@@ -136,8 +156,8 @@ class TerminalSteeringService:
             and terminal.get("source_thread") in terminal.get("thread_associations", [])
             and terminal.get("model_backgrounded") is True
             and terminal.get("last_command_status") == "completed"
-            and terminal.get("completion_observed_by_model") is not True
-            and terminal.get("steering_dispatching") is not True
+            and (terminal.get("steering_dispatching") is True
+                 or terminal.get("completion_observed_by_model") is not True)
             and terminal.get("steering_dispatched") is not True
         )
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from html import escape
 
 from app.abstractions.internal_message import PreparedInternalMessage
+from app.domain.itemized.records import InternalDisplayProvenance
 from app.prompting.registry import (
     InternalDisplayPolicy,
     PromptContentCodec,
@@ -38,6 +39,7 @@ class InternalMessageFactory:
         sections: Sequence[PromptSection] = (),
         metadata: Mapping[str, object] | None = None,
         display_content: str | None = None,
+        display_provenance: InternalDisplayProvenance | None = None,
     ) -> PreparedInternalMessage:
         kind_spec = self._registry.internal_message_kind(kind)
         section_names = [section.tag for section in sections]
@@ -71,6 +73,7 @@ class InternalMessageFactory:
             INTERNAL_PROMPT_VERSION_METADATA_KEY,
             "display_content",
             "internal_display_kind",
+            "internal_display_provenance",
         }
         conflicting_keys = reserved_keys & resolved_metadata.keys()
         if conflicting_keys:
@@ -78,6 +81,8 @@ class InternalMessageFactory:
                 "内部结构消息 metadata 不得覆盖保留字段: "
                 f"{sorted(conflicting_keys)}"
             )
+        if kind == "generated_session_result" and resolved_metadata:
+            raise ValueError("generated_session_result 不允许额外 metadata；来源必须使用 typed display_provenance")
         resolved_metadata.update(
             {
                 "internal": True,
@@ -95,7 +100,11 @@ class InternalMessageFactory:
                     f"内部结构消息 kind={kind} 必须提供非空 display_content"
                 )
             resolved_metadata["internal_display_kind"] = kind_spec.display_kind
-        elif display_content is not None:
+            if display_provenance is not None and not isinstance(display_provenance, InternalDisplayProvenance):
+                raise TypeError("display_provenance 必须是 InternalDisplayProvenance")
+            if display_provenance is not None:
+                resolved_metadata["internal_display_provenance"] = display_provenance.to_dict()
+        elif display_content is not None or display_provenance is not None:
             raise ValueError(
                 f"内部结构消息 kind={kind} 使用隐藏展示策略，不能提供 display_content"
             )

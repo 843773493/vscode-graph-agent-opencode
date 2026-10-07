@@ -9,6 +9,7 @@ from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.internal_v2.pending_request import PendingRequestDTO
 from app.services.business.job.service import JobService
 from app.services.infrastructure.pending_request_store import PendingRequestStore
+from tests.support.job_thread_fixture import job_fixture_thread_id
 
 
 class _UnusedExecutor:
@@ -66,7 +67,7 @@ def _request(
         execution_binding=execution_binding,
         message_id=message_id,
         session_id=session_id,
-        thread_id=f"thr_{session_id}",
+        thread_id=job_fixture_thread_id(session_id),
         turn_id=execution_binding.turn_id,
         content=message_id,
         delivery_policy="after_turn",
@@ -152,7 +153,7 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
         service.start_job(
             "ses_019b8605a35b7fd6829e9dfec660d38c",
             "后发送",
-            thread_id="thr_ses_019b8605a35b7fd6829e9dfec660d38c",
+            thread_id=job_fixture_thread_id("ses_019b8605a35b7fd6829e9dfec660d38c"),
             message_id="msg_new",
             message_created_at=datetime.now(UTC).isoformat(),
         ),
@@ -161,7 +162,7 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
     assert started_jobs == ["job_restored_first"]
     assert new_dispatch.job_status == "queued"
     assert (
-        service._session_current_job["ses_019b8605a35b7fd6829e9dfec660d38c"]
+        service._thread_current_job[("ses_019b8605a35b7fd6829e9dfec660d38c", job_fixture_thread_id("ses_019b8605a35b7fd6829e9dfec660d38c"))]
         == "job_restored_first"
     )
     assert service._pending_queue.ids("ses_019b8605a35b7fd6829e9dfec660d38c") == (

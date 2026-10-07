@@ -303,12 +303,12 @@ class StepRunner:
 
         resolved_attachments = list(attachments or [])
         resolved_message_metadata = dict(message_metadata or {})
+        preferred_provider_id_value = resolved_message_metadata.get(
+            "boxteam_session_provider_id"
+        )
         if isinstance(execution_binding, UserExecutionIdentity):
             resolved_message_metadata.pop(DISPLAY_CONTENT_METADATA_KEY, None)
-        preferred_provider_id_value = resolved_message_metadata.pop(
-            "boxteam_session_provider_id",
-            None,
-        )
+            resolved_message_metadata.pop("boxteam_session_provider_id", None)
         if preferred_provider_id_value is not None and not isinstance(
             preferred_provider_id_value,
             str,
@@ -326,6 +326,8 @@ class StepRunner:
             message_metadata=resolved_message_metadata,
             attachment_diagnostics=human_content_result.diagnostics,
         )
+        if isinstance(execution_binding, InternalExecutionIntent) and "canonical_item_manifests" in resolved_message_metadata:
+            human_response_metadata = dict(resolved_message_metadata)
         raw_message_metadata = human_response_metadata.get("message_metadata")
         if raw_message_metadata is not None and not isinstance(
             raw_message_metadata,
@@ -494,7 +496,8 @@ class StepRunner:
                 thread_id=thread_id,
                 job_id=job_id,
                 admission_idempotency_key=admission_idempotency_key,
-                message=next_input_messages[0],
+                message=(None if isinstance(execution_binding, InternalExecutionIntent)
+                         and execution_binding.input_reference_json is not None else next_input_messages[0]),
                 execution_intent=(
                     execution_binding
                     if isinstance(execution_binding, InternalExecutionIntent)
@@ -539,11 +542,13 @@ class StepRunner:
                 model_call_registrar=model_call_adapter.register,
                 model_call_outcome_sink=model_call_adapter.update_outcome,
             )
+            turn_scope = self.execution_scope_registry.create(
+                message_stream_writer.turn_stream_id
+                if message_stream_writer is not None
+                else admission.execution_id
+            )
+            turn_scope_token = set_current_turn_execution_scope(turn_scope)
             if message_stream_writer is not None:
-                user_turn_scope = self.execution_scope_registry.create(
-                    message_stream_writer.turn_stream_id
-                )
-                turn_scope = user_turn_scope
                 control_inbox = AgentControlInbox(
                     message_stream_writer.turn_stream_id,
                     session_id=session_id,
@@ -558,18 +563,17 @@ class StepRunner:
                 control_loop_stop_event = asyncio.Event()
                 control_loop_task = asyncio.create_task(
                     AgentLoopControlCoordinator(
-                        scope=user_turn_scope,
+                        scope=turn_scope,
                         inbox=control_inbox,
                         writer=message_stream_writer,
                     ).run(control_loop_stop_event)
                 )
                 if self.ports.external_resource_leases is not None:
-                    user_turn_scope.register_cleanup(
+                    turn_scope.register_cleanup(
                         lambda: self.ports.external_resource_leases.release_turn_leases(
                             message_stream_writer.turn_stream_id
                         )
                     )
-                turn_scope_token = set_current_turn_execution_scope(user_turn_scope)
             message_delta_token = set_current_model_delta_sink(message_stream_runtime)
             final_text = ""
             latest_model_content_blocks: tuple[dict[str, object], ...] = ()
@@ -635,8 +639,12 @@ class StepRunner:
             )
             settled.set()
 
+            if isinstance(execution_binding, InternalExecutionIntent) and execution_binding.input_reference_json is not None:
+                next_input_messages = []
             retry_result = await run_agent_with_retries(
                 agent=runtime_lease.runtime.agent,
+                checkpointer=checkpointer,
+                admission=admission,
                 session_id=session_id,
                 resolved_agent_id=resolved_agent_id,
                 job_id=job_id,
@@ -833,9 +841,9 @@ class StepRunner:
                         control_loop_task.cancel()
                     await asyncio.gather(control_loop_task, return_exceptions=True)
                 try:
-                    if message_stream_writer is not None:
+                    if turn_scope is not None:
                         await self.execution_scope_registry.close(
-                            message_stream_writer.turn_stream_id
+                            turn_scope.turn_stream_id
                         )
                 finally:
                     # 执行任务已排空；Turn 清理错误仍传播，但不得遗失 thread 使用权。

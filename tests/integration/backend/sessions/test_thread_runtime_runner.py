@@ -379,7 +379,7 @@ async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_l
         assert job.status == JobStatus.cancelling
         assert job.task is not None and not job.task.done()
         assert (
-            case.runner.container.job_service._session_current_job[session_id]
+            case.runner.container.job_service._thread_current_job[(session_id, job.thread_id)]
             == job.job_id
         )
         assert case.tracker.snapshot(session_id, thread_id).residency == "loading"

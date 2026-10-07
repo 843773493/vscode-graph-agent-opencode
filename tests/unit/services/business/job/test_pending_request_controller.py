@@ -321,7 +321,6 @@ async def test_pending_request_uses_safe_display_content(
             PromptSection("control_context", {"secret_route": "ses_private"}),
             PromptSection("generated_session_result", "内部结果"),
         ),
-        metadata={"secret_route": "ses_private"},
         display_content="生成分支已结束，主会话正在处理返回结果。",
     )
     await service.start_job(

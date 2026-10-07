@@ -22,6 +22,7 @@ from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.domain.itemized.records import CanonicalItemRecord, InternalDisplayProvenance
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.business.message_display import project_message_for_display
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
@@ -86,11 +87,11 @@ def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separat
             PromptSection("control_context", {"generated_session_id": "branch-session"}),
             PromptSection("generated_session_result", "分支私有结果正文。"),
         ),
-        metadata={
-            "internal_display_provenance": {
-                "source_session_id": "branch-session",
-            }
-        },
+        display_provenance=InternalDisplayProvenance(
+            source_session_id="branch-session", source_thread_id="branch-thread",
+            delegation_id="delegation-branch", source_execution_id="branch-execution",
+            source_item_id="branch-item",
+        ),
         display_content="生成分支已结束，主会话正在处理返回结果。",
     )
     message = HumanMessage(
@@ -118,7 +119,11 @@ def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separat
         "display_part": {
             "kind": "generated_session_result",
             "text": "生成分支已结束，主会话正在处理返回结果。",
-            "provenance": {"source_session_id": "branch-session"},
+            "provenance": {
+                "source_session_id": "branch-session", "source_thread_id": "branch-thread",
+                "delegation_id": "delegation-branch", "source_execution_id": "branch-execution",
+                "source_item_id": "branch-item",
+            },
         },
     }
 
@@ -141,6 +146,52 @@ def test_generated_session_notice_keeps_provider_prompt_and_safe_display_separat
     assert provider_content == prompt.content
     assert "分支私有结果正文。" in provider_content
     assert "生成分支已结束，主会话正在处理返回结果。" not in provider_content
+    assert "分支私有结果正文。" not in str(item.extensions)
+    assert restored.response_metadata["internal_display_provenance"] == item.payload["display_part"]["provenance"]
+    # 完整 payload 的三个部分都属于同一 canonical hash，冷投影不得改写它。
+    for path in ("prompt", "text", "source_execution_id"):
+        value = item.to_dict()
+        payload = {**item.payload, "display_part": {**item.payload["display_part"], "provenance": dict(item.payload["display_part"]["provenance"])}}
+        if path == "prompt":
+            payload[path] += "改变私有结果"
+        elif path == "text":
+            payload["display_part"][path] = "改变安全展示"
+        else:
+            payload["display_part"]["provenance"][path] = "another-execution"
+        value["payload"] = payload
+        with pytest.raises(ValueError, match="content_hash"):
+            CanonicalItemRecord.from_dict(value)
+
+
+@pytest.mark.parametrize("field", [
+    "boxteam_generation_run_id", "boxteam_generator_id", "boxteam_generation_phase",
+    "branch_result", "generated_job_id",
+])
+def test_generated_notice_rejects_control_annotations_on_write_and_cold_projection(field: str) -> None:
+    prepared = internal_message_factory.build(
+        kind="generated_session_result", control="处理冻结结果。",
+        sections=(PromptSection("control_context", {}), PromptSection("generated_session_result", "私有正文")),
+        display_content="任务已结束。",
+    )
+    codec = LangChainMessageCodec()
+    message = HumanMessage(id="result-notice", content=prepared.content, response_metadata=prepared.metadata)
+    (item,) = codec.items_for_message(
+        message, item_sequence=1, message_id="result-notice", turn_id=None,
+        execution_id="result-execution", timestamp="2026-10-03T00:00:00+00:00",
+    )
+    extension = {
+        "boxteam.checkpoint.annotations": {
+            "extension_version": "1", "protection": "public", "value": {field: "禁止的控制或正文"},
+        },
+    }
+    with pytest.raises(ValueError, match="未知或控制字段"):
+        CanonicalItemRecord.from_dict({**item.to_dict(), "extensions": extension})
+    message.response_metadata["extensions"] = extension
+    with pytest.raises(ValueError, match="未知或控制字段"):
+        codec.items_for_message(
+            message, item_sequence=1, message_id="result-notice", turn_id=None,
+            execution_id="result-execution", timestamp="2026-10-03T00:00:00+00:00",
+        )
 
 
 @pytest.mark.parametrize(

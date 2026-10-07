@@ -38,6 +38,7 @@ from tests.support.graph_binding import (
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 JUNE_2 = datetime(2026, 6, 2, 12, 0, tzinfo=UTC)
+PUBLISHED_OWNER_SESSION_ID = session_id_at(DEFAULT_CREATED_AT)
 
 
 def make_thread_id() -> str:
@@ -1222,7 +1223,7 @@ def test_freeze_artifact_manifest_rejects_non_preparing(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
     # 先正常发布，再对 published record 冻结 → 拒绝
-    store.publish_thread_creation_record("key-1")
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     with pytest.raises(RuntimeError, match="非 preparing"):
         store.freeze_thread_creation_artifact_manifest(
             "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
@@ -1238,7 +1239,7 @@ def test_publish_record_inserts_child_row_single_transaction(
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
-    published = store.publish_thread_creation_record("key-1")
+    published = store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert published.state == "published"
     assert published.abort_reason is None
     # thread_catalog child row 可见（唯一可见性提交点）
@@ -1288,7 +1289,7 @@ def test_publish_child_row_and_record_state_single_transaction(
 
         store.connection.set_trace_callback(observe)
         try:
-            published = store.publish_thread_creation_record("key-1")
+            published = store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
         finally:
             store.connection.set_trace_callback(None)
     finally:
@@ -1321,7 +1322,7 @@ def test_publish_record_cas_fails_when_owner_fence_drifted(
     # 只推进 generation、保持 active：record 冻结的是 generation=1。
     store.connection.execute("UPDATE lifecycle_fence SET generation = 2 WHERE id = 1")
     with pytest.raises(RuntimeError, match="owner fence 已漂移"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     # 失败回滚：无 child row、record 保持 preparing
     child_rows = store.connection.execute(
         "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'child'"
@@ -1345,7 +1346,7 @@ def test_publish_record_rejected_when_owner_fence_deleting(
     )
     assert store.cas_fence_transition(1, "deleting") is True
     with pytest.raises(SessionDeletionPendingError, match="session_deletion_pending"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     child_rows = store.connection.execute(
         "SELECT COUNT(*) FROM thread_catalog WHERE kind = 'child'"
     ).fetchone()
@@ -1373,7 +1374,7 @@ def test_publish_record_tolerates_sibling_growth_and_rejects_shrink(
         "VALUES (?, 'child', ?)",
         (sibling_id, DEFAULT_CREATED_AT.isoformat()),
     )
-    published = store.publish_thread_creation_record("key-1")
+    published = store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert published.state == "published"
     # owner binding 字段槽随发布原子建立（2.1）
     binding = store.get_thread_owner_binding(published.child_thread_id)
@@ -1389,7 +1390,7 @@ def test_publish_record_tolerates_sibling_growth_and_rejects_shrink(
     )
     raw_execute(store, "DELETE FROM thread_catalog WHERE thread_id = ?", (sibling_id,))
     with pytest.raises(RuntimeError, match="precondition revision 已回退"):
-        store.publish_thread_creation_record("key-2")
+        store.publish_thread_creation_record("key-2", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-2").state == "preparing"
 
 
@@ -1398,7 +1399,7 @@ def test_publish_record_requires_frozen_artifact_manifest(
 ) -> None:
     prepare_record(store)
     with pytest.raises(RuntimeError, match="尚未冻结"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
 
 
@@ -1439,7 +1440,7 @@ def test_publish_record_rejects_collaboration_ledger_regression(
         "UPDATE collaboration_ledger SET revision = revision - 1 WHERE id = 1",
     )
     with pytest.raises(RuntimeError, match="collaboration ledger revision 已回退"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
     assert store.get_thread_creation_record("key-1").state == "preparing"
 
 
@@ -1481,7 +1482,7 @@ def test_publish_record_tolerates_sibling_delegation_growth(
         description="另一件事",
     )
     assert store.get_collaboration_ledger_revision() > revision
-    published = store.publish_thread_creation_record("key-1")
+    published = store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
     assert published.state == "published"
     # 本 delegation member 原子转正；sibling 仍 registering（未被本 publish 触碰）
     own = store.get_collaboration_member("del-1")
@@ -1528,7 +1529,7 @@ def test_publish_record_rejects_own_member_already_published(
         ("del-1",),
     )
     with pytest.raises(RuntimeError, match="非 registering"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
     assert store.get_thread_creation_record("key-1").state == "preparing"
     visible = store.connection.execute(
         "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
@@ -1575,7 +1576,7 @@ def test_publish_record_rejects_missing_own_member_row(
         ("del-1",),
     )
     with pytest.raises(RuntimeError, match="member 缺失"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
     assert store.get_thread_creation_record("key-1").state == "preparing"
     visible = store.connection.execute(
         "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
@@ -1608,7 +1609,7 @@ def test_publish_record_rejects_delegated_without_collaboration_revision(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
     with pytest.raises(RuntimeError, match="缺少 collaboration"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     assert store.get_thread_creation_record("key-1").state == "preparing"
     visible = store.connection.execute(
         "SELECT 1 FROM thread_catalog WHERE thread_id = ?",
@@ -1625,10 +1626,10 @@ def test_publish_record_rejects_published_and_aborted(
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
-    store.publish_thread_creation_record("key-1")
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     # 已 published → 拒绝重复发布（重复 Job/重复发布防线）
     with pytest.raises(RuntimeError, match="拒绝重复发布"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     # 已 published 的 record 不可经 abort 回退为终态 aborted
     with pytest.raises(RuntimeError, match="不可撤销"):
         store.abort_thread_creation_record("key-1", "迟到取消")
@@ -1647,7 +1648,7 @@ def test_abort_record_preparing_to_aborted_then_idempotent(
     assert again.abort_reason == "定点清理完成"
     # aborted 拒绝发布
     with pytest.raises(RuntimeError, match="已中止"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
 
 
 def test_abort_record_rejects_published(store: SessionControlStore) -> None:
@@ -1656,7 +1657,7 @@ def test_abort_record_rejects_published(store: SessionControlStore) -> None:
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest=manifest, artifact_manifest_hash="c" * 64
     )
-    store.publish_thread_creation_record("key-1")
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     with pytest.raises(RuntimeError, match="不可撤销"):
         store.abort_thread_creation_record("key-1", "迟到取消")
     assert store.get_thread_creation_record("key-1").state == "published"
@@ -1673,7 +1674,7 @@ def _publish_child(store: SessionControlStore) -> ThreadCreationRecord:
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64
     )
-    return store.publish_thread_creation_record("key-1")
+    return store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
 
 
 def test_get_published_child_locator_returns_frozen_locator(
@@ -1763,7 +1764,7 @@ def test_mark_published_idempotent_verifies_catalog_row(
     # preparing 时拒绝（须经 publish 推进）
     with pytest.raises(RuntimeError, match="仍 preparing"):
         store.mark_thread_creation_published("key-1")
-    store.publish_thread_creation_record("key-1")
+    store.publish_thread_creation_record("key-1", session_id=PUBLISHED_OWNER_SESSION_ID)
     marked = store.mark_thread_creation_published("key-1")
     assert marked.state == "published"
     assert marked.child_thread_id == record.child_thread_id
@@ -1806,7 +1807,7 @@ def test_initial_execution_intent_roundtrip_and_guards(
             initial_state="running",
             creation_idempotency_key="key-1",
         )
-    store.publish_thread_creation_record("key-1")
+    store.publish_thread_creation_record("key-1", session_id=owner_session_id)
     intent = store.create_or_get_initial_execution_intent(
         admission_idempotency_key="key-1",
         session_id=owner_session_id,
@@ -2071,20 +2072,14 @@ def prepare_published_intent(
         )
         store.initialize_fence("active", 1)
     kwargs = valid_thread_creation_kwargs(store, idempotency_key=admission_key)
-    record = store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
+    store.create_or_get_thread_creation_record(**kwargs)  # type: ignore[arg-type]
     store.freeze_thread_creation_artifact_manifest(
         admission_key,
         artifact_manifest="{}",
         artifact_manifest_hash="c" * 64,
     )
-    store.publish_thread_creation_record(admission_key)
-    return store.create_or_get_initial_execution_intent(
-        admission_idempotency_key=admission_key,
-        session_id=make_session_id(),
-        thread_id=record.child_thread_id,
-        initial_state="running",
-        creation_idempotency_key=admission_key,
-    )
+    store.publish_thread_creation_record(admission_key, session_id=PUBLISHED_OWNER_SESSION_ID)
+    return store.get_initial_execution_intent(admission_key)
 
 
 def test_list_pending_intents_reads_state_index_only(
@@ -2459,7 +2454,7 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
         ("del-1",),
     )
     with pytest.raises(RuntimeError, match="非 registering"):
-        store.publish_thread_creation_record("key-1")
+        store.publish_thread_creation_record("key-1", session_id=coordinator_session_id)
     assert store.get_thread_creation_record("key-1").state == "preparing"
     raw_execute(
         store,
@@ -2494,7 +2489,7 @@ def test_delegated_record_publish_cas_and_member_atomic_visibility(
     store.freeze_thread_creation_artifact_manifest(
         "key-2", artifact_manifest="{}", artifact_manifest_hash="c" * 64
     )
-    store.publish_thread_creation_record("key-2")
+    store.publish_thread_creation_record("key-2", session_id=coordinator_session_id)
     member3 = store.get_collaboration_member("del-3")
     assert member3.state == "published"
     assert member3.child_thread_id == record2.child_thread_id

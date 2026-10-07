@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
 
 from app.agents import itemized_context_middleware
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
@@ -20,6 +25,102 @@ def bridge(registered_tool_set_producer_factory):
         tool_set_producer=registered_tool_set_producer_factory(),
         resource_activation=None,
     )
+
+
+@pytest.fixture
+def response_dispatch(bridge, monkeypatch):
+    model_call_id = "00000000-0000-4000-8000-000000000001"
+    prepared = {"snapshot": object(), "callback_model_call_id": model_call_id}
+    bridge._prepare_projection = MagicMock(return_value=(prepared, [], []))
+    bridge._aprepare = AsyncMock(return_value=prepared)
+    bridge._project_prepared = MagicMock(return_value=(prepared, [], []))
+    monkeypatch.setattr(
+        itemized_context_middleware, "sealed_assembly_dispatch_scope",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+
+    async def dispatch(response, mode):
+        request = ModelRequest(model=MagicMock(), messages=[])
+        if mode == "sync":
+            return bridge.wrap_model_call(request, lambda _request: response)
+
+        async def handler(_request):
+            return response
+
+        return await bridge.awrap_model_call(request, handler)
+
+    return model_call_id, dispatch
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("extended", [False, True])
+async def test_vendor_carrier_binds_emitting_call_and_its_structured_tool_result(
+    response_dispatch, mode, extended,
+):
+    model_call_id, dispatch = response_dispatch
+    assistant = AIMessage(
+        content="工具回答", id="resp-vendor",
+        response_metadata={"provider_id": "test-provider"},
+        tool_calls=[{"id": "call-vendor", "name": "answer", "args": {"value": "ok"}}],
+    )
+    result = ToolMessage(
+        content="ok", id="result-vendor", tool_call_id="call-vendor", name="answer",
+    )
+    structured = {"value": "ok"}
+    response = ModelResponse(result=[assistant, result], structured_response=structured)
+    command = Command(update={"selected": "unchanged"})
+    wrapped = ExtendedModelResponse(model_response=response, command=command) if extended else response
+
+    bound = await dispatch(wrapped, mode)
+    if extended:
+        assert isinstance(bound, ExtendedModelResponse)
+        assert bound.command is command
+        bound = bound.model_response
+    assert bound.structured_response is structured
+    bound_assistant, bound_result = bound.result
+    assert bound_assistant.id == assistant.id == "resp-vendor"
+    assert bound_assistant.content == assistant.content
+    assert bound_assistant.tool_calls == assistant.tool_calls
+    assert bound_assistant.response_metadata == {
+        "provider_id": "test-provider", "model_call_id": model_call_id,
+    }
+    assert bound_result.id == result.id == "result-vendor"
+    assert bound_result.tool_call_id == result.tool_call_id == "call-vendor"
+    assert bound_result.content == "ok"
+    assert bound_result.response_metadata == {"model_call_id": model_call_id}
+    assert assistant.response_metadata == {"provider_id": "test-provider"}
+    assert result.response_metadata == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("conflict", ["assistant", "nested", "lc_id", "tool", "unpaired"])
+async def test_response_identity_conflicts_fail_without_rebinding(
+    response_dispatch, mode, conflict,
+):
+    model_call_id, dispatch = response_dispatch
+    assistant = AIMessage(
+        content="", id="resp-vendor",
+        tool_calls=[{"id": "call-vendor", "name": "answer", "args": {}}],
+    )
+    result = ToolMessage(content="ok", tool_call_id="call-vendor", name="answer")
+    if conflict == "assistant":
+        assistant.response_metadata = {"model_call_id": "foreign-model-call"}
+    elif conflict == "nested":
+        assistant.response_metadata = {"message_metadata": {"model_call_id": "foreign-model-call"}}
+    elif conflict == "lc_id":
+        assistant.id = "lc_run--foreign-model-call"
+    elif conflict == "tool":
+        result.response_metadata = {"model_call_id": "foreign-model-call"}
+    else:
+        result.tool_call_id = "call-foreign"
+    response = ModelResponse(result=[assistant, result])
+
+    with pytest.raises(ValueError, match="source-mismatch"):
+        await dispatch(response, mode)
+    assert assistant.response_metadata.get("model_call_id") != model_call_id
+    assert result.response_metadata.get("model_call_id") != model_call_id
 
 
 @pytest.mark.parametrize("prepared", [

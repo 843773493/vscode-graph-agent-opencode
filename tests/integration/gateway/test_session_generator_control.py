@@ -15,6 +15,7 @@ from tests.support.gateway_processes import (
     start_gateway_process,
 )
 from tests.support.ports import integration_port_block_for_file
+from tests.support.processes import workspace_backend_id_for_root
 
 
 @pytest.fixture(autouse=True)
@@ -99,14 +100,24 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
 ) -> None:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
+    target_workspace = workspace_root / "generator-control-target"
+    target_workspace.mkdir(parents=True, exist_ok=True)
     target_port = port_block.port(10)
-    with generation_target_stub(
-        target_port,
-        output_workspace_id="gw_stub_primary",
-    ) as target_state:
+    with (
+        generation_target_stub(
+            port_block.port(12),
+            output_workspace_id="gw_stub_default",
+            backend_workspace_id=workspace_backend_id_for_root(workspace_root),
+        ),
+        generation_target_stub(
+            target_port,
+            output_workspace_id="gw_stub_primary",
+            backend_workspace_id=workspace_backend_id_for_root(target_workspace),
+        ) as target_state,
+    ):
         gateway = start_gateway_process(
             workspace_root=workspace_root,
-            default_backend_url=f"http://127.0.0.1:{target_port}",
+            default_backend_url=f"http://127.0.0.1:{port_block.port(12)}",
             port=port_block.port(11),
         )
         try:
@@ -117,8 +128,6 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
             ) as client:
                 workspaces_response = await client.get("/api/gateway/workspaces")
                 assert workspaces_response.status_code == 200, workspaces_response.text
-                target_workspace = workspace_root / "generator-control-target"
-                target_workspace.mkdir(parents=True, exist_ok=True)
                 add_target_response = await client.post(
                     "/api/gateway/workspaces/local",
                     json={
@@ -277,6 +286,7 @@ async def test_generator_crud_preview_and_idempotent_manual_run(
                     "target": {
                         "workspace_id": workspace_id,
                         "session_id": "ses_stub_parent",
+                        "thread_id": "thr_stub_parent",
                     },
                     "concurrency": "queue",
                     "report_back": "continue_agent",
@@ -331,10 +341,12 @@ async def test_generator_rejects_split_execution_then_runs_on_cross_workspace_mo
         generation_target_stub(
             primary_port,
             output_workspace_id="gw_stub_primary",
+            backend_workspace_id=workspace_backend_id_for_root(workspace_root),
         ) as primary_state,
         generation_target_stub(
             secondary_port,
             output_workspace_id="gw_stub_secondary",
+            backend_workspace_id=workspace_backend_id_for_root(secondary_workspace),
         ) as secondary_state,
     ):
         gateway = start_gateway_process(

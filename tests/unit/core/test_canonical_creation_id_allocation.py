@@ -238,7 +238,7 @@ def test_session_journal_bucket_uses_session_id_across_midnight(
             artifact_manifest="{}",
             artifact_manifest_hash=sha256(b"{}").hexdigest(),
         )
-        control_store.publish_thread_creation_record("midnight-child")
+        control_store.publish_thread_creation_record("midnight-child", session_id=record.session_id)
         child_row = control_store.connection.execute(
             "SELECT thread_id, kind, created_at FROM thread_catalog "
             "WHERE kind = 'child'"

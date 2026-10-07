@@ -62,6 +62,9 @@ class _Jobs:
 
 
 class _Orchestrator:
+    async def resolve_main_thread(self, session_id):
+        return f"thr_{session_id}"
+
     def __init__(self):
         self.calls = []
 
@@ -70,12 +73,12 @@ class _Orchestrator:
     ):
         self.calls.append((session_id, content, metadata, delivery_policy))
 
-    async def create_and_run_internal(
+    async def submit_runtime_event(
         self,
         session_id,
         message,
         *,
-        delivery_policy="after_turn",
+        thread_id, source_id, idempotency_key, delivery_policy="after_turn",
     ):
         self.calls.append(
             (session_id, message.content, message.metadata, delivery_policy)
@@ -137,7 +140,7 @@ async def test_job_started_listener_does_not_reenter_goal_lock():
         store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
     )
     jobs = _Jobs()
-    jobs.job = SimpleNamespace(job_id="job_1", session_id="sess_1")
+    jobs.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
     runtime = GoalRuntimeService(
         goal_service=goals,
         job_service=jobs,
@@ -171,7 +174,7 @@ async def test_replaced_goal_ignores_old_job_and_failed_job_blocks_owner():
     jobs = _Jobs()
     jobs.job = SimpleNamespace(
         job_id="job_1",
-        session_id="sess_1",
+        session_id="sess_1", thread_id="thr_sess_1",
         created_at=datetime.now(UTC),
         ended_at=None,
     )
@@ -200,7 +203,7 @@ async def test_failed_job_does_not_overwrite_goal_paused_during_active_turn():
         store=_Store(), session_service=_Sessions(), job_event_bus=_Bus()
     )
     jobs = _Jobs()
-    jobs.job = SimpleNamespace(job_id="job_1", session_id="sess_1")
+    jobs.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
     runtime = GoalRuntimeService(
         goal_service=goals,
         job_service=jobs,
@@ -223,7 +226,7 @@ async def test_goal_created_during_unrelated_job_starts_after_that_job_completes
     jobs = _Jobs()
     running = SimpleNamespace(
         job_id="job_unrelated",
-        session_id="sess_1",
+        session_id="sess_1", thread_id="thr_sess_1",
         status=SimpleNamespace(value="running"),
     )
     jobs.job = running
@@ -252,7 +255,7 @@ async def test_budget_limited_goal_dispatches_codex_aligned_wrap_up_prompt():
     jobs = _Jobs()
     jobs.job = SimpleNamespace(
         job_id="job_budget",
-        session_id="sess_1",
+        session_id="sess_1", thread_id="thr_sess_1",
         created_at=started_at,
         ended_at=started_at + timedelta(seconds=37),
     )
@@ -288,7 +291,7 @@ async def test_active_objective_edit_queues_internal_goal_message():
     jobs = _Jobs()
     running = SimpleNamespace(
         job_id="job_goal",
-        session_id="sess_1",
+        session_id="sess_1", thread_id="thr_sess_1",
         status=SimpleNamespace(value="running"),
     )
     jobs.items = [running]
@@ -343,7 +346,7 @@ async def test_close_admission_waits_for_admitted_dispatch_without_consuming_nex
     orchestrator = _Orchestrator()
     jobs = _Jobs()
     entered, release = asyncio.Event(), asyncio.Event()
-    real_dispatch = orchestrator.create_and_run_internal
+    real_dispatch = orchestrator.submit_runtime_event
 
     async def blocked_dispatch(*args, **kwargs) -> None:
         entered.set()
@@ -351,7 +354,7 @@ async def test_close_admission_waits_for_admitted_dispatch_without_consuming_nex
         await real_dispatch(*args, **kwargs)
 
     if window == "dispatch":
-        monkeypatch.setattr(orchestrator, "create_and_run_internal", blocked_dispatch)
+        monkeypatch.setattr(orchestrator, "submit_runtime_event", blocked_dispatch)
     else:
         real_list = jobs.list
 

@@ -278,7 +278,11 @@ async function main() {
         }
 
         if (request.method === "POST" && action === "claim-steering") {
-          sendJson(response, 200, { data: await manager.claimSteering(terminalId) });
+          const payload = await readJson(request);
+          sendJson(response, 200, { data: await manager.claimSteering(terminalId, {
+            completionEventId: payload.completion_event_id,
+            commandStartSequence: payload.command_start_sequence,
+          }) });
           return;
         }
 
@@ -289,6 +293,8 @@ async function main() {
           }
           sendJson(response, 200, {
             data: await manager.finishSteering(terminalId, {
+              completionEventId: payload.completion_event_id,
+              commandStartSequence: payload.command_start_sequence,
               dispatched: payload.dispatched,
             }),
           });

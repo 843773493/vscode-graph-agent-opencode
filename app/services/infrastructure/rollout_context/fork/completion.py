@@ -10,10 +10,14 @@ from app.domain.itemized.enums import (
     CommitKind,
     ControlOutcome,
     SemanticKind,
+    TurnScope,
     TurnStatus,
 )
-from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
-from app.domain.itemized.hashing import validate_hash_token
+from app.domain.itemized.execution_admission import (
+    internal_execution_request_preimage,
+    user_turn_admission_payload_hash,
+)
+from app.domain.itemized.hashing import sha256_jcs, validate_hash_token
 from app.domain.itemized.records import parse_item_projection_manifest
 from app.services.infrastructure.rollout_context.fork.cloning import ForkCloneMixin
 from app.services.infrastructure.rollout_context.fork.identity import (
@@ -115,6 +119,8 @@ class ForkCompletionMixin(ForkCloneMixin):
         source_session_id: str,
         source_checkpoint_id: str | None,
         checkpoint_ns: str,
+        *,
+        source_thread_id: str,
     ) -> list[tuple[str, str]]:
         from app.services.infrastructure.rollout_context.storage.primitives import (
             _RolloutFileLock,
@@ -123,7 +129,7 @@ class ForkCompletionMixin(ForkCloneMixin):
         source_session_id = required_text(
             source_session_id, field="completed_finalizations.source_session_id"
         )
-        source_thread_id = self.main_thread_id(source_session_id)
+        source_thread_id = self._resolve_thread_identity(source_session_id, source_thread_id)
         source_checkpoint_id = optional_text(
             source_checkpoint_id,
             field="completed_finalizations.source_checkpoint_id",
@@ -206,13 +212,15 @@ class ForkCompletionMixin(ForkCloneMixin):
         self,
         source_session_id: str,
         checkpoint_ns: str,
+        *,
+        source_thread_id: str,
     ) -> tuple[tuple[object, ...], ...]:
         from app.services.infrastructure.rollout_context.storage.primitives import (
             _RolloutFileLock,
         )
 
         """读取 source v2 Turn/acceptance 的只读 lineage 输入。"""
-        source_thread_id = self.main_thread_id(source_session_id)
+        source_thread_id = self._resolve_thread_identity(source_session_id, source_thread_id)
         source_root = self.root(
             source_session_id, checkpoint_ns, thread_id=source_thread_id
         )
@@ -385,8 +393,8 @@ class ForkCompletionMixin(ForkCloneMixin):
         self, connection: sqlite3.Connection, *, session_id: str, thread_id: str,
         checkpoint_ns: str, execution_id: str, job_id: str, admission_key: str,
         admission_hash: str,
-    ) -> None:
-        """所有 fork 模式共用冻结 notice 的原始 admission commit 校验。"""
+    ) -> dict[str, object]:
+        """所有 fork 模式共用冻结 notice 或 seed/reference 的准入校验。"""
         imported = connection.execute(
             "SELECT m.lineage_json, j.status, j.target_session_id, j.target_thread_id, "
             "j.checkpoint_ns, j.source_snapshot_sha256 FROM fork_identity_mappings AS m "
@@ -416,16 +424,59 @@ class ForkCompletionMixin(ForkCloneMixin):
                 or any(char not in "0123456789abcdef" for char in digest)):
                 raise RuntimeError("fork source imported internal admission 与本地冻结 journal 不一致")
             validate_hash_token(admission_hash, "source.internal.imported.admission_hash")
-            return
+            preimage = lineage.get("admission_preimage")
+            if not isinstance(preimage, dict) or not isinstance(preimage.get("input"), dict):
+                raise RuntimeError("fork source imported internal admission 缺少冻结 request preimage")
+            validated = internal_execution_request_preimage(
+                session_id=required_text(preimage.get("session_id"), field="imported.admission.session_id"),
+                thread_id=required_text(preimage.get("thread_id"), field="imported.admission.thread_id"),
+                execution_id=required_text(preimage.get("execution_id"), field="imported.admission.execution_id"),
+                job_id=job_id,
+                admission_idempotency_key=required_text(
+                    preimage.get("admission_idempotency_key"), field="imported.admission.key"),
+                request_input=preimage["input"],
+            )
+            if validated != preimage or sha256_jcs(validated) != admission_hash:
+                raise RuntimeError("fork source imported internal request 与冻结 admission hash 不一致")
+            return validated
         metadata_rows = connection.execute(
             "SELECT metadata_json FROM storage_commits WHERE commit_kind = ? "
             "AND subject_id = ? AND idempotency_key = ?",
-            (CommitKind.ITEM_CONVERGENCE.value, execution_id, f"internal-admission:{admission_key}"),
+            (CommitKind.EXECUTION_ADMISSION.value, execution_id, f"internal-admission:{admission_key}"),
         ).fetchall()
         if len(metadata_rows) != 1:
-            raise RuntimeError("fork source internal execution 缺少唯一 notice admission commit")
+            raise RuntimeError("fork source internal execution 缺少唯一 request admission commit")
         metadata = json_mapping(metadata_rows[0][0], field="source.internal.admission.metadata")
-        notice_id = required_text(metadata.get("notice_item_id"), field="source.internal.notice_item_id")
+        request_input = metadata.get("request_input")
+        if not isinstance(request_input, dict):
+            raise RuntimeError("fork source internal admission 缺少冻结 request input")  # noqa: TRY004
+        preimage = internal_execution_request_preimage(
+            session_id=session_id, thread_id=thread_id, execution_id=execution_id,
+            job_id=job_id, admission_idempotency_key=admission_key,
+            request_input=request_input,
+        )
+        expected_hash = sha256_jcs(preimage)
+        if expected_hash != validate_hash_token(admission_hash, "source.internal.admission_hash"):
+            raise RuntimeError("fork source internal admission hash 与冻结 request 不一致")
+        notice_id = optional_text(metadata.get("notice_item_id"), field="source.internal.notice_item_id")
+        is_notice = request_input["kind"] == "runtime_notice"
+        if is_notice != (notice_id is not None):
+            raise RuntimeError("fork source internal input kind 与 notice identity 不一致")
+        commit = load_committed_idempotency_commit(
+            connection, commit_kind=CommitKind.EXECUTION_ADMISSION.value,
+            subject_id=execution_id, idempotency_key=f"internal-admission:{admission_key}",
+            commit_mode="item_bearing" if is_notice else "metadata_only", outcome=None,
+            metadata={"execution_id": execution_id, "job_id": job_id,
+                      "notice_item_id": notice_id, "request_input": request_input},
+            item_count=1 if is_notice else 0,
+        )
+        if commit is None:
+            raise RuntimeError("fork source internal request 与冻结 admission commit 不一致")
+        committed_items = read_committed_item_identities(connection, commit_id=commit.commit_id)
+        if not is_notice:
+            if committed_items:
+                raise RuntimeError("fork source seed/reference admission 不得含 canonical item")
+            return preimage
         notice = self._read_canonical_item_from_catalog(
             connection, session_id=session_id, thread_id=thread_id,
             checkpoint_ns=checkpoint_ns, item_id=notice_id,
@@ -433,23 +484,17 @@ class ForkCompletionMixin(ForkCloneMixin):
         binding = connection.execute(
             "SELECT execution_id FROM item_catalog WHERE item_id = ?", (notice_id,),
         ).fetchone()
-        commit = load_committed_idempotency_commit(
-            connection, commit_kind=CommitKind.ITEM_CONVERGENCE.value,
-            subject_id=execution_id, idempotency_key=f"internal-admission:{admission_key}",
-            commit_mode="item_bearing", outcome=None,
-            metadata={"execution_id": execution_id, "job_id": job_id, "notice_item_id": notice_id},
-            item_count=1,
-        )
         if (notice.semantic_kind != SemanticKind.RUNTIME_NOTICE or notice.turn_id is not None
-            or binding != (execution_id,) or commit is None
-            or read_committed_item_identities(connection, commit_id=commit.commit_id)
+            or notice.turn_scope != TurnScope.PENDING_NEXT_TURN
+            or request_input != {"kind": "runtime_notice", "payload": notice.payload}
+            or binding != (execution_id,)
+            or committed_items
             != ((notice_id, notice.content_hash, notice.item_sequence),)):
             raise RuntimeError("fork source internal notice 与冻结 admission commit 不一致")
-        if notice.content_hash != validate_hash_token(admission_hash, "source.internal.admission_hash"):
-            raise RuntimeError("fork source internal admission hash 与冻结 notice 不一致")
+        return preimage
 
     def _ensure_fork_v2_turn_records(
-        self, connection: sqlite3.Connection, *, source_session_id: str,
+        self, connection: sqlite3.Connection, *, source_session_id: str, source_thread_id: str,
         target_session_id: str, target_thread_id: str, fork_id: str,
         checkpoint_ns: str, source_turn_rows: Sequence[tuple[object, ...]], timestamp: str,
     ) -> None:
@@ -462,7 +507,6 @@ class ForkCompletionMixin(ForkCloneMixin):
             if turn_id in source_by_turn:
                 raise RuntimeError(f"fork source Turn manifest 重复: {turn_id}")
             source_by_turn[turn_id] = row
-        source_thread_id = self.main_thread_id(source_session_id)
         item_map: dict[str, str] = {}
         turn_map: dict[str, str] = {}
         root_map: dict[str, tuple[object, ...]] = {}
@@ -521,7 +565,7 @@ class ForkCompletionMixin(ForkCloneMixin):
                 raise RuntimeError("fork canonical item 引用了缺失的 source execution")
             model_rows = tuple(row for row in source_connection.execute(
                 "SELECT model_call_id, session_id, thread_id, execution_id, attempt, attempt_ordinal, "
-                "provider, provider_request_id, retry_of_model_call_id, assembly_id, outcome, created_at "
+                "provider, provider_request_id, retry_of_model_call_id, assembly_id, outcome, created_at, dispatch_state "
                 "FROM model_calls ORDER BY attempt_ordinal, model_call_id"
             ).fetchall() if row[3] in execution_map)
             model_map = {row[0]: self._full_copy_identity(fork_id, target_session_id, "model_call", row[0])
@@ -534,10 +578,11 @@ class ForkCompletionMixin(ForkCloneMixin):
                 "FROM turn_execution_links WHERE session_id = ? AND thread_id = ?",
                 (source_session_id, source_thread_id),
             ).fetchall() if row[0] in turn_map and row[1] in execution_map)
+            internal_preimages = {}
             for row in execution_rows:
                 if row[4] != "internal":
                     continue
-                self._validate_fork_internal_admission(
+                internal_preimages[row[0]] = self._validate_fork_internal_admission(
                     source_connection, session_id=source_session_id, thread_id=source_thread_id,
                     checkpoint_ns=checkpoint_ns, execution_id=row[0], job_id=row[5],
                     admission_key=row[6], admission_hash=row[7],
@@ -657,7 +702,9 @@ class ForkCompletionMixin(ForkCloneMixin):
                                 "execution_origin": origin, "attempt": attempt, "execution_ordinal": execution_ordinal,
                                 "admission_idempotency_key": target_key, "admission_payload_hash": target_hash,
                                 "resumed_from_execution_id": execution_map.get(resumed),
-                                "replay_of_execution_id": execution_map.get(replay)}})
+                                "replay_of_execution_id": execution_map.get(replay)},
+                     **({"admission_preimage": internal_preimages[execution_id]}
+                        if origin == "internal" else {})})
             mapping("admission_idempotency_key", admission_key, target_key)
         for turn_id, execution_id, role, ordinal, link_key in source_links:
             if execution_id not in execution_map:
@@ -670,15 +717,15 @@ class ForkCompletionMixin(ForkCloneMixin):
             )
         for row in model_rows:
             (model_id, owner_session, owner_thread, execution_id, attempt, ordinal, provider, provider_request,
-             retry_of, assembly_id, outcome, created_at) = row
+             retry_of, assembly_id, outcome, created_at, dispatch_state) = row
             if (owner_session, owner_thread) != (source_session_id, source_thread_id):
                 raise RuntimeError("fork source model call owner 不一致")
             connection.execute(
                 "INSERT INTO model_calls(model_call_id, session_id, thread_id, execution_id, attempt, attempt_ordinal, "
                 "provider, provider_request_id, retry_of_model_call_id, assembly_id, dispatch_state, outcome, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'failed', ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
                 (model_map[model_id], target_session_id, target_thread_id, execution_map[execution_id],
-                 attempt, ordinal, provider, provider_request, model_map.get(retry_of), outcome, created_at),
+                 attempt, ordinal, provider, provider_request, model_map.get(retry_of), dispatch_state, outcome, created_at),
             )
             mapping("model_call", model_id, model_map[model_id],
                     {"source": {"session_id": source_session_id, "thread_id": source_thread_id,

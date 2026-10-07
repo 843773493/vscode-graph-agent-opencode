@@ -135,7 +135,13 @@ def localize_full_copy_seal_bindings(
                 source.prefix.state.epoch,
                 turn_id=state.mapped("turn", source.prefix.state.epoch.turn_id),
             )
-            root = None if source.root is None else replace(source.root, epoch=epoch)
+            root = None if source.root is None else replace(
+                source.root, epoch=epoch,
+                sources=tuple(replace(
+                    provenance,
+                    source_identity=state.mapped("source_identity", provenance.source_identity),
+                ) for provenance in source.root.sources),
+            )
 
             root_ref = source.prefix.state.frames[0].item_ref if root is not None else None
             root_revision = root.frame_hash() if root is not None else None
@@ -151,6 +157,7 @@ def localize_full_copy_seal_bindings(
                 return replace(
                     ref,
                     ref_id=state.mapped("request_ref", ref.ref_id),
+                    source_identity=state.mapped("source_identity", ref.source_identity),
                     source_revision=(
                         root_revision if ref == root_ref
                         else ref.source_revision

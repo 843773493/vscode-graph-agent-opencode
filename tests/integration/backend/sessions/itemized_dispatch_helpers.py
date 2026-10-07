@@ -203,6 +203,7 @@ class NativeHTTPState:
     call_tool: bool = False
     response_text: str = "native-http-result"
     output_tool_name: str | None = None
+    reasoning_item: dict[str, object] | None = None
     request_ready: Event = field(default_factory=Event)
     release_response: Event = field(default_factory=Event)
 
@@ -221,7 +222,7 @@ class NativeHTTPState:
 
 def _response_events(
     ordinal: int, *, call_tool: bool = False, text: str = "native-http-result",
-    tool_name: str = "inspect_file",
+    tool_name: str = "inspect_file", reasoning_item: dict[str, object] | None = None,
 ) -> bytes:
     message_id = f"msg-native-{ordinal}"
     part = {"type": "output_text", "text": text, "annotations": []}
@@ -317,6 +318,21 @@ def _response_events(
             {"type": "response.output_item.done", "output_index": 0, "item": call},
             {"type": "response.completed", "response": {**response, "output": [call]}},
         ]
+    if reasoning_item is not None:
+        # reasoning 与工具调用共享同一响应；真实字段原样参与下一次 HTTP 请求。
+        for event in events:
+            if "output_index" in event:
+                event["output_index"] += 1
+        events[1:1] = [
+            {"type": "response.output_item.added", "output_index": 0, "item": {
+                **reasoning_item, "status": "in_progress", "summary": [],
+                "content": [], "encrypted_content": None,
+            }},
+            {"type": "response.output_item.done", "output_index": 0, "item": {
+                **reasoning_item, "status": "completed",
+            }},
+        ]
+        events[-1]["response"]["output"].insert(0, reasoning_item)
     return "".join(
         "event: "
         + event["type"]
@@ -391,6 +407,7 @@ def native_http_server(
                 _response_events(
                     ordinal, call_tool=(state.call_tool or state.output_tool_name is not None) and ordinal == 1,
                     text=state.response_text, tool_name=state.output_tool_name or "inspect_file",
+                    reasoning_item=state.reasoning_item if ordinal == 1 else None,
                 )
                 if self.path == "/v1/responses"
                 else _chat_response_events(ordinal, text=state.response_text, tool_name=state.output_tool_name)

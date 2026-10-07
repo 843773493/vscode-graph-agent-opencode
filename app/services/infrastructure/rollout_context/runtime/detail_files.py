@@ -8,6 +8,7 @@ import stat
 from pathlib import Path
 
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
@@ -30,10 +31,18 @@ class DetailFiles:
         return info
 
     def path(
-        self, ref: DetailRef, *, create: bool = False
+        self, ref: DetailRef, *, create: bool = False,
+        creation_record: SessionCreationRecord | None = None,
     ) -> Path | None:
         relative = detail_relative_path(ref)
-        root = self._resolver.resolve_thread_node(ref.session_id, ref.thread_id)
+        if creation_record is not None and creation_record.session_id != ref.session_id:
+            raise ValueError("source-mismatch: detail 与 prepared Session creation owner 不一致")
+        root = (
+            self._resolver.resolve_thread_node(ref.session_id, ref.thread_id)
+            if creation_record is None else self._resolver.resolve_prepared_thread_node(
+                creation_record, ref.thread_id,
+            )
+        )
         root_info = self._info(root)
         if root_info is None or not stat.S_ISDIR(root_info.st_mode):
             raise DetailUnavailableError("session node 不是安全普通目录")
@@ -83,8 +92,10 @@ class DetailFiles:
             if descriptor >= 0:
                 os.close(descriptor)
 
-    def publish(self, ref: DetailRef, raw: bytes) -> Path:
-        target = self.path(ref, create=True)
+    def publish(
+        self, ref: DetailRef, raw: bytes, *, creation_record: SessionCreationRecord | None = None,
+    ) -> Path:
+        target = self.path(ref, create=True, creation_record=creation_record)
         if target is None:
             raise DetailUnavailableError("detail 写入目录未创建")
         temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.tmp")
@@ -102,7 +113,7 @@ class DetailFiles:
                 stream.flush()
                 os.fsync(stream.fileno())
             # link 是排他发布，不能用 replace 覆盖已经存在的 immutable detail。
-            self.path(ref)
+            self.path(ref, creation_record=creation_record)
             os.link(temporary, target, follow_symlinks=False)
             published = True
             temporary.unlink()
@@ -110,7 +121,7 @@ class DetailFiles:
         except BaseException as error:
             # 发布后清理临时 link 失败也不能留下无 record 可追踪的正文。
             if published:
-                self.path(ref)
+                self.path(ref, creation_record=creation_record)
                 target.unlink()
             if isinstance(error, OSError):
                 raise DetailUnavailableError(

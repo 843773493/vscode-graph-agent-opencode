@@ -107,6 +107,7 @@ describe("useNodeDebugWorkbench", () => {
       binding = useNodeDebugWorkbench({
         apiPort: 49_412,
         workspaceId: "workspace-workbench",
+        workspaces: [{ workspace_id: "workspace-workbench", backend_workspace_id: "backend-workbench", connection_kind: "local" }],
         sessionId: "session-workbench",
         enabled: true,
         onStatusChange: (message) => statusMessages.push(message),
@@ -125,12 +126,14 @@ describe("useNodeDebugWorkbench", () => {
     });
     expect(binding.threadId).toBe(mainThreadId);
     expect(binding.activeFrame?.path).toBe("/workspace/app.js");
+    expect(mainThreadSpy).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       binding.selectThread(childThreadId);
       await Promise.resolve();
     });
     expect(binding.threadId).toBe(childThreadId);
+    expect(mainThreadSpy).toHaveBeenCalledTimes(1);
     expect(auxiliaryVisible).toBe(true);
     expect(auxiliaryTab).toBe("debug");
     expect(persistedLayouts).toEqual([{
@@ -183,6 +186,7 @@ describe("useNodeDebugWorkbench", () => {
       binding = useNodeDebugWorkbench({
         apiPort: 49_412,
         workspaceId: "workspace-workbench",
+        workspaces: [{ workspace_id: "workspace-workbench", backend_workspace_id: "backend-workbench", connection_kind: "local" }],
         sessionId: "session-workbench",
         enabled: true,
         onStatusChange: () => {},

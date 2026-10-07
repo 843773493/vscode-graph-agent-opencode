@@ -139,10 +139,11 @@ class RolloutCompactionPreflightOwnerMixin:
                     )
                 view_id = strict_text(head[6], field="checkpoints.view_id")
                 view_sequences = self._view_message_sequences(
-                    session_id,
+                    thread_id,
                     checkpoint_ns,
                     view_id,
                     set(),
+                    session_id=session_id,
                     connection=connection,
                 )
                 view_positions = {

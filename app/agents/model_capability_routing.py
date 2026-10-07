@@ -122,9 +122,14 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         last_error: Exception | None = None
-        for candidate in self._matching_candidates(request):
+        candidates = self._matching_candidates(request)
+        for index, candidate in enumerate(candidates):
             try:
                 response = handler(request.override(model=candidate.model))
+                # 最后候选的正常响应交执行循环完成空回复限次校验，
+                # 不把业务重试误归为 Provider 请求故障。
+                if index == len(candidates) - 1:
+                    return response
                 return _validate_visible_response(candidate, response)
             except ScopeCancelledError:
                 # 父 turn 的用户中断、Job 总超时和内部执行取消都已经是
@@ -152,9 +157,14 @@ class CapabilityRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
         last_error: Exception | None = None
-        for candidate in self._matching_candidates(request):
+        candidates = self._matching_candidates(request)
+        for index, candidate in enumerate(candidates):
             try:
                 response = await handler(request.override(model=candidate.model))
+                # 有后续候选时仍保留内部推理无正文的 fallback 规则。
+                # 最后候选由执行循环在原 execution 内决定重试或失败。
+                if index == len(candidates) - 1:
+                    return response
                 return _validate_visible_response(candidate, response)
             except ScopeCancelledError:
                 # 取消不是 provider 能力降级；保留原始 reason 交给 Job/stream

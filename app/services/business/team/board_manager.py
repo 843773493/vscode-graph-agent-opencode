@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+import json
+from datetime import UTC, datetime
 
+from app.abstractions.session_subagent import OwnerThreadCreationFactoryProtocol
 from app.abstractions.team import TeamStoreProtocol
 from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.team import (
@@ -10,12 +12,9 @@ from app.schemas.internal_v2.team import (
     TeamEventDTO,
     TeamListDTO,
     TeamMemberDTO,
-    TeamMemberSource,
-    TeamMemberStatus,
     TeamTaskDTO,
     TeamTaskPhase,
     TeamTaskStatus,
-    TeamWorkMode,
 )
 
 from .rules import (
@@ -32,157 +31,46 @@ from .rules import (
 class TeamBoardManager:
     """串行化并持久化团队任务板；不启动 Session Job。"""
 
-    def __init__(self, *, store: TeamStoreProtocol) -> None:
+    def __init__(self, *, store: TeamStoreProtocol, factory: OwnerThreadCreationFactoryProtocol) -> None:
         self._store = store
+        self._factory = factory
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def create(self, *, coordinator_session_id: str, name: str) -> TeamBoardDTO:
+    def create(self, *, session_id: str, coordinator_thread_id: str, name: str) -> TeamBoardDTO:
         now = self._now()
         board = TeamBoardDTO(
-            team_id=create_prefixed_id("team"),
-            name=required_text(name, "name"),
-            coordinator_session_id=coordinator_session_id,
-            version=1,
-            members=[
-                TeamMemberDTO(
-                    session_id=coordinator_session_id,
-                    role="coordinator",
-                    source="coordinator",
-                    work_mode="write",
-                    instructions="负责拆分工作、修改代码并协调团队成员。",
-                    status="active",
-                    joined_at=now,
-                    updated_at=now,
-                )
-            ],
-            created_at=now,
-            updated_at=now,
+            team_id=create_prefixed_id("team"), name=required_text(name, "name"),
+            session_id=session_id, coordinator_thread_id=coordinator_thread_id,
+            version=1, created_at=now, updated_at=now,
         )
         self._store.create(board)
-        self._store.append_event(
-            self._event(
-                board,
-                event_type="team.created",
-                actor_session_id=coordinator_session_id,
-                payload={"name": board.name},
-            )
-        )
+        self._store.append_event(self._event(
+            board, event_type="team.created", actor_thread_id=coordinator_thread_id,
+            payload={"name": board.name},
+        ))
         return self.with_recent_events(board)
 
-    def list_for_session(self, session_id: str) -> TeamListDTO:
-        return TeamListDTO(
-            items=[
-                self.with_recent_events(board)
-                for board in self._store.list()
-                if find_member(board, session_id, required=False) is not None
-            ]
-        )
+    def list_for_member(self, session_id: str, thread_id: str) -> TeamListDTO:
+        boards = [self.with_recent_events(board) for board in self._store.list(session_id)]
+        return TeamListDTO(items=[board for board in boards if find_member(board, thread_id, required=False) is not None])
 
-    def get_for_member(self, *, team_id: str, session_id: str) -> TeamBoardDTO:
-        board = self._store.get(team_id)
-        require_active_member(board, session_id)
-        return self.with_recent_events(board)
-
-    def get_for_coordinator(self, *, team_id: str, session_id: str) -> TeamBoardDTO:
-        board = self._store.get(team_id)
-        require_coordinator(board, session_id)
+    def get_for_member(self, *, session_id: str, team_id: str, thread_id: str) -> TeamBoardDTO:
+        board = self.with_recent_events(self._store.get(session_id, team_id))
+        require_active_member(board, thread_id)
         return board
 
-    async def add_member(
-        self,
-        *,
-        team_id: str,
-        actor_session_id: str,
-        target_session_id: str,
-        role: str,
-        source: TeamMemberSource,
-        work_mode: TeamWorkMode,
-        instructions: str,
-    ) -> TeamBoardDTO:
-        async with self._lock(team_id):
-            board = self.get_for_coordinator(
-                team_id=team_id,
-                session_id=actor_session_id,
-            )
-            if find_member(board, target_session_id, required=False) is not None:
-                raise ValueError(f"Session 已是团队成员: {target_session_id}")
-            now = self._now()
-            member = TeamMemberDTO(
-                session_id=target_session_id,
-                role=required_text(role, "role"),
-                source=source,
-                work_mode=work_mode,
-                instructions=instructions.strip(),
-                status="active",
-                joined_at=now,
-                updated_at=now,
-            )
-            board = self._replace_board(board, members=[*board.members, member])
-            return self._persist(
-                board,
-                self._event(
-                    board,
-                    event_type="member.added",
-                    actor_session_id=actor_session_id,
-                    payload={
-                        "session_id": target_session_id,
-                        "role": member.role,
-                        "source": source,
-                        "work_mode": work_mode,
-                    },
-                ),
-            )
-
-    async def set_member_activation(
-        self,
-        *,
-        team_id: str,
-        actor_session_id: str,
-        target_session_id: str,
-        status: TeamMemberStatus,
-        activation_job_id: str | None = None,
-        activation_error: str | None = None,
-    ) -> TeamBoardDTO:
-        async with self._lock(team_id):
-            board = self._store.get(team_id)
-            member = find_member(board, target_session_id)
-            assert member is not None
-            updated = member.model_copy(
-                update={
-                    "status": status,
-                    "activation_job_id": activation_job_id,
-                    "activation_error": activation_error,
-                    "updated_at": self._now(),
-                }
-            )
-            board = self._replace_board(
-                board,
-                members=[
-                    updated if item.session_id == target_session_id else item
-                    for item in board.members
-                ],
-            )
-            return self._persist(
-                board,
-                self._event(
-                    board,
-                    event_type="member.activation_updated",
-                    actor_session_id=actor_session_id,
-                    payload={
-                        "session_id": target_session_id,
-                        "status": status,
-                        "activation_job_id": activation_job_id,
-                        "activation_error": activation_error,
-                    },
-                ),
-            )
+    def get_for_coordinator(self, *, session_id: str, team_id: str, thread_id: str) -> TeamBoardDTO:
+        board = self.get_for_member(session_id=session_id, team_id=team_id, thread_id=thread_id)
+        require_coordinator(board, thread_id)
+        return board
 
     async def assign_task(
         self,
         *,
         requester_session_id: str,
+        requester_thread_id: str,
         team_id: str,
-        assignee_session_id: str,
+        assignee_thread_id: str,
         title: str,
         description: str,
         phase: TeamTaskPhase,
@@ -196,8 +84,9 @@ class TeamBoardManager:
             board = self.get_for_coordinator(
                 team_id=team_id,
                 session_id=requester_session_id,
+                thread_id=requester_thread_id,
             )
-            require_active_member(board, assignee_session_id)
+            require_active_member(board, assignee_thread_id)
             tasks = {task.task_id: task for task in board.tasks}
             missing = [task_id for task_id in depends_on_task_ids if task_id not in tasks]
             if missing:
@@ -216,10 +105,10 @@ class TeamBoardManager:
                 description=required_text(description, "description"),
                 phase=phase,
                 cycle=cycle,
-                assignee_session_id=assignee_session_id,
+                assignee_thread_id=assignee_thread_id,
                 status="in_progress",
                 depends_on_task_ids=list(dict.fromkeys(depends_on_task_ids)),
-                updated_by_session_id=requester_session_id,
+                updated_by_thread_id=requester_thread_id,
                 created_at=now,
                 updated_at=now,
             )
@@ -229,10 +118,10 @@ class TeamBoardManager:
                 self._event(
                     board,
                     event_type="task.assigned",
-                    actor_session_id=requester_session_id,
+                    actor_thread_id=requester_thread_id,
                     payload={
                         "task_id": task.task_id,
-                        "assignee_session_id": assignee_session_id,
+                        "assignee_thread_id": assignee_thread_id,
                         "phase": phase,
                         "cycle": cycle,
                         "start_assignee": start_assignee,
@@ -245,6 +134,7 @@ class TeamBoardManager:
         self,
         *,
         requester_session_id: str,
+        requester_thread_id: str,
         team_id: str,
         task_id: str,
         status: TeamTaskStatus,
@@ -257,11 +147,12 @@ class TeamBoardManager:
             board = self.get_for_member(
                 team_id=team_id,
                 session_id=requester_session_id,
+                thread_id=requester_thread_id,
             )
             task = find_task(board, task_id)
-            if requester_session_id not in {
-                board.coordinator_session_id,
-                task.assignee_session_id,
+            if requester_thread_id not in {
+                board.coordinator_thread_id,
+                task.assignee_thread_id,
             }:
                 raise PermissionError("只能由协调者或任务负责人更新团队任务")
             if status not in TASK_TRANSITIONS[task.status]:
@@ -270,7 +161,7 @@ class TeamBoardManager:
                 update={
                     "status": status,
                     "summary": normalized_summary or task.summary,
-                    "updated_by_session_id": requester_session_id,
+                    "updated_by_thread_id": requester_thread_id,
                     "updated_at": self._now(),
                 }
             )
@@ -280,7 +171,7 @@ class TeamBoardManager:
                 self._event(
                     board,
                     event_type="task.updated",
-                    actor_session_id=requester_session_id,
+                    actor_thread_id=requester_thread_id,
                     payload={
                         "task_id": task_id,
                         "status": status,
@@ -295,16 +186,17 @@ class TeamBoardManager:
         *,
         team_id: str,
         task_id: str,
-        actor_session_id: str,
+        session_id: str,
+        actor_thread_id: str,
         job_id: str,
     ) -> tuple[TeamBoardDTO, TeamTaskDTO]:
         async with self._lock(team_id):
-            board = self._store.get(team_id)
+            board = self._store.get(session_id, team_id)
             task = find_task(board, task_id).model_copy(
                 update={
                     "assigned_job_id": job_id,
                     "updated_at": self._now(),
-                    "updated_by_session_id": actor_session_id,
+                    "updated_by_thread_id": actor_thread_id,
                 }
             )
             board = self._replace_task(board, task)
@@ -313,7 +205,7 @@ class TeamBoardManager:
                 self._event(
                     board,
                     event_type="task.dispatched",
-                    actor_session_id=actor_session_id,
+                    actor_thread_id=actor_thread_id,
                     payload={"task_id": task_id, "job_id": job_id},
                 ),
             )
@@ -324,18 +216,19 @@ class TeamBoardManager:
         *,
         team_id: str,
         task_id: str,
-        actor_session_id: str,
+        session_id: str,
+        actor_thread_id: str,
         error: str,
     ) -> None:
         async with self._lock(team_id):
-            board = self._store.get(team_id)
+            board = self._store.get(session_id, team_id)
             task = find_task(board, task_id).model_copy(
                 update={
                     "status": "failed",
                     "error": error,
-                    "summary": "目标 Session Job 启动失败",
+                    "summary": "目标线程 Job 启动失败",
                     "updated_at": self._now(),
-                    "updated_by_session_id": actor_session_id,
+                    "updated_by_thread_id": actor_thread_id,
                 }
             )
             board = self._replace_task(board, task)
@@ -344,20 +237,45 @@ class TeamBoardManager:
                 self._event(
                     board,
                     event_type="task.dispatch_failed",
-                    actor_session_id=actor_session_id,
+                    actor_thread_id=actor_thread_id,
                     payload={"task_id": task_id, "error": error},
                 ),
             )
 
     def with_recent_events(self, board: TeamBoardDTO) -> TeamBoardDTO:
-        return board.model_copy(
-            update={"recent_events": self._store.recent_events(board.team_id)}
-        )
+        control = self._factory.for_owner_session(board.session_id).control_store
+        members = [TeamMemberDTO(
+            thread_id=board.coordinator_thread_id, role="coordinator", source="coordinator",
+            work_mode="write", instructions="负责拆分工作、修改代码并协调团队成员。",
+            status="active", joined_at=board.created_at, updated_at=board.created_at,
+        )]
+        for row in control.list_collaboration_members(coordinator_session_id=board.session_id):
+            seed = json.loads(row.task_seed)
+            context = seed["trusted_context"]
+            if context.get("team_id") != board.team_id:
+                continue
+            if row.coordinator_thread_id != board.coordinator_thread_id or context["coordinator_thread_id"] != board.coordinator_thread_id:
+                raise RuntimeError(f"团队成员的冻结协调线程不一致: {row.delegation_id}")
+            if row.child_thread_id is None:
+                if row.state == "published":
+                    raise RuntimeError(f"published 团队成员缺少 child thread: {row.delegation_id}")
+                continue
+            intent = control.get_initial_execution_intent(row.delegation_id)
+            status = "cancelled" if row.state == "cancelled" else "active" if row.state == "published" and intent.state == "bound" else "pending"
+            members.append(TeamMemberDTO(
+                thread_id=row.child_thread_id, delegation_id=row.delegation_id,
+                role=row.role, source="delegated", work_mode=context["work_mode"],
+                instructions=seed.get("untrusted_instructions", ""), status=status,
+                joined_at=row.registered_at, updated_at=intent.intent_updated_at,
+            ))
+        return board.model_copy(update={
+            "members": members, "recent_events": self._store.recent_events(board.session_id, board.team_id),
+        })
 
     def _persist(self, board: TeamBoardDTO, event: TeamEventDTO) -> TeamBoardDTO:
-        self._store.save(board.model_copy(update={"recent_events": []}))
+        self._store.save(board.model_copy(update={"members": [], "recent_events": []}))
         self._store.append_event(event)
-        return board
+        return self.with_recent_events(board)
 
     def _replace_board(self, board: TeamBoardDTO, **updates: object) -> TeamBoardDTO:
         return board.model_copy(
@@ -380,14 +298,15 @@ class TeamBoardManager:
         board: TeamBoardDTO,
         *,
         event_type: str,
-        actor_session_id: str,
+        actor_thread_id: str,
         payload: dict[str, object],
     ) -> TeamEventDTO:
         return TeamEventDTO(
             event_id=create_prefixed_id("tevt"),
             team_id=board.team_id,
+            session_id=board.session_id,
             type=event_type,
-            actor_session_id=actor_session_id,
+            actor_thread_id=actor_thread_id,
             created_at=self._now(),
             payload=payload,
         )
@@ -397,4 +316,4 @@ class TeamBoardManager:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)

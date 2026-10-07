@@ -19,6 +19,16 @@ Thread-owned Node调试方案是额外的可移植业务资源，不属于canoni
 - **AND** target 只物化该已完成 Turn 的 inclusive 边界及其有效 canonical prefix，为所有复制实体建立 source→target mapping，并将源 checkpoint 的非 messages channel、channel versions、`versions_seen`、`pending_sends` 和 pending writes 物化到 target 自己的 SQLite 初始 checkpoint/view
 - **AND** target active view 只打开 target-local item/offset，父会话删除不影响 detached target
 
+默认 `context_fork` 的来源解析 MUST 限定于显式 `(source_session_id, source_thread_id, checkpoint_ns)` 的 active lineage。该 lineage 存在 normal Turn 时，继续按上述最近已完成 normal Turn 的规则解析；只有没有 normal Turn 时，才可选择当前已提交 checkpoint/view 明确绑定的 `execution_origin=internal`、`outcome=completed|completed_empty` execution 及其真实 `ExecutionAdmission`。系统 MUST 冻结该 owner 的 branch、view/revision、checkpoint、execution/admission identity，并在 source capture、SourceCopySnapshot、mapping 与 target materialization 中持续校验同一来源；MUST NOT 改选 Session main、其它 thread、全局最新 checkpoint 或按时间/物理邻接推断 execution。非空 internal 来源缺少可恢复 checkpoint、绑定不一致，或同一 source thread 存在进行中的 execution/Turn/未终态 assembly时 MUST 在创建 target 前明确拒绝。空 rollout 的原规则不作为非空 internal 来源的降级路径。该合同由本 requirement 唯一定义，生成分支消费同一入口，不另建生成专用 fork 链路。
+
+internal 来源的有效输出和 seed/reference 输入 MUST 按该已提交 checkpoint、selection 与 sealed detail 合同 target-local 物化，保留原协议闭合和来源绑定，不因其不符合公开 internal history 展示资格而丢失上下文；不得复制当前 producer 状态作为旧来源或伪造用户 Turn、acceptance、root、notice。目标仍是独立 Session 的 main thread；下一次执行使用新的目标准入，不继续运行 source execution。`history_prefix_fork` 与显式 Turn anchor 仍使用原已验证历史锚点，不使用上述无 Turn 路径。
+
+#### Scenario: 初始 internal child 可成为精确生成来源
+
+- **WHEN** same-Session child 的 seed/reference execution 已正常完成、该 active lineage 没有 normal Turn，且显式 child owner 当前 checkpoint/view 与该 internal admission/execution 一致
+- **THEN** `context_fork` 冻结并物化该精确 child 的有效上下文到 target-local checkpoint/view，不回退 main、不伪造 Turn 或 notice；生成结果回报仍到原发起 thread
+- **AND** source sibling 的运行和内容不改变该来源；同一 source thread 正在执行、checkpoint 缺失或绑定漂移时明确失败且不创建 target
+
 #### Scenario: context/history prefix fork 拒绝运行中的 Turn
 
 - **WHEN** `context_fork` 或 `history_prefix_fork` 请求明确携带一个尚未完成的 Turn，或者默认解析发现 source 存在 normal Turn 但没有任何已完成 Turn

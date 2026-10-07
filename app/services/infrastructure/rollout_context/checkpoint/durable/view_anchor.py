@@ -458,10 +458,16 @@ class RolloutViewAnchorMixin:
                 )
                 if source_kind == "display_only":
                     if (
-                        semantic_kind != "runtime_notice"
-                        or turn_id is not None
+                        turn_id is not None
                         or execution_id is None
-                        or turn_scope not in {"ambient", "pending_next_turn"}
+                        or (
+                            semantic_kind == "runtime_notice"
+                            and turn_scope not in {"ambient", "pending_next_turn"}
+                        )
+                        or (
+                            semantic_kind != "runtime_notice"
+                            and turn_scope is not None
+                        )
                     ):
                         raise RuntimeError(
                             "父 context view 的 display_only membership 指向非法 runtime item: "

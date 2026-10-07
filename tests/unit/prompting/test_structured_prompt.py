@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
 )
+from app.domain.itemized.records import InternalDisplayProvenance
 from app.prompting import (
     PromptSection,
     internal_message_factory,
@@ -122,8 +123,8 @@ def test_backend_display_projection_follows_registered_policy():
             PromptSection("control_context", {"secret_route": "ses_private"}),
             PromptSection("generated_session_result", "内部生成结果"),
         ),
-        metadata={"secret_route": "ses_private"},
         display_content="生成分支已经完成。",
+        display_provenance=InternalDisplayProvenance(source_session_id="ses_private"),
     )
     explicit_projection = project_message_for_display(
         explicit.content,
@@ -135,12 +136,26 @@ def test_backend_display_projection_follows_registered_policy():
     assert explicit_projection.metadata["internal_display_kind"] == (
         "generated_session_result"
     )
+    assert explicit.metadata["internal_display_provenance"] == {"source_session_id": "ses_private"}
 
     with pytest.raises(ValueError, match="隐藏展示策略"):
         internal_message_factory.build(
             kind="checkpoint_reminder",
             control="继续处理。",
             display_content="不应展示",
+        )
+
+
+@pytest.mark.parametrize("field", [
+    "boxteam_generation_run_id", "boxteam_generator_id", "boxteam_generation_phase",
+    "generated_session_id", "generated_job_id", "branch_result", "secret_route",
+])
+def test_generated_result_factory_rejects_control_or_unknown_metadata(field: str) -> None:
+    with pytest.raises(ValueError, match="不允许额外 metadata"):
+        internal_message_factory.build(
+            kind="generated_session_result", control="处理冻结结果。",
+            sections=(PromptSection("control_context", {}), PromptSection("generated_session_result", "私有结果")),
+            metadata={field: "禁止的控制或正文"}, display_content="任务已结束。",
         )
 
 

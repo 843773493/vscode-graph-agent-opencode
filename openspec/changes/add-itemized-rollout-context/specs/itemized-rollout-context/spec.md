@@ -188,7 +188,7 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 
 右侧文件树 MUST 保持对象级替换与精确子树失效，MUST NOT 退回全量重载；Gateway 工作区导航的集合成员 mutation MUST 接入本 change 已冻结的同一意图协议核心（唯一 `client_operation_id`、同分区有序 `client_sequence`、durable acceptance 不等于完成、按 ID 查询操作状态、迟到重放返回原终态、同 key 异 preimage 冲突），MUST NOT 另立第二套协议语义。
 
-协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。
+协议核心是共享语义，**operation 记录、执行 worker、事件通道与唯一键空间由该集合的权威 owner 各自实例化**：工作区目录的 owner 是工作区后端（`NavigationMutationRecord`）；Gateway 工作区导航的 owner 是 Gateway 控制面自身（MUST NOT 被读成「Gateway 不许接管自有导航」）。文件树是否引入异步受理，**由量化前置决定**（见 tasks §10.4b）：量化证明无瓶颈时 MUST NOT 引入，MUST NOT 以「一致性更好」为由先行实现。量化结果未达到开工条件时也 MUST NOT 默认引入，SHALL 按 10.4b/10.7 具名登记本轮不实施及证据原因，不将其伪称为已验证无瓶颈；精确失效、单目录替换和权威增量义务持续有效。
 
 文件树的影响面 MUST 用精确子树失效（丢弃该路径及其后代缓存并中止在途请求）表达，MUST NOT 以把全部已展开目录标记为过期再逐个重载的方式作为成功路径。文件变更事件流 MUST 接成权威增量修正通道，使外部变更（Agent、终端）驱动树增量更新，与本地乐观投影形成收敛闭环。
 
@@ -204,9 +204,9 @@ worker MUST在实际执行时按最新已提交SQLite和`NavigationTopologyGate`
 - **WHEN** Agent 或终端在树外部修改了文件，事件通道送达批量变更
 - **THEN** 前端按该增量修正对应目录的投影，MUST NOT 依赖全量重载来体现该变更
 
-#### Scenario: 集合型 mutation 不得绕开协议核心
-- **WHEN** 为会话目录树、文件树或 Gateway 工作区导航新增一个会改变集合成员的写操作
-- **THEN** 该操作 MUST 接入同一协议核心，MUST NOT 定义一套与之冲突的语义；其 operation 记录与 worker 由该集合的权威 owner 实例化，MUST NOT 保留一条绕开幂等与终态语法的同步直接写入通道
+#### Scenario: 已进入意图协议的集合型 mutation 不得绕开核心
+- **WHEN** 为会话目录树或 Gateway 工作区导航新增成员写操作，或文件树按量化前置进入异步受理分支后新增成员写操作
+- **THEN** 该操作 MUST 接入同一协议核心，MUST NOT 定义冲突语义；operation 记录与 worker 由该集合的权威 owner 实例化，MUST NOT 保留绕开幂等与终态语法的同步直接写入通道。文件树未进入异步受理分支时仍遵守单目录替换、精确子树失效与权威事件增量，MUST NOT 因本 Scenario 新增异步机制
 
 ### Requirement: 目录列表读取工作量必须与页大小相关
 
@@ -1349,6 +1349,8 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 每个`ContextRequestPlan`和`ContextAssemblySnapshot` SHALL引用一个由上下文生命周期owner冻结的`ResourceActivationSnapshotRef`，并为每个实际选择的管理型资源保存有序`ResourceProvenanceRef`。activation snapshot MUST记录`activation_snapshot_id`、`snapshot_kind=execution|model_call`、model-call snapshot的`parent_execution_snapshot_id`、activation policy revision/hash及完整规范化`activation_policy={default_boundary, overrides}`、Registry generation、owner SessionThread、真实execution identity、按admission kind可空的Turn及按kind要求的model-call identity、`bindings_hash`和`activation_provenance_hash`；resource provenance MUST记录内部resource identity、模型安全display URI、resource kind/scope/facet、已发布语义revision、effective boundary、captured Registry generation、语义payload content length、恰一个content hash或redacted stable digest、typed snapshot/detail reference、availability、activation ordinal，以及受保护typed `source_lineage_ref`和覆盖source_id/revision向量与derivation版本的`source_lineage_digest`。该lineage不得包含provider locator/credential，不得被用于当前源重读；原始来源revision与语义resource revision不得混用。
 
+`ResourceProvenanceRef.display_uri` MUST为必填 nullable 字段，地址与内部聚合的选择及校验只引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」。serde、activation持久化、detail manifest、hash和restore/fork保持相同值；NULL不等于字段缺失或来源不可用，不能从当前catalog补造URI，也不能作为非法地址的fallback。
+
 完整policy MUST包含default与全部kind overrides，包括本次没有binding的kind；持久化和恢复 MUST校验其规范化JCS hash及revision与snapshot记录一致。MUST NOT从选中binding重建policy、补默认值或读取当前配置。model-call snapshot MUST与parent保存相同完整policy；policy正文不进入bindings/plan hash，其完整性由既有policy hash及provenance校验保护。
 
 真实execution取得active slot时 MUST按下述唯一冻结合同取得不可变的activation policy与`ExecutionResourceSnapshot`，其中固定turn-bound binding。若没有model-call-bound kind，该Turn全部model call复用同一snapshot；若存在override，每次安全model-call preparation MUST建立parent-linked`ModelCallResourceSnapshot`并绑定该model call，逐字节复用parent中的turn-bound binding，只重新冻结model-call-bound binding。同一assembly可以包含两类binding，必须由每个ResourceProvenanceRef的effective boundary区分，不能用单个assembly boundary覆盖。ResourceRegistry或activation配置后续变化不得改写已经sealed的plan、hash、selection或Provider bytes，policy变化只在下一个新用户Turn或独立internal execution生效；同用户Turn retry/resume保持原冻结事实。
@@ -1514,7 +1516,7 @@ v1 root candidate 必须按 source `message_sequence` 升序切分为 user-root 
 
 `InitialExecutionIntent` 仅拥有 owner Session 内初始 execution 的 scheduling、claim 和 `pending -> bound` 状态，不是目标 thread execution owner 的 admission 记录。初始 binder 必须在目标 thread owner 以同一 `admission_idempotency_key` 对 `admit_internal_execution` 做幂等 create-or-get，且传入 intent 冻结的 `execution_binding_id` 和 `job_id`；`ExecutionAdmission.execution_id` MUST 与 `execution_binding_id` 完全相同。目标 owner 成功持久化或找回唯一 admission 后，binder 才能返回匹配的 durable binding 并允许 intent CAS 为 `bound`；admission 已提交但 intent 尚未 bound 时重试必须找回原 admission，不能产生第二个 Job 或 admission。`binding_preimage_hash` 覆盖 intent 冻结字段（admission key、owner Session、thread、creation key、initial state、execution_binding_id、job_id），`ExecutionAdmission.payload_hash` 覆盖 internal admission request/preimage；两者职责独立，不得互换或代替 canonical item 的 `content_hash`。
 
-`admit_internal_execution` 是所有 internal execution 共用的唯一准入入口；其通用合同允许 `runtime_notice_item=None`，仅在没有生成结果回报输入的初始 task-seed/reference execution 中使用。该初始执行的 request/preimage 必须绑定既有冻结 task-seed/reference identity，不得伪造 `generated_session_result`、user Turn 或 acceptance；seed 仍由原有初始 ContextStore owner 持有，不复制为第二份输入权威。携带生成结果回报的调用则 MUST 提供 `runtime_notice_item`，并由同一 owner 事务同时持久化 admission 与首个 notice；不得以可选参数绕过此原子义务。
+`admit_internal_execution` 是所有 internal execution 共用的唯一准入入口；其通用合同允许 `runtime_notice_item=None`，仅在没有生成结果回报输入的初始 task-seed/reference execution 中使用。该初始执行的 request/preimage 必须绑定既有冻结 task-seed/reference identity，不得伪造 `generated_session_result`、user Turn 或 acceptance；seed 仍由原有初始 ContextStore owner 持有，不复制为第二份输入权威。携带生成结果回报的调用则 MUST 提供 `runtime_notice_item`，并由同一 owner 事务同时持久化 admission 与首个 notice；不得以可选参数绕过此原子义务。两种形态均消费 `rollout-checkpoint-storage` requirement「JSONL 与 SQLite 提交边界一致」的 `execution_admission` commit 合同，不挪用 seal、item convergence 或 terminal commit，也不建立第二提交账本。
 
 内部生成结果回报 MUST 由接收 thread 的 owner 在一个事务中，通过 `admit_internal_execution(session_id, *, thread_id, execution_id, job_id, admission_idempotency_key, payload_hash, runtime_notice_item)` 持久化 internal admission 与其 `runtime_notice` item。`payload_hash` 是 admission request/preimage 的 JCS hash，不能复用 canonical item 的 `content_hash`；相同 idempotency key 重试时，payload hash、execution 或 job 任一不同都必须冲突，完全匹配时返回既有 admission/item 而不得重复创建。该 item 使用 `semantic_kind=runtime_notice`、`payload_kind=structured_content`、`turn_scope=pending_next_turn`、`turn_id=NULL`；它不得创建用户 acceptance、Turn、root、Turn execution link，也不得挂到 source completed Turn。内部 execution 的 model call、checkpoint、输出和失败终态 MUST 始终使用同一个显式 `ExecutionAdmission`，独立于 source Turn 的 lineage；缺少或无法解析该 binding 时必须 fail closed，不能从相邻 item、source Turn 或调用栈推断或补造。
 

@@ -13,6 +13,14 @@ from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 @runtime_checkable
 class SessionOrchestratorProtocol(Protocol):
+    async def resolve_main_thread(self, session_id: str) -> str: ...
+
+    async def submit_runtime_event(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+        delivery_policy: DeliveryPolicy = "after_turn",
+    ) -> MessageRunAccepted: ...
+
     def reserve_user_execution_identity(self) -> UserExecutionIdentity: ...
 
     def reserve_internal_job_id(self) -> str: ...
@@ -36,6 +44,11 @@ class SessionOrchestratorProtocol(Protocol):
         idempotency_key: str | None = None,
         thread_id: str | None = None,
     ) -> MessageRunAccepted: ...
+
+    async def prepare_user_message(
+        self, session_id: str, content: str, *, thread_id: str,
+        metadata: dict[str, object] | None = None,
+    ) -> MessageDTO: ...
 
     async def prepare_internal_message(
         self,

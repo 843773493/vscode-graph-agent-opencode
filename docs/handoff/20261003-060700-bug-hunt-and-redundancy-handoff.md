@@ -4,7 +4,7 @@
 停止点 HEAD：`11dcfa394261e70ffa7aba3a033a285eaebb1bb2`
 工作树状态：**当时完全干净**（独立索引 `read-tree HEAD` 后 `git status` 零残留）。这是历史停止点，恢复任务需重新检查。
 
-2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/07/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
+2026-10-03 调度整理：handoff 文档提交为 `9bc4246b`；模型、派单、路径和提交方法改由 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/08/team-collaboration-workflow.md) 维护。两种模型版本已准备，本轮仅整理文档及遗留目录，未继续 OpenSpec。目录问题与待审建议见 [目录审查](20261003-151500-team-collaboration-directory-review.md)。
 
 2026-10-04 迁移更新：仓库物理根为 `/data1/hyf/20260822_agent/vscode-graph-agent-opencode`，原路径为软链接；后续不复用历史临时测试工作区。默认工作区与 `/data1/hyf/test_workspace/drive_bicicle` 的旧 `.boxteam/` 数据已分别按用户授权清理，普通文件保留，两个连接均恢复 `ready`。完整开发服务已恢复（前端 8027、Gateway 8030）。以上为迁移时的历史服务状态，恢复时需重新核验。当前 goal 已继续本交接及七个关联 OpenSpec 的实施与独立验收，实际进展以技能实时台账为准。用户随后授权按架构熵减自主决策，开发生成的新旧中间数据可直接删除，不保留旧兼容，不再逐项询问。
 
@@ -113,7 +113,7 @@
 
 ### 2. 集成提交与防线
 
-`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-gpt/memory/2026/10/07/team-collaboration-workflow.md#集成与索引)。
+`scripts/assert_isolated_index_commit.mjs` 已落地，当前执行方法统一见 [技能的集成与索引流程](../../.codex/skills/team-collaboration-gpt/memory/2026/10/08/team-collaboration-workflow.md#集成与索引)。
 
 - 独立索引只能隔离暂存内容，不能隔离工作树文件，也不能防止旧 HEAD 快照覆盖并发提交；默认由主代理串行集成。
 - `git commit -- <路径>` 会绕过隔离索引（事故 `d4e864fc`），禁止使用；禁止 `--amend` 与裸共享索引提交。
@@ -127,7 +127,7 @@
 1. **`delegate` 的 `before_start` 失败后 child 已 publish，无回收路径**（OpenSpec 8.5 已知缺口）。
    探针实测：child row 与 intent 都留下，`abort_thread_creation_record` 只覆盖 `preparing`，对已 `published` 直接抛错；全库无任何回收已发布 child 的路径。
    当前选择：发布前准备复用 Session `session-control.sqlite` 的唯一 collaboration/creation ledger，与 child publication 同事务收敛；不增加 Team JSON intent/readiness 权威，published child 不回滚。实施及依赖验证仍待完成。
-2. **Resource activation/provenance 组件已存在，真实执行接线与验收仍待**：领域 snapshot/provenance 与 `services/orchestration/resource_activation/coordinator.py` 已有实现，不重新派“从零新增”；继续接真实 user/internal execution、唯一 Saver 与封存重试，按原第 9 节逐项验收。
+2. **Resource activation/provenance 真实执行闭包已集成，剩余整项验收继续推进**：`16f09ee7` 已接通 execution-owned activation → Runner/Factory/CSM/Provider/Saver 与 Skill/MCP，单份精确正文 detail、typed/hash、默认 history/API 脱敏及 restore/fork/retention 已有具名运行证据；本地 AES、两个 key 与 thread HMAC 已按用户要求删除。不得重复派“从零新增/尚无生产调用方”；itemized 9.3、9.8、9.9 等完整门槛仍按实时台账验收，源码包通过不等于整个 change 完成。
 3. **自由 metadata 决策字段的 typed 迁移已集成，完整来源消费仍待验收**：`ContextContribution` 已有 typed selection_role/replacement_policy/source_binding，当前 middleware 无旧 replaceable_source 分支。继续审 producer、封存、恢复与 Provider，不恢复 metadata 双读；整 R 与 activation 未验收项保留。
 4. **SessionThread typed owner 已进入模型和存储，继承入口与端到端验收仍待**：`ContextRef`、assembly、detail、canonical/checkpoint/fork 已显式携带 thread，不按旧“缺字段”描述重做。当前历史加载测试仍混用 Session/Thread 或漏 admission，交唯一实现者整文件迁移；通信、activation、同 Session child/team 沿原第 8 节继续。
 5. **前端会话目录 outbox 已接线，完整连续操作验收未闭合**（2026-10-07 fixed54a复核，OpenSpec 8.1-G/H、10.8）：App/hooks与folder CRUD/move、session rename/parent/delete已消费同一outbox；backend已有跨进程flock＋durable generation worker，旧同步端点/非递归第二writer已下线，不按历史“零caller”重做。真实剩余是pending父Folder建child被两处UI拒绝、前端intent/dependency/projection的连续创建链路，以及即时pending/失败/重开对账的最终验收。两个后端测试已消费唯一operations合同，旧同步调用finding撤销，不再派backend queue重写。最新固定树复核见本run `wire_contract_reviewer/artifacts/r01-identity-owner-review/next-outbox-remaining-plan.md`；旧报告保留为历史证据，未运行当前完整组、未勾任务。
@@ -178,7 +178,7 @@ bun run --cwd src/clients/web build                             EXIT=0
    - `app/services/orchestration/**` 的执行面（ThreadExecutionQueue、admission ordinal、ExecutionContextFence，OpenSpec 8.3-A）；
    - 前端 `hooks/{session*,sessionEventStream}` 的深层分支、`components/{agentSessions,overlays,shell,eventQueue}`；
    - `tests/integration/**` 的变异鉴别力审计（哪些用例还原缺陷后仍绿）。
-4. **并行协作口径**统一见 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/07/team-collaboration-workflow.md)，不在历史交接中维护第二套指令。保留本轮经验：独占文件范围、独立核验、区分真实缺陷与设计/未接线候选，允许审查者推翻自己的初判。
+4. **并行协作口径**统一见 [团队协作技能](../../.codex/skills/team-collaboration-gpt/memory/2026/10/08/team-collaboration-workflow.md)，不在历史交接中维护第二套指令。保留本轮经验：独占文件范围、独立核验、区分真实缺陷与设计/未接线候选，允许审查者推翻自己的初判。
 
 ---
 

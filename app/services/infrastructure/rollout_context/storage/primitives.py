@@ -109,6 +109,22 @@ class RolloutTurnAnchor:
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutInternalForkAnchor:
+    """无正常 Turn 的 owner 当前已提交内部执行锚点。"""
+
+    session_id: str
+    thread_id: str
+    checkpoint_ns: str
+    checkpoint_id: str
+    branch_id: str
+    view_id: str
+    history_view_revision: int
+    execution_id: str
+    admission_idempotency_key: str
+    admission_payload_hash: str
+
+
+@dataclass(frozen=True, slots=True)
 class ContextTurnItemWindow:
     """同一 view 的 Turn ordinal window 对应的 canonical membership bounds。"""
 

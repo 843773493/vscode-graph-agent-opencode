@@ -6,6 +6,10 @@ import pytest
 
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobService, JobState
+from tests.support.job_thread_fixture import (
+    job_fixture_execution_binding,
+    job_fixture_thread_id,
+)
 
 
 class FakeJobEventBus:
@@ -42,7 +46,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.running,
-        task=running_task,
+        task=running_task, execution_binding=job_fixture_execution_binding("job_running"), thread_id=job_fixture_thread_id(session_id),
     )
     queued_job = JobState(
         job_id="job_queued",
@@ -52,7 +56,7 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
-        delivery_policy="after_turn",
+        delivery_policy="after_turn", execution_binding=job_fixture_execution_binding("job_queued"), thread_id=job_fixture_thread_id(session_id),
     )
     other_job = JobState(
         job_id="job_other",
@@ -61,13 +65,13 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
         message_id="msg_other",
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
-        status=JobStatus.queued,
+        status=JobStatus.queued, execution_binding=job_fixture_execution_binding("job_other"), thread_id=job_fixture_thread_id("ses_other"),
     )
     service._jobs[running_job.job_id] = running_job
     service._jobs[queued_job.job_id] = queued_job
     service._jobs[other_job.job_id] = other_job
-    service._session_current_job[session_id] = running_job.job_id
-    service._pending_queue.append(session_id, queued_job.job_id, "after_turn")
+    service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = running_job.job_id
+    service._pending_queue.append(session_id, queued_job.job_id, "after_turn", thread_id=queued_job.thread_id)
 
     deleted_count = await service.delete_session_jobs(session_id)
 
@@ -76,5 +80,5 @@ async def test_delete_session_jobs_removes_running_and_queued_jobs(
     assert running_job.job_id not in service._jobs
     assert queued_job.job_id not in service._jobs
     assert other_job.job_id in service._jobs
-    assert session_id not in service._session_current_job
+    assert session_id not in service._thread_current_job
     assert service._pending_queue.ids(session_id) == ()

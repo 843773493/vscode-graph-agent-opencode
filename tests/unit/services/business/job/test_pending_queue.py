@@ -5,8 +5,8 @@ from app.services.business.job.pending_queue import JobPendingQueue, QueueEntry
 
 def test_queue_is_strict_fifo_and_tail_policy_update_preserves_order() -> None:
     queue = JobPendingQueue()
-    first = queue.append("session", "job_1", "after_turn")
-    second = queue.append("session", "job_2", "after_tool_result")
+    first = queue.append("session", "job_1", "after_turn", thread_id="thread")
+    second = queue.append("session", "job_2", "after_tool_result", thread_id="thread")
 
     assert first.enqueue_sequence == 1
     assert second.enqueue_sequence == 2
@@ -16,53 +16,53 @@ def test_queue_is_strict_fifo_and_tail_policy_update_preserves_order() -> None:
 
     assert updated.delivery_policy == "after_interrupt"
     assert queue.ids("session") == ("job_1", "job_2")
-    assert queue.peek_head("session") is first
+    assert queue.peek_head("session", "thread") is first
 
 
 def test_remove_head_makes_successor_the_new_head() -> None:
     queue = JobPendingQueue()
-    first = queue.append("session", "job_1", "after_turn")
-    second = queue.append("session", "job_2", "after_turn")
+    first = queue.append("session", "job_1", "after_turn", thread_id="thread")
+    second = queue.append("session", "job_2", "after_turn", thread_id="thread")
 
     queue.remove("session", first.job_id)
 
-    assert queue.peek_head("session") is second
+    assert queue.peek_head("session", "thread") is second
     assert queue.ids("session") == ("job_2",)
 
 
 def test_boundary_eligibility_never_allows_later_item_to_bypass_head() -> None:
     queue = JobPendingQueue()
-    head = queue.append("session", "job_head", "after_interrupt")
-    queue.append("session", "job_tail", "after_tool_result")
+    head = queue.append("session", "job_head", "after_interrupt", thread_id="thread")
+    queue.append("session", "job_tail", "after_tool_result", thread_id="thread")
 
-    assert queue.take_head("session", "after_tool_result") is None
+    assert queue.take_head("session", "after_tool_result", thread_id="thread") is None
     assert head.waiting_reason == "等待已提交的 interrupt 边界"
-    assert queue.peek_head("session") is head
+    assert queue.peek_head("session", "thread") is head
 
-    assert queue.take_head("session", "after_interrupt") is head
+    assert queue.take_head("session", "after_interrupt", thread_id="thread") is head
     assert queue.ids("session") == ("job_tail",)
 
 
 def test_tool_result_policy_falls_back_only_when_no_tool_result_exists() -> None:
     queue = JobPendingQueue()
-    entry = queue.append("session", "job", "after_tool_result")
+    entry = queue.append("session", "job", "after_tool_result", thread_id="thread")
 
     assert queue.take_head(
         "session",
-        "after_turn",
+        "after_turn", thread_id="thread",
         tool_result_available=True,
     ) is None
     assert queue.take_head(
         "session",
-        "after_turn",
+        "after_turn", thread_id="thread",
         tool_result_available=False,
     ) is entry
 
 
 def test_take_head_removes_message_before_execution() -> None:
     queue = JobPendingQueue()
-    entry = queue.append("session", "job", "after_turn")
-    taken = queue.take_head("session", "idle")
+    entry = queue.append("session", "job", "after_turn", thread_id="thread")
+    taken = queue.take_head("session", "idle", thread_id="thread")
 
     assert taken is entry
     assert queue.ids("session") == ()
@@ -75,15 +75,15 @@ def test_take_head_removes_message_before_execution() -> None:
     [
         (
             [
-                QueueEntry("job_1", 1, "after_turn"),
-                QueueEntry("job_1_duplicate", 1, "after_turn"),
+                QueueEntry("job_1", "thread", 1, "after_turn"),
+                QueueEntry("job_1_duplicate", "thread", 1, "after_turn"),
             ],
             "重复入队序号",
         ),
         (
             [
-                QueueEntry("job_2", 2, "after_turn"),
-                QueueEntry("job_1", 1, "after_turn"),
+                QueueEntry("job_2", "thread", 2, "after_turn"),
+                QueueEntry("job_1", "thread", 1, "after_turn"),
             ],
             "未严格递增",
         ),
@@ -101,7 +101,7 @@ def test_reorder_and_promotion_are_explicitly_rejected() -> None:
 
 def test_restore_only_restores_still_queued_messages() -> None:
     queue = JobPendingQueue()
-    queue.restore("session", [QueueEntry("job", 1, "after_turn")])
+    queue.restore("session", [QueueEntry("job", "thread", 1, "after_turn")])
 
     assert queue.ids("session") == ("job",)
 
@@ -109,10 +109,10 @@ def test_restore_only_restores_still_queued_messages() -> None:
 def test_interrupt_boundary_also_releases_after_turn_head() -> None:
     """interrupt 边界本身已是 turn 终止边界，不得让 after_turn 队首永久阻塞。"""
     queue = JobPendingQueue()
-    entry = queue.append("session", "job", "after_turn")
+    entry = queue.append("session", "job", "after_turn", thread_id="thread")
 
-    assert queue.take_head("session", "after_tool_result") is None
-    assert queue.take_head("session", "after_interrupt") is entry
+    assert queue.take_head("session", "after_tool_result", thread_id="thread") is None
+    assert queue.take_head("session", "after_interrupt", thread_id="thread") is entry
     assert queue.ids("session") == ()
 
 
@@ -125,25 +125,25 @@ def test_promoted_head_clears_stale_waiting_reason() -> None:
     排队条目的 hover 提示），而它当前恰恰就是队首、可立即投递。
     """
     queue = JobPendingQueue()
-    queue.append("session", "job_1", "after_turn")
-    second = queue.append("session", "job_2", "after_turn")
+    queue.append("session", "job_1", "after_turn", thread_id="thread")
+    second = queue.append("session", "job_2", "after_turn", thread_id="thread")
     assert second.waiting_reason == "等待队首"
 
-    assert queue.take_head("session", "idle").job_id == "job_1"
+    assert queue.take_head("session", "idle", thread_id="thread").job_id == "job_1"
 
-    assert queue.peek_head("session") is second
+    assert queue.peek_head("session", "thread") is second
     assert second.waiting_reason is None
 
 
 def test_promoted_head_after_remove_records_no_waiting_reason() -> None:
     """撤回队首后接替者同样不得残留「等待队首」。"""
     queue = JobPendingQueue()
-    queue.append("session", "job_1", "after_turn")
-    second = queue.append("session", "job_2", "after_turn")
+    queue.append("session", "job_1", "after_turn", thread_id="thread")
+    second = queue.append("session", "job_2", "after_turn", thread_id="thread")
 
     queue.remove("session", "job_1")
 
-    assert queue.peek_head("session") is second
+    assert queue.peek_head("session", "thread") is second
     assert second.waiting_reason is None
     assert queue.ids("session") == ("job_2",)
 
@@ -151,12 +151,12 @@ def test_promoted_head_after_remove_records_no_waiting_reason() -> None:
 def test_head_keeps_boundary_waiting_reason_when_bumped() -> None:
     """队首的边界理由由投递边界决定，``_bump`` 不得把它误清成 None。"""
     queue = JobPendingQueue()
-    head = queue.append("session", "job_head", "after_interrupt")
-    queue.append("session", "job_tail", "after_turn")
+    head = queue.append("session", "job_head", "after_interrupt", thread_id="thread")
+    queue.append("session", "job_tail", "after_turn", thread_id="thread")
 
-    assert queue.take_head("session", "after_tool_result") is None
+    assert queue.take_head("session", "after_tool_result", thread_id="thread") is None
     assert head.waiting_reason == "等待已提交的 interrupt 边界"
-    assert queue.peek_head("session") is head
+    assert queue.peek_head("session", "thread") is head
 
 
 def test_clear_releases_per_session_counters() -> None:
@@ -169,7 +169,7 @@ def test_clear_releases_per_session_counters() -> None:
     """
     queue = JobPendingQueue()
     for session_id in ("ses_a", "ses_b", "ses_c"):
-        queue.append(session_id, f"job_{session_id}", "after_turn")
+        queue.append(session_id, f"job_{session_id}", "after_turn", thread_id="thread")
         queue.clear(session_id)
 
     assert queue._waiting == {}
@@ -182,11 +182,11 @@ def test_clear_releases_per_session_counters() -> None:
 def test_clear_is_idempotent_and_reusable_session_restarts_sequence() -> None:
     """clear 幂等；清空后同一会话重新排队从第一号重新开始。"""
     queue = JobPendingQueue()
-    queue.append("session", "job_1", "after_turn")
+    queue.append("session", "job_1", "after_turn", thread_id="thread")
     queue.clear("session")
     assert queue.clear("session") == ()
 
-    entry = queue.append("session", "job_2", "after_turn")
+    entry = queue.append("session", "job_2", "after_turn", thread_id="thread")
 
     assert entry.enqueue_sequence == 1
     assert entry.waiting_reason is None
@@ -196,11 +196,11 @@ def test_clear_is_idempotent_and_reusable_session_restarts_sequence() -> None:
 def test_policy_update_keeps_positional_reason_semantics() -> None:
     """改策略不改位置：队首保持无位置理由，非队首标注「等待队首」。"""
     queue = JobPendingQueue()
-    head = queue.append("session", "job_head", "after_turn")
-    tail = queue.append("session", "job_tail", "after_turn")
+    head = queue.append("session", "job_head", "after_turn", thread_id="thread")
+    tail = queue.append("session", "job_tail", "after_turn", thread_id="thread")
 
     assert queue.update_policy("session", "job_head", "after_tool_result") is head
     assert head.waiting_reason is None
     assert queue.update_policy("session", "job_tail", "after_interrupt") is tail
     assert tail.waiting_reason == "等待队首"
-    assert queue.peek_head("session") is head
+    assert queue.peek_head("session", "thread") is head

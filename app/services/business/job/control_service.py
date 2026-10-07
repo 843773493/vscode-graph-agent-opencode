@@ -97,7 +97,7 @@ class JobControlService:
         self,
         *,
         get_jobs: Callable[[], Mapping[str, JobControlTarget]],
-        get_current_jobs: Callable[[], MutableMapping[str, str]],
+        get_current_jobs: Callable[[], MutableMapping[tuple[str, str], str]],
         pending_queue: JobPendingQueue,
         pending_requests: JobPendingRequestService,
         dispatch_lock: asyncio.Lock,
@@ -236,13 +236,13 @@ class JobControlService:
 
     def _resume_job_locked(self, job: JobControlTarget) -> None:
         current_jobs = self._get_current_jobs()
-        current_job_id = current_jobs.get(job.session_id)
+        current_job_id = current_jobs.get((job.session_id, job.thread_id))
         if current_job_id not in {None, job.job_id}:
             raise JobControlValueError.session_busy(
                 job.session_id,
                 current_job_id,
             )
-        current_jobs[job.session_id] = job.job_id
+        current_jobs[(job.session_id, job.thread_id)] = job.job_id
         transition_job_status(job, JobStatus.running, error_message=None)
         if job.task is None or job.task.done():
             self._start_job_task(job)

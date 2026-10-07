@@ -259,7 +259,7 @@ def test_different_threads_do_not_share_control_state(
             key, artifact_manifest=manifest,
             artifact_manifest_hash=hashlib.sha256(manifest.encode()).hexdigest(),
         )
-        child = control.publish_thread_creation_record(key)
+        child = control.publish_thread_creation_record(key, session_id=main_owner.session_id)
     (session_root / child.final_relative_locator).mkdir(parents=True)
     child_owner = ContextSourceOwnerKey(
         session_id=main_owner.session_id, thread_id=CHILD_THREAD_ID,

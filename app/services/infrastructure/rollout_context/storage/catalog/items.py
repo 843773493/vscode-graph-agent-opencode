@@ -484,6 +484,7 @@ class RolloutItemsMixin:
                         connection,
                         checkpoint_ns=checkpoint_ns,
                         item_ids=resolved_item_ids,
+                        source_kind="display_only" if execution_origin == "internal" else "canonical",
                     )
                     self._commit_connection(connection)
                     return tuple(dict.fromkeys(existing_commit_ids))
@@ -572,6 +573,7 @@ class RolloutItemsMixin:
                     connection,
                     checkpoint_ns=checkpoint_ns,
                     item_ids=(item.item_id for item in pending),
+                    source_kind="display_only" if execution_origin == "internal" else "canonical",
                 )
                 self._commit_connection(connection)
                 return tuple(dict.fromkeys((*existing_commit_ids, commit_id)))

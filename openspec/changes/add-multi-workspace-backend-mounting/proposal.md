@@ -13,7 +13,7 @@
 - 完整化 `scope_id` 原则（权威表 R2）：URI 的 `scope_id` 对所有 scope MUST 必填且 MUST **推导自该 scope 的稳定身份、MUST NOT 硬编码**；`workspace`→真实 workspace_id、`gateway`→真实 gateway_id、`inline`（原 `builtin`）→真实 distribution_id（**来源已裁定**：该发行包 runtime manifest 的 `distribution` + `version`，编码规则见同一 change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」；`gateway_id` 的**来源与注入 owner 亦已裁定**：owner = Gateway 侧按请求注入，取值见同一 change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」，本 change 只引用）、`user`→`local`（**已定稿终值**，单用户本地程序约定，见 `add-unified-virtual-resource-addressing` 的 requirement「scope 必须取自定稿闭集且 scope_id 对所有 scope 必填」）。两个既存违反点均已修复（**2026-10-01 第八轮复核更正**）：`inline` 由 `298ef599`+`f3bd8213` 装配为真实 distribution_id（`app/agents/skill_runtime.py` 的 `_layer_scope_identity` 调 `load_distribution_id()`），`gateway` 由 `64ba30c8`/`53befbfc`/`9881a3b2` 装配为按请求注入的真实 gateway_id（原 `skill_runtime.py` 的 `else "local"` 分支已物理删除）。
 - **接口前提**：`gateway` 身份与 workspace 身份同属**寻址层身份**，都 MUST 显式可表达。`gateway_id` MUST 真实：owner = Gateway 侧按请求注入，取值见「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」，由 Gateway 侧经 `X-BoxTeam-Gateway-Id` 按请求注入（提交 `64ba30c8`/`53befbfc`/`9881a3b2`）——**装配已落地**，本 change 只引用、不复述取值规则。`distribution_id` 来源为发行包 runtime manifest 的 `distribution` + `version`（见「统一资源寻址」change 的 requirement「inline scope 的 scope_id 由 manifest 的 distribution 与 version 定稿推导」），**装配亦已落地**（提交 `298ef599`+`f3bd8213`：`app/core/distribution_identity.py::load_distribution_id` 为生产赋值方，被 `app/agents/skill_runtime.py::_layer_scope_identity` 消费）。二者均已就绪，不再有「零生产赋值 / 尚未实现装配 / 剩通道与装配」的空洞（**2026-10-01 第八轮复核更正**）。
 - 进程级资源按 workspace_id 分区（清单与理由见 design）：会话目录解析器与 `lru_cache`、SQLite catalog/状态库及进程所有权锁、会话生命周期 gate/operation lease、Job 事件总线与事件通道、后台任务注册表、配置服务与 `workspace-root` 绑定、Workspace 活动/资源注册表、持久资源账本、消息流与 trace 存储。
-- **BREAKING** 破坏性迁移边界（见 design）：**无存量 URI 数据迁移** —— 权威表实测 URI 零落盘，故只需新写字段与读路径切换；旧持久化字段中**只描述单工作区前提的非 URI 字段**仍需显式迁移或显式失效，不回滚兼容层。
+- **BREAKING** 破坏性迁移边界（见 design）：按用户授权让旧开发运行数据显式失效并清理，只保留新写字段与单一读路径，不增加存量 URI 扫描、回填或兼容层；只描述单工作区前提的旧字段不再读取。当前正确的新 writer 及精确恢复合同仍须验收。
 - 收口手续（具名、对称）：本 change 的 workspace 身份以 **`add-unified-virtual-resource-addressing` 的 requirement「多工作区场景下寻址层必须显式承载 scope_id 身份」** 为唯一权威定义（该 requirement 亦具名引用本 change 承接实现细节）；收口以该具名定义为准，不采用「`rg` 复核全仓」这类无目标的表述。
 - 命名一致性作为跨 change 硬约束：逐字使用**冻结契约 v2** 的 `资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`，禁止同义异名。scope 闭合集与 `scope_id` 取值语义、拒绝码登记以「统一资源寻址」change 的**权威表**为准，本 change 不复述具体取值。
 
@@ -25,7 +25,7 @@
 
 ### Modified Capabilities
 
-- `managed-backend-lifecycle`: 该 capability 现要求「Gateway 拥有默认及每个新增的本地托管工作区 runtime」，即「一个工作区一个后端进程」的隐含前提。多工作区挂载后，后端进程数与工作区数解耦，需按本 change 的注册表模型调整其「所有权/排空式重启/进程组清理」的粒度表述。
+- `managed-backend-lifecycle`: 共享 Backend 的唯一 owner 持进程句柄/generation/完整启动清单；工作区成员保独立业务身份与辅助服务。明确完整组 generation/成员前置条件、排空/force、不可变 mount 集合切换、一次清理/接管/恢复与配置候选补偿，统一影响面 DTO及Web消费；普通新增工作区仍独立singleton启动，外部后端仍仅探测。
 
 ## Impact
 
@@ -33,5 +33,5 @@
 - **本轮已收口**：`add-workspace-persistent-resource-management` 的 `proposal.md`/`design.md`/`tasks.md` 与 `specs/workspace-persistent-resources/spec.md` 中「当前工作区」「`${workspace_abs_path}`」的单工作区前提已改为指向本 change 的显式 `workspace_id` 身份与已挂载工作区注册表（该 change 当时空闲，无并发编辑冲突）。
 - **受影响系统**：`app/container.py`（单根装配 → 多工作区注册表）、`app/core/path_utils.py`（解析器与工作区路径 owner）、`app/main.py`（挂载和生命周期）、`app/api/**`（workspace 身份载体）、`app/core/sqlite_state.py` 的 `SQLiteProcessOwnership`、`app/services/**` 中按工作区构造的服务/注册表/总线、Gateway registry 与 workspace proxy（目标显式传递）、OpenAPI 快照及相关测试。
 - **破坏性**：既有「一个后端进程一个工作区」的部署形态、只描述单工作区前提的**非 URI** 持久化字段、以「当前激活工作区」为隐含前提的客户端调用一并收敛；不提供旧形态兼容层或双读。
-- **不涉及存量 URI 数据迁移**：权威表实测 URI 零落盘（157 live + 44 dev/temp SQLite 对 `boxteam://` 零命中、无 `resource_activation*` 表；`display_uri` 仅测试写入、container 无装配、生产 seal 恒为 `None`），故本 change 的 workspace 身份显式化只需新写字段与读路径切换。
+- **不涉及旧开发数据迁移**：原零 URI 取证属于历史基线；A01 `16f09ee7` 已将真实 activation freeze/seal/restore 接入生产，不能再用“无装配、seal 恒为空”推断当前状态。本 change 按用户清理授权完成显式身份的新写字段与单一读路径，不从旧数据反推默认工作区或当前来源。
 - **契约依赖**：URI 语法、scope 闭合集、`scope_id` 取值语义与拒绝码登记由「统一资源寻址」change 独占，本 change 只引用其权威表；会话上下文资源的承载由「会话上下文 URI 统一改造」change 负责。

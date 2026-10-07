@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.core.identifier import create_prefixed_id
 from tests.integration.stubs.http_stubs import generation_target_stub
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -46,6 +48,8 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             headers={
                 **LOCAL_TOKEN_HEADERS,
                 "X-BoxTeam-Workspace-Id": primary_backend.workspace_id,
+                "X-BoxTeam-Gateway-Id": "0197d9a3-7d2a-7c29-8d76-58b3cf3f8a21",
+                "X-BoxTeam-Navigation-Actor": "guest",
             },
             timeout=30,
         ) as client:
@@ -83,12 +87,10 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
         close_backend_process(primary_backend)
 
     secondary_port = port_block.port(1)
-    secondary_folder_id = "folder_secondary_reports"
-    secondary_session_id = "ses_secondary_needle"
-    secondary_folder_storage = f"次工作区报告--{secondary_folder_id[-8:]}"
+    secondary_folder_id = create_prefixed_id("ses")
+    secondary_session_id = create_prefixed_id("ses")
     secondary_session_storage = (
-        f"{secondary_folder_storage}/"
-        f"Shared Catalog Needle Secondary--{secondary_session_id[-8:]}"
+        f"{datetime.now(UTC):%Y/%m/%d}/{secondary_session_id}"
     )
     secondary_backend_workspace_id = workspace_backend_id_for_root(
         secondary_workspace
@@ -102,8 +104,9 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": None,
             "folder_id": secondary_folder_id,
             "has_children": True,
+            "node_revision": 1,
             "state": "active",
-            "storage_relative_path": secondary_folder_storage,
+            "storage_relative_path": None,
             "created_at": None,
             "updated_at": None,
             "session": None,
@@ -116,6 +119,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
             "session_id": secondary_session_id,
             "folder_id": None,
             "has_children": False,
+            "node_revision": 1,
             "state": "active",
             "storage_relative_path": secondary_session_storage,
             "created_at": None,
@@ -235,7 +239,7 @@ async def test_gateway_aggregates_catalog_breadcrumbs_and_reports_offline_worksp
 
     gateway = start_gateway_process(
         workspace_root=primary_workspace,
-        default_backend_url="http://127.0.0.1:9",
+        default_backend_url=None,
         port=port_block.port(2),
     )
     try:

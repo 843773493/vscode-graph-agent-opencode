@@ -251,6 +251,10 @@ from pathlib import Path
 from app.core.session_catalog_store import SessionCatalogStore
 from app.core.session_control_store import SessionControlStore
 from app.core.session_creation import SessionCreationService
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 clock_shim = ctypes.CDLL(os.environ["BOXTEAM_U07_CLOCK_SHIM"])
 set_realtime_ms = clock_shim.u07_set_realtime_ms
@@ -284,6 +288,7 @@ async def create_session(key):
         title=key,
         purpose="normal",
         parent_node_id=None,
+        graph_binding=TEST_THREAD_GRAPH_BINDING,
         session_metadata=session_metadata,
     )
     return await service.publish_prepared(record)
@@ -300,7 +305,7 @@ def create_child(session_record, key):
             idempotency_key=key,
             initial_state="idle",
             preimage_hash=hashlib.sha256(key.encode()).hexdigest(),
-            graph_binding="{}",
+            graph_binding=TEST_THREAD_GRAPH_BINDING_JSON,
             capability_profile="{}",
         )
         control.freeze_thread_creation_artifact_manifest(
@@ -308,7 +313,7 @@ def create_child(session_record, key):
             artifact_manifest="{}",
             artifact_manifest_hash=hashlib.sha256(b"{}").hexdigest(),
         )
-        control.publish_thread_creation_record(key)
+        control.publish_thread_creation_record(key, session_id=session_record.session_id)
         child_row = control.connection.execute(
             "SELECT thread_id, created_at FROM thread_catalog WHERE kind = 'child'"
         ).fetchone()
@@ -453,7 +458,7 @@ def test_seed_catalog_session_rejects_created_at_millisecond_mismatch_before_wri
     boxteam_root = isolated_uuid7_workspace / ".boxteam"
     sessions_root = boxteam_root / "sessions"
     navigation_database = boxteam_root / "navigation" / "session-catalog.sqlite"
-    assert navigation_database.is_file()
+    assert not navigation_database.exists()
     files_before = {
         path.relative_to(boxteam_root): path.read_bytes()
         for path in boxteam_root.rglob("*")
@@ -475,6 +480,7 @@ def test_seed_catalog_session_rejects_created_at_millisecond_mismatch_before_wri
         )
 
     assert not sessions_root.exists()
+    assert not navigation_database.exists()
     assert {
         path.relative_to(boxteam_root): path.read_bytes()
         for path in boxteam_root.rglob("*")

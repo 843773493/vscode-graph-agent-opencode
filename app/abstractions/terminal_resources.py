@@ -25,9 +25,11 @@ class TerminalTransport(ResourceTransport, Protocol):
 
     async def mark_terminal_backgrounded(self, terminal_id: str) -> TerminalSnapshot: ...
 
-    async def claim_terminal_steering(self, terminal_id: str) -> TerminalSnapshot: ...
-
-    async def finish_terminal_steering(
-        self, terminal_id: str, *, dispatched: bool,
+    async def claim_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
     ) -> TerminalSnapshot: ...
 
+    async def finish_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+        dispatched: bool,
+    ) -> TerminalSnapshot: ...

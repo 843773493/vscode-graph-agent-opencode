@@ -114,6 +114,16 @@ def compile_prefix_context(
     else:
         state = previous_binding.prefix.state
     rebuilding = not state.epoch_applied
+    if rebuilding and transition is None and previous_binding is not None:
+        # ToolSet hard rebase 只替换执行能力；已封存的 untracked 用户来源仍属于
+        # 当前 owner 的有效上下文。复用真实 selection/frame，不重新观察来源。
+        retained_source_assembly = previous
+        retained_source_refs = frozenset(
+            (frame.item_ref.ref_id, frame.item_ref.source_revision)
+            for frame in previous_binding.prefix.state.frames
+            if frame.role == "user" and frame.item_ref.ref_type == "source_item"
+            and frame.item_ref.tracking_state == "not_tracked"
+        )
     by_id = {ref.ref_id: ref for ref in plan.refs}
     by_contribution = {source.contribution_id: source for source in plan.contributions}
     selected_ids: list[str] = []

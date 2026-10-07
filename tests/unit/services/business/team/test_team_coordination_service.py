@@ -1,289 +1,169 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
 from app.abstractions.session_subagent import SessionSubagentAccepted
-from app.schemas.internal_v2.session import SessionDTO
-from app.services.business.session_context_resource import (
-    session_resource_identity,
-    session_resource_uri,
-)
+from app.schemas.internal_v2.team import TeamBoardDTO
+from app.services.business.message_display import project_message_for_display
 from app.services.business.team.service import TeamCoordinationService
-from app.services.infrastructure.team.store import TeamStore
 
 
-def _session(session_id: str, *, title: str = "会话") -> SessionDTO:
-    now = datetime.now(timezone.utc)
-    return SessionDTO(
-        session_id=session_id,
-        workspace_id="ws_test",
-        resource_identity=session_resource_identity("ws_test", session_id),
-        uri=session_resource_uri("ws_test", session_id),
-        scope="workspace",
-        title=title,
-        current_agent_id="default",
-        kind="normal",
-        created_at=now,
-        updated_at=now,
-    )
+class BoardStore:
+    def __init__(self):
+        self.boards = {}
+        self.events = []
+
+    def create(self, board):
+        return self.save(board)
+
+    def save(self, board):
+        self.boards[(board.session_id, board.team_id)] = board
+        return board
+
+    def get(self, session_id, team_id):
+        return self.boards[(session_id, team_id)]
+
+    def list(self, session_id):
+        return [board for (owner, _key), board in self.boards.items() if owner == session_id]
+
+    def append_event(self, event):
+        self.events.append(event)
+
+    def recent_events(self, session_id, team_id, *, limit=20):
+        return [event for event in self.events if (event.session_id, event.team_id) == (session_id, team_id)][-limit:]
 
 
-class _SessionService:
-    def __init__(self, sessions: list[SessionDTO]) -> None:
-        self.sessions = {session.session_id: session for session in sessions}
+class Factory:
+    def __init__(self):
+        self.members = []
+        self.control_store = self
 
-    async def get(self, session_id: str) -> SessionDTO:
-        return self.sessions[session_id]
+    def for_owner_session(self, session_id):
+        assert session_id == "ses_owner"
+        return self
 
+    def validate_owner_thread(self, session_id, thread_id):
+        assert session_id == "ses_owner"
+        assert thread_id == "thr_main" or any(row.child_thread_id == thread_id for row in self.members)
 
-class _Orchestrator:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
+    def list_collaboration_members(self, *, coordinator_session_id):
+        assert coordinator_session_id == "ses_owner"
+        return tuple(self.members)
 
-    async def create_and_run(self, session_id: str, content: str, **kwargs):
-        self.calls.append({"session_id": session_id, "content": content, **kwargs})
-        index = len(self.calls)
-        return SimpleNamespace(message_id=f"msg_{index}", job_id=f"job_{index}")
-
-    async def create_and_run_internal(self, session_id: str, message, **kwargs):
-        return await self.create_and_run(
-            session_id,
-            message.content,
-            metadata=message.metadata,
-            **kwargs,
-        )
+    def get_initial_execution_intent(self, delegation_id):
+        assert any(row.delegation_id == delegation_id for row in self.members)
+        return SimpleNamespace(state="bound", intent_updated_at=datetime.now(UTC))
 
 
-class _SubagentService:
-    def __init__(self, session_service: _SessionService) -> None:
-        self.session_service = session_service
-        self.calls: list[dict[str, object]] = []
+class Sessions:
+    async def get(self, session_id):
+        assert session_id == "ses_owner"
+        return SimpleNamespace(thread_id="thr_main")
 
-    async def delegate(self, **kwargs) -> SessionSubagentAccepted:
+
+class Subagents:
+    def __init__(self, factory):
+        self.factory = factory
+        self.calls = []
+
+    async def delegate(self, **kwargs):
         self.calls.append(kwargs)
-        # R25 契约：委派产出 owner Session 内 child thread + pending
-        # intent（不创建 child Session，不返回运行中 Job）。
         index = len(self.calls)
-        accepted = SessionSubagentAccepted(
-            owner_session_id=kwargs["parent_session_id"],
-            child_thread_id=f"thr_{index:032x}",
-            delegation_id=f"del_{index:032x}",
-            admission_idempotency_key=f"del_{index:032x}",
-            admission_state="pending",
-            execution_binding_id=f"tbind_{index:032x}",
-            frozen_job_id=f"job_{index:032x}",
-        )
-        before_start = kwargs.get("before_start")
-        if before_start is not None:
-            await before_start(accepted)
-        return accepted
+        delegation_id = f"del_{index}"
+        child_thread_id = f"thr_child_{index}"
+        self.factory.members.append(SimpleNamespace(
+            delegation_id=delegation_id, coordinator_session_id=kwargs["parent_session_id"],
+            coordinator_thread_id=kwargs["parent_thread_id"], child_thread_id=child_thread_id,
+            role=kwargs["collaboration_member"]["role"], state="published", registered_at=datetime.now(UTC),
+            task_seed=json.dumps({"trusted_context": kwargs["trusted_context"], "untrusted_instructions": kwargs["untrusted_instructions"]}),
+        ))
+        return SessionSubagentAccepted(owner_session_id=kwargs["parent_session_id"], child_thread_id=child_thread_id,
+                                       delegation_id=delegation_id, admission_idempotency_key=delegation_id,
+                                       admission_state="bound", execution_binding_id=f"binding_{index}", frozen_job_id=f"job_{index}")
 
 
-def _service(tmp_path, sessions: list[SessionDTO]):
-    session_service = _SessionService(sessions)
-    orchestrator = _Orchestrator()
-    subagents = _SubagentService(session_service)
-    service = TeamCoordinationService(
-        store=TeamStore(workspace_root=tmp_path),
-        session_service=session_service,
-        session_orchestrator=orchestrator,
-        session_subagent_service=subagents,
-    )
-    return service, session_service, orchestrator, subagents
+class Orchestrator:
+    def __init__(self):
+        self.calls = []
+
+    async def submit_runtime_event(self, session_id, message, *, thread_id, source_id, idempotency_key, delivery_policy="after_turn"):
+        self.calls.append((session_id, thread_id, message, source_id, idempotency_key))
+        return SimpleNamespace(job_id=f"notice_{len(self.calls)}")
 
 
-@pytest.mark.asyncio
-async def test_delegated_reviewer_uses_shared_board_and_reports_to_parent(tmp_path):
-    parent = _session("ses_parent", title="开发主会话")
-    service, _, orchestrator, subagents = _service(tmp_path, [parent])
+@pytest.fixture
+def team_case():
+    store = BoardStore()
+    factory = Factory()
+    subagents = Subagents(factory)
+    orchestrator = Orchestrator()
+    service = TeamCoordinationService(store=store, session_service=Sessions(), session_orchestrator=orchestrator,
+                                      session_subagent_service=subagents, thread_creation_factory=factory)
+    return SimpleNamespace(service=service, store=store, factory=factory, subagents=subagents, orchestrator=orchestrator)
 
-    team = await service.create_team(
-        requester_session_id=parent.session_id,
-        name="交付循环",
-    )
-    member_result = await service.create_member(
-        requester_session_id=parent.session_id,
-        requester_agent_id="default",
-        requester_job_id="job_parent",
-        requester_tool_call_id="call_member",
-        team_id=team.team_id,
-        role="reviewer",
-        startup_prompt="确认审查职责并等待任务。",
-        instructions="只读审查，不修改文件。",
-        work_mode="read_only",
-    )
 
-    reviewer_id = member_result.member.session_id
-    assert reviewer_id == "thr_" + f"{1:032x}"
-    assert member_result.member.source == "delegated"
-    # R25：委派成员无激活 Job（R26 接线）；admission 保持 pending。
-    assert member_result.member.activation_job_id is None
-    assert member_result.child_thread_id == reviewer_id
-    assert member_result.child_delegation_id == "del_" + f"{1:032x}"
-    assert member_result.child_admission_state == "pending"
-    assert subagents.calls[0]["trusted_context"]["team_id"] == team.team_id
-    assert subagents.calls[0]["title"] == "reviewer · 交付循环"
-
-    assigned = await service.assign_task(
-        requester_session_id=parent.session_id,
-        team_id=team.team_id,
-        assignee_session_id=reviewer_id,
-        title="审查父会话修改",
-        description="读取结果并报告问题。",
-        phase="review",
-        cycle=1,
-        depends_on_task_ids=[],
-        start_assignee=True,
-    )
-    assert assigned.dispatched_job_id == "job_1"
-    assert orchestrator.calls[0]["session_id"] == reviewer_id
-    assert "message_role" not in orchestrator.calls[0]
-    assert orchestrator.calls[0]["metadata"]["source"] == "team_task_assignment"
-
-    completed = await service.update_task(
-        requester_session_id=reviewer_id,
-        team_id=team.team_id,
-        task_id=assigned.task.task_id,
-        status="completed",
-        summary="REVIEW_OK：修改符合要求。",
-    )
-
-    assert completed.task.status == "completed"
-    assert completed.dispatched_job_id == "job_2"
-    assert orchestrator.calls[1]["session_id"] == parent.session_id
-    assert "message_role" not in orchestrator.calls[1]
-    assert orchestrator.calls[1]["metadata"]["source"] == "team_task_update"
-    assert '"board_update_persisted": true' in orchestrator.calls[1]["content"]
-    assert "不得声称面板尚未同步" in orchestrator.calls[1]["content"]
-    reviewer_board = await service.get_board(
-        requester_session_id=reviewer_id,
-        team_id=team.team_id,
-    )
-    assert {member.session_id for member in reviewer_board.members} == {
-        parent.session_id,
-        reviewer_id,
-    }
+async def create_reviewer(case):
+    board = await case.service.create_team(requester_session_id="ses_owner", requester_thread_id="thr_main", name="交付循环")
+    member = await case.service.create_member(requester_session_id="ses_owner", requester_thread_id="thr_main",
+                                              requester_agent_id="default", requester_job_id="job_parent", requester_tool_call_id="call_member",
+                                              team_id=board.team_id, role="reviewer", startup_prompt="确认审查职责并等待任务。",
+                                              instructions="只读审查，不修改文件。", work_mode="read_only")
+    return board, member
 
 
 @pytest.mark.asyncio
-async def test_existing_review_session_is_attached_without_replacement(tmp_path):
-    parent = _session("ses_parent", title="开发主会话")
-    reviewer = _session("ses_manual_review", title="已调校三轮的审查会话")
-    service, sessions, orchestrator, subagents = _service(
-        tmp_path,
-        [parent, reviewer],
-    )
-    original_session_count = len(sessions.sessions)
-    original_reviewer = sessions.sessions[reviewer.session_id]
-    team = await service.create_team(
-        requester_session_id=parent.session_id,
-        name="复用人工审查会话",
-    )
-
-    attached = await service.attach_session(
-        requester_session_id=parent.session_id,
-        team_id=team.team_id,
-        target_session_id=reviewer.session_id,
-        role="reviewer",
-        instructions="沿用该会话已经形成的严格审查方案。",
-        work_mode="read_only",
-        notify=True,
-    )
-
-    assert len(sessions.sessions) == original_session_count
-    assert sessions.sessions[reviewer.session_id] is original_reviewer
-    assert attached.member.source == "attached"
-    assert attached.member.session_id == reviewer.session_id
-    assert subagents.calls == []
-    assert orchestrator.calls[0]["session_id"] == reviewer.session_id
-    assert "保留当前全部上下文和既有审查方案" in orchestrator.calls[0]["content"]
-
-    task = await service.assign_task(
-        requester_session_id=parent.session_id,
-        team_id=team.team_id,
-        assignee_session_id=reviewer.session_id,
-        title="使用既有规则复审",
-        description="按此前人工确认的审查方案检查父会话修改。",
-        phase="review",
-        cycle=2,
-        depends_on_task_ids=[],
-        start_assignee=True,
-    )
-    board = await service.get_board(
-        requester_session_id=reviewer.session_id,
-        team_id=team.team_id,
-    )
-    assert board.tasks[0].task_id == task.task.task_id
-    assert board.members[1].source == "attached"
-
-
-async def _blocked_task_fixture(tmp_path):
-    parent = _session("ses_parent", title="开发主会话")
-    service, _, orchestrator, _ = _service(tmp_path, [parent])
-    team = await service.create_team(
-        requester_session_id=parent.session_id,
-        name="结论闭集",
-    )
-    member_result = await service.create_member(
-        requester_session_id=parent.session_id,
-        requester_agent_id="default",
-        requester_job_id="job_parent",
-        requester_tool_call_id="call_member",
-        team_id=team.team_id,
-        role="reviewer",
-        startup_prompt="等待任务。",
-        instructions="只读。",
-        work_mode="read_only",
-    )
-    assigned = await service.assign_task(
-        requester_session_id=parent.session_id,
-        team_id=team.team_id,
-        assignee_session_id=member_result.member.session_id,
-        title="审查",
-        description="检查。",
-        phase="review",
-        cycle=1,
-        depends_on_task_ids=[],
-        start_assignee=True,
-    )
-    return service, team, member_result.member.session_id, assigned.task.task_id, orchestrator
+async def test_member_projection_and_task_notifications_use_same_session_exact_threads(team_case):
+    board, accepted = await create_reviewer(team_case)
+    member = accepted.member
+    assert member.thread_id == "thr_child_1"
+    assert member.status == "active"
+    assert accepted.child_admission_state == "bound"
+    frozen = team_case.subagents.calls[0]
+    assert frozen["parent_thread_id"] == "thr_main"
+    assert frozen["trusted_context"]["coordinator_thread_id"] == "thr_main"
+    assert frozen["collaboration_member"] == {"role": "reviewer"}
+    stored = team_case.store.get("ses_owner", board.team_id)
+    assert stored.members == []
+    task = await team_case.service.assign_task(requester_session_id="ses_owner", requester_thread_id="thr_main",
+                                                team_id=board.team_id, assignee_thread_id=member.thread_id, title="审查",
+                                                description="检查实现并报告。", phase="review", cycle=1,
+                                                depends_on_task_ids=[], start_assignee=True)
+    assert team_case.orchestrator.calls[0][:2] == ("ses_owner", member.thread_id)
+    updated = await team_case.service.update_task(requester_session_id="ses_owner", requester_thread_id=member.thread_id,
+                                                  team_id=board.team_id, task_id=task.task.task_id, status="completed", summary="审查通过")
+    assert updated.task.status == "completed"
+    assert team_case.orchestrator.calls[1][:2] == ("ses_owner", "thr_main")
+    assert "审查通过" in team_case.orchestrator.calls[1][2].content
+    assert "审查通过" not in project_message_for_display(team_case.orchestrator.calls[1][2].content, team_case.orchestrator.calls[1][2].metadata).content
+    assert not hasattr(team_case.service, "attach_session")
 
 
 @pytest.mark.asyncio
-async def test_blocked_status_requires_summary(tmp_path):
-    """blocked 属于结论闭集，summary 必填（续用 RESOLUTION_STATUSES 判定）。"""
-
-    service, team, reviewer_id, task_id, _ = await _blocked_task_fixture(tmp_path)
-
-    with pytest.raises(ValueError, match="时 summary 不能为空"):
-        await service.update_task(
-            requester_session_id=reviewer_id,
-            team_id=team.team_id,
-            task_id=task_id,
-            status="blocked",
-            summary="   ",
-        )
+async def test_only_main_coordinator_can_create_or_assign_and_dependencies_must_complete(team_case):
+    with pytest.raises(PermissionError, match="main thread"):
+        await team_case.service.create_team(requester_session_id="ses_owner", requester_thread_id="thr_child", name="非法团队")
+    board, member = await create_reviewer(team_case)
+    with pytest.raises(PermissionError, match="协调者"):
+        await team_case.service.create_member(requester_session_id="ses_owner", requester_thread_id=member.member.thread_id,
+                                              requester_agent_id="default", requester_job_id="job_member", requester_tool_call_id="call_other",
+                                              team_id=board.team_id, role="tester", startup_prompt="测试", instructions="", work_mode="read_only")
+    with pytest.raises(ValueError, match="依赖任务不存在"):
+        await team_case.service.assign_task(requester_session_id="ses_owner", requester_thread_id="thr_main",
+                                             team_id=board.team_id, assignee_thread_id=member.member.thread_id, title="检查", description="测试",
+                                             phase="test", cycle=1, depends_on_task_ids=["missing"], start_assignee=True)
 
 
 @pytest.mark.asyncio
-async def test_blocked_status_notifies_coordinator(tmp_path):
-    """blocked 属于结论闭集，非协调者成员置 blocked 必须通知协调者。"""
-
-    service, team, reviewer_id, task_id, orchestrator = await _blocked_task_fixture(tmp_path)
-    calls_before = len(orchestrator.calls)
-
-    result = await service.update_task(
-        requester_session_id=reviewer_id,
-        team_id=team.team_id,
-        task_id=task_id,
-        status="blocked",
-        summary="BLOCKED：等待上游依赖。",
-    )
-
-    assert result.task.status == "blocked"
-    assert result.dispatched_job_id is not None
-    assert orchestrator.calls[-1]["session_id"] == "ses_parent"
-    assert len(orchestrator.calls) == calls_before + 1
+async def test_restart_projection_uses_sqlite_readiness_and_never_json_activation(team_case):
+    board, member = await create_reviewer(team_case)
+    fresh = TeamCoordinationService(store=team_case.store, session_service=Sessions(), session_orchestrator=team_case.orchestrator,
+                                    session_subagent_service=team_case.subagents, thread_creation_factory=team_case.factory)
+    restored: TeamBoardDTO = await fresh.get_board(requester_session_id="ses_owner", requester_thread_id=member.member.thread_id, team_id=board.team_id)
+    assert [item.thread_id for item in restored.members] == ["thr_main", member.member.thread_id]
+    team_case.factory.members[0].state = "cancelled"
+    with pytest.raises(PermissionError):
+        await fresh.get_board(requester_session_id="ses_owner", requester_thread_id=member.member.thread_id, team_id=board.team_id)

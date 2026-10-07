@@ -332,6 +332,7 @@ message MessageRunAccepted {
   string job_id = 2;
   string status = 3;
   JobDispatchSnapshotDTO dispatch = 4;
+  string thread_id = 5;
 }
 
 message MessageRunRequest {
@@ -1426,7 +1427,8 @@ message TeamBoardDTO {
   google.protobuf.Timestamp updated_at = 2;
   string team_id = 3;
   string name = 4;
-  string coordinator_session_id = 5;
+  string session_id = 5;
+  string coordinator_thread_id = 10;
   int64 version = 6;
   repeated TeamMemberDTO members = 7;
   repeated TeamTaskDTO tasks = 8;
@@ -1437,7 +1439,8 @@ message TeamEventDTO {
   string event_id = 1;
   string team_id = 2;
   string type = 3;
-  string actor_session_id = 4;
+  string actor_thread_id = 4;
+  string session_id = 7;
   google.protobuf.Timestamp created_at = 5;
   optional google.protobuf.Struct payload = 6;
 }
@@ -1447,14 +1450,15 @@ message TeamListDTO {
 }
 
 message TeamMemberDTO {
-  string session_id = 1;
+  string thread_id = 1;
+  optional string delegation_id = 11;
   string role = 2;
   string source = 3;
   string work_mode = 4;
   optional string instructions = 5;
   optional string status = 6;
-  optional string activation_job_id = 7;
-  optional string activation_error = 8;
+  reserved 7, 8;
+  reserved "activation_job_id", "activation_error";
   google.protobuf.Timestamp joined_at = 9;
   google.protobuf.Timestamp updated_at = 10;
 }
@@ -1462,9 +1466,11 @@ message TeamMemberDTO {
 message TeamMemberOperationDTO {
   TeamBoardDTO board = 1;
   TeamMemberDTO member = 2;
-  optional string child_session_id = 3;
-  optional string child_message_id = 4;
-  optional string child_job_id = 5;
+  reserved 3, 4, 5;
+  reserved "child_session_id", "child_message_id", "child_job_id";
+  optional string child_thread_id = 6;
+  optional string child_delegation_id = 7;
+  optional string child_admission_state = 8;
 }
 
 message TeamTaskDTO {
@@ -1475,13 +1481,13 @@ message TeamTaskDTO {
   string description = 5;
   string phase = 6;
   int64 cycle = 7;
-  string assignee_session_id = 8;
+  string assignee_thread_id = 8;
   string status = 9;
   repeated string depends_on_task_ids = 10;
   optional string assigned_job_id = 11;
   optional string summary = 12;
   optional string error = 13;
-  string updated_by_session_id = 14;
+  string updated_by_thread_id = 14;
 }
 
 message TeamTaskOperationDTO {

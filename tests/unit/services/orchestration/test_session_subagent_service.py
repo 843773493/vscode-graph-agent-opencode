@@ -19,6 +19,10 @@ from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
+from app.services.orchestration.initial_execution_binding_worker import (
+    InitialExecutionBindingWorker,
+    InitialExecutionBindOutcome,
+)
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -98,6 +102,7 @@ async def parent_session(
     now = datetime.now(UTC)
     return SessionDTO(
         session_id=result.session_id,
+        thread_id=record.main_thread_id,
         workspace_id=WORKSPACE_ID,
         resource_identity=session_resource_identity(WORKSPACE_ID, result.session_id),
         uri=session_resource_uri(WORKSPACE_ID, result.session_id),
@@ -121,26 +126,23 @@ def factory(sessions_root: Path) -> OwnerThreadCreationFactory:
 
 
 class _RecordingBinder:
-    """可用 binder 标记：delegate 只做可用性声明，绑定归 §8.5 worker。
-
-    SessionSubagentService 不在此同步调用 binder（claim/CAS 与重启恢复由
-    InitialExecutionBindingWorker 负责），故本测试替身一旦被调用即断言
-    失败，锁住「delegate 不越界绑定」这一边界。
-    """
-
     def __call__(self, target):
-        raise AssertionError(f"delegate 不应直接调用 binder: {target!r}")
+        return InitialExecutionBindOutcome(execution_binding_id=target.execution_binding_id, job_id=target.job_id)
 
 
-def make_service(
-    parent_session: SessionDTO,
-    factory: OwnerThreadCreationFactory,
-) -> SessionSubagentService:
-    return SessionSubagentService(
-        parent_session_reader=_ParentReader(parent_session),
-        thread_creation_factory=factory,
-        initial_execution_binder=_RecordingBinder(),
-    )
+async def bind_owner_for_test(factory: OwnerThreadCreationFactory, session_id: str) -> None:
+    worker = InitialExecutionBindingWorker(store=factory.for_owner_session(session_id).control_store,
+                                           claim_owner="test-binder", binder=_RecordingBinder())
+    worker.start()
+    try:
+        worker.bind_pending_once()
+    finally:
+        worker.stop()
+
+
+def make_service(parent_session: SessionDTO, factory: OwnerThreadCreationFactory) -> SessionSubagentService:
+    return SessionSubagentService(parent_session_reader=_ParentReader(parent_session), thread_creation_factory=factory,
+                                  initial_execution_binder=_RecordingBinder(), bind_owner=lambda sid: bind_owner_for_test(factory, sid))
 
 
 async def delegate_parent(
@@ -154,6 +156,7 @@ async def delegate_parent(
 ) -> object:
     return await service.delegate(
         parent_session_id=parent_session.session_id,
+        parent_thread_id=parent_session.thread_id,
         parent_agent_id="default",
         parent_job_id="job_parent",
         parent_tool_call_id=tool_call_id,
@@ -178,7 +181,7 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
     assert accepted.child_thread_id.startswith("thr_")
     assert accepted.delegation_id.startswith("del_")
     assert accepted.admission_idempotency_key == accepted.delegation_id
-    assert accepted.admission_state == "pending"
+    assert accepted.admission_state == "bound"
     assert accepted.execution_binding_id.startswith("tbind_")
     assert accepted.frozen_job_id.startswith("job_")
 
@@ -205,7 +208,7 @@ async def test_delegate_creates_durable_child_thread_with_pending_intent(
         intent = control.get_initial_execution_intent(
             accepted.admission_idempotency_key
         )
-        assert intent.state == "pending"
+        assert intent.state == "bound"
         assert intent.execution_binding_id == accepted.execution_binding_id
         assert intent.job_id == accepted.frozen_job_id
         # child thread 只有一条初始 intent。
@@ -262,28 +265,16 @@ async def test_delegate_different_tool_call_creates_sibling_thread(
 
 
 @pytest.mark.asyncio
-async def test_delegate_before_start_failure_exposes_thread_id(
-    parent_session: SessionDTO,
-    factory: OwnerThreadCreationFactory,
-) -> None:
-    async def failing_before_start(accepted) -> None:
-        raise RuntimeError("启动前准备失败")
-
-    service = SessionSubagentService(
-        parent_session_reader=_ParentReader(parent_session),
-        thread_creation_factory=factory,
-        initial_execution_binder=_RecordingBinder(),
-    )
-    with pytest.raises(RuntimeError, match="child_thread_id="):
-        await service.delegate(
-            parent_session_id=parent_session.session_id,
-            parent_agent_id="default",
-            parent_job_id="job_parent",
-            parent_tool_call_id="call_task",
-            description="做事",
-            subagent_type="general-purpose",
-            before_start=failing_before_start,
-        )
+async def test_delegate_binding_failure_preserves_published_pending_intent(parent_session: SessionDTO, factory: OwnerThreadCreationFactory) -> None:
+    async def fail_binding(_session_id: str) -> None:
+        raise RuntimeError("真实绑定失败")
+    service = SessionSubagentService(parent_session_reader=_ParentReader(parent_session), thread_creation_factory=factory,
+                                    initial_execution_binder=_RecordingBinder(), bind_owner=fail_binding)
+    with pytest.raises(RuntimeError, match="真实绑定失败"):
+        await delegate_parent(service, parent_session)
+    control = factory.for_owner_session(parent_session.session_id).control_store
+    assert len(control.list_child_thread_rows()) == 1
+    assert control.list_initial_execution_intents()[0].state == "pending"
 
 
 @pytest.mark.asyncio
@@ -297,6 +288,7 @@ async def test_delegate_rejects_unknown_subagent_type_before_creation(
     with pytest.raises(ValueError, match="当前仅支持 general-purpose"):
         await service.delegate(
             parent_session_id=parent_session.session_id,
+        parent_thread_id=parent_session.thread_id,
             parent_agent_id="default",
             parent_job_id="job_parent",
             parent_tool_call_id="call_task",
@@ -318,10 +310,12 @@ async def test_delegate_rejects_agent_mismatch(
         parent_session_reader=_MismatchedReader(parent_session),
         thread_creation_factory=factory,
         initial_execution_binder=_RecordingBinder(),
+        bind_owner=lambda sid: bind_owner_for_test(factory, sid),
     )
     with pytest.raises(RuntimeError, match="不一致"):
         await service.delegate(
             parent_session_id=parent_session.session_id,
+        parent_thread_id=parent_session.thread_id,
             parent_agent_id="default",
             parent_job_id="job_parent",
             parent_tool_call_id="call_task",
@@ -347,6 +341,7 @@ async def test_delegate_without_real_binder_fails_closed_before_side_effects(
         parent_session_reader=_ParentReader(parent_session),
         thread_creation_factory=factory,
         initial_execution_binder=None,
+        bind_owner=lambda sid: bind_owner_for_test(factory, sid),
     )
 
     with pytest.raises(SessionSubagentUnavailableError) as raised:

@@ -88,7 +88,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 continue
             raw_request = record.get("request")
             if not isinstance(raw_request, dict):
-                raise RuntimeError(
+                raise RuntimeError(  # noqa: TRY004 - 持久账本损坏统一暴露为运行时错误。
                     f"待恢复的会话生成记录缺少 request: {ledger_path}"
                 )
             payload = SessionGenerationExecuteRequest.model_validate(raw_request)
@@ -97,7 +97,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 continue
             raw_result = record.get("result")
             if not isinstance(raw_result, dict):
-                raise RuntimeError(
+                raise RuntimeError(  # noqa: TRY004 - 持久账本损坏统一暴露为运行时错误。
                     f"待恢复的会话生成回报记录缺少 result: {ledger_path}"
                 )
             result = SessionGenerationExecuteResultDTO.model_validate(raw_result)
@@ -366,7 +366,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
         record = self._read_ledger(ledger_path)
         raw_result = record.get("result")
         if not isinstance(raw_result, dict):
-            raise RuntimeError(f"会话生成运行记录缺少 result: {ledger_path}")
+            raise RuntimeError(f"会话生成运行记录缺少 result: {ledger_path}")  # noqa: TRY004 - 持久账本损坏。
         return SessionGenerationExecuteResultDTO.model_validate(raw_result)
 
     @staticmethod
@@ -448,6 +448,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 payload,
                 session.session_id,
                 prompt,
+                thread_id=target.thread_id,
                 phase="continue_existing",
                 ledger_path=ledger_path,
             )
@@ -466,6 +467,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 parent_node_id = await self._resolve_placement_folder(payload)
                 session = await self._session_context_fork_service.fork(
                     target.session_id,
+                    source_thread_id=target.thread_id,
                     generation_origin=origin,
                     title=payload.title,
                     parent_node_id=parent_node_id,
@@ -475,6 +477,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                 payload,
                 session.session_id,
                 prompt,
+                thread_id=await self._session_service.resolve_main_thread(session.session_id),
                 phase="fork_child",
                 ledger_path=ledger_path,
             )
@@ -499,6 +502,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
                     raise ValueError("live_session context source 缺少 session_id")
                 session = await self._session_context_fork_service.fork(
                     source_session_id,
+                    source_thread_id=payload.context_source.thread_id,
                     generation_origin=origin,
                     title=payload.title,
                     parent_node_id=parent_node_id,
@@ -516,6 +520,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
             payload,
             session.session_id,
             prompt,
+            thread_id=await self._session_service.resolve_main_thread(session.session_id),
             phase="new_session",
             ledger_path=ledger_path,
         )
@@ -640,7 +645,7 @@ class SessionGenerationService(SessionGenerationMessageDispatchSupport):
     def _read_ledger(path: Path) -> dict[str, object]:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
-            raise RuntimeError(f"会话生成幂等记录必须是对象: {path}")
+            raise RuntimeError(f"会话生成幂等记录必须是对象: {path}")  # noqa: TRY004 - 持久账本损坏。
         return value
 
     @staticmethod

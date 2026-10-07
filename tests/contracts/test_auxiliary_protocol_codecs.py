@@ -16,6 +16,7 @@ def test_terminal_snapshot_round_trip_preserves_extended_json_fields() -> None:
         "workspace_id": "00000000-0000-4000-8000-000000000001",
         "cwd_relative": ".",
         "transport_owner_revision": 9_007_199_254_740_993,
+        "command_start_sequence": 9_007_199_254_740_993,
         "status": "running",
         "cols": 120,
         "rows": 32,
@@ -27,6 +28,7 @@ def test_terminal_snapshot_round_trip_preserves_extended_json_fields() -> None:
 
     decoded = terminal_session_to_json(encoded)
     assert isinstance(decoded["transport_owner_revision"], int)
+    assert isinstance(decoded["command_start_sequence"], int)
     assert decoded == value
 
 

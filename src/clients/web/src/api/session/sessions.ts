@@ -11,11 +11,14 @@ import type {
 } from "../../types/backend";
 import { parseChildThreadStatus } from "../../types/protocol";
 import {
+  gatewayWorkspaceRequestHeaders,
   normalizePageResult,
   requestJson,
   unwrapApiData,
   workspaceHeader,
 } from "../http";
+
+import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
 
 export const DEFAULT_SESSION_TITLE = "新会话";
 
@@ -81,13 +84,13 @@ export async function getSession(
 export async function getSessionMainThread(
   port: number,
   sessionId: string,
-  workspaceId?: string | null,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
 ): Promise<SessionMainThread> {
   const data = unwrapApiData(
     await requestJson<APIResponse<SessionMainThread>>(
       port,
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/main-thread`,
-      { headers: workspaceHeader(workspaceId) },
+      { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
     ),
   );
   if (

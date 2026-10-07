@@ -92,21 +92,14 @@ class OwnerThreadCreationFactory:
             self._services.popitem(last=False)
         return service
 
-    def owner_main_thread_id(self, session_id: str) -> str:
-        """返回 owner Session 的唯一 main thread id（preimage 冻结面）。"""
-        node = self._require_catalog_resolver().catalog_store.get_node(session_id)
-        if node.kind != "session" or node.main_thread_id is None:
-            raise RuntimeError(
-                "owner 节点不是 session 或缺 main_thread_id（fail closed）: "
-                f"session_id={session_id!r}, kind={node.kind!r}"
-            )
-        return str(node.main_thread_id)
+    def validate_owner_thread(self, session_id: str, thread_id: str) -> None:
+        self._require_catalog_resolver().resolve_thread_node(session_id, thread_id)
 
     def _require_catalog_resolver(self) -> SessionCatalogPathResolver:
         """child thread 唯一入口的 resolver 模式校验（fail closed）。"""
         if not isinstance(self._resolver, SessionCatalogPathResolver):
             # 运行时模式错误，不是参数类型错误，不适用 TypeError。
-            raise RuntimeError(
+            raise RuntimeError(  # noqa: TRY004
                 "child thread 创建要求 catalog resolver: "
                 f"sessions_root={self._sessions_root}"
             )

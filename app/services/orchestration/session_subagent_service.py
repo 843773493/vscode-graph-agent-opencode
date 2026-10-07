@@ -1,34 +1,17 @@
-"""SessionSubagentService —— Agent 委派 → owner Session 内 durable child thread
-（OpenSpec 8.5-B，R25 单链路）。
+"""Agent 委派到 owner Session 内的 durable child thread。
 
-R25 起委派不再创建 delegated child Session：``delegate``` 经装配好的
-``OwnerThreadCreationFactory``` 取得绑定 parent Session 的
-``ThreadCreationService```，创建 ``kind=child``` durable child thread
-并提交 pending admission intent（R23 状态机）。红线：
-
-- R25 **不启动真实 child Job**：intent 保持 ``pending```，由 R26
-  thread-qualified binder 消费；本服务不触碰 JobService/orchestrator。
-  真实 thread binder 是构造必须显式声明的依赖：未装配时 ``delegate``
-  在任何持久化副作用前 fail closed 抛 ``SessionSubagentUnavailableError``，
-  绝不创建必然永久 pending 的 intent、绝不返回虚假 ``accepted``
-  （OpenSpec 主 spec 第 244 行 / tasks.md 8.5-B）。
-- 同一委派的 identity 由 (parent session, parent job, parent tool call,
-  subagent type) 确定性派生：同 tool call 崩溃重试收敛同一 child thread
-  与 intent；不同 preimage / aborted 后重登记由 store/ledger fail closed
-  （同 delegation 不换绑）。
-- delegation/member/task/role/coordinator 冻结进 owner session-control 的
-  collaboration ledger（revision CAS），parent 线程/Job/tool call/subagent
-  type/title/task seed/可信上下文冻结进 creation preimage。
-- 失败直接抛错，不做 adapter/fallback/双写。
+creation owner 冻结 parent/Job/tool call/seed/reference 与 collaboration
+身份，生产 binder 准入真实 child Job。同一委派重试收敛同一 thread、intent
+和 execution；缺 binder 时在任何持久化副作用前明确报告 unavailable。
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 
 from app.abstractions.session_subagent import (
     GENERAL_PURPOSE_SUBAGENT,
-    BeforeSubagentStart,
     OwnerThreadCreationFactoryProtocol,
     SessionReaderProtocol,
     SessionSubagentAccepted,
@@ -49,18 +32,7 @@ __all__ = [
 
 
 class SessionSubagentUnavailableError(RuntimeError):
-    """生产未装配真实 thread binder：初始 execution 无法绑定，fail closed。
-
-    OpenSpec ``add-itemized-rollout-context`` 主 spec Requirement「main thread
-    与 durable child thread 必须支持真实的多任务协作模型」第 244 行规定：
-    delegated child 的初始 execution 绑定 MUST 由生产提供真实 thread
-    binder；缺少 binder 时系统 MUST 可观测地 fail-closed 报告
-    ``unavailable``（含具体 admission identity 与原因），MUST NOT 静默停留、
-    MUST NOT 把 intent 标成 ``bound``。在位真实 binder（§8.5 的 thread
-    binder 装配链路）落地前，``SessionSubagentService`` 不得向模型返回虚假
-    的 ``accepted`` + 绑定承诺：本异常是该唯一失败出口，携带确定性派生的
-    delegation identity（即 admission idempotency key）与缺失原因。
-    """
+    """缺少生产 binder 时，携带冻结 delegation identity 明确报告失败。"""
 
     def __init__(
         self,
@@ -80,9 +52,8 @@ class SessionSubagentUnavailableError(RuntimeError):
         self.parent_session_id = parent_session_id
         self.subagent_type = subagent_type
 
-# child thread 能力 profile：R25 冻结产品 canonical profile（与 main thread
-# 同一 GraphBinding 四元组，保证 R26/R28 restore 可解析）；child 专属
-# runtime policy（如禁用 Goal）归 R26 ThreadRuntimePolicy 轮决策。
+# child 与 main thread 共用产品 canonical profile；child 专属运行策略
+# 由 ThreadRuntimePolicy 决定，恢复时仍使用同一 GraphBinding 四元组。
 _CHILD_GRAPH_BINDING = DEEP_AGENT_GRAPH_BINDING
 _CHILD_CAPABILITY_PROFILE = dict(DEEP_AGENT_CAPABILITY_PROFILE)
 
@@ -118,6 +89,7 @@ class SessionSubagentService:
         parent_session_reader: SessionReaderProtocol,
         thread_creation_factory: OwnerThreadCreationFactoryProtocol,
         initial_execution_binder: InitialExecutionBinder | None,
+        bind_owner: Callable[[str], Awaitable[None]],
     ) -> None:
         self._parent_session_reader = parent_session_reader
         self._thread_creation_factory = thread_creation_factory
@@ -125,11 +97,13 @@ class SessionSubagentService:
         # 第 244 行义务）。binder 缺省为 None 时本服务 fail closed，绝不向
         # 模型返回虚假 accepted+绑定承诺；intent 不会永久滞留。
         self._initial_execution_binder = initial_execution_binder
+        self._bind_owner = bind_owner
 
     async def delegate(
         self,
         *,
         parent_session_id: str,
+        parent_thread_id: str,
         parent_agent_id: str,
         parent_job_id: str,
         parent_tool_call_id: str,
@@ -138,7 +112,7 @@ class SessionSubagentService:
         title: str | None = None,
         trusted_context: dict[str, object] | None = None,
         untrusted_instructions: str | None = None,
-        before_start: BeforeSubagentStart | None = None,
+        collaboration_member: dict[str, object] | None = None,
     ) -> SessionSubagentAccepted:
         normalized_description = description.strip()
         if not normalized_description:
@@ -175,12 +149,11 @@ class SessionSubagentService:
                 parent_session_id=parent_session_id,
                 subagent_type=subagent_type,
             )
-        parent_thread_id = self._thread_creation_factory.owner_main_thread_id(
-            parent_session_id
-        )
+        self._thread_creation_factory.validate_owner_thread(parent_session_id, parent_thread_id)
         normalized_title = self._build_title(title or normalized_description)
         task_seed: dict[str, object] = {
             "description": normalized_description,
+            "agent_id": parent_agent_id,
             "subagent_type": subagent_type,
             "title": normalized_title,
             "parent_job_id": parent_job_id,
@@ -223,33 +196,20 @@ class SessionSubagentService:
                 "role": "delegated_subagent",
                 "subagent_type": subagent_type,
                 "title": normalized_title,
+                **dict(collaboration_member or {}),
             },
         )
-        if result.admission_state != "pending":
-            # R25 契约：创建流只提交 pending intent；bound 属 R26 binder。
-            raise RuntimeError(
-                "委派 child thread 的 admission intent 非 pending（状态机被"
-                f"绕过，fail closed）: delegation_id={delegation_id!r}, "
-                f"state={result.admission_state!r}"
-            )
+        await self._bind_owner(parent_session_id)
+        bound_intent = self._thread_creation_factory.for_owner_session(parent_session_id).control_store.get_initial_execution_intent(delegation_id)
         accepted = SessionSubagentAccepted(
             owner_session_id=parent_session_id,
             child_thread_id=result.child_thread_id,
             delegation_id=delegation_id,
             admission_idempotency_key=delegation_id,
-            admission_state=result.admission_state,
+            admission_state=bound_intent.state,
             execution_binding_id=result.execution_binding_id,
             frozen_job_id=result.frozen_job_id,
         )
-        if before_start is not None:
-            try:
-                await before_start(accepted)
-            except Exception as error:
-                raise RuntimeError(
-                    "委派 child thread 已创建，但启动前准备失败: "
-                    f"child_thread_id={result.child_thread_id} "
-                    f"delegation_id={delegation_id} error={error}"
-                ) from error
         return accepted
 
     @staticmethod

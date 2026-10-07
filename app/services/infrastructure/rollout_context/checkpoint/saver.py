@@ -10,7 +10,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
-from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
 )
@@ -20,10 +19,9 @@ from app.core.execution_admission_context import require_current_execution_admis
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
-from app.domain.itemized.enums import SemanticKind, TurnScope
+from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
-    InternalExecutionIntent,
 )
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.mutation_intents import (
@@ -76,6 +74,9 @@ from app.services.infrastructure.rollout_context.checkpoint.owner.context_source
 )
 from app.services.infrastructure.rollout_context.checkpoint.owner.context_source_control import (
     ContextSourceControlOwnerMixin,
+)
+from app.services.infrastructure.rollout_context.checkpoint.owner.runtime_execution import (
+    RuntimeExecutionOwnerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     RolloutContextReader,
@@ -206,6 +207,7 @@ class _AppendIntentBatch:
 
 
 class RolloutCheckpointSaver(
+    RuntimeExecutionOwnerMixin,
     RolloutMutationIntentPortMixin,
     ContextPlanRegistryOwnerMixin,
     ContextOwnerMixin,
@@ -424,60 +426,6 @@ class RolloutCheckpointSaver(
             session_id,
             turn_id=turn_id,
             thread_id=thread_id,
-            checkpoint_ns=checkpoint_ns,
-        )
-
-    def admit_internal_execution(
-        self,
-        session_id: str,
-        *,
-        thread_id: str,
-        job_id: str,
-        intent: InternalExecutionIntent,
-        message: HumanMessage,
-        checkpoint_ns: str = "",
-    ) -> ExecutionAdmission:
-        if not isinstance(intent, InternalExecutionIntent):
-            raise TypeError("internal execution admission 必须使用 typed intent")
-        if not isinstance(message, HumanMessage):
-            raise TypeError("internal execution notice 必须是 HumanMessage")
-        response_metadata = message.response_metadata or {}
-        message_id = response_metadata.get("message_id")
-        created_at = response_metadata.get("created_at")
-        if message_id != intent.message_id:
-            raise ValueError(
-                "internal execution intent 与 message identity 不一致: "
-                f"intent={intent.message_id!r}, message={message_id!r}"
-            )
-        if not isinstance(created_at, str) or not created_at:
-            raise ValueError("internal execution notice 缺少稳定 created_at")
-        notice_items = self._storage._codec().items_for_message(
-            message,
-            item_sequence=1,
-            message_id=intent.message_id,
-            turn_id=None,
-            execution_id=intent.execution_id,
-            timestamp=created_at,
-        )
-        if len(notice_items) != 1:
-            raise ValueError("internal execution notice 不得展开成多个 canonical item")
-        notice = notice_items[0]
-        if (
-            notice.item_id != intent.notice_item_id
-            or notice.semantic_kind != SemanticKind.RUNTIME_NOTICE
-            or notice.turn_id is not None
-            or notice.turn_scope != TurnScope.PENDING_NEXT_TURN
-        ):
-            raise ValueError(
-                "internal execution notice 未生成预期的 pending runtime_notice"
-            )
-        return self._storage.admit_internal_execution(
-            session_id,
-            thread_id=thread_id,
-            execution_id=intent.execution_id,
-            job_id=job_id,
-            admission_idempotency_key=intent.admission_idempotency_key,
-            notice_item=notice,
             checkpoint_ns=checkpoint_ns,
         )
 

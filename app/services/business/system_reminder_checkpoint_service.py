@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 
 from app.domain.itemized.mutation_intents import (
     ApplySourceLifecycleDecision,
@@ -66,9 +66,7 @@ def _event_identity(
         value = response_metadata.get(key)
         if isinstance(value, str) and value:
             return value
-    # 调用方没有提供执行身份时只能把 session+reason 作为稳定边界；重复事件
-    # 将按 item identity 幂等复用，不从当前 checkpoint 内容猜测新 ID。
-    return f"{session_id}:{checkpoint_source}"
+    raise ValueError(f"checkpoint reminder 缺少真实 event identity: session_id={session_id} source={checkpoint_source}")
 
 
 def submit_checkpoint_reminder(
@@ -80,6 +78,7 @@ def submit_checkpoint_reminder(
     response_metadata: Mapping[str, object],
     checkpoint_source: str,
     event_identity: str | None = None,
+    execution_id: str,
 ) -> bool:
     """向唯一 source intent owner 提交一次 pending runtime reminder。"""
     if not isinstance(session_id, str) or not session_id:
@@ -125,15 +124,16 @@ def submit_checkpoint_reminder(
         # 同一事件重试时复用同一个 immutable item；若正文真的变化，owner 会
         # 以 identity/content 冲突显式拒绝，而不是悄悄追加第二条提醒。
         item_id=f"item-{source_id}",
+        execution_id=execution_id,
         extensions={"boxteam.checkpoint.annotations": {
             "extension_version": "1", "protection": "public",
             "value": dict(prepared.metadata),
         }},
     )
-    consume = getattr(checkpointer, "consume_mutation_intent", None)
+    consume = getattr(checkpointer, "submit_execution_pending_source", None)
     if not callable(consume):
         raise TypeError(
-            "checkpoint reminder owner 缺少 consume_mutation_intent 端口"
+            "checkpoint reminder owner 缺少 submit_execution_pending_source 端口"
         )
     consume(decision)
     return True
@@ -146,7 +146,8 @@ def persist_interrupt_checkpoint(
     thread_id: str,
     active_tool_name: str | None,
     checkpoint_source: str = "interrupt",
-    event_identity: str | None = None,
+    event_identity: str,
+    execution_id: str,
 ) -> None:
     """任务被取消时提交 pending runtime reminder。
 
@@ -158,7 +159,7 @@ def persist_interrupt_checkpoint(
         raise RuntimeError("任务取消时无法提交 runtime reminder：owner 未配置")
 
     phase = "tool" if active_tool_name else "text"
-    interrupted_at = datetime.now(UTC).isoformat()
+    interrupted_at = f"执行事件 {event_identity}"
     if checkpoint_source == "interrupt":
         reminder = build_user_interrupt_reminder(
             phase=phase,
@@ -187,6 +188,7 @@ def persist_interrupt_checkpoint(
         },
         checkpoint_source=checkpoint_source,
         event_identity=event_identity,
+        execution_id=execution_id,
     )
 
 

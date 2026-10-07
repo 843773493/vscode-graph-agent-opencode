@@ -557,201 +557,211 @@ class ContextSourceControlStorageMixin:
                 thread_id=thread_id,
                 validate_jsonl_items=False,
             )
-        with (
-            self._lock(thread_id, "", session_id=owner.session_id),
-            self._connect(thread_id, "", session_id=owner.session_id) as connection,
-        ):
-            self._require_context_source_control_runtime(connection)
-            self._validate_schema_state(connection)
-            existing_row = connection.execute(
-                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
-                "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
-                (owner.session_id, owner.thread_id, decision.source_id),
-            ).fetchone()
-            stored = (
-                _state_from_row(tuple(existing_row))
-                if existing_row is not None
-                else None
-            )
-            if item is not None:
-                if decision.content is None:
-                    raise ValueError(
-                        "source item 存在时 ApplySourceLifecycleDecision.content 不能为 None"
-                    )
-                existing_item = connection.execute(
-                    "SELECT content_hash, semantic_kind, payload_kind, status, "
-                    "turn_id, turn_scope, message_group_id, wire_role, "
-                    "producer_ref_json, projection_manifest_json, commit_id "
-                    "FROM item_catalog WHERE item_id = ?",
-                    (item.item_id,),
-                ).fetchone()
-                if existing_item is not None:
-                    # 仅允许完全相同的 immutable source item 重放；其它冲突
-                    # 必须失败，不能以 revision 或当前正文猜测替代。
-                    stored_identity = (
-                        existing_item[0],
-                        existing_item[1],
-                        existing_item[2],
-                        existing_item[3],
-                        existing_item[4],
-                        existing_item[5],
-                        existing_item[6],
-                        existing_item[7],
-                        existing_item[8],
-                        existing_item[9],
-                    )
-                    incoming_identity = (
-                        item.content_hash,
-                        item.semantic_kind,
-                        item.payload_kind,
-                        item.status,
-                        item.turn_id,
-                        item.turn_scope,
-                        item.message_group_id,
-                        item.wire_role,
-                        canonical_json_bytes(dict(item.producer_ref)).decode("utf-8"),
-                        canonical_json_bytes(item.projection_manifest()).decode("utf-8"),
-                    )
-                    if stored_identity != incoming_identity:
-                        raise RuntimeError(
-                            "source item identity/content 冲突，拒绝重放: "
-                            f"item_id={item.item_id}"
-                        )
-                    commit_id = strict_non_negative_int(
-                        existing_item[10],
-                        field="item_catalog.commit_id",
-                    )
-                    commit_ids = (commit_id,)
-                else:
-                    last_sequence_row = connection.execute(
-                        "SELECT last_item_sequence FROM database_meta "
-                        "WHERE singleton_id = 1"
-                    ).fetchone()
-                    if last_sequence_row is None:
-                        raise RuntimeError(
-                            "rollout database_meta 缺少 last_item_sequence"
-                        )
-                    next_sequence = (
-                        strict_non_negative_int(
-                            last_sequence_row[0],
-                            field="database_meta.last_item_sequence",
-                        )
-                        + 1
-                    )
-                    prepared_item = replace(item, item_sequence=next_sequence)
-                    connection.execute("BEGIN IMMEDIATE")
-                    commit_id, _offset = self._append_v2_records_transaction(
-                        connection,
-                        thread_id,
-                        "",
-                        (prepared_item,),
-                        session_id=owner.session_id,
-                        commit_kind=CommitKind.ITEM_CONVERGENCE.value,
-                        subject_id=prepared_item.item_id,
-                        idempotency_key=decision.idempotency_key,
-                        begin_transaction=False,
-                    )
-                    self._append_context_view_items(
-                        connection,
-                        checkpoint_ns="",
-                        item_ids=(prepared_item.item_id,),
-                    )
-                    commit_ids = (commit_id,)
-            else:
-                connection.execute("BEGIN IMMEDIATE")
-                commit_ids = ()
+        with self._execution_input_transaction(owner.session_id, thread_id) as connection:
+            return self._apply_source_lifecycle_decision_transaction(connection, decision, item)
 
-            # observe_pending 只保留 immutable pending item；提醒等一次性
-            # runtime source 不建立 tracking row，避免把事件伪装成 CSM
-            # registration。其它 source decision 才更新控制状态。
-            if decision.decision_kind != "observe_pending":
-                tracking_status = decision.tracking_status or (
-                    stored.tracking_status if stored is not None else "untracked"
+    def _apply_source_lifecycle_decision_transaction(
+        self, connection: sqlite3.Connection,
+        decision: ApplySourceLifecycleDecision, item: CanonicalItemRecord | None,
+    ) -> tuple[int, ...]:
+        """source owner 的唯一事务内实现；不会自行提交或推进 pending applied。"""
+        if not connection.in_transaction:
+            raise RuntimeError("source decision 需要活动 ContextStore 事务")
+        owner = decision.owner
+        thread_id = self._context_source_rollout_owner(owner.session_id, owner.thread_id)
+        self._require_context_source_control_runtime(connection)
+        self._validate_schema_state(connection)
+        existing_row = connection.execute(
+            f"SELECT {_SELECT_COLUMNS} FROM {_TABLE_NAME} "
+            "WHERE session_id = ? AND thread_id = ? AND source_id = ?",
+            (owner.session_id, owner.thread_id, decision.source_id),
+        ).fetchone()
+        stored = (
+            _state_from_row(tuple(existing_row))
+            if existing_row is not None
+            else None
+        )
+        if item is not None:
+            if decision.content is None:
+                raise ValueError(
+                    "source item 存在时 ApplySourceLifecycleDecision.content 不能为 None"
                 )
-                latest_revision = (
-                    decision.revision
-                    if decision.revision is not None
-                    else (stored.latest_revision if stored is not None else None)
+            existing_item = connection.execute(
+                "SELECT content_hash, semantic_kind, payload_kind, status, "
+                "turn_id, turn_scope, message_group_id, wire_role, "
+                "producer_ref_json, projection_manifest_json, commit_id "
+                "FROM item_catalog WHERE item_id = ?",
+                (item.item_id,),
+            ).fetchone()
+            if existing_item is not None:
+                # 仅允许完全相同的 immutable source item 重放；其它冲突
+                # 必须失败，不能以 revision 或当前正文猜测替代。
+                stored_identity = (
+                    existing_item[0],
+                    existing_item[1],
+                    existing_item[2],
+                    existing_item[3],
+                    existing_item[4],
+                    existing_item[5],
+                    existing_item[6],
+                    existing_item[7],
+                    existing_item[8],
+                    existing_item[9],
                 )
-                latest_visible = (
-                    decision.revision
-                    if decision.content is not None and not decision.pending_only
-                    else (
-                        stored.latest_visible_committed_revision
-                        if stored is not None
-                        else None
+                incoming_identity = (
+                    item.content_hash,
+                    item.semantic_kind,
+                    item.payload_kind,
+                    item.status,
+                    item.turn_id,
+                    item.turn_scope,
+                    item.message_group_id,
+                    item.wire_role,
+                    canonical_json_bytes(dict(item.producer_ref)).decode("utf-8"),
+                    canonical_json_bytes(item.projection_manifest()).decode("utf-8"),
+                )
+                if stored_identity != incoming_identity:
+                    raise RuntimeError(
+                        "source item identity/content 冲突，拒绝重放: "
+                        f"item_id={item.item_id}"
                     )
+                commit_id = strict_non_negative_int(
+                    existing_item[10],
+                    field="item_catalog.commit_id",
                 )
-                state = ContextSourceControlState(
-                    owner=ContextSourceOwnerKey(
-                        session_id=owner.session_id,
-                        thread_id=owner.thread_id,
-                    ),
-                    source_id=decision.source_id,
-                    source_kind=decision.source_kind,
-                    name=decision.name,
-                    binding_revision=(
-                        stored.binding_revision if stored is not None else None
-                    ),
-                    tracking_status=cast(
-                        ContextSourceTrackingStatus,
-                        tracking_status,
-                    ),
-                    latest_visible_committed_revision=latest_visible,
-                    latest_revision=latest_revision,
-                    state_revision=stored.state_revision if stored is not None else 0,
+                commit_ids = (commit_id,)
+            else:
+                last_sequence_row = connection.execute(
+                    "SELECT last_item_sequence FROM database_meta "
+                    "WHERE singleton_id = 1"
+                ).fetchone()
+                if last_sequence_row is None:
+                    raise RuntimeError(
+                        "rollout database_meta 缺少 last_item_sequence"
+                    )
+                next_sequence = (
+                    strict_non_negative_int(
+                        last_sequence_row[0],
+                        field="database_meta.last_item_sequence",
+                    )
+                    + 1
                 )
-                timestamp = _now()
-                if stored is None:
-                    connection.execute(
-                        f"INSERT INTO {_TABLE_NAME} "
-                        f"({_SELECT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            owner.session_id,
-                            owner.thread_id,
-                            state.source_id,
-                            state.source_kind,
-                            state.name,
-                            state.binding_revision,
-                            state.tracking_status,
-                            state.latest_visible_committed_revision,
-                            state.latest_revision,
-                            1,
-                            timestamp,
-                            timestamp,
-                        ),
+                prepared_item = replace(item, item_sequence=next_sequence)
+                commit_id, _offset = self._append_v2_records_transaction(
+                    connection,
+                    thread_id,
+                    "",
+                    (prepared_item,),
+                    session_id=owner.session_id,
+                    commit_kind=CommitKind.ITEM_CONVERGENCE.value,
+                    subject_id=prepared_item.item_id,
+                    idempotency_key=decision.idempotency_key,
+                    begin_transaction=False,
+                )
+                self._append_context_view_items(
+                    connection,
+                    checkpoint_ns="",
+                    item_ids=(prepared_item.item_id,),
+                )
+                commit_ids = (commit_id,)
+        else:
+            commit_ids = ()
+
+        if item is not None and decision.execution_id is not None:
+            self._bind_canonical_item_execution(
+                connection, item_id=item.item_id, execution_id=decision.execution_id,
+            )
+
+        # observe_pending 只保留 immutable pending item；提醒等一次性
+        # runtime source 不建立 tracking row，避免把事件伪装成 CSM
+        # registration。其它 source decision 才更新控制状态。
+        if decision.decision_kind != "observe_pending":
+            tracking_status = decision.tracking_status or (
+                stored.tracking_status if stored is not None else "untracked"
+            )
+            latest_revision = (
+                decision.revision
+                if decision.revision is not None
+                else (stored.latest_revision if stored is not None else None)
+            )
+            latest_visible = (
+                decision.revision
+                if decision.content is not None and not decision.pending_only
+                else (
+                    stored.latest_visible_committed_revision
+                    if stored is not None
+                    else None
+                )
+            )
+            state = ContextSourceControlState(
+                owner=ContextSourceOwnerKey(
+                    session_id=owner.session_id,
+                    thread_id=owner.thread_id,
+                ),
+                source_id=decision.source_id,
+                source_kind=decision.source_kind,
+                name=decision.name,
+                binding_revision=(
+                    stored.binding_revision if stored is not None else None
+                ),
+                tracking_status=cast(
+                    ContextSourceTrackingStatus,
+                    tracking_status,
+                ),
+                latest_visible_committed_revision=latest_visible,
+                latest_revision=latest_revision,
+                state_revision=stored.state_revision if stored is not None else 0,
+            )
+            timestamp = _now()
+            if stored is None:
+                connection.execute(
+                    f"INSERT INTO {_TABLE_NAME} "
+                    f"({_SELECT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        owner.session_id,
+                        owner.thread_id,
+                        state.source_id,
+                        state.source_kind,
+                        state.name,
+                        state.binding_revision,
+                        state.tracking_status,
+                        state.latest_visible_committed_revision,
+                        state.latest_revision,
+                        1,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            elif stored.durable_fields() != state.durable_fields():
+                next_state_revision = stored.state_revision + 1
+                cursor = connection.execute(
+                    f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
+                    "binding_revision = ?, tracking_status = ?, "
+                    "latest_visible_committed_revision = ?, latest_revision = ?, "
+                    "state_revision = ?, updated_at = ? "
+                    "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
+                    "AND state_revision = ?",
+                    (
+                        state.source_kind,
+                        state.name,
+                        state.binding_revision,
+                        state.tracking_status,
+                        state.latest_visible_committed_revision,
+                        state.latest_revision,
+                        next_state_revision,
+                        timestamp,
+                        owner.session_id,
+                        owner.thread_id,
+                        state.source_id,
+                        stored.state_revision,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "context-source-control-state-conflict: source decision "
+                        f"更新未命中 owner 行: source_id={state.source_id}"
                     )
-                elif stored.durable_fields() != state.durable_fields():
-                    next_state_revision = stored.state_revision + 1
-                    cursor = connection.execute(
-                        f"UPDATE {_TABLE_NAME} SET source_kind = ?, name = ?, "
-                        "binding_revision = ?, tracking_status = ?, "
-                        "latest_visible_committed_revision = ?, latest_revision = ?, "
-                        "state_revision = ?, updated_at = ? "
-                        "WHERE session_id = ? AND thread_id = ? AND source_id = ? "
-                        "AND state_revision = ?",
-                        (
-                            state.source_kind,
-                            state.name,
-                            state.binding_revision,
-                            state.tracking_status,
-                            state.latest_visible_committed_revision,
-                            state.latest_revision,
-                            next_state_revision,
-                            timestamp,
-                            owner.session_id,
-                            owner.thread_id,
-                            state.source_id,
-                            stored.state_revision,
-                        ),
-                    )
-                    if cursor.rowcount != 1:
-                        raise RuntimeError(
-                            "context-source-control-state-conflict: source decision "
-                            f"更新未命中 owner 行: source_id={state.source_id}"
-                        )
-            connection.commit()
-            return commit_ids
+        return commit_ids
 
 
 class ContextSourceControlOwnerMixin:

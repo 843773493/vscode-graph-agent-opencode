@@ -16,7 +16,6 @@ thread（同 owner、kind=child、durable admission intent pending），本模�
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -47,9 +46,6 @@ class SessionSubagentAccepted:
     frozen_job_id: str
 
 
-BeforeSubagentStart = Callable[[SessionSubagentAccepted], Awaitable[None]]
-
-
 @runtime_checkable
 class SessionReaderProtocol(Protocol):
     """按 ID 读取 Session DTO 的最小只读协议（委派/协作工具共用）。"""
@@ -63,7 +59,7 @@ class OwnerThreadCreationFactoryProtocol(Protocol):
 
     def for_owner_session(self, session_id: str) -> ThreadCreationService: ...
 
-    def owner_main_thread_id(self, session_id: str) -> str: ...
+    def validate_owner_thread(self, session_id: str, thread_id: str) -> None: ...
 
 
 @runtime_checkable
@@ -72,6 +68,7 @@ class SessionSubagentProtocol(Protocol):
         self,
         *,
         parent_session_id: str,
+        parent_thread_id: str,
         parent_agent_id: str,
         parent_job_id: str,
         parent_tool_call_id: str,
@@ -80,5 +77,5 @@ class SessionSubagentProtocol(Protocol):
         title: str | None = None,
         trusted_context: dict[str, object] | None = None,
         untrusted_instructions: str | None = None,
-        before_start: BeforeSubagentStart | None = None,
+        collaboration_member: dict[str, object] | None = None,
     ) -> SessionSubagentAccepted: ...

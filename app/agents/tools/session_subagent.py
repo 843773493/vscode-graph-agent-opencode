@@ -10,6 +10,7 @@ from app.abstractions.session_subagent import (
     SessionSubagentProtocol,
 )
 from app.agents.tool_invocation_context import ToolInvocationContext
+from app.core.execution_admission_context import require_current_execution_admission
 from app.core.job_context import get_current_job_id
 
 
@@ -48,6 +49,7 @@ def create_session_subagent_tool(
 
         accepted = await session_subagent_service.delegate(
             parent_session_id=parent_session_id,
+            parent_thread_id=require_current_execution_admission().thread_id,
             parent_agent_id=parent_agent_id,
             parent_job_id=parent_job_id,
             parent_tool_call_id=tool_call_id,

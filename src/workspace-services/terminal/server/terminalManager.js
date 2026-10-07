@@ -319,18 +319,18 @@ export class TerminalManager {
     return session.snapshot();
   }
 
-  async claimSteering(id) {
+  async claimSteering(id, identity) {
     const session = this.get(id);
-    const claimed = session.claimSteering();
+    const claimed = session.claimSteering(identity);
     if (claimed) {
       await this.persist();
     }
     return { claimed, terminal: session.snapshot() };
   }
 
-  async finishSteering(id, { dispatched }) {
+  async finishSteering(id, { completionEventId, commandStartSequence, dispatched }) {
     const session = this.get(id);
-    session.finishSteering({ dispatched });
+    session.finishSteering({ completionEventId, commandStartSequence, dispatched });
     await this.persist();
     return { terminal: session.snapshot() };
   }

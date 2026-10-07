@@ -103,9 +103,12 @@ class TerminalManagerClient:
         )
         return self._require_data(response)
 
-    async def claim_terminal_steering(self, terminal_id: str) -> dict[str, object]:
+    async def claim_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+    ) -> dict[str, object]:
         response = await self._json_request(
-            "POST", f"/api/terminals/{terminal_id}/claim-steering"
+            "POST", f"/api/terminals/{terminal_id}/claim-steering",
+            {"completion_event_id": completion_event_id, "command_start_sequence": command_start_sequence},
         )
         return self._require_terminal_envelope(response)
 
@@ -113,12 +116,15 @@ class TerminalManagerClient:
         self,
         terminal_id: str,
         *,
+        completion_event_id: str,
+        command_start_sequence: int,
         dispatched: bool,
     ) -> dict[str, object]:
         response = await self._json_request(
             "POST",
             f"/api/terminals/{terminal_id}/finish-steering",
-            {"dispatched": dispatched},
+            {"completion_event_id": completion_event_id, "command_start_sequence": command_start_sequence,
+             "dispatched": dispatched},
         )
         return self._require_terminal_envelope(response)
 

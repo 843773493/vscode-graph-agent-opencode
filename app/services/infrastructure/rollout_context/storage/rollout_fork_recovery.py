@@ -8,6 +8,9 @@ import sqlite3
 from pathlib import Path
 
 from app.core.sqlite_state import utc_now_text as _now
+from app.services.infrastructure.rollout_context.assembly.detail_identity import (
+    detail_ref_from_key,
+)
 from app.services.infrastructure.rollout_context.fork.node_debug_materialization import (
     publish_target_snapshot,
     remove_target_snapshot,
@@ -17,6 +20,10 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
     optional_text,
     required_text,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    detail_relative_path,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
@@ -78,7 +85,7 @@ class RolloutForkRecoveryMixin:
             SELECT materialization_id, fork_id, target_session_id, source_session_id,
                    source_checkpoint_id, source_view_id, relationship, status,
                    source_thread_id, target_thread_id, checkpoint_ns,
-                   source_snapshot_sha256
+                   source_snapshot_sha256, fork_mode
             FROM fork_materializations
             WHERE status IN ('prepared', 'target_committed')
             ORDER BY created_at
@@ -105,6 +112,7 @@ class RolloutForkRecoveryMixin:
             journal_target_thread_id,
             journal_checkpoint_ns,
             source_snapshot_sha256,
+            fork_mode,
         ) = row
         materialization_id = required_text(
             materialization_id, field="fork_materializations.materialization_id"
@@ -140,6 +148,8 @@ class RolloutForkRecoveryMixin:
             {"prepared", "target_committed"},
             field="fork_materializations.status",
         )
+        fork_mode = one_of_text(fork_mode, {"context_fork", "history_prefix_fork", "full_rollout_copy"},
+                                field="fork_materializations.fork_mode")
         source_thread_id = required_text(
             source_thread_id, field="fork_materializations.source_thread_id"
         )
@@ -273,6 +283,41 @@ class RolloutForkRecoveryMixin:
             return
 
         connection.execute("BEGIN IMMEDIATE")
+        detail_files = DetailFiles(self._host._path_resolver)
+        creation_record = self._host._prepared_target_record(session_id)
+        # publication 前已经 durable 的 typed mapping 覆盖「文件已发布、
+        # registry 事务因硬退出回滚」窗口；不扫描磁盘补造身份。
+        for (key,) in connection.execute(
+            "SELECT target_local_id FROM fork_identity_mappings "
+            "WHERE fork_id=? AND entity_type='detail'", (fork_id,),
+        ).fetchall():
+            ref = detail_ref_from_key(key)
+            ref.require_owner(session_id, thread_id)
+            path = detail_files.path(ref, creation_record=creation_record)
+            if path is not None:
+                path.unlink(missing_ok=True)
+        for key, owner_session, owner_thread, assembly_id in connection.execute(
+            "SELECT detail_ref,session_id,thread_id,assembly_id FROM context_plan_details"
+        ).fetchall():
+            ref = detail_ref_from_key(key)
+            ref.require_owner(owner_session, owner_thread, assembly_id)
+            if (owner_session, owner_thread) != (session_id, thread_id):
+                if fork_mode != "full_rollout_copy" or (owner_session, owner_thread) != (
+                    source_session_id, source_thread_id,
+                ):
+                    raise RuntimeError("source-mismatch: prepared fork detail registry owner 不一致")
+                # full copy 的 remap 前副本仍带 source typed ref；只删除 target
+                # 节点内的暂存文件，绝不解析或删除 source 节点。
+                node = self._host._resolve_thread_node(session_id, thread_id)
+                relative = detail_relative_path(ref)
+                staged = node / relative
+                if not staged.exists() and not staged.is_symlink():
+                    continue
+                path = self._host._safe_session_relative_path(node, relative)
+            else:
+                path = detail_files.path(ref, creation_record=creation_record)
+            if path is not None:
+                path.unlink(missing_ok=True)
         debug_row = connection.execute(
             "SELECT lineage_json FROM fork_identity_mappings "
             "WHERE fork_id = ? AND entity_type = 'debug_snapshot'",
@@ -339,47 +384,17 @@ class RolloutForkRecoveryMixin:
             stream.truncate(0)
             stream.flush()
             os.fsync(stream.fileno())
-        for table in (
-            "control_events",
-            "messages",
-            "message_projections",
-            "item_projections",
-            "tool_calls",
-            "reasoning_blocks",
-            "turns",
-            "context_view_turns",
-            "context_view_ranges",
-            "context_view_jumps",
-            "context_views",
-            "checkpoint_channels",
-            "pending_writes",
-            "checkpoints",
-            "branches",
-            "checkpoint_namespace_state",
-            "storage_commits",
-            "fork_origins",
-            "retention_refs",
-            "item_catalog",
-            "item_parts",
-            "operation_anchors",
-            "turn_acceptances",
-            "fork_identity_mappings",
-            "turn_records",
-            "executions",
-            "model_calls",
-            "turn_execution_links",
-            "context_assemblies",
-            "assembly_item_refs",
-            "tool_set_snapshots",
-            "context_assembly_contributions",
-            "context_assembly_selections",
-            "context_contributions",
-            "context_view_items",
-            "source_overlays",
-            "context_plan_details",
-            "legacy_migration_reports",
-        ):
-            connection.execute(f"DELETE FROM {table}")
+        # prepared target 尚未发布，整个 rollout 属于本次创建事务；按唯一
+        # schema 清空业务表，避免新 plan/source/epoch/activation 表留下悬空引用。
+        connection.execute("PRAGMA defer_foreign_keys=ON")
+        tables = connection.execute(
+            "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND name NOT IN ('database_meta','schema_migrations','fork_materializations',"
+            "'resource_activation_schema_state')"
+        ).fetchall()
+        for (table,) in tables:
+            quoted = '"' + table.replace('"', '""') + '"'
+            connection.execute(f"DELETE FROM {quoted}")
         timestamp = _now()
         result = connection.execute(
             "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, created_at, updated_at) VALUES ('branch-001', 'root', 'active', NULL, NULL, ?, ?)",
@@ -394,7 +409,7 @@ class RolloutForkRecoveryMixin:
         if result.rowcount != 1:
             raise RuntimeError("fork recovery 未重建 checkpoint namespace state")
         result = connection.execute(
-            "UPDATE database_meta SET database_state = 'active', last_commit_id = NULL, last_message_sequence = 0, last_control_sequence = 0, committed_jsonl_offset = 0, active_branch_id = 'branch-001', projection_epoch = 1, history_view_revision = 0, source_overlay_epoch = 0, updated_at = ? WHERE singleton_id = 1",
+            "UPDATE database_meta SET database_state = 'active', last_commit_id = NULL, last_item_sequence = 0, last_message_sequence = 0, last_control_sequence = 0, committed_jsonl_offset = 0, active_branch_id = 'branch-001', projection_epoch = 1, history_view_revision = 0, source_overlay_epoch = 0, updated_at = ? WHERE singleton_id = 1",
             (timestamp,),
         )
         if result.rowcount != 1:

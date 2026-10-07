@@ -257,7 +257,8 @@ class LegacyImportBuilder:
                     execution_id=notice_execution_id,
                     job_id=f"legacy-notice-job:{notice_seed}",
                     admission_idempotency_key=f"legacy-notice-admission:{notice_seed}",
-                    notice_item=notice,
+                    runtime_notice_item=notice,
+                    request_input={"kind": "runtime_notice", "payload": notice.payload},
                     checkpoint_ns=checkpoint_ns,
                 )
                 self.storage.converge_execution(

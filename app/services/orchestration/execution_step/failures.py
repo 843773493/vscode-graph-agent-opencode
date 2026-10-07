@@ -93,6 +93,7 @@ async def handle_step_cancelled(
                 active_tool_name=state.tool_name,
                 checkpoint_source=("interrupt" if user_interrupt else failure_code),
                 event_identity=turn_id or execution_id or job_id,
+                execution_id=execution_id,
             )
             logger.info(
                 "[agent_execution_service] cancellation checkpoint persisted: "
@@ -188,7 +189,7 @@ async def handle_step_failure(
     publish: Callable[[str, dict[str, Any]], Awaitable[None]],
     logger: logging.Logger,
 ) -> None:
-    """把普通异常映射为 v2 execution-lost/stream failure 终态。"""
+    """区分确定业务失败与取消/失联，收敛同一 v2 execution 终态。"""
     if execution_id is None:
         await publish(EventType.ERROR, {"error": str(error), "phase": "agent_execution"})
         return
@@ -241,6 +242,7 @@ async def handle_step_failure(
                 active_tool_name=interrupt_state.tool_name,
                 checkpoint_source=failure_code,
                 event_identity=turn_id or execution_id or job_id,
+                execution_id=execution_id,
             )
         except Exception:
             logger.exception(
@@ -261,12 +263,20 @@ async def handle_step_failure(
             code=failure_code,
             message=failure_message,
         )
-    mark_execution_lost = getattr(checkpointer, "mark_execution_lost", None)
-    if not callable(mark_execution_lost):
-        raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
-    if execution_id is not None:
+    if failure_code == "execution_error":
         await asyncio.to_thread(
-            mark_execution_lost,
+            checkpointer.converge_execution,
+            session_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            execution_id=execution_id,
+            outcome="failed",
+            turn_status="failed" if turn_id is not None else None,
+            checkpoint_ns=checkpoint_ns,
+        )
+    else:
+        await asyncio.to_thread(
+            checkpointer.mark_execution_lost,
             session_id,
             thread_id=thread_id,
             turn_id=turn_id,

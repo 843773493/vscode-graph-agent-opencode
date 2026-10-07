@@ -13,10 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import (
-    TEST_THREAD_GRAPH_BINDING,
-    TEST_THREAD_GRAPH_BINDING_JSON,
-)
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import SessionControlStore
@@ -27,6 +23,10 @@ from app.services.orchestration.initial_execution_binding_worker import (
     InitialExecutionBindOutcome,
 )
 from tests.support.canonical_id_at import thread_id_at
+from tests.support.graph_binding import (
+    TEST_THREAD_GRAPH_BINDING,
+    TEST_THREAD_GRAPH_BINDING_JSON,
+)
 
 DEFAULT_CREATED_AT = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
@@ -56,7 +56,7 @@ def prepare_published_intent(store: SessionControlStore):
     capability_profile = json.dumps(
         {"tools": ["read_file"]}, sort_keys=True, separators=(",", ":")
     )
-    record = store.create_or_get_thread_creation_record(
+    store.create_or_get_thread_creation_record(
         idempotency_key="key-1",
         initial_state="running",
         preimage_hash="a" * 64,
@@ -75,14 +75,9 @@ def prepare_published_intent(store: SessionControlStore):
     store.freeze_thread_creation_artifact_manifest(
         "key-1", artifact_manifest="{}", artifact_manifest_hash="c" * 64
     )
-    store.publish_thread_creation_record("key-1")
-    return store.create_or_get_initial_execution_intent(
-        admission_idempotency_key="key-1",
-        session_id=make_session_id(),
-        thread_id=record.child_thread_id,
-        initial_state="running",
-        creation_idempotency_key="key-1",
-    )
+    owner_session_id = make_session_id()
+    store.publish_thread_creation_record("key-1", session_id=owner_session_id)
+    return store.get_initial_execution_intent("key-1")
 
 
 def identity_binder(

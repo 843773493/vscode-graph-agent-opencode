@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSessionMainThread } from "../../api";
 import { errorMessage } from "../../utils/errorMessage";
 
+import { requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import type { NodeDebugBreakpointDefinition } from "../../components/nodeDebug/NodeDebugBreakpointGutter";
 import type { NodeDebugState, WebUiSettingsUpdate } from "../../types/backend";
 import {
@@ -13,6 +14,7 @@ import { useNodeDebugOwner } from "./useNodeDebugOwner";
 interface UseNodeDebugWorkbenchOptions {
   apiPort: number;
   workspaceId: string | null;
+  workspaces: readonly GatewayWorkspaceRequestTarget[];
   sessionId: string | null;
   enabled: boolean;
   onStatusChange: (message: string) => void;
@@ -39,6 +41,7 @@ export interface NodeDebugWorkbenchBinding {
 export function useNodeDebugWorkbench({
   apiPort,
   workspaceId,
+  workspaces,
   sessionId,
   enabled,
   onStatusChange,
@@ -50,14 +53,25 @@ export function useNodeDebugWorkbench({
   const [resolvedMainThreadId, setResolvedMainThreadId] = useState<string | null>(null);
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+  const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === workspaceId);
+  const backendWorkspaceId = selectedWorkspace?.backend_workspace_id;
+  const connectionKind = selectedWorkspace?.connection_kind;
+  const requestTarget = useMemo<GatewayWorkspaceRequestTarget | null>(() => (
+    workspaceId && connectionKind
+      ? { workspace_id: workspaceId, backend_workspace_id: backendWorkspaceId, connection_kind: connectionKind }
+      : null
+  ), [workspaceId, backendWorkspaceId, connectionKind]);
   useEffect(() => {
-    if (!sessionId) {
+    if (!sessionId || !workspaceId) {
       setResolvedMainThreadId(null);
       return;
     }
     let current = true;
     setResolvedMainThreadId(null);
-    void getSessionMainThread(apiPort, sessionId, workspaceId)
+    void Promise.resolve().then(() => getSessionMainThread(
+      apiPort, sessionId,
+      requireGatewayWorkspaceRequestTarget(requestTarget ? [requestTarget] : [], workspaceId),
+    ))
       .then((owner) => {
         if (current) setResolvedMainThreadId(owner.thread_id);
       })
@@ -65,7 +79,7 @@ export function useNodeDebugWorkbench({
         if (current) onStatusChangeRef.current(`解析调试主线程失败: ${errorMessage(cause)}`);
       });
     return () => { current = false; };
-  }, [apiPort, sessionId, workspaceId]);
+  }, [apiPort, sessionId, workspaceId, requestTarget]);
 
   const {
     threadId,

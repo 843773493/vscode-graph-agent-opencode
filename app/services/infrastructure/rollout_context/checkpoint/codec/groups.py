@@ -23,14 +23,10 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.metadata impor
     message_annotations,
     project_annotations,
 )
-
-_REASONING = {
-    "reasoning",
-    "reasoning_content",
-    "reasoning_items",
-    "thinking",
-    "redacted_thinking",
-}
+from app.services.mapping.itemized.canonical_langchain import (
+    REASONING_CARRIER_TYPES,
+    project_reasoning_carrier,
+)
 
 
 def message_projection_id(item: CanonicalItemRecord) -> str:
@@ -162,7 +158,7 @@ def _content_item(
     payload_kind = "text" if isinstance(part, str) else "structured_content"
     payload = part if isinstance(part, str) else [part]
     carrier: dict[str, object] = {}
-    if isinstance(part, Mapping) and part.get("type") in _REASONING:
+    if isinstance(part, Mapping) and part.get("type") in REASONING_CARRIER_TYPES:
         kind = "reasoning"
         text_key = next(
             (
@@ -366,26 +362,15 @@ def group_content(items: Sequence[CanonicalItemRecord]) -> str | list[object]:
         if item.semantic_kind == "tool_call":
             continue
         if item.semantic_kind == "reasoning":
-            if item.payload_kind == "extension":
-                if (
-                    item.payload.get("extension_schema")
-                    != "boxteam.checkpoint.reasoning-carrier"
-                    or item.payload.get("extension_version") != "1"
-                    or not isinstance(item.payload.get("value"), Mapping)
-                ):
-                    raise ValueError(
-                        "canonical message group reasoning extension 不受支持"
-                    )
-                result.append(dict(item.payload["value"]))
-            else:
-                if (
-                    item.projection_identity is None
-                    or item.projection_identity.reasoning_carrier is None
-                ):
-                    raise ValueError("reasoning group 缺少 typed carrier")
-                carrier = item.projection_identity.reasoning_carrier.to_dict()
-                key = carrier.pop("text_key")
-                result.append({**carrier, key: item.payload})
+            if item.payload_kind != "extension" and (
+                item.projection_identity is None
+                or item.projection_identity.reasoning_carrier is None
+            ):
+                raise ValueError("reasoning group 缺少 typed carrier")
+            carrier = project_reasoning_carrier(item)
+            if carrier is None:
+                raise ValueError("canonical message group reasoning extension 不受支持")
+            result.append(carrier)
         elif item.payload_kind == "text":
             result.append(item.payload)
         else:

@@ -80,6 +80,7 @@ export interface TerminalSession {
   transport_owner_revision: number;
   exit_code?: number | undefined;
   last_command_exit_code?: number | undefined;
+  command_start_sequence?: number | undefined;
 }
 
 export interface TerminalJsonMessage {
@@ -103,6 +104,7 @@ function createBaseTerminalSession(): TerminalSession {
     transport_owner_revision: 0,
     exit_code: undefined,
     last_command_exit_code: undefined,
+    command_start_sequence: undefined,
   };
 }
 
@@ -126,6 +128,9 @@ export const TerminalSession: MessageFns<TerminalSession> = {
       exit_code: isSet(object.exit_code) ? globalThis.Number(object.exit_code) : undefined,
       last_command_exit_code: isSet(object.last_command_exit_code)
         ? globalThis.Number(object.last_command_exit_code)
+        : undefined,
+      command_start_sequence: isSet(object.command_start_sequence)
+        ? globalThis.Number(object.command_start_sequence)
         : undefined,
     };
   },
@@ -174,6 +179,9 @@ export const TerminalSession: MessageFns<TerminalSession> = {
     if (message.last_command_exit_code !== undefined) {
       obj.last_command_exit_code = Math.round(message.last_command_exit_code);
     }
+    if (message.command_start_sequence !== undefined) {
+      obj.command_start_sequence = Math.round(message.command_start_sequence);
+    }
     return obj;
   },
 
@@ -196,6 +204,7 @@ export const TerminalSession: MessageFns<TerminalSession> = {
     message.transport_owner_revision = object.transport_owner_revision ?? 0;
     message.exit_code = object.exit_code ?? undefined;
     message.last_command_exit_code = object.last_command_exit_code ?? undefined;
+    message.command_start_sequence = object.command_start_sequence ?? undefined;
     return message;
   },
 };

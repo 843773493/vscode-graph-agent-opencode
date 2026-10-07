@@ -19,6 +19,10 @@ from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
 )
 
+REASONING_CARRIER_TYPES = frozenset({
+    "reasoning", "reasoning_content", "reasoning_items", "thinking", "redacted_thinking",
+})
+
 
 def _message_id(item: CanonicalItemRecord) -> str:
     value = (item.projection_identity.projection_message_id if item.projection_identity is not None else None)
@@ -57,17 +61,39 @@ def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:
     return result
 
 
-def _item_content(item: CanonicalItemRecord) -> object:
-    if item.semantic_kind != SemanticKind.REASONING:
-        return item.payload
-    block = {
+def project_reasoning_carrier(item: CanonicalItemRecord) -> dict[str, object] | None:
+    """恢复既有 canonical reasoning carrier；未知 envelope 保留 unsupported。"""
+    if item.payload_kind == "opaque":
+        return None
+    if item.payload_kind == "extension":
+        payload = item.payload
+        if (
+            payload.get("extension_schema") != "boxteam.checkpoint.reasoning-carrier"
+            or payload.get("extension_version") != "1"
+            or payload.get("encoding") != "json"
+            or payload.get("schema_version") != "1"
+        ):
+            return None
+        value = payload.get("value")
+        if (
+            not isinstance(value, Mapping)
+            or value.get("type") not in REASONING_CARRIER_TYPES
+            or value.get("type") != payload.get("wire_type")
+        ):
+            raise ValueError("canonical reasoning carrier 的 type/wire_type 不一致")
+        return dict(value)
+    identity = item.projection_identity
+    if identity is not None and identity.reasoning_carrier is not None:
+        carrier = identity.reasoning_carrier.to_dict()
+        key = carrier.pop("text_key")
+        return {**carrier, key: item.payload}
+    return {
         "type": "reasoning",
         "text": item.payload.get("content", "")
         if isinstance(item.payload, Mapping)
         else item.payload,
         "item_id": item.item_id,
     }
-    return [block]
 
 
 def _message_content(value: object) -> object:
@@ -124,15 +150,6 @@ def project_canonical_items(
     superseded_ids = _superseded_stream_item_ids(ordered)
     for item in ordered:
         if item.item_id in superseded_ids:
-            continue
-        if item.semantic_kind == SemanticKind.REASONING and item.payload_kind in {
-            "opaque",
-            "extension",
-        }:
-            if capability_losses is not None:
-                capability_losses.append(
-                    f"{item.item_id}:{item.semantic_kind}/{item.payload_kind}"
-                )
             continue
         if item.semantic_kind == SemanticKind.USER_INPUT:
             messages.append(
@@ -215,7 +232,12 @@ def project_canonical_items(
                 )
             continue
         group = _projection_message_group_id(item)
-        content = _message_content(_item_content(item))
+        content = project_reasoning_carrier(item) if item.semantic_kind == SemanticKind.REASONING else item.payload
+        if content is None:
+            if capability_losses is not None:
+                capability_losses.append(f"{item.item_id}:{item.semantic_kind}/{item.payload_kind}")
+            continue
+        content = _message_content(content)
         current_index = message_groups.get(group)
         if (
             current_index != len(messages) - 1

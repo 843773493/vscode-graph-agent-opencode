@@ -84,6 +84,11 @@ export declare type TerminalSession = Message<"boxteam.terminal.v1.TerminalSessi
    * @generated from field: optional int32 last_command_exit_code = 16;
    */
   lastCommandExitCode?: number | undefined;
+
+  /**
+   * @generated from field: optional uint64 command_start_sequence = 17;
+   */
+  commandStartSequence?: bigint | undefined;
 };
 
 /**

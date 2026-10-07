@@ -26,6 +26,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_message_idempotency_store import (
     SessionMessageIdempotencyStore,
 )
+from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 
 class SessionOrchestrator:
@@ -38,6 +39,7 @@ class SessionOrchestrator:
         job_service: JobServiceProtocol,
         job_event_bus: JobEventBusProtocol,
         idempotency_store: SessionMessageIdempotencyStore | None = None,
+        runtime_source_dispatcher: RuntimeSourceDispatcher | None = None,
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
@@ -45,6 +47,22 @@ class SessionOrchestrator:
         self._job_service = job_service
         self._job_event_bus = job_event_bus
         self._idempotency_store = idempotency_store
+        self._runtime_source_dispatcher = runtime_source_dispatcher
+
+    async def resolve_main_thread(self, session_id: str) -> str:
+        return await self._session_service.resolve_main_thread(session_id)
+
+    async def submit_runtime_event(
+        self, session_id: str, message: PreparedInternalMessage, *,
+        thread_id: str, source_id: str, idempotency_key: str,
+        delivery_policy: DeliveryPolicy = "after_turn",
+    ) -> MessageRunAccepted:
+        if self._runtime_source_dispatcher is None:
+            raise RuntimeError("runtime source dispatcher unavailable")
+        return await self._runtime_source_dispatcher.submit(
+            session_id, thread_id, message, source_id=source_id,
+            idempotency_key=idempotency_key, delivery_policy=delivery_policy,
+        )
 
     def reserve_user_execution_identity(self) -> UserExecutionIdentity:
         return self._job_service.reserve_user_execution_identity()
@@ -107,10 +125,12 @@ class SessionOrchestrator:
         session_id: str,
         content: str,
         *,
+        thread_id: str,
         metadata: dict[str, object] | None = None,
     ) -> MessageDTO:
         """生成稳定消息 DTO；调用方必须先写入业务账本再派发。"""
         self._reject_internal_message_on_user_path(content, metadata)
+        self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
         return await self._job_service.run_session_preparation(
             session_id,
             lambda: self._message_service.create(
@@ -120,6 +140,7 @@ class SessionOrchestrator:
                     content=content,
                     metadata=metadata or {},
                 ),
+                thread_id=thread_id,
             ),
         )
 

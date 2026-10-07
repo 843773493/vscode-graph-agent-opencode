@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -35,9 +36,19 @@ from app.services.infrastructure.rollout_context.fork.remap_prepare import (
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
+    ContextSourceDescriptor,
+    ContextSourceSnapshot,
+    PendingContextSourceBatch,
+)
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailRecord,
     detail_relative_path,
+)
+from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
+    compile_prefix_context,
+    full_source_id,
+    source_contributions,
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
@@ -77,7 +88,7 @@ def _manual_fork_journal_fields(
 
 
 @pytest.fixture
-def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
+def committed_source(request: pytest.FixtureRequest, session_bundle_factory):
     sessions = prepare_rollout_workspace(request) / ".boxteam" / "sessions"
     for session in (SOURCE_SESSION_ID, TARGET_SESSION_ID):
         session_bundle_factory(sessions, session)
@@ -108,43 +119,50 @@ def plan_source(request: pytest.FixtureRequest, session_bundle_factory):
                 build_checkpoint_config(thread), checkpoint,
                 {"source": "integration"}, {"messages": "1"},
             )
-        body = [{"type": "text", "text": "source plan 明文不是 identity，必须保持"}]
-        saver.register_context_contribution(
-            SOURCE_SESSION_ID, thread,
-            ContextContribution(
-                contribution_id="source-contribution",
-                source_kind="environment",
-                source_revision="source-revision",
-                body=body,
-                content_hash=contribution_content_hash("prompt", body),
-                extensions={} , source_binding=SourceBinding(source_ref='source-contribution'),
-            ),
-            request_content=body,
-        )
-        tools = ({
-            "tool_id": "echo", "name": "echo",
-            "parameters": {
-                "type": "object", "properties": {"source": {"type": "string"}},
-            },
-        },)
-        plan = saver.compose_committed_context_plan(
-            SOURCE_SESSION_ID, thread, plan_id="source-plan",
-            tool_set=ToolSetSnapshot(selection_revision=sha256_jcs(tools), tools=tools),
-        )
-        plan = replace(
-            plan,
-            plan_creation_idempotency_key="test_rollout_fork_plans:source-plan:create",
-        )
-        saver.create_context_plan(SOURCE_SESSION_ID, plan)
-        sealed = saver.seal_context_plan(
-            SOURCE_SESSION_ID, thread,
-            plan,
-            wire_profile=None, wire_params=None, turn_id="source-turn",
-            execution_id=accepted["initial_execution_id"],
-            provider_version="integration-provider",
-            seal_idempotency_key="test_rollout_fork_plans:source-plan:seal",
-        )
-        yield saver, sealed, body
+        yield saver, accepted
+
+
+@pytest.fixture
+def plan_source(committed_source):
+    saver, accepted = committed_source
+    thread = saver._storage.main_thread_id(SOURCE_SESSION_ID)
+    body = [{"type": "text", "text": "source plan 明文不是 identity，必须保持"}]
+    saver.register_context_contribution(
+        SOURCE_SESSION_ID, thread,
+        ContextContribution(
+            contribution_id="source-contribution",
+            source_kind="environment",
+            source_revision="source-revision",
+            body=body,
+            content_hash=contribution_content_hash("prompt", body),
+            source_binding=SourceBinding(source_ref="source-contribution"),
+        ),
+        request_content=body,
+    )
+    tools = ({
+        "tool_id": "echo", "name": "echo",
+        "parameters": {
+            "type": "object", "properties": {"source": {"type": "string"}},
+        },
+    },)
+    plan = saver.compose_committed_context_plan(
+        SOURCE_SESSION_ID, thread, plan_id="source-plan",
+        tool_set=ToolSetSnapshot(selection_revision=sha256_jcs(tools), tools=tools),
+    )
+    plan = replace(
+        plan,
+        plan_creation_idempotency_key="test_rollout_fork_plans:source-plan:create",
+    )
+    saver.create_context_plan(SOURCE_SESSION_ID, plan)
+    sealed = saver.seal_context_plan(
+        SOURCE_SESSION_ID, thread,
+        plan,
+        wire_profile=None, wire_params=None, turn_id="source-turn",
+        execution_id=accepted["initial_execution_id"],
+        provider_version="integration-provider",
+        seal_idempotency_key="test_rollout_fork_plans:source-plan:seal",
+    )
+    return saver, sealed, body
 
 
 def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
@@ -152,18 +170,11 @@ def test_full_copy_sealed_sources_restore_from_target_only(plan_source) -> None:
     storage = saver._storage
     source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
-    source_view = storage.clone_rollout(
-        source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
-    )
-    fields = _manual_fork_journal_fields(
-        storage,
-        source_session_id=SOURCE_SESSION_ID,
-        target_session_id=TARGET_SESSION_ID,
-        source_view_id=source_view,
-    )
-    materialization, fork_id = storage.begin_fork_materialization(**fields)
-    storage.commit_fork_materialization(materialization, **fields)
+    result = asyncio.run(saver.afork(
+        source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
+        mode="full_rollout_copy",
+    ))
+    fork_id = result.fork_id
     assert artifact_manifest(source_root) == before
     with storage._connect(storage.main_thread_id(TARGET_SESSION_ID), "", read_only=True, session_id=TARGET_SESSION_ID) as connection:
         target_assembly = connection.execute(
@@ -323,38 +334,49 @@ def test_full_copy_preflight_observes_wal_without_modifying_source(plan_source) 
 
 
 @pytest.mark.parametrize("failure_phase", ["during_detail", "after_detail"])
-def test_failed_full_copy_restores_jsonl_and_detail_bytes(
-    plan_source, monkeypatch: pytest.MonkeyPatch, failure_phase: str
+def test_failed_full_copy_discards_staging_without_changing_source(
+    plan_source, monkeypatch: pytest.MonkeyPatch, failure_phase: str,
 ) -> None:
-    from app.services.infrastructure.rollout_context.fork import remap, remap_files
+    from app.services.infrastructure.rollout_context.fork import remap
+    from app.services.infrastructure.rollout_context.fork.full_copy import details
 
     saver, _, _ = plan_source
     storage = saver._storage
     source_before = artifact_manifest(storage.root(SOURCE_SESSION_ID))
-    source_view = storage.clone_rollout(
-        source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
-    )
-    fields = _manual_fork_journal_fields(
-        storage,
-        source_session_id=SOURCE_SESSION_ID,
-        target_session_id=TARGET_SESSION_ID,
-        source_view_id=source_view,
-    )
-    materialization, _ = storage.begin_fork_materialization(**fields)
     target_root = storage.root(TARGET_SESSION_ID)
-    before = artifact_manifest(target_root)
+    original_write = details.write_private
+    original_restore = remap.restore_full_copy_files
+    restored = []
+    published = []
 
-    def fail(*_args, **_kwargs):
+    def fail_after_detail(path, raw):
+        original_write(path, raw)
+        published.append(path)
         raise RuntimeError("injected detail materialization failure")
 
+    def fail_after_files(*_args, **_kwargs):
+        raise RuntimeError("injected detail materialization failure")
+
+    def verify_restoration(state):
+        original_restore(state)
+        assert state.jsonl_path.read_bytes() == state.old_jsonl
+        restored.append(state.jsonl_path)
+
+    monkeypatch.setattr(remap, "restore_full_copy_files", verify_restoration)
     if failure_phase == "during_detail":
-        monkeypatch.setattr(remap_files, "canonical_json_bytes", fail)
+        monkeypatch.setattr(details, "write_private", fail_after_detail)
     else:
-        monkeypatch.setattr(remap, "rewrite_full_copy_fast_columns", fail)
+        monkeypatch.setattr(remap, "rewrite_full_copy_fast_columns", fail_after_files)
     with pytest.raises(RuntimeError, match="injected detail materialization failure"):
-        storage.commit_fork_materialization(materialization, **fields)
-    assert artifact_manifest(target_root) == before
+        asyncio.run(saver.afork(
+            source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
+            mode="full_rollout_copy",
+        ))
+    assert restored and all(not path.exists() for path in restored)
+    if failure_phase == "during_detail":
+        assert published and all(not path.exists() for path in published)
+    assert not target_root.exists()
+    assert not tuple(target_root.parent.glob(".fork-staging-*"))
     assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
 
 
@@ -543,31 +565,47 @@ def test_full_copy_unavailable_detail_manifest_localizes_typed_owner(
     assert artifact_manifest(storage.root(SOURCE_SESSION_ID)) == source_before
 
 
-def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
-    plan_source,
+@pytest.mark.parametrize("mode", ["context_fork", "history_prefix_fork", "full_rollout_copy"])
+@pytest.mark.parametrize("root_placement", ["tail_only", "root_eligible"])
+def test_fork_preserves_distinct_source_detail_and_sealed_detail(
+    committed_source, mode: str, root_placement: str,
 ) -> None:
-    saver, initial, _ = plan_source
+    saver, accepted = committed_source
     storage = saver._storage
-    body = [{"type": "text", "text": "已有 typed source detail 正文不可丢失"}]
-    source_detail: DetailRef | None = None
-    for ordinal in (1, 2):
-        ref_id, plan_id = f"source-extra-ref-{ordinal}", f"source-extra-plan-{ordinal}"
-        ref = ContextRef.request_only_ref(
-            ref_id,
-            session_id=SOURCE_SESSION_ID, thread_id=initial.thread_id,
-            plan_id=plan_id,
-            source_revision="existing-source-revision",
-            content=body,
-            source_ref=source_detail
-            if source_detail is not None
-            else "original-source",
-            visibility="internal",
+    thread = storage.main_thread_id(SOURCE_SESSION_ID)
+    body = "已有 typed source detail 正文不可丢失"
+    source = ContextSourceSnapshot(
+        descriptor=ContextSourceDescriptor(
+            source_id="original-source", source_kind="environment",
+            name="已有来源", description="验证 typed source detail 的独立复制",
+            internal_locator="original-source", root_placement=root_placement,
+        ),
+        revision=sha256_jcs(body), content=body, applied_revision=None, tracked=False,
+    )
+    batch = PendingContextSourceBatch(deltas=(), sources=(source,))
+    for contribution in source_contributions(batch):
+        saver.register_context_contribution(
+            SOURCE_SESSION_ID, thread, contribution, request_content=contribution.body,
         )
-        plan = saver.compose_context_plan(
-            session_id=SOURCE_SESSION_ID, thread_id=initial.thread_id,
-            plan_id=plan_id, tool_set=EMPTY_TOOL_SET,
-            refs=(ref,),
-            history_view_revision=initial.history_view_revision,
+    ref_id = full_source_id(source)
+    source_detail: DetailRef | None = None
+    previous = None
+    for ordinal in (1, 2):
+        plan_id = f"source-extra-plan-{ordinal}"
+        with saver._context_reader.open_snapshot(SOURCE_SESSION_ID, thread, "") as snapshot:
+            plan = saver.compose_committed_context_plan(
+                SOURCE_SESSION_ID, thread, plan_id=plan_id, tool_set=EMPTY_TOOL_SET,
+                read_snapshot=snapshot,
+            )
+            items = storage.committed_context_items(snapshot)
+        if source_detail is not None:
+            plan = replace(plan, refs=tuple(
+                replace(ref, source_ref=source_detail) if ref.ref_id == ref_id else ref
+                for ref in plan.refs
+            ))
+        plan, preparation = compile_prefix_context(
+            plan, items, batch, EMPTY_TOOL_SET, overlay_bodies={}, previous=previous,
+            provider_profile="chat_completions:integration-provider", turn_id="source-turn",
         )
         plan = replace(
             plan,
@@ -575,13 +613,14 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
         )
         saver.create_context_plan(SOURCE_SESSION_ID, plan)
         sealed = saver.seal_context_plan(
-            SOURCE_SESSION_ID, initial.thread_id,
+            SOURCE_SESSION_ID, thread,
             plan,
             wire_profile=None, wire_params=None, turn_id="source-turn",
-            execution_id=saver.execution_for_turn(SOURCE_SESSION_ID, thread_id=initial.thread_id, turn_id="source-turn"),
+            execution_id=accepted["initial_execution_id"],
             provider_version="integration-provider",
             seal_idempotency_key=f"test_rollout_fork_plans:{plan_id}:seal",
-            request_only_content={ref_id: body} if ordinal == 1 else None,
+            target_format="chat_completions",
+            context_preparation=preparation,
         )
         entry = next(entry for entry in sealed.selection if entry.ref.ref_id == ref_id)
         assert isinstance(entry.detail_ref, DetailRef)
@@ -589,20 +628,23 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             source_detail = entry.detail_ref
         else:
             assert entry.ref.source_ref == source_detail != entry.detail_ref
+        previous = sealed
+    config = build_checkpoint_config(thread)
+    with dispatch_execution_scope(saver, SOURCE_SESSION_ID, "source-turn"):
+        checkpoint = saver.get_tuple(config).checkpoint
+        checkpoint = {**checkpoint, "id": "alias-selection-checkpoint"}
+        saver.put(config, checkpoint, {"source": "alias-selection"}, {})
+    saver.finalize_turn(
+        session_id=SOURCE_SESSION_ID, thread_id=thread,
+        turn_id="source-turn", final_message_id="source-final",
+    )
     source_root = storage.root(SOURCE_SESSION_ID)
     before = artifact_manifest(source_root)
-    source_view = storage.clone_rollout(
-        source_session_id=SOURCE_SESSION_ID,
-        source_thread_id=storage.main_thread_id(SOURCE_SESSION_ID), target_session_id=TARGET_SESSION_ID, target_thread_id=storage.main_thread_id(TARGET_SESSION_ID), source_checkpoint_id=None
-    )
-    fields = _manual_fork_journal_fields(
-        storage,
-        source_session_id=SOURCE_SESSION_ID,
-        target_session_id=TARGET_SESSION_ID,
-        source_view_id=source_view,
-    )
-    materialization, fork_id = storage.begin_fork_materialization(**fields)
-    storage.commit_fork_materialization(materialization, **fields)
+    result = asyncio.run(saver.afork(
+        source_session_id=SOURCE_SESSION_ID, target_session_id=TARGET_SESSION_ID,
+        mode=mode,
+    ))
+    fork_id = result.fork_id
     target_assembly = storage.fork_target_identity(
         TARGET_SESSION_ID,
         fork_id=fork_id,
@@ -633,11 +675,17 @@ def test_full_copy_preserves_distinct_source_detail_and_sealed_detail(
             )["detail"]
             == body
         )
+        assert (
+            restarted.read_context_plan_detail(
+                TARGET_SESSION_ID, target.thread_id, detail_ref=entry.detail_ref,
+            )["detail"]
+            == body
+        )
         projected, losses = restarted.project_context_plan_with_diagnostics(
             TARGET_SESSION_ID, target.thread_id, target.as_sealed_plan()
         )
         assert not losses
-        assert body[0]["text"] in json.dumps(
+        assert body in json.dumps(
             [message.model_dump(mode="json") for message in projected],
             ensure_ascii=False,
         )

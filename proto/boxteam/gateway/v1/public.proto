@@ -492,6 +492,7 @@ message GeneratorContextSourceDTO {
   optional string workspace_id = 2;
   optional string session_id = 3;
   optional string snapshot_id = 4;
+  optional string thread_id = 5;
 }
 
 message GeneratorDefinitionCreateRequest {
@@ -591,9 +592,15 @@ message GeneratorPoliciesDTO {
   optional string delete_outputs = 4;
 }
 
+message GeneratorTargetDTO {
+  string workspace_id = 1;
+  string session_id = 2;
+  string thread_id = 3;
+}
+
 message GeneratorSessionStrategyDTO {
   optional string mode = 1;
-  optional SessionLocatorDTO target = 2;
+  optional GeneratorTargetDTO target = 2;
   optional string concurrency = 3;
   optional string report_back = 4;
 }

@@ -37,7 +37,7 @@ describe("main thread API", () => {
       });
     });
 
-    const result = await getSessionMainThread(48_310, "ses/owner", "workspace-1");
+    const result = await getSessionMainThread(48_310, "ses/owner", { workspace_id: "workspace-1", backend_workspace_id: "backend-1", connection_kind: "local" });
 
     expect(result.thread_id).toBe("thr_00000000700070008000000000000001");
     expect(requestUrl).toContain("/api/v1/sessions/ses%2Fowner/main-thread");
@@ -52,7 +52,7 @@ describe("main thread API", () => {
       request_id: "req-main-thread-mismatch",
     }));
 
-    await expect(getSessionMainThread(48_311, "ses_owner", "workspace-1"))
+    await expect(getSessionMainThread(48_311, "ses_owner", { workspace_id: "workspace-1", backend_workspace_id: "backend-1", connection_kind: "local" }))
       .rejects.toThrow("main thread 协议响应");
   });
 });

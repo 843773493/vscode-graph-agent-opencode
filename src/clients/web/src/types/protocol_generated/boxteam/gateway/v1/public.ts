@@ -490,6 +490,7 @@ export interface GeneratorContextSourceDTO {
   workspace_id?: string | undefined;
   session_id?: string | undefined;
   snapshot_id?: string | undefined;
+  thread_id?: string | undefined;
 }
 
 export interface GeneratorDefinitionCreateRequest {
@@ -589,9 +590,15 @@ export interface GeneratorPoliciesDTO {
   delete_outputs?: string | undefined;
 }
 
+export interface GeneratorTargetDTO {
+  workspace_id: string;
+  session_id: string;
+  thread_id: string;
+}
+
 export interface GeneratorSessionStrategyDTO {
   mode?: string | undefined;
-  target?: SessionLocatorDTO | undefined;
+  target?: GeneratorTargetDTO | undefined;
   concurrency?: string | undefined;
   report_back?: string | undefined;
 }
@@ -3989,7 +3996,13 @@ export const GenerationRunListDTO: MessageFns<GenerationRunListDTO> = {
 };
 
 function createBaseGeneratorContextSourceDTO(): GeneratorContextSourceDTO {
-  return { kind: undefined, workspace_id: undefined, session_id: undefined, snapshot_id: undefined };
+  return {
+    kind: undefined,
+    workspace_id: undefined,
+    session_id: undefined,
+    snapshot_id: undefined,
+    thread_id: undefined,
+  };
 }
 
 export const GeneratorContextSourceDTO: MessageFns<GeneratorContextSourceDTO> = {
@@ -3999,6 +4012,7 @@ export const GeneratorContextSourceDTO: MessageFns<GeneratorContextSourceDTO> = 
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
       snapshot_id: isSet(object.snapshot_id) ? globalThis.String(object.snapshot_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
     };
   },
 
@@ -4016,6 +4030,9 @@ export const GeneratorContextSourceDTO: MessageFns<GeneratorContextSourceDTO> = 
     if (message.snapshot_id !== undefined) {
       obj.snapshot_id = message.snapshot_id;
     }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4028,6 +4045,7 @@ export const GeneratorContextSourceDTO: MessageFns<GeneratorContextSourceDTO> = 
     message.workspace_id = object.workspace_id ?? undefined;
     message.session_id = object.session_id ?? undefined;
     message.snapshot_id = object.snapshot_id ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
     return message;
   },
 };
@@ -4752,6 +4770,45 @@ export const GeneratorPoliciesDTO: MessageFns<GeneratorPoliciesDTO> = {
   },
 };
 
+function createBaseGeneratorTargetDTO(): GeneratorTargetDTO {
+  return { workspace_id: "", session_id: "", thread_id: "" };
+}
+
+export const GeneratorTargetDTO: MessageFns<GeneratorTargetDTO> = {
+  fromJSON(object: any): GeneratorTargetDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+    };
+  },
+
+  toJSON(message: GeneratorTargetDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GeneratorTargetDTO>, I>>(base?: I): GeneratorTargetDTO {
+    return GeneratorTargetDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GeneratorTargetDTO>, I>>(object: I): GeneratorTargetDTO {
+    const message = createBaseGeneratorTargetDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
 function createBaseGeneratorSessionStrategyDTO(): GeneratorSessionStrategyDTO {
   return { mode: undefined, target: undefined, concurrency: undefined, report_back: undefined };
 }
@@ -4760,7 +4817,7 @@ export const GeneratorSessionStrategyDTO: MessageFns<GeneratorSessionStrategyDTO
   fromJSON(object: any): GeneratorSessionStrategyDTO {
     return {
       mode: isSet(object.mode) ? globalThis.String(object.mode) : undefined,
-      target: isSet(object.target) ? SessionLocatorDTO.fromJSON(object.target) : undefined,
+      target: isSet(object.target) ? GeneratorTargetDTO.fromJSON(object.target) : undefined,
       concurrency: isSet(object.concurrency) ? globalThis.String(object.concurrency) : undefined,
       report_back: isSet(object.report_back) ? globalThis.String(object.report_back) : undefined,
     };
@@ -4772,7 +4829,7 @@ export const GeneratorSessionStrategyDTO: MessageFns<GeneratorSessionStrategyDTO
       obj.mode = message.mode;
     }
     if (message.target !== undefined) {
-      obj.target = SessionLocatorDTO.toJSON(message.target);
+      obj.target = GeneratorTargetDTO.toJSON(message.target);
     }
     if (message.concurrency !== undefined) {
       obj.concurrency = message.concurrency;
@@ -4790,7 +4847,7 @@ export const GeneratorSessionStrategyDTO: MessageFns<GeneratorSessionStrategyDTO
     const message = createBaseGeneratorSessionStrategyDTO();
     message.mode = object.mode ?? undefined;
     message.target = (object.target !== undefined && object.target !== null)
-      ? SessionLocatorDTO.fromPartial(object.target)
+      ? GeneratorTargetDTO.fromPartial(object.target)
       : undefined;
     message.concurrency = object.concurrency ?? undefined;
     message.report_back = object.report_back ?? undefined;

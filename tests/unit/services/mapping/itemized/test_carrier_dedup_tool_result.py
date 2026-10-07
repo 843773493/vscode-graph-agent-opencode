@@ -20,6 +20,7 @@ from app.domain.itemized.enums import (
     SemanticKind,
     TurnScope,
 )
+from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ProjectionGroup,
@@ -250,3 +251,68 @@ def test_no_checkpoint_group_keeps_live_result():
     assert superseded_stream_item_ids(items) == set()
     messages = project_canonical_items(items, preserve_order=True)
     assert any(type(message).__name__ == "ToolMessage" for message in messages)
+
+
+@pytest.fixture
+def protected_reasoning_carrier():
+    block = {
+        "type": "reasoning_items",
+        "reasoning_items": [{
+            "type": "reasoning", "id": "rs-vendor",
+            "summary": [{"index": 0, "type": "summary_text", "text": ""}],
+            "content": [{"type": "reasoning_text", "text": "用户要求委派子代理。"}],
+            "encrypted_content": "encrypted-reasoning-fixture",
+            "provider_extension": {"trace_group": "vendor-group"},
+        }],
+    }
+    item = _item(
+        4, "item-resp-vendor-content-0", SemanticKind.REASONING, PayloadKind.EXTENSION,
+        {
+            "extension_schema": "boxteam.checkpoint.reasoning-carrier",
+            "extension_version": "1", "encoding": "json", "wire_type": "reasoning_items",
+            "schema_version": "1", "value": block,
+            "protection": {"visibility": "protected"},
+        },
+        wire_role="assistant", message_group_id=f"message-lc_run--{MODEL_CALL}",
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL),
+        projection_group=ProjectionGroup(0, 2, "list"),
+    )
+    return block, item
+
+
+def test_protected_reasoning_replays_with_one_emitting_call_and_result(
+    protected_reasoning_carrier,
+):
+    block, reasoning = protected_reasoning_carrier
+    items = (
+        _stream_reasoning(), _stream_tool_call(), _live_tool_result(),
+        reasoning, _confirmed_tool_call(), _request_tool_result(),
+    )
+    losses: list[str] = []
+    messages = project_canonical_items(items, capability_losses=losses, preserve_order=True)
+    assert losses == []
+    assert len(messages) == 2
+    assistant, result = messages
+    assert assistant.content == [block]
+    assert [call["id"] for call in assistant.tool_calls] == [TOOL_CALL_ID]
+    assert result.tool_call_id == TOOL_CALL_ID
+    assert result.content == RESULT_CONTENT
+    assert assistant.response_metadata["model_call_id"] == result.response_metadata["model_call_id"] == MODEL_CALL
+
+
+@pytest.mark.parametrize("field,value", [
+    ("extension_schema", "unknown.reasoning-carrier"),
+    ("extension_version", "unsupported-version"),
+])
+def test_unknown_reasoning_extension_stays_unsupported(
+    protected_reasoning_carrier, field, value,
+):
+    _block, reasoning = protected_reasoning_carrier
+    body = reasoning.to_dict()
+    body["payload"][field] = value
+    body["content_hash"] = content_hash(body["payload_kind"], body["payload"])
+    unknown = CanonicalItemRecord.from_dict(body)
+    losses: list[str] = []
+    messages = project_canonical_items((unknown,), capability_losses=losses)
+    assert messages == []
+    assert losses == [f"{unknown.item_id}:reasoning/extension"]

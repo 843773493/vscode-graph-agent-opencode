@@ -112,6 +112,9 @@ async def _workspace_lifespan(container: AppContainer):
                 container.goal_runtime_service.on_event,
             )
             resources.push_async_callback(container.goal_runtime_service.shutdown)
+            resources.push_async_callback(container.thread_initial_execution_service.stop)
+            resources.push_async_callback(container.job_event_bus.unregister_durable_listener,
+                                          container.thread_initial_execution_service.on_event)
 
             async def record_session_activity(event) -> None:
                 if event.type not in {"job_completed", "job_failed", "job_cancelled"}:
@@ -190,6 +193,7 @@ async def _workspace_lifespan(container: AppContainer):
             await container.job_event_bus.register_durable_listener(
                 container.goal_runtime_service.on_event
             )
+            await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
             await container.job_event_bus.register_durable_listener(
                 record_session_activity
             )
@@ -199,9 +203,11 @@ async def _workspace_lifespan(container: AppContainer):
             recovered = await container.session_context_fork_service.recover_prepared_forks()
             if recovered:
                 logger.info("已恢复 %s 个未发布 context fork", recovered)
+            await container.agent_execution_service.start()
+            await container.thread_initial_execution_service.start()
+            await container.runtime_source_dispatcher.start()
             await container.session_generation_service.start()
             await container.terminal_steering_service.start()
-            await container.agent_execution_service.start()
             await container.goal_runtime_service.resume_active_goals()
             await operations.start()
             logger.info(

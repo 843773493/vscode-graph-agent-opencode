@@ -18,6 +18,7 @@ class QueueEntry:
     """仍在等待执行的队列项；消息正文仍由 JobState 持有。"""
 
     job_id: str
+    thread_id: str
     enqueue_sequence: int
     delivery_policy: DeliveryPolicy
     waiting_reason: str | None = None
@@ -26,7 +27,7 @@ class QueueEntry:
 
 
 class JobPendingQueue:
-    """每个会话一个严格 FIFO 队列，不提供任何改变顺序的操作。"""
+    """同一 thread 严格 FIFO；会话聚合保持原入队顺序。"""
 
     def __init__(self) -> None:
         self._waiting: dict[str, deque[str]] = {}
@@ -34,8 +35,9 @@ class JobPendingQueue:
         self._next_sequence: dict[str, int] = {}
         self._snapshot_versions: dict[str, int] = {}
 
-    def ids(self, session_id: str) -> tuple[str, ...]:
-        return tuple(self._waiting.get(session_id, ()))
+    def ids(self, session_id: str, thread_id: str | None = None) -> tuple[str, ...]:
+        return tuple(job_id for job_id in self._waiting.get(session_id, ())
+                     if thread_id is None or self._entries[job_id].thread_id == thread_id)
 
     def snapshot_version(self, session_id: str) -> int:
         return self._snapshot_versions.get(session_id, 0)
@@ -51,16 +53,20 @@ class JobPendingQueue:
         session_id: str,
         job_id: str,
         delivery_policy: DeliveryPolicy,
+        *, thread_id: str,
     ) -> QueueEntry:
+        if not thread_id:
+            raise ValueError("队列入队必须携带精确 thread_id")
         if job_id in self._entries:
             raise ValueError(f"Job 已在 FIFO 队列中: job_id={job_id}")
         sequence = self._next_sequence.get(session_id, 0) + 1
         self._next_sequence[session_id] = sequence
         entry = QueueEntry(
             job_id=job_id,
+            thread_id=thread_id,
             enqueue_sequence=sequence,
             delivery_policy=delivery_policy,
-            waiting_reason=_POSITIONAL_WAITING_REASON if self.ids(session_id) else None,
+            waiting_reason=_POSITIONAL_WAITING_REASON if self.ids(session_id, thread_id) else None,
         )
         self._entries[job_id] = entry
         self._waiting.setdefault(session_id, deque()).append(job_id)
@@ -81,11 +87,12 @@ class JobPendingQueue:
             raise RuntimeError(
                 f"待处理队列入队序号未严格递增: session_id={session_id}, sequences={sequences}"
             )
+        seen_threads: set[str] = set()
         for entry in entries:
             JobPendingQueue._sync_positional_waiting_reason(
-                entry,
-                is_head=entry is entries[0],
+                entry, is_head=entry.thread_id not in seen_threads,
             )
+            seen_threads.add(entry.thread_id)
             self._entries[entry.job_id] = entry
         if entries:
             self._waiting[session_id] = deque(entry.job_id for entry in entries)
@@ -95,8 +102,8 @@ class JobPendingQueue:
                 default=0,
             )
 
-    def peek_head(self, session_id: str) -> QueueEntry | None:
-        waiting = self._waiting.get(session_id)
+    def peek_head(self, session_id: str, thread_id: str) -> QueueEntry | None:
+        waiting = self.ids(session_id, thread_id)
         if not waiting:
             return None
         return self.entry(waiting[0])
@@ -106,9 +113,10 @@ class JobPendingQueue:
         session_id: str,
         boundary: DeliveryBoundary,
         *,
+        thread_id: str,
         tool_result_available: bool = True,
     ) -> QueueEntry | None:
-        entry = self.peek_head(session_id)
+        entry = self.peek_head(session_id, thread_id)
         if entry is None:
             return None
         if not self._policy_allows(
@@ -122,7 +130,7 @@ class JobPendingQueue:
         entry.last_boundary = boundary
         entry.waiting_reason = None
         waiting = self._waiting[session_id]
-        waiting.popleft()
+        waiting.remove(entry.job_id)
         self._entries.pop(entry.job_id, None)
         if not waiting:
             self._waiting.pop(session_id, None)
@@ -140,7 +148,7 @@ class JobPendingQueue:
         entry.delivery_policy = delivery_policy
         entry.waiting_reason = (
             None
-            if self.peek_head(session_id) is entry
+            if self.peek_head(session_id, entry.thread_id) is entry
             else _POSITIONAL_WAITING_REASON
         )
         self._bump(session_id)
@@ -217,14 +225,15 @@ class JobPendingQueue:
         version = self._snapshot_versions.get(session_id, 0) + 1
         self._snapshot_versions[session_id] = version
         waiting = self._waiting.get(session_id)
-        head_id = waiting[0] if waiting else None
+        seen_threads: set[str] = set()
         for job_id in waiting or ():
             entry = self._entries[job_id]
             entry.snapshot_version = version
             JobPendingQueue._sync_positional_waiting_reason(
                 entry,
-                is_head=job_id == head_id,
+                is_head=entry.thread_id not in seen_threads,
             )
+            seen_threads.add(entry.thread_id)
         return version
 
     @staticmethod

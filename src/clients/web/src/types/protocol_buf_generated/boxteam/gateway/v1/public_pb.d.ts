@@ -2158,6 +2158,11 @@ export declare type GeneratorContextSourceDTO = Message<"boxteam.gateway.v1.Gene
    * @generated from field: optional string snapshot_id = 4;
    */
   snapshotId?: string | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 5;
+   */
+  threadId?: string | undefined;
 };
 
 /**
@@ -2612,6 +2617,32 @@ export declare type GeneratorPoliciesDTO = Message<"boxteam.gateway.v1.Generator
 export declare const GeneratorPoliciesDTOSchema: GenMessage<GeneratorPoliciesDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v1.GeneratorTargetDTO
+ */
+export declare type GeneratorTargetDTO = Message<"boxteam.gateway.v1.GeneratorTargetDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 3;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GeneratorTargetDTO.
+ * Use `create(GeneratorTargetDTOSchema)` to create a new message.
+ */
+export declare const GeneratorTargetDTOSchema: GenMessage<GeneratorTargetDTO>;
+
+/**
  * @generated from message boxteam.gateway.v1.GeneratorSessionStrategyDTO
  */
 export declare type GeneratorSessionStrategyDTO = Message<"boxteam.gateway.v1.GeneratorSessionStrategyDTO"> & {
@@ -2621,9 +2652,9 @@ export declare type GeneratorSessionStrategyDTO = Message<"boxteam.gateway.v1.Ge
   mode?: string | undefined;
 
   /**
-   * @generated from field: optional boxteam.gateway.v1.SessionLocatorDTO target = 2;
+   * @generated from field: optional boxteam.gateway.v1.GeneratorTargetDTO target = 2;
    */
-  target?: SessionLocatorDTO | undefined;
+  target?: GeneratorTargetDTO | undefined;
 
   /**
    * @generated from field: optional string concurrency = 3;

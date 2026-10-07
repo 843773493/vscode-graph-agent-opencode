@@ -11,6 +11,10 @@ from app.schemas.internal_v2.common import ControlAction, JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
+from tests.support.job_thread_fixture import (
+    job_fixture_execution_binding,
+    job_fixture_thread_id,
+)
 
 
 class _DummyJobExecutor:
@@ -56,7 +60,7 @@ async def test_session_idle_operation_is_atomic_with_job_admission(
 
     async def competing_admission() -> None:
         async with service._dispatch_lock:
-            service._session_current_job[session_id] = "job_after_compaction"
+            service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] = "job_after_compaction"
         admission_finished.set()
 
     compact_task = asyncio.create_task(
@@ -84,7 +88,7 @@ async def test_multiple_session_storage_operation_rejects_any_active_session(
     session_lifecycle_guard,
 ) -> None:
     service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
-    service._session_current_job["ses_active"] = "job_active"
+    service._thread_current_job[("ses_active", job_fixture_thread_id("ses_active"))] = "job_active"
     operation_called = False
 
     async def move_storage() -> None:
@@ -170,7 +174,7 @@ async def test_job_control_pause_cancels_running_task(
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.running,
-        task=DummyTask(),
+        task=DummyTask(), execution_binding=job_fixture_execution_binding("job_test_pause"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -210,11 +214,11 @@ async def test_job_control_resume_waits_for_paused_task_to_finish(
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.queued,
-        delivery_policy="after_turn",
+        delivery_policy="after_turn", execution_binding=job_fixture_execution_binding("job_pause_resume"), thread_id=job_fixture_thread_id(session_id),
     )
     service._jobs[job.job_id] = job
-    service._pending_queue.append(session_id, job.job_id, "after_turn")
-    assert await service._start_next_pending(session_id, boundary="idle") is True
+    service._pending_queue.append(session_id, job.job_id, "after_turn", thread_id=job.thread_id)
+    assert await service._start_next_pending(session_id, thread_id=job_fixture_thread_id(session_id), boundary="idle") is True
     await started.wait()
 
     await service.control(
@@ -228,7 +232,7 @@ async def test_job_control_resume_waits_for_paused_task_to_finish(
 
     assert result.status == JobStatus.running
     assert job.status == JobStatus.running
-    assert service._session_current_job[session_id] == job.job_id
+    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == job.job_id
     assert job.task is not None
     resumed_task = job.task
 
@@ -254,7 +258,7 @@ async def test_job_control_resume_restarts_completed_pause(
         agent_id="default",
         status=JobStatus.paused,
         task=DummyTask(done=True),
-        message="resume me",
+        message="resume me", execution_binding=job_fixture_execution_binding("job_test_resume"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -300,7 +304,7 @@ async def test_job_task_starts_in_fresh_context(session_lifecycle_guard):
     try:
         dispatch = await service.start_job(
             "session_context_isolation",
-            "run independently",
+            "run independently", thread_id=job_fixture_thread_id("session_context_isolation"),
             message_id="msg_context_isolation",
             message_created_at="2026-07-17T00:00:00+00:00",
         )
@@ -345,7 +349,7 @@ async def test_cross_session_job_does_not_leak_langchain_events_to_sender(
     async def sender_runnable_function(value: str) -> str:
         dispatch = await service.start_job(
             "session_target",
-            "target message",
+            "target message", thread_id=job_fixture_thread_id("session_target"),
             message_id="msg_target",
             message_created_at="2026-07-17T00:00:00+00:00",
         )
@@ -382,7 +386,7 @@ async def test_job_control_cancel_requests_task_cancel(
         message_created_at="2026-07-14T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.running,
-        task=task,
+        task=task, execution_binding=job_fixture_execution_binding("job_test_cancel"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -413,7 +417,7 @@ async def test_job_control_rejects_terminal_job(
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.completed,
-        task=DummyTask(done=True),
+        task=DummyTask(done=True), execution_binding=job_fixture_execution_binding("job_terminal_control"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -436,7 +440,7 @@ async def test_job_control_rejects_unimplemented_action(
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.running,
-        task=DummyTask(),
+        task=DummyTask(), execution_binding=job_fixture_execution_binding("job_unimplemented_control"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -462,7 +466,7 @@ async def test_job_control_rejects_pause_for_interrupt_pending_job(
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.interrupt_pending,
-        task=DummyTask(),
+        task=DummyTask(), execution_binding=job_fixture_execution_binding("job_interrupt_pending_pause"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -488,7 +492,7 @@ async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(
         message_created_at="2026-08-09T00:00:00+00:00",
         agent_id="default",
         status=JobStatus.completed,
-        task=DummyTask(done=True),
+        task=DummyTask(done=True), execution_binding=job_fixture_execution_binding("job_finished_after_snapshot"), thread_id=job_fixture_thread_id("session_test"),
     )
     service._jobs[job.job_id] = job
 
@@ -497,6 +501,7 @@ async def test_force_interrupt_skips_job_finished_after_blocker_snapshot(
             JobDrainBlocker(
                 job_id=job.job_id,
                 session_id=job.session_id,
+                thread_id=job.thread_id,
                 status=JobStatus.running,
                 phase="text",
                 tool_names=(),
@@ -522,13 +527,13 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(
     session_id = "session_cancel_queued"
     await service.start_job(
         session_id,
-        "active",
+        "active", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_active",
         message_created_at="2026-08-09T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
-        "queued",
+        "queued", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_queued",
         message_created_at="2026-08-09T00:00:01+00:00",
     )
@@ -549,7 +554,7 @@ async def test_start_job_queues_same_session_until_previous_finishes(
 ):
     service = create_job_service(session_lifecycle_guard=session_lifecycle_guard)
     service._jobs = {}
-    service._session_current_job = {}
+    service._thread_current_job = {}
     started_jobs: list[str] = []
 
     def fake_start_job_task(job):
@@ -561,19 +566,19 @@ async def test_start_job_queues_same_session_until_previous_finishes(
     session_id = "session_queue_test"
     first_dispatch = await service.start_job(
         session_id,
-        "first",
+        "first", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_first",
         message_created_at="2026-07-14T00:00:00+00:00",
     )
     second_dispatch = await service.start_job(
         session_id,
-        "second",
+        "second", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_second",
         message_created_at="2026-07-14T00:00:01+00:00",
     )
     third_dispatch = await service.start_job(
         session_id,
-        "third",
+        "third", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_third",
         message_created_at="2026-07-14T00:00:02+00:00",
     )
@@ -600,7 +605,7 @@ async def test_start_job_queues_same_session_until_previous_finishes(
     assert third_dispatch.queued_jobs_ahead == 1
     assert third_dispatch.queued_job_count == 2
     assert third_dispatch.pending_job_count == 3
-    assert service._session_current_job[session_id] == first_job_id
+    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == first_job_id
     assert list(service._pending_queue.ids(session_id)) == [
         second_job_id,
         third_job_id,
@@ -613,7 +618,7 @@ async def test_start_job_queues_same_session_until_previous_finishes(
     await service._schedule_next_job_if_needed(first_job)
 
     assert started_jobs == [first_job_id, second_job_id]
-    assert service._session_current_job[session_id] == second_job_id
+    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == second_job_id
     assert list(service._pending_queue.ids(session_id)) == [third_job_id]
     assert service._jobs[second_job_id].status == JobStatus.running
 
@@ -632,13 +637,13 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
     session_id = "session_boundary_dispatch"
     await service.start_job(
         session_id,
-        "active",
+        "active", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_active",
         message_created_at="2026-07-27T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
-        "等待中断",
+        "等待中断", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_queued",
         message_created_at="2026-07-27T00:00:01+00:00",
         delivery_policy="after_interrupt",
@@ -646,7 +651,7 @@ async def test_boundary_notification_keeps_fifo_head_and_records_waiting_reason(
 
     snapshot = await service.notify_boundary(
         session_id,
-        "after_tool_result",
+        "after_tool_result", thread_id=job_fixture_thread_id(session_id),
         tool_result_available=True,
     )
 
@@ -675,13 +680,13 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
     session_id = "session_interrupt_releases_after_turn"
     active = await service.start_job(
         session_id,
-        "active",
+        "active", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_active",
         message_created_at="2026-07-28T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
-        "queued",
+        "queued", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_queued",
         message_created_at="2026-07-28T00:00:01+00:00",
         delivery_policy="after_turn",
@@ -693,7 +698,7 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
     )
     await service.notify_boundary(
         session_id,
-        "after_interrupt",
+        "after_interrupt", thread_id=job_fixture_thread_id(session_id),
         tool_result_available=False,
     )
     active_job = service._jobs[active.job_id]
@@ -707,7 +712,7 @@ async def test_interrupt_releases_after_turn_head_instead_of_stalling_fifo(
 
     assert started == [active.job_id, queued.job_id]
     assert service._jobs[queued.job_id].status == JobStatus.running
-    assert service._session_current_job[session_id] == queued.job_id
+    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == queued.job_id
     assert service._pending_queue.ids(session_id) == ()
 
 
@@ -733,13 +738,13 @@ async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(
     session_id = "session_direct_cancel_idle_boundary"
     active = await service.start_job(
         session_id,
-        "active",
+        "active", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_active",
         message_created_at="2026-07-28T00:00:00+00:00",
     )
     queued = await service.start_job(
         session_id,
-        "queued",
+        "queued", thread_id=job_fixture_thread_id(session_id),
         message_id="msg_queued",
         message_created_at="2026-07-28T00:00:01+00:00",
         delivery_policy="after_turn",
@@ -763,5 +768,5 @@ async def test_direct_cancel_releases_after_turn_head_when_boundary_stays_idle(
 
     assert started == [active.job_id, queued.job_id]
     assert service._jobs[queued.job_id].status == JobStatus.running
-    assert service._session_current_job[session_id] == queued.job_id
+    assert service._thread_current_job[(session_id, job_fixture_thread_id(session_id))] == queued.job_id
     assert service._pending_queue.ids(session_id) == ()

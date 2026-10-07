@@ -292,6 +292,8 @@ source overlay 也必须 target-local：每个被复制的 `source_overlay_epoch
 
 三种跨 session fork 的物化范围固定为：`context_fork` 复制 source active view 的有效 canonical item/Turn/checkpoint prefix；`history_prefix_fork` 复制从 source session 开始到指定 inclusive/before anchor 的有效 prefix；`full_rollout_copy` 复制 source rollout 的全部 canonical records、SQLite checkpoint/view/branch/control state、checkpoint channel state 和可复制的 overlay/detail lineage，并为全部实体建立 target 映射。source v1 的原始 message-line 若需保留，只能由一次性 `legacy_import_v1_to_v2` staging 作为 migration/rollback audit 输入保存；它不挂载到 target 正常 reader，也不构成 target 的 legacy runtime。三种模式都创建新的 target branch/view；`full_rollout_copy` 的“full”描述语义范围，不意味着 source 和 target 可以共享 SQLite、JSONL 或 namespace。target active view 使用 target-local logical ordinal，source view/branch/turn ordinal 仅保留在 fork lineage。无论 source 是 v1 还是 v2，跨 session fork 的 target 一律是 `rollout_format_version=2`；v1 只能通过上述一次性 migration staging 映射到 target-local v2 item/Turn/execution，源 `message_id`、`message_sequence`、offset 只写入 `legacy_source_ref`，不能成为 target identity 或 offset。
 
+无 normal Turn 的初始 child 已完成 internal seed/reference execution时，默认 `context_fork` 仍须消费精确 source thread 的真实 checkpoint/view；来源准入、冻结与拒绝规则只由 checkpoint-context-branching requirement「Fork 支持三种独立模式」定义。生成入口、source snapshot/control、capture、读取、完成回报与 target materialization一次迁齐显式 source_thread_id，不保留 main fallback 或另一生成专用 fork 实现；history_prefix_fork与显式Turn anchor不受此窄入口补齐影响。
+
 Node调试方案属于thread-owned、非canonical的可移植资源，fork复制范围与历史item范围分开定义：同Workspace `context_fork`只带source选中thread在capture时活动方案的当前正文，`history_prefix_fork`不带方案（历史anchor不具备对应调试方案快照），`full_rollout_copy`带全部当前已保存方案正文；target只保存target-local方案ID/lineage，不复制active指针、历史方案revision、进程、端口或动作审计，不能据`full`字样推断后者可恢复。debug owner在source read guard下固定方案manifest/revision并对逐文件bytes/hash做前后校验，将选中artifact列入同一个SourceCopySnapshot；target debug owner在未发布staging中冻结有效Workspace debug配置revision/hash，以该快照逐一校验入口、工作目录、每个断点路径、profile/adapter/runtime，并在发布前复核配置revision仍相同。任何必需方案缺失/漂移/不兼容或目标配置漂移使整个fork失败，不能只丢方案仍发布target；fork journal记录source artifact、target配置hash及方案映射并承担恢复，不另建copy coordinator。公开fork不跨Workspace，未来跨Workspace可移植方案转移须另设授权export/import，Gateway federation的send/read/wait grant不能被复用成复制许可。
 
 复制的Turn使用target main thread新`turn_id`、新root item和在该thread内保持相对顺序的新`turn_ordinal`；source `turn_id`/ordinal/origin branch只写入source lineage。复制的tool call/result必须使用target-local invocation/call/attempt IDs和relation；只有映射后、当前target active lineage中成功completed且未superseded的result才能作为replay input。复制的sealed assembly使用target-local新`assembly_id`，保留source assembly ref、plan/request hash和detail availability；active/未终态assembly不得自动恢复为可运行请求。`context_fork`与`history_prefix_fork`在preflight发现选定范围含未完成Turn/active execution/未终态assembly时直接拒绝，目标Session不创建；`full_rollout_copy`则允许目标创建完整历史副本，但把对应target Turn标记为`cancelled`（reason=`fork_source_runtime_not_copied`），其target execution/model-call/assembly仅为不可运行的历史状态，不自动resume或伪造成功。source运行态不会以“复制后取消”方式改变source状态。
@@ -330,6 +332,7 @@ storage_commits              # item-bearing 与 metadata-only 的提交账本
 ```text
 storage_commits.commit_kind
 ├── acceptance                 # root item + Turn + initial execution
+├── execution_admission        # internal 首次准入：notice 或 seed/reference
 ├── assembly_sealed             # sealed-before-dispatch
 ├── item_convergence            # 非 terminal 的 canonical item 批次
 └── terminal_convergence        # assembly/execution/model-call/Turn 终态
@@ -339,7 +342,7 @@ storage_commits.commit_mode
 └── metadata_only               # jsonl_record_count = 0
 ```
 
-`commit_kind` 和 `commit_mode` 是正交字段，不得把 `metadata_only` 写入 `commit_kind`。`acceptance` 必须是 `item_bearing`，且同一事务建立 root item、Turn 和 initial execution；`assembly_sealed` 必须是 `metadata_only`，因为它只封存 assembly/control state；`item_convergence` 必须是 `item_bearing`；`terminal_convergence` 可以是 `item_bearing`（canonical item 与终态一起收敛）或 `metadata_only`（空输出、失败、中断、执行丢失等无 item 终态）。`(session_id, thread_id, commit_kind, subject_id, idempotency_key)` 必须唯一：同一 owner thread 中，同一 acceptance subject 只能有一个成功 acceptance，同一 assembly/model-call 只能有一个成功 seal，同一 item batch 只能有一个成功 item convergence，同一 terminal subject 只能有一个成功 terminal convergence；同 key 重放时 payload、outcome、mode、record count 或 offset span 不同都必须报冲突。`jsonl_offset_before`/`jsonl_offset_after` 是该 thread rollout 文件的绝对字节边界，不是 item sequence，也不是事件计数。每个 commit 都必须记录这两个值；metadata-only commit 的 `jsonl_record_count=0` 且 `jsonl_offset_after=jsonl_offset_before`，不能为了填 offset 伪造空 item。只有真实 JSONL item 已经完成 durability barrier 时，offset 才可以前进；SQLite 控制表仍可在 offset 不变时原子记录 assembly、execution/model-call 和 Turn outcome。
+`commit_kind` 和 `commit_mode` 是正交字段，不得把 `metadata_only` 写入 `commit_kind`。`acceptance` 必须是 `item_bearing`，且同一事务建立 root item、Turn 和 initial execution；`execution_admission` 只承载 internal 首次准入，其 notice 形态为 item-bearing，初始 seed/reference 形态为 metadata-only、零 item且 offset 不变，两者均不创建用户 Turn、accepted ingress 或 terminal outcome（outcome=NULL），真实用户 initial execution 不再另写该 commit；`assembly_sealed` 必须是 `metadata_only`，因为它只封存 assembly/control state；`item_convergence` 必须是 `item_bearing`；`terminal_convergence` 可以是 `item_bearing`（canonical item 与终态一起收敛）或 `metadata_only`（空输出、失败、中断、执行丢失等无 item 终态）。`(session_id, thread_id, commit_kind, subject_id, idempotency_key)` 必须唯一：同一 owner thread 中，同一 acceptance subject、同一 internal admission subject、同一 assembly/model-call、同一 item batch、同一 terminal subject 各只有一个对应成功 commit；同 key 重放时 request preimage、payload、outcome、mode、record count 或 offset span 不同都必须报冲突。`jsonl_offset_before`/`jsonl_offset_after` 是该 thread rollout 文件的绝对字节边界，不是 item sequence，也不是事件计数。每个 commit 都必须记录这两个值；metadata-only commit 的 `jsonl_record_count=0` 且 `jsonl_offset_after=jsonl_offset_before`，不能为了填 offset 伪造空 item。只有真实 JSONL item 已经完成 durability barrier 时，offset 才可以前进；SQLite 控制表仍可在 offset 不变时原子记录 assembly、execution/model-call 和 Turn outcome。
 
 `database_meta.committed_jsonl_offset` 是每个 SessionThread rollout 的单一权威 committed boundary；`storage_commits.jsonl_offset_after` 是同一边界在提交账本中的不可脱离副本，保留二者不表示存在两个可选择的 offset。对每一条已提交 commit，必须满足 `jsonl_offset_before` 等于该 SQLite 事务开始时的 `database_meta.committed_jsonl_offset`，`jsonl_offset_after >= jsonl_offset_before`，且事务成功后 `database_meta.committed_jsonl_offset == jsonl_offset_after`；下一条 commit 的 `jsonl_offset_before` 必须等于上一条已提交 commit 的 `jsonl_offset_after`。metadata-only commit 的两者都保持不变。插入 `storage_commits`、更新 `database_meta.committed_jsonl_offset`、item catalog/view/control outcome 必须在同一个 SQLite 事务内完成；JSONL item 则必须在该事务前完成 durability barrier。启动恢复必须同时读取并校验 `database_meta`、`storage_commits` 的链、JSONL 文件大小和 item index：缺失、等值不成立、回退、越界或链断裂都必须停止恢复并报告明确的 commit-boundary conflict，reader 不得自行选择另一个值继续。
 
@@ -442,7 +445,7 @@ ResourceActivationSnapshotRef {
 
 ResourceProvenanceRef {
   resource_id               # 内部权威identity
-  display_uri               # 安全boxteam://逻辑来源
+  display_uri               # 必填nullable，地址选择引用统一寻址owner
   resource_kind
   owner_scope
   facet
@@ -461,7 +464,7 @@ ResourceProvenanceRef {
 
 `activation_policy`保存完整规范化的`{default_boundary, overrides}`，包括本次尚未选择资源的kind覆盖。恢复时由同一领域值校验其JCS hash与`activation_policy_hash`及revision一致，不能从bindings的effective boundary反推policy、补默认值或读取当前配置。model-call snapshot必须复用parent的完整policy；policy正文不进入bindings/plan hash，其完整性由既有policy hash及provenance校验保护。领域只拥有纯冻结值；配置来源与运行时策略选择仍归编排owner。
 
-`display_uri`不含revision且不是ContextRef/resource identity、capability、dedupe或业务幂等key；同一URI可以在不同revision出现，provider locator变化也不能修改已提交URI或resource identity。`source_lineage_ref`只指向受保护、不可变的source_id/revision向量和derivation版本；它支持审计与完整性校验，不允许据此重新读当前来源。一个SKILL.md可对应两个语义resource，多层配置可合成一个effective resource；raw source revision变化而选中facet未变时，不得改变该binding的语义revision、bindings hash、plan hash或旧source lineage ref。`provider_locator`、绝对路径、network endpoint、credential ref和内部handle永远不进入上述record、JSONL、普通history或模型请求日志。需要受保护正文时只用typed snapshot/detail ref和integrity manifest读取，不能把URI转成本地Path或重新请求当前provider。
+`display_uri`不含revision且不是ContextRef/resource identity、capability、dedupe或业务幂等key；内部聚合的必填null及非空URI校验只引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」。同一URI可以在不同revision出现，provider locator变化也不能修改已提交URI或resource identity。`source_lineage_ref`只指向受保护、不可变的source_id/revision向量和derivation版本；它支持审计与完整性校验，不允许据此重新读当前来源。一个SKILL.md可对应两个语义resource，多层配置可合成一个effective resource；raw source revision变化而选中facet未变时，不得改变该binding的语义revision、bindings hash、plan hash或旧source lineage ref。`provider_locator`、绝对路径、network endpoint、credential ref和内部handle永远不进入上述record、JSONL、普通history或模型请求日志。需要受保护正文时只用typed snapshot/detail ref和integrity manifest读取，不能把URI转成本地Path或重新请求当前provider。
 
 真实execution取得active slot时按唯一冻结合同建立或恢复一个`ExecutionResourceSnapshot(snapshot_kind=execution)`并冻结完整activation policy、其revision/hash及所有turn-bound binding。若冻结policy没有model-call-bound kind，该Turn全部model call的plan都引用同一snapshot id和bindings hash；若存在override，每个安全model-call preparation建立`ModelCallResourceSnapshot(snapshot_kind=model_call, parent_execution_snapshot_id, model_call_id)`，逐字节复用parent的turn-bound binding，只为model-call-bound kind取得新的Registry generation/binding。每条ResourceProvenanceRef保存自己的`effective_boundary`和captured generation，因此同一assembly可安全混合两种边界。policy本身整个Turn不变；热发布的新policy只影响下一个新用户Turn或独立internal execution，同Turn retry/resume复用原policy。任一模式下snapshot只来自ResourceRegistry已发布内存revision，sealing后观察到的新resource/config revision不修改旧record、plan hash、request hash或Provider bytes。
 
@@ -1013,7 +1016,7 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 ### 9.2 集合型 mutation 的统一乐观合同、文件树接入与目录列表读放大
 
-§9.0 已经把**会话目录树**的乐观投影、202 持久入队、终态对账写成了可验证义务。本节只补三件它没覆盖的事，不重写 §9.0：把该合同上升为**所有集合型 mutation 的横切判据**、把**右侧文件树**与**Gateway 工作区导航**接进同一协议、以及消除**会话目录列表的逐会话文件读放大**。
+§9.0 已冻结会话目录树的乐观投影、持久入队和终态对账。本节补集合操作的横切收敛判据、Gateway 工作区导航的同族协议、文件树的单目录替换与精确失效，以及目录列表读放大约束。文件树是否新增 202 由 10.4b 的量化前置决定，不因共享判据而预设新增异步机制。
 
 #### 9.2.0 协议核心与按 owner 实例的切分（消解 §9.0 与本节的两处措辞冲突）
 
@@ -1026,9 +1029,11 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 #### 9.2.0b 文件树不预设必须接 202（先量化）
 
-本节的「文件树接入」曾被写成「必须接同一 202 协议」。2026-09-30 审查实测后收紧：文件树的成功路径**已经是**对象级替换与精确失效（单目录写成功后只替换该目录、delete 走 `invalidateDirectoriesUnder`、SSE 已按受影响父目录收敛），**且文件树从未被量化**（§10.1 自述「文件树全量重载目录数本轮未经真实浏览器测量」）。因此文件树现在只承担三条既成义务（精确子树失效、单目录替换、SSE 权威增量），**是否引入 202 由 tasks §10.4b 的量化前置决定**；判据与阈值见该处，MUST NOT 在未量化前按「用户希望」开工（AGENTS.md 禁止过度抽象）。
+文件树的既定义务是精确子树失效、单目录替换和权威事件增量。是否引入 202 只按 tasks 10.4b 的量化判据决定；结论和不实施登记引用 10.4b/10.7，不复制阈值或把早期「尚未量化」记述当作当前待办。现有不实施分支不能为了形式统一而启动 10.4c。量化数据已完整但未达到开工条件时，按 10.4b 的剩余分支记录本轮不实施及具体原因，不冒称无瓶颈，不默认新增异步机制。只有新的量化证据使 10.4b 判定成立，才先完成 10.4c 的结构合同并实施。
 
 #### 归因：缺的是一条判据，不是一套机制
+
+以下为前期调查归因，不是当前零 caller 的结论。固定 `16f09ee7` 已有真实 outbox 消费与唯一 backend writer；连续操作、pending 父 Folder 和失败/重开验收以 tasks 8.1/10.8 为准，不再重复实现既有接线。
 
 前端已实现的乐观机制（`sessionCatalogOutbox` 五态状态机、IndexedDB 持久层、`sessionCatalogProjection` 的「已提交基线 + 本地有序命令重放」、`sessionCatalogOutboxDriver` 六步编排、`sessionCatalogOperations` 协议客户端）在生产侧**零调用**；会话目录树仍在走「同步阻塞 mutation + 成功后全量重拉整棵树」，删除会话甚至成功后无条件再调一次会话列表。文件树有目录缓存与 `stale` 全量重载，会话列表有本地收敛，三者对「哪些操作该乐观、失败怎么回滚、并发同目标怎么排队」各答一套。
 
@@ -1045,15 +1050,13 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 任何集合成员变化在其**成功路径** MUST NOT 触发全量重取整个集合或整棵目录树；全量重取只允许在基线 revision 冲突、跨端并发写入或本地投影不可信时作为**显式可观测**的校验兜底。文件树的细化判据：影响子树时 MUST 用 `invalidateDirectoriesUnder(treePath)`（丢弃该路径及其后代缓存并中止在途请求），MUST NOT 用把全部已展开目录标 stale 再逐个重载的 `refreshExpandedDirectories`。
 
-#### 9.2.2 文件树与 Gateway 工作区导航接同一 202 协议
+#### 9.2.2 同一意图协议与文件树量化前置
 
-§9.0 冻结的 `client_operation_id` 唯一性、`client_sequence` 同分区有序、`created_by_operation_id` 跨批依赖、状态闭集 `queued|running|committed|rejected|cancelled|dependency_failed`、terminal 后 compact tombstone、`dependency_failed` 不执行等条款，**是集合型 mutation 的唯一协议**。右侧文件树与 Gateway 工作区导航 MUST 接入同一协议，MUST NOT 另立第二套写通道；接线完成后原同步写路径 MUST 物理下线，不得双轨并存。
+Gateway 工作区导航接入 §9.0 的唯一意图协议核心，operation 记录、worker、事件和唯一键空间由 Gateway owner 实例化；认证归属取自路由，不借工作区后端业务队列。接线后的旧旁路写通道必须物理下线，不保留双 writer。
 
-两处与 §9.0 的差异点必须显式处理：① 文件树的权威集合是**目录行的直接子节点**而非整棵 Session 导航树，其 revision 必须绑定**目录行 revision**，不得借用 workspace catalog revision —— 但**当前全仓文件面无目录级 revision**（前端 `DirectoryCacheEntry` 只有布尔 `stale`，后端 `WorkspaceFileListDTO` 只有 `next_cursor`，SSE `WorkspaceFileChangeDTO` 只有 `kind/path`；`revision` 仅描述文件正文），故该 revision 属**需先定稿的新增结构**（归属见 9.2.0b 与 tasks §10.4c），MUST NOT 在前端自证。② Gateway 工作区导航的权威 owner 是 Gateway 控制面而非工作区后端（见 9.2.0），故其 `gateway_id` 与 actor 只能取自认证路由，且 Gateway **在该面上自己是 owner 与 worker**。
+文件树继续单目录替换、精确子树失效和权威事件增量。仅当 tasks 10.4b 的量化判定成立才接入同一异步协议，进入该分支前按 10.4c 固定目录行 revision 的 owner、基于路径的成员身份和因果依赖，以及实际 mutation 端点；不得借用 Session catalog revision、在前端补造 revision，或照搬稳定 node ID 的假设。无瓶颈分支不得新增 operation 表、worker或 202 接口。
 
-③ 文件树的成员身份是 **`path`** 而非稳定 node id，故「同一目标」判定与重命名/移动后的因果依赖 MUST 另行定义，MUST NOT 照搬 §9.0 的 node id 假设；④ 后端 `app/api/workspace.py` 当前只有 create/paste/copy，**没有 delete/rename/move**，而 spec 的 Scenario 覆盖删除——端点存在性 MUST 在实施前判死（补端点或收窄 Scenario 范围）。
-
-文件变更 SSE（`streamWorkspaceFileEvents`，支持按 `paths` 订阅与 `onBatch`）MUST 接成权威增量修正通道：外部变更（Agent、终端）经该通道驱动树增量更新，与本地乐观投影形成闭环；「乐观」不是「猜」，而是「先看意图、再用权威增量校正」。
+文件变更 SSE 继续作为权威增量修正通道，外部 Agent/终端变更按受影响父目录更新，不依赖全量重载。这条既定义务不取决于是否新增异步受理。
 
 #### 9.2.3 目录列表读取工作量必须有界
 
@@ -1107,9 +1110,9 @@ E2E 必须通过用户可见 DOM 语义、Gateway/workspace 网络回执、threa
 
 ## Open Questions
 
-- 集合型 mutation 的横切合同（design 9.2）需要在何时补进 `docs/design-decisions/frontend-state-management-backend-first.md`：随本节实施同笔，还是先落规范再补文档，未定。
+- 集合型 mutation 的文档判据已按 tasks 10.6 落实：`docs/design-decisions/frontend-state-management-backend-first.md` 具名引用唯一 requirement，四类操作表及未知结果/失败收敛经独立文档审查；这不代表其它源码或 UI 验收完成。
 - 消除会话目录列表读放大前，需要先确认 `SessionDTO` 是否存在只能从 `session.json` 取得、无法由目录索引提供的字段；若存在，必须先扩展索引再改读路径，不得边改边补。该字段清单尚未取证。
-- 右侧文件树接同一 202 协议后，其「目录行 revision」是否需要成为持久化对象（当前只有缓存与 stale 标记，未见 revision 概念），未定；若需要，属本 change 的 schema 增量而非临时字段。
+- 文件树新增异步协议的结构选择只在 tasks 10.4b 判定成立后按 10.4c 定稿；现有无瓶颈/不实施分支不以未定目录 revision 阻塞收口，也不为该未来分支预写 schema。
 - 量化实测（design 9.2.4）的规模基线、观测口径（是否含首次冷缓存、是否含浏览器渲染耗时）尚未冻结，实施前需裁定。
 
 - SQLite item projection 的名称和 Python 类型归属已经冻结：canonical item 的最小事实索引是 `item_catalog`，关系/来源是 `item_relations`，content-part locator 是 `item_parts`，按需历史/消息投影是 `item_projections`；不得复用 `messages` 作为 canonical item 表，也不得新增未在本设计中登记的并行 item 事实表。当前聚合文件若因 import 迁移暂留，只能是有删除门槛的临时 import shim；目标类型位置以 1.1 的 `app/domain/itemized/` 和 infrastructure/mapping 目录为准，shim 最迟在 7.5/change 完成前删除。

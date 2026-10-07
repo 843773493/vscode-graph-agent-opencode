@@ -14,13 +14,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from app.core.session_control_store.contracts import ThreadGraphBindingRecord
-
 from app.core.session_catalog_store import validate_thread_id
 from app.core.session_control_primitives import (
     SHA256_HEX_PATTERN,
     validate_thread_creation_key,
 )
+from app.core.session_control_store.contracts import ThreadGraphBindingRecord
 from app.core.session_control_store.sql import (
     SELECT_COLLABORATION_LEDGER_REVISION,
     SELECT_THREAD_CATALOG_CHILD_ROW,
@@ -136,6 +135,7 @@ class ThreadCreationPublishMixin:
     def publish_thread_creation_record(
         self,
         idempotency_key: str,
+        *, session_id: str,
     ) -> ThreadCreationRecord:
         """CAS 发布 ThreadCreationRecord（**唯一可见性提交点**，8.5-A）。
 
@@ -348,6 +348,11 @@ class ThreadCreationPublishMixin:
                         str(row["delegation_id"]),
                     ),
                 )
+            self._create_or_get_initial_execution_intent_transaction(
+                connection, admission_idempotency_key=idempotency_key,
+                session_id=session_id, thread_id=child_thread_id,
+                initial_state=str(row["initial_state"]), creation_idempotency_key=idempotency_key,
+            )
             updated = self._fetch_thread_creation_record(connection, idempotency_key)
             if updated is None:
                 # 防御性兜底：同事务内更新后必然可见。

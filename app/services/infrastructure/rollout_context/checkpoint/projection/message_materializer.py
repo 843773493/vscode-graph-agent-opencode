@@ -27,6 +27,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
     strict_optional_text,
     strict_text,
 )
+from app.services.mapping.itemized.carrier_dedup import superseded_stream_item_ids
 
 if TYPE_CHECKING:
     from app.services.infrastructure.rollout_context.storage.primitives import (
@@ -56,7 +57,7 @@ class RolloutMessageMaterializerMixin:
         )
         if not sequence_values:
             return []
-        values: list[dict[str, object]] = []
+        values: list[tuple[tuple[CanonicalItemRecord, ...], dict[str, object]]] = []
         if connection is None:
             with self._connect(
                 thread_id,
@@ -141,7 +142,7 @@ class RolloutMessageMaterializerMixin:
                         f"message={message_id}, item={item.item_id}"
                     )
                 values.append(
-                    self._hydrate_message_identity(
+                    (tuple(items), self._hydrate_message_identity(
                         message,
                         message_id=message_id,
                         turn_id=turn_id,
@@ -150,7 +151,7 @@ class RolloutMessageMaterializerMixin:
                             fork_source_session_id,
                             field="fork_identity_mappings.source_session_id",
                         ),
-                    )
+                    ))
                 )
         missing_sequences = tuple(
             sequence for sequence in sequence_values if sequence not in found_sequences
@@ -160,7 +161,13 @@ class RolloutMessageMaterializerMixin:
                 "SQLite messages 缺少请求的 message_sequence: "
                 + ",".join(str(sequence) for sequence in missing_sequences)
             )
-        return values
+        # 私有 checkpoint 恢复也复用 typed carrier 去重；已被完整 checkpoint
+        # carrier 替代的 stream 影子不得再次成为 LangGraph 工具调用输入。
+        superseded = superseded_stream_item_ids(tuple(
+            item for group, _value in values for item in group
+        ))
+        return [value for group, value in values
+                if not all(item.item_id in superseded for item in group)]
 
 
     @staticmethod

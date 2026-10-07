@@ -116,6 +116,10 @@ class SessionLocatorDTO(BaseModel):
     session_id: str = Field(min_length=1)
 
 
+class GeneratorTargetDTO(SessionLocatorDTO):
+    thread_id: str = Field(min_length=1)
+
+
 class GeneratorTypeRefDTO(BaseModel):
     type_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
@@ -160,14 +164,15 @@ class GeneratorContextSourceDTO(BaseModel):
     kind: Literal["fresh", "live_session", "snapshot"] = "fresh"
     workspace_id: str | None = None
     session_id: str | None = None
+    thread_id: str | None = None
     snapshot_id: str | None = None
 
     @model_validator(mode="after")
     def validate_source(self) -> GeneratorContextSourceDTO:
         if self.kind == "live_session" and (
-            self.workspace_id is None or self.session_id is None
+            self.workspace_id is None or self.session_id is None or not self.thread_id
         ):
-            raise ValueError("live_session context source 缺少 workspace_id/session_id")
+            raise ValueError("live_session context source 缺少 workspace_id/session_id/thread_id")
         if self.kind == "snapshot" and self.snapshot_id is None:
             raise ValueError("snapshot context source 缺少 snapshot_id")
         return self
@@ -187,7 +192,7 @@ class GeneratorSessionStrategyDTO(BaseModel):
         "continue_existing",
         "fork_new_and_report_back",
     ] = "new_per_run"
-    target: SessionLocatorDTO | None = None
+    target: GeneratorTargetDTO | None = None
     concurrency: Literal["queue"] = "queue"
     report_back: Literal[
         "none",

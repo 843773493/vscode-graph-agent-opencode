@@ -130,7 +130,7 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 #### Scenario: 进程数与工作区数解耦
 
 - **WHEN** 同一后端进程挂载多个工作区
-- **THEN** Gateway MUST 能对其中任一工作区发请求，且 MUST NOT 要求为每个工作区各拉起一个后端进程
+- **THEN** Gateway MUST 能对其中任一工作区发请求，且 MUST NOT 要求为每个工作区各拉起一个后端进程；进程句柄、完整组排空/force、generation切换及恢复 MUST 遵守唯一 `managed-backend-lifecycle` capability，本 capability 不另立生命周期合同
 
 #### Scenario: 跨 gateway 解析不返回 locator（星型解析 / star-topology resolution）
 
@@ -158,17 +158,17 @@ Gateway MUST 继续负责选择目标工作区，但选定目标 MUST 显式传�
 
 ### Requirement: 破坏性迁移与回滚必须有明确边界
 
-本形态迁移 MUST 提供破坏性迁移步骤，但 MUST NOT 虚构不存在的存量数据：权威表实测**资源 URI 零落盘**（live 安装工作区 157 个 SQLite 与 dev/temp 44 个库对 `boxteam://` 零命中、无 `resource_activation*` 表；唯一 `display_uri` 列的写入方全在测试、container 无装配、生产 seal 恒为 `None`），故本 change 的 workspace 身份显式化**不涉及存量 URI 数据迁移**，只需新写字段与读路径切换。既有**只描述单工作区前提**的非 URI 持久化字段仍 MUST 显式迁移或显式失效，MUST NOT 保留旧形态兼容层、双读或别名。迁移 MUST 声明可回滚到何种程度（含不可回滚点与其理由）。旧客户端调用（依赖「当前激活工作区」或旧工作区维度地址者）MUST 被视为破坏范围内。
+本形态迁移 MUST 提供破坏性切换步骤；按用户授权，旧开发运行数据 MUST 显式失效并在停止对应写入后清理，MUST NOT 引入旧 URI 扫描、回填、兼容层、双读或别名。当前新写入和精确恢复 MUST 继续遵守显式 workspace 身份合同，不能通过清理 fresh 数据掩盖 writer 错误。原零 URI、未装配 activation 取证只属于历史基线，MUST NOT 用来否定当前已接通的 production seal/restore。只描述单工作区前提的旧持久化字段 MUST 不再读取。迁移 MUST 声明代码、数据与生成快照各自的回滚边界及不可回滚点；旧客户端调用（依赖「当前激活工作区」或旧工作区维度地址者）MUST 被视为破坏范围内。
 
-#### Scenario: 无存量 URI 数据需要迁移
+#### Scenario: 旧开发数据不建立迁移链
 
-- **WHEN** 本形态迁移启动并核对磁盘
-- **THEN** 依据实测的 URI 零落盘事实，迁移 MUST 不引入任何 URI 存量读取/改写步骤，只做新写字段与读路径切换；若实施时实测发现存量，MUST 显式迁移或显式失效，MUST NOT 双读
+- **WHEN** 本形态切换遇到不符合新合同的旧开发运行数据
+- **THEN** 系统 MUST 停止对应写入并显式失效、清理这些数据，只保留新写字段与单一读路径，MUST NOT 扫描回填、迁移旧 URI 或保留双读；普通源码和独有未集成改动 MUST 保留
 
 #### Scenario: 旧字段显式失效
 
 - **WHEN** 迁移遇到只描述单工作区前提的旧持久化字段
-- **THEN** 系统 MUST 显式迁移或将其标记失效，MUST NOT 静默按旧语义继续解释
+- **THEN** 系统 MUST 将其显式失效并删除旧读取分支，MUST NOT 静默按旧语义继续解释
 
 #### Scenario: 不提供兼容层
 

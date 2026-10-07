@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listSessionCatalogChildren } from "../../api";
+import { getSessionMainThread, listSessionCatalogChildren } from "../../api";
 import type { SessionGeneratorResourcesController } from "../../hooks/sessionResourceExplorer/useSessionGeneratorResources";
 import type {
   GatewayWorkspace,
@@ -68,6 +68,13 @@ export default function SessionGeneratorManager({
   useEffect(() => {
     setTargetWorkspaceId(activeWorkspaceId ?? "");
   }, [activeWorkspaceId]);
+
+  const resolveTarget = async (workspaceId: string) => {
+    const owner = await getSessionMainThread(
+      apiPort, targetSessionId.trim(), requireGatewayWorkspaceRequestTarget(workspaces, workspaceId),
+    );
+    return { workspace_id: workspaceId, session_id: owner.session_id, thread_id: owner.thread_id };
+  };
 
   const reportError = (prefix: string, error: unknown) => {
     onStatusChange(`${prefix}: ${errorMessage(error)}`);
@@ -159,7 +166,7 @@ export default function SessionGeneratorManager({
     }
     const target = strategy === "new_per_run"
       ? null
-      : { workspace_id: workspaceId, session_id: targetSessionId.trim() };
+      : await resolveTarget(workspaceId);
     if (strategy !== "new_per_run" && !target?.session_id) {
       throw new Error("继续/分支策略必须填写目标会话 ID");
     }
@@ -417,7 +424,7 @@ export default function SessionGeneratorManager({
                 reportError("预览命名路径失败", new Error("请先选择目标工作区"));
                 return;
               }
-              void generatorResources.previewGenerator({
+              void (async () => generatorResources.previewGenerator({
                 name: name.trim(),
                 naming: {
                   title_template: titleTemplate,
@@ -434,16 +441,13 @@ export default function SessionGeneratorManager({
                   mode: strategy,
                   target: strategy === "new_per_run"
                     ? null
-                    : {
-                      workspace_id: previewWorkspaceId,
-                      session_id: targetSessionId.trim(),
-                    },
+                    : await resolveTarget(previewWorkspaceId),
                   concurrency: "queue",
                   report_back: strategy === "fork_new_and_report_back"
                     ? "continue_agent"
                     : "none",
                 },
-              }).then((preview) => setPreviewPath(preview.relative_path)).catch((error) => reportError("预览命名路径失败", error));
+              }))().then((preview) => setPreviewPath(preview.relative_path)).catch((error) => reportError("预览命名路径失败", error));
             }}>预览物理路径模板（稳定 ID 在运行时分配）</button>
             {previewPath ? <code>{previewPath}</code> : null}
           </div>

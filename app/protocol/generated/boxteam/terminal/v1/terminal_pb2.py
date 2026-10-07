@@ -26,17 +26,17 @@ from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"boxteam/terminal/v1/terminal.proto\x12\x13\x62oxteam.terminal.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x96\x05\n\x0fTerminalSession\x12\x1f\n\x0bterminal_id\x18\x01 \x01(\tR\nterminalId\x12\x14\n\x05title\x18\x03 \x01(\tR\x05title\x12\x12\n\x04\x63ols\x18\x05 \x01(\rR\x04\x63ols\x12\x12\n\x04rows\x18\x06 \x01(\rR\x04rows\x12;\n\x06status\x18\x07 \x01(\x0e\x32#.boxteam.terminal.v1.TerminalStatusR\x06status\x12\x1a\n\x08sequence\x18\x08 \x01(\rR\x08sequence\x12\x33\n\x08metadata\x18\t \x01(\x0b\x32\x17.google.protobuf.StructR\x08metadata\x12\x39\n\ncreated_at\x18\n \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x39\n\nupdated_at\x18\x0b \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tupdatedAt\x12!\n\x0cworkspace_id\x18\x0c \x01(\tR\x0bworkspaceId\x12!\n\x0c\x63wd_relative\x18\r \x01(\tR\x0b\x63wdRelative\x12\x38\n\x18transport_owner_revision\x18\x0e \x01(\x04R\x16transportOwnerRevision\x12 \n\texit_code\x18\x0f \x01(\x05H\x00R\x08\x65xitCode\x88\x01\x01\x12\x38\n\x16last_command_exit_code\x18\x10 \x01(\x05H\x01R\x13lastCommandExitCode\x88\x01\x01\x42\x0c\n\n_exit_codeB\x19\n\x17_last_command_exit_codeJ\x04\x08\x02\x10\x03J\x04\x08\x04\x10\x05R\nsession_idR\x03\x63wd\"\\\n\x13TerminalJsonMessage\x12\x12\n\x04type\x18\x01 \x01(\tR\x04type\x12\x31\n\x07payload\x18\x02 \x01(\x0b\x32\x17.google.protobuf.StructR\x07payload*\xc4\x01\n\x0eTerminalStatus\x12\x1f\n\x1bTERMINAL_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n\x17TERMINAL_STATUS_CREATED\x10\x01\x12\x1b\n\x17TERMINAL_STATUS_RUNNING\x10\x02\x12\x1a\n\x16TERMINAL_STATUS_EXITED\x10\x03\x12\x1e\n\x1aTERMINAL_STATUS_TERMINATED\x10\x04\x12\x1b\n\x17TERMINAL_STATUS_DELETED\x10\x05\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"boxteam/terminal/v1/terminal.proto\x12\x13\x62oxteam.terminal.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xec\x05\n\x0fTerminalSession\x12\x1f\n\x0bterminal_id\x18\x01 \x01(\tR\nterminalId\x12\x14\n\x05title\x18\x03 \x01(\tR\x05title\x12\x12\n\x04\x63ols\x18\x05 \x01(\rR\x04\x63ols\x12\x12\n\x04rows\x18\x06 \x01(\rR\x04rows\x12;\n\x06status\x18\x07 \x01(\x0e\x32#.boxteam.terminal.v1.TerminalStatusR\x06status\x12\x1a\n\x08sequence\x18\x08 \x01(\rR\x08sequence\x12\x33\n\x08metadata\x18\t \x01(\x0b\x32\x17.google.protobuf.StructR\x08metadata\x12\x39\n\ncreated_at\x18\n \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x39\n\nupdated_at\x18\x0b \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tupdatedAt\x12!\n\x0cworkspace_id\x18\x0c \x01(\tR\x0bworkspaceId\x12!\n\x0c\x63wd_relative\x18\r \x01(\tR\x0b\x63wdRelative\x12\x38\n\x18transport_owner_revision\x18\x0e \x01(\x04R\x16transportOwnerRevision\x12 \n\texit_code\x18\x0f \x01(\x05H\x00R\x08\x65xitCode\x88\x01\x01\x12\x38\n\x16last_command_exit_code\x18\x10 \x01(\x05H\x01R\x13lastCommandExitCode\x88\x01\x01\x12\x39\n\x16\x63ommand_start_sequence\x18\x11 \x01(\x04H\x02R\x14\x63ommandStartSequence\x88\x01\x01\x42\x0c\n\n_exit_codeB\x19\n\x17_last_command_exit_codeB\x19\n\x17_command_start_sequenceJ\x04\x08\x02\x10\x03J\x04\x08\x04\x10\x05R\nsession_idR\x03\x63wd\"\\\n\x13TerminalJsonMessage\x12\x12\n\x04type\x18\x01 \x01(\tR\x04type\x12\x31\n\x07payload\x18\x02 \x01(\x0b\x32\x17.google.protobuf.StructR\x07payload*\xc4\x01\n\x0eTerminalStatus\x12\x1f\n\x1bTERMINAL_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n\x17TERMINAL_STATUS_CREATED\x10\x01\x12\x1b\n\x17TERMINAL_STATUS_RUNNING\x10\x02\x12\x1a\n\x16TERMINAL_STATUS_EXITED\x10\x03\x12\x1e\n\x1aTERMINAL_STATUS_TERMINATED\x10\x04\x12\x1b\n\x17TERMINAL_STATUS_DELETED\x10\x05\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'boxteam.terminal.v1.terminal_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_TERMINALSTATUS']._serialized_start=882
-  _globals['_TERMINALSTATUS']._serialized_end=1078
+  _globals['_TERMINALSTATUS']._serialized_start=968
+  _globals['_TERMINALSTATUS']._serialized_end=1164
   _globals['_TERMINALSESSION']._serialized_start=123
-  _globals['_TERMINALSESSION']._serialized_end=785
-  _globals['_TERMINALJSONMESSAGE']._serialized_start=787
-  _globals['_TERMINALJSONMESSAGE']._serialized_end=879
+  _globals['_TERMINALSESSION']._serialized_end=871
+  _globals['_TERMINALJSONMESSAGE']._serialized_start=873
+  _globals['_TERMINALJSONMESSAGE']._serialized_end=965
 # @@protoc_insertion_point(module_scope)

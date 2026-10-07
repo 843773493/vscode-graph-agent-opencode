@@ -305,7 +305,7 @@ export type NodeDebugState = Omit<WorkspaceProtocol.NodeDebugStateDTO, "status" 
   actions?: NodeDebugActionRecord[];
   source_changed_paths?: string[];
 };
-export type JobDispatchStatus = "queued" | "running";
+export type JobDispatchStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 export type JobDispatchSnapshot = Omit<
   WorkspaceProtocol.JobDispatchSnapshotDTO,
   "job_status" | "active_job_id" | "blocked_by_job_id" | "delivery_policy" | "enqueue_sequence"

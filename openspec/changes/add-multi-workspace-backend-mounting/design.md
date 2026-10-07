@@ -93,46 +93,64 @@
 ### D7: 迁移策略 —— 「新写字段 + 读路径切换」，不虚构存量迁移，不留兼容层
 
 **决策**：
-- **不虚构存量 URI 数据迁移**：权威表实测**资源 URI 零落盘**（live 安装工作区 157 个 SQLite + dev/temp 44 个库对 `boxteam://` 零命中、无 `resource_activation*` 表；唯一 `display_uri` 列的写入方全在测试、`app/container.py` 无装配、生产 seal 恒为 `None`）。故 workspace 身份显式化**只需新写字段 + 读路径切换**，不得凭空设计 URI 存量迁移步骤。
-- 只描述单工作区前提的**非 URI** 持久化字段：显式迁移为带 workspace 身份的等价字段，或显式标记失效；不双读、不留别名。
+- **不新增旧开发数据迁移**：原零 URI 取证仅为历史基线；A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，“container 无装配、seal 恒为空”已失效。按用户授权清理旧开发运行数据，workspace 身份显式化只保留新写字段与单一读路径，不增加 URI 扫描、回填或当前来源补造。
+- 只描述单工作区前提的旧持久化字段显式失效；清理开发数据前停止对应写入，保留普通源码和独有未集成改动，不双读、不留别名。新的 writer 及恢复错误须修复，不能靠反复清数据掩盖。
 - 环境变量 `WORKSPACE_ROOT` 的定位能力由「注册表 + 显式身份」取代；`get_workspace_root()` 系列不再作为业务解析入口。
 - **OpenAPI 快照会因 workspace 身份显式化而失效**：路径形态从 `/api/v1/...` 变为 `/api/v1/workspaces/{workspace_id}/...`，已提交的 `src/clients/web/openapi.json` 与 `src/clients/web/src/types/openapi/index.json` MUST 重新生成（`bun run gen:openapi`），否则 `tests/contracts/api/**` 的快照断言会红。这是**明确的门禁影响**，不是可选优化。
 
-**不可回滚点**：一旦持久化字段按新形态写入并被读取，回到旧形态需再次迁移；迁移脚本本身 MUST 幂等、可在同一形态内重复执行。
+**不可回滚点**：新形态已写入后，旧代码不能解释其数据；代码回退若确有需要，应停止 writer 并显式失效、清理开发运行数据，不恢复旧兼容路径。已清理的旧开发数据不承诺恢复；普通源码与未集成改动不在清理范围。
 
 ### D8: 测试影响面分层口径（因无存量迁移而重述）
 
-因 URI 零落盘、**无存量迁移**，本形态的实施风险**主要落在接口契约变更**（路由路径形态、显式身份载体、拒绝路径与分区隔离断言），而非数据迁移；据此把测试影响面重述为三层：
+本形态不迁移旧开发数据；验收重点为接口契约（路由路径形态、显式身份载体、拒绝路径与分区隔离）、新写入和精确恢复。测试影响面分为三层：
 
 - **必须重写**：断言「进程只有一个工作区」、直接读 `WORKSPACE_ROOT`、或复用同一解析器实例跨工作区的用例；API 契约快照类（`tests/contracts/api/**`）——因路径形态变化，需重新生成快照并更新断言。
 - **只需加 workspace 参数**：绝大多数 `tests/unit/api/**`、服务层单测——Fixture 已提供独立工作区（如 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)` 已支持显式 `workspace_id`），改为把 `workspace_id` 显式传入请求/装配即可。
 - **不受影响**：纯算法/值对象/语法单测（URI 语法、ID 校验、JSON 序列化等），以及不接触工作区根的纯逻辑测试。
 - **新增（scope_id 推导原则的负向断言）**：新增用例断言 `gateway`/`inline` 的 `scope_id` MUST NOT 为硬编码字面量，且 `workspace` scope 的 `scope_id` 与 HTTP 显式寻址的 workspace_id 同源；此属接口契约层断言，不是数据迁移用例。
 
+### D9: Gateway 共享 Backend 由唯一生命周期 owner 管理
+
+后端已挂载注册表负责一个 generation 的实际 workspace UUID→根寻址；Gateway 的 managed Backend owner 只负责控制面的一份完整启动合同、generation 与唯一进程句柄。每项绑定 Gateway target ID、Backend UUID、规范化根；成员 runtime 只引用 owner，Terminal/Browser 仍归各 target。共享关系显式登记，不按相同 URL 或所有运行 target 推导，也不维护重复的双向成员权威。普通新增 managed workspace 保持现有独立 singleton 启动行为；只有显式加入共享组才等待整组切换。
+
+唯一生命周期规范为本 change 的 `managed-backend-lifecycle` delta；mounting capability 只引用，不另写排空/force/adopt/close 规则。Backend generation 的 mount 集合不可变；增删成员走现有受控整组 drain→新集合启动→全量身份/健康验证→路由公布，不预造动态 mount RPC。旧组未排空或新组失败时保留/恢复完整旧组，不以一个成员成功代表组成功。
+
+复用现有 Gateway runtime start/stop/safe/force 入口。共享组普通单 target 请求返回 blocked；显式整组请求同时携带 `expected_backend_generation` 与 `expected_workspace_ids`，后者是 Gateway target ID 的完整无重复集合，使用路由 ID 的命名空间，不混成 Backend UUID。owner 锁内重新核 generation/成员，再修改意图或 drain。响应与 runtime 状态提供 `backend_generation` 和完整 `affected_workspace_ids`，blocker 增加归属 `workspace_id`；DTO、OpenAPI、Web runtime hook/确认与必要协议同批迁齐，不把旧单target force 偷偷扩成全组。
+
+safe 在原30秒期限内汇总全组执行与代理引用；超时撤销 drain并保留旧组。force 先持久化全部受影响执行 interrupted，再关闭唯一 Backend handle。remove、替换、shutdown、preserve/adopt、startup recovery 均按 owner 一次处理；故障使全成员 fail-closed/offline并逐成员反馈，按权威完整启动合同仅恢复一次。外部/attached target仍仅探测和透明转发，不因URL相同成为managed成员；默认工作区不可stop的现有限制保留。
+
+共享组配置 restart 只 promotion 发起 target 的匹配 pending proof，sibling仅校验自身UUID/根/健康；失败恢复完整旧 generation 和旧 mount 集合，失败补偿按原 `recovery_required` 合同报告，不新造恢复状态机。当前固定16f只有按target的句柄/锁/恢复；该合同未实施，不把静态计划记为生命周期验收。
+
+实施仍采用整批源码/DTO/调用方/核心公共fixture→少量真实共享进程核心→集中边界回归→最终一次停写冻结。首个核心须经一个Gateway/一个真实managed Backend/两个mount验证身份与数据隔离；边界覆盖单target blocked、完整集合/陈旧generation、全组排空与force、成员进退、一次close/adopt/recovery、配置失败补偿以及外部target边界。
+
+成员变更另有显式 `desired_workspace_ids` 完整目标集合，不从当前集合或path target推导；只接纳已登记managed target，运行中的独立singleton先受控stop，不隐式合并两个活动owner。新组验证前不提交成员权威/运行意图；普通切换若新旧组都不可用，保唯一旧已公布集合、全组offline和候选失败诊断，明确完整组start按最近公布generation/旧启动合同执行恢复。配置恢复仍沿原candidate/journal状态机，不将其recovery_required套给普通成员变更。包含默认target的整组stop和移除默认成员都拒绝，restart仍按合同执行。
+
+Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单；失败保完整旧组，成功一次接管全组，不逐target adopt。共享配置proof missing/mismatch及retry/resolve/discard均核同一owner generation/完整mount集合；只promotion发起成员的匹配proof，sibling未验证不能公布候选/恢复generation在线，已确认完整旧组按原合同继续服务。
+
 ## Risks / Trade-offs
 
-- [**大量测试改动**（用户已知并接受）] → 用 D8 分层口径分批推进；优先让 fixture 支持显式 `workspace_id`（helper 已具备），把「加参数」与「重写」两类分开，避免一次性巨改。
+- [**大量测试改动**（用户已知并接受）] → 用 D8 区分必要加参、语义重写和不受影响用例；同一作者一次迁齐完整闭包与公共 fixture，再跑少量真实核心，集中补边界，不逐小包冻结。
 - [**OpenAPI 快照与前端类型失配**] → 迁移步骤显式包含 `bun run gen:openapi` 与前端类型再生成；门禁在快照未更新时会明确报错（fail-closed），不会静默通过。
 - [**路径段与请求头不一致的双载体风险**] → 规定不一致时**显式失败**（spec 已冻结该场景），禁止静默取其一。
 - [**两个 workspace_id 命名空间混淆**（后端 UUID vs Gateway `gw_`）] → 本 change 明确：寻址层 `workspace_id` 只使用**后端身份命名空间**（`workspace_identity.validate_workspace_id` 的严格 UUID 文本）；Gateway `gw_` ID 如需保留，只能是 Gateway 控制面内部标识，MUST NOT 进入工作区寻址/URI。（见 Open Questions）
 - [**惰性构造服务图导致首次请求延迟/装配竞态**] → 规定每工作区服务图构造为**进程内幂等**（同一 workspace_id 只构造一次），并沿用既有 SQLite 进程所有权锁语义 fail-closed。
-- [**存量 URI 数据风险已消除**（权威表实测）] → URI 零落盘（157 live + 44 dev/temp SQLite 对 `boxteam://` 零命中、无 `resource_activation*` 表；`display_uri` 仅测试写入、container 无装配、生产 seal 恒为 `None`），迁移章节因此**不含存量 URI 迁移**，只需新写字段与读路径切换。
+- [**旧取证误当当前生产状态**] → 原零 URI、未装配取证不能覆盖 A01 已接通的 activation；依据固定候选和真实入口收据复用已绿范围，验收当前新 writer 与恢复，不新增旧开发数据迁移。
 - [**gateway_id 通道与装配已落地（2026-10-01 第八轮复核更正）**] → `gateway` scope 的 `scope_id` 由 Gateway 侧按请求注入真实 gateway_id（owner = Gateway 侧按请求注入，取值按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」推导），装配提交 `64ba30c8`/`53befbfc`/`9881a3b2`；原硬编码字面量 `local` 分支已物理删除，跨 gateway 寻址的接口前提已满足。
 - [**distribution_id 装配已落地（2026-10-01 第八轮复核更正）**] → `distribution_id` 来源为发行包 runtime manifest 的 `distribution` + `version`（编码规则见「统一资源寻址」change 的 requirement），装配提交 `298ef599`+`f3bd8213`（`app/core/distribution_identity.py::load_distribution_id` 生产赋值、`app/agents/skill_runtime.py::_layer_scope_identity` 消费）；原「零赋值空洞」已消除。
 - [**旧 scope_id 硬编码被误当现行合同**] → 原规划基线中 gateway 与 inline 共用 `"local"` 的违反点已由前述身份装配修复；后续依赖真实 gateway_id / distribution_id，不恢复硬编码，不重复派发已完成的装配。
 
 ## Migration Plan
 
-**不含数据迁移子步骤**：权威表实测 URI 零落盘，故本形态**无存量 URI 数据迁移**；下列步骤均为代码层/接口契约层动作，仅在盘点出「只描述单工作区前提的非 URI 持久化字段」时才产生一次性字段迁移。
+**不含旧开发数据迁移子步骤**：按用户授权使旧运行数据显式失效并清理；下列代码、接口和新写入步骤保持单一链路，不能将历史零 URI 取证当作当前无持久化 activation 的证明。
 
 1. 引入注册表与显式身份载体，按真实调用链同步迁移全部消费者；每个集成切片只保留一个身份解析入口，不引入新旧并存读取。
 2. 把所有工作区根/数据目录定位改为「显式 workspace_id → 注册表」。
 3. 把 `build_app_container` 改为「注册表 + 按需服务图」；把 `lru_cache` 键改为 workspace 维度。
 4. 按 `scope_id` 推导原则落实身份来源：`workspace` scope 的 `scope_id` 取真实 workspace_id；`gateway`/`inline` 的硬编码字面量 MUST 改为推导自真实 gateway_id / distribution_id（`distribution_id` 来源已裁定为 manifest 的 `distribution` + `version`；`gateway_id` 来源已裁定为 `identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求注入；两者均按「统一资源寻址」change 的编码/来源规则实施，缺失时 fail-closed，不得继续硬编码）。
-5. 处理只描述单工作区前提的**非 URI** 持久化字段（显式迁移或显式失效）；**无存量 URI 数据迁移**。
-6. Gateway 改为显式传目标（路径前缀或等价头），并与**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 约定一致。
+5. 使只描述单工作区前提的旧字段显式失效，停止对应写入后清理开发数据；验证新字段和恢复只依赖精确 workspace 身份，不扫描、回填旧 URI。
+6. Gateway 改为显式传目标（路径前缀或等价头），并与**星型解析 / star-topology resolution** 的 hub-spoke 有界 transit 约定一致；按 D9 一次迁齐共享 Backend 唯一owner、完整组生命周期和消费者，保普通 singleton 启动语义。
 7. 重新生成 OpenAPI 快照与前端类型；更新契约测试。
-8. **回滚**：步骤 1–4 与步骤 6 可在**代码层回滚**（不改变持久化形态，因无存量 URI 数据）；步骤 5 仅当真的写入了新的非 URI 字段才产生回滚成本（需再次迁移）；步骤 7 可随时重生成。
+8. **回滚**：代码与生成快照可以回退或重生成；如数据形态已变化，必须停止 writer 并显式失效、清理开发运行数据，不把新数据交旧 reader，也不增加兼容双轨。已删除开发数据无法由代码回退恢复。
 
 ## Open Questions
 

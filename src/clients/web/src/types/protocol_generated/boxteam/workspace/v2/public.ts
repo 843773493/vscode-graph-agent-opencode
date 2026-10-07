@@ -330,6 +330,7 @@ export interface MessageRunAccepted {
   job_id: string;
   status: string;
   dispatch: JobDispatchSnapshotDTO | undefined;
+  thread_id: string;
 }
 
 export interface MessageRunRequest {
@@ -1398,7 +1399,8 @@ export interface TeamBoardDTO {
   updated_at: string | undefined;
   team_id: string;
   name: string;
-  coordinator_session_id: string;
+  session_id: string;
+  coordinator_thread_id: string;
   version: number;
   members: TeamMemberDTO[];
   tasks: TeamTaskDTO[];
@@ -1409,7 +1411,8 @@ export interface TeamEventDTO {
   event_id: string;
   team_id: string;
   type: string;
-  actor_session_id: string;
+  actor_thread_id: string;
+  session_id: string;
   created_at: string | undefined;
   payload?: { [key: string]: any } | undefined;
 }
@@ -1419,14 +1422,13 @@ export interface TeamListDTO {
 }
 
 export interface TeamMemberDTO {
-  session_id: string;
+  thread_id: string;
+  delegation_id?: string | undefined;
   role: string;
   source: string;
   work_mode: string;
   instructions?: string | undefined;
   status?: string | undefined;
-  activation_job_id?: string | undefined;
-  activation_error?: string | undefined;
   joined_at: string | undefined;
   updated_at: string | undefined;
 }
@@ -1434,9 +1436,9 @@ export interface TeamMemberDTO {
 export interface TeamMemberOperationDTO {
   board: TeamBoardDTO | undefined;
   member: TeamMemberDTO | undefined;
-  child_session_id?: string | undefined;
-  child_message_id?: string | undefined;
-  child_job_id?: string | undefined;
+  child_thread_id?: string | undefined;
+  child_delegation_id?: string | undefined;
+  child_admission_state?: string | undefined;
 }
 
 export interface TeamTaskDTO {
@@ -1447,13 +1449,13 @@ export interface TeamTaskDTO {
   description: string;
   phase: string;
   cycle: number;
-  assignee_session_id: string;
+  assignee_thread_id: string;
   status: string;
   depends_on_task_ids: string[];
   assigned_job_id?: string | undefined;
   summary?: string | undefined;
   error?: string | undefined;
-  updated_by_session_id: string;
+  updated_by_thread_id: string;
 }
 
 export interface TeamTaskOperationDTO {
@@ -3982,7 +3984,7 @@ export const MessageReplayRequest: MessageFns<MessageReplayRequest> = {
 };
 
 function createBaseMessageRunAccepted(): MessageRunAccepted {
-  return { message_id: "", job_id: "", status: "", dispatch: undefined };
+  return { message_id: "", job_id: "", status: "", dispatch: undefined, thread_id: "" };
 }
 
 export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
@@ -3992,6 +3994,7 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
       job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       dispatch: isSet(object.dispatch) ? JobDispatchSnapshotDTO.fromJSON(object.dispatch) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
@@ -4009,6 +4012,9 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
     if (message.dispatch !== undefined) {
       obj.dispatch = JobDispatchSnapshotDTO.toJSON(message.dispatch);
     }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
     return obj;
   },
 
@@ -4023,6 +4029,7 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
     message.dispatch = (object.dispatch !== undefined && object.dispatch !== null)
       ? JobDispatchSnapshotDTO.fromPartial(object.dispatch)
       : undefined;
+    message.thread_id = object.thread_id ?? "";
     return message;
   },
 };
@@ -11276,7 +11283,8 @@ function createBaseTeamBoardDTO(): TeamBoardDTO {
     updated_at: undefined,
     team_id: "",
     name: "",
-    coordinator_session_id: "",
+    session_id: "",
+    coordinator_thread_id: "",
     version: 0,
     members: [],
     tasks: [],
@@ -11291,9 +11299,8 @@ export const TeamBoardDTO: MessageFns<TeamBoardDTO> = {
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       team_id: isSet(object.team_id) ? globalThis.String(object.team_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      coordinator_session_id: isSet(object.coordinator_session_id)
-        ? globalThis.String(object.coordinator_session_id)
-        : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      coordinator_thread_id: isSet(object.coordinator_thread_id) ? globalThis.String(object.coordinator_thread_id) : "",
       version: isSet(object.version) ? globalThis.Number(object.version) : 0,
       members: globalThis.Array.isArray(object?.members)
         ? object.members.map((e: any) => TeamMemberDTO.fromJSON(e))
@@ -11319,8 +11326,11 @@ export const TeamBoardDTO: MessageFns<TeamBoardDTO> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
-    if (message.coordinator_session_id !== "") {
-      obj.coordinator_session_id = message.coordinator_session_id;
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.coordinator_thread_id !== "") {
+      obj.coordinator_thread_id = message.coordinator_thread_id;
     }
     if (message.version !== 0) {
       obj.version = Math.round(message.version);
@@ -11346,7 +11356,8 @@ export const TeamBoardDTO: MessageFns<TeamBoardDTO> = {
     message.updated_at = object.updated_at ?? undefined;
     message.team_id = object.team_id ?? "";
     message.name = object.name ?? "";
-    message.coordinator_session_id = object.coordinator_session_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.coordinator_thread_id = object.coordinator_thread_id ?? "";
     message.version = object.version ?? 0;
     message.members = object.members?.map((e) => TeamMemberDTO.fromPartial(e)) || [];
     message.tasks = object.tasks?.map((e) => TeamTaskDTO.fromPartial(e)) || [];
@@ -11356,7 +11367,15 @@ export const TeamBoardDTO: MessageFns<TeamBoardDTO> = {
 };
 
 function createBaseTeamEventDTO(): TeamEventDTO {
-  return { event_id: "", team_id: "", type: "", actor_session_id: "", created_at: undefined, payload: undefined };
+  return {
+    event_id: "",
+    team_id: "",
+    type: "",
+    actor_thread_id: "",
+    session_id: "",
+    created_at: undefined,
+    payload: undefined,
+  };
 }
 
 export const TeamEventDTO: MessageFns<TeamEventDTO> = {
@@ -11365,7 +11384,8 @@ export const TeamEventDTO: MessageFns<TeamEventDTO> = {
       event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
       team_id: isSet(object.team_id) ? globalThis.String(object.team_id) : "",
       type: isSet(object.type) ? globalThis.String(object.type) : "",
-      actor_session_id: isSet(object.actor_session_id) ? globalThis.String(object.actor_session_id) : "",
+      actor_thread_id: isSet(object.actor_thread_id) ? globalThis.String(object.actor_thread_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       payload: isObject(object.payload) ? object.payload : undefined,
     };
@@ -11382,8 +11402,11 @@ export const TeamEventDTO: MessageFns<TeamEventDTO> = {
     if (message.type !== "") {
       obj.type = message.type;
     }
-    if (message.actor_session_id !== "") {
-      obj.actor_session_id = message.actor_session_id;
+    if (message.actor_thread_id !== "") {
+      obj.actor_thread_id = message.actor_thread_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
     }
     if (message.created_at !== undefined) {
       obj.created_at = message.created_at;
@@ -11402,7 +11425,8 @@ export const TeamEventDTO: MessageFns<TeamEventDTO> = {
     message.event_id = object.event_id ?? "";
     message.team_id = object.team_id ?? "";
     message.type = object.type ?? "";
-    message.actor_session_id = object.actor_session_id ?? "";
+    message.actor_thread_id = object.actor_thread_id ?? "";
+    message.session_id = object.session_id ?? "";
     message.created_at = object.created_at ?? undefined;
     message.payload = object.payload ?? undefined;
     return message;
@@ -11440,14 +11464,13 @@ export const TeamListDTO: MessageFns<TeamListDTO> = {
 
 function createBaseTeamMemberDTO(): TeamMemberDTO {
   return {
-    session_id: "",
+    thread_id: "",
+    delegation_id: undefined,
     role: "",
     source: "",
     work_mode: "",
     instructions: undefined,
     status: undefined,
-    activation_job_id: undefined,
-    activation_error: undefined,
     joined_at: undefined,
     updated_at: undefined,
   };
@@ -11456,14 +11479,13 @@ function createBaseTeamMemberDTO(): TeamMemberDTO {
 export const TeamMemberDTO: MessageFns<TeamMemberDTO> = {
   fromJSON(object: any): TeamMemberDTO {
     return {
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      delegation_id: isSet(object.delegation_id) ? globalThis.String(object.delegation_id) : undefined,
       role: isSet(object.role) ? globalThis.String(object.role) : "",
       source: isSet(object.source) ? globalThis.String(object.source) : "",
       work_mode: isSet(object.work_mode) ? globalThis.String(object.work_mode) : "",
       instructions: isSet(object.instructions) ? globalThis.String(object.instructions) : undefined,
       status: isSet(object.status) ? globalThis.String(object.status) : undefined,
-      activation_job_id: isSet(object.activation_job_id) ? globalThis.String(object.activation_job_id) : undefined,
-      activation_error: isSet(object.activation_error) ? globalThis.String(object.activation_error) : undefined,
       joined_at: isSet(object.joined_at) ? globalThis.String(object.joined_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
     };
@@ -11471,8 +11493,11 @@ export const TeamMemberDTO: MessageFns<TeamMemberDTO> = {
 
   toJSON(message: TeamMemberDTO): unknown {
     const obj: any = {};
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.delegation_id !== undefined) {
+      obj.delegation_id = message.delegation_id;
     }
     if (message.role !== "") {
       obj.role = message.role;
@@ -11489,12 +11514,6 @@ export const TeamMemberDTO: MessageFns<TeamMemberDTO> = {
     if (message.status !== undefined) {
       obj.status = message.status;
     }
-    if (message.activation_job_id !== undefined) {
-      obj.activation_job_id = message.activation_job_id;
-    }
-    if (message.activation_error !== undefined) {
-      obj.activation_error = message.activation_error;
-    }
     if (message.joined_at !== undefined) {
       obj.joined_at = message.joined_at;
     }
@@ -11509,14 +11528,13 @@ export const TeamMemberDTO: MessageFns<TeamMemberDTO> = {
   },
   fromPartial<I extends Exact<DeepPartial<TeamMemberDTO>, I>>(object: I): TeamMemberDTO {
     const message = createBaseTeamMemberDTO();
-    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.delegation_id = object.delegation_id ?? undefined;
     message.role = object.role ?? "";
     message.source = object.source ?? "";
     message.work_mode = object.work_mode ?? "";
     message.instructions = object.instructions ?? undefined;
     message.status = object.status ?? undefined;
-    message.activation_job_id = object.activation_job_id ?? undefined;
-    message.activation_error = object.activation_error ?? undefined;
     message.joined_at = object.joined_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     return message;
@@ -11527,9 +11545,9 @@ function createBaseTeamMemberOperationDTO(): TeamMemberOperationDTO {
   return {
     board: undefined,
     member: undefined,
-    child_session_id: undefined,
-    child_message_id: undefined,
-    child_job_id: undefined,
+    child_thread_id: undefined,
+    child_delegation_id: undefined,
+    child_admission_state: undefined,
   };
 }
 
@@ -11538,9 +11556,13 @@ export const TeamMemberOperationDTO: MessageFns<TeamMemberOperationDTO> = {
     return {
       board: isSet(object.board) ? TeamBoardDTO.fromJSON(object.board) : undefined,
       member: isSet(object.member) ? TeamMemberDTO.fromJSON(object.member) : undefined,
-      child_session_id: isSet(object.child_session_id) ? globalThis.String(object.child_session_id) : undefined,
-      child_message_id: isSet(object.child_message_id) ? globalThis.String(object.child_message_id) : undefined,
-      child_job_id: isSet(object.child_job_id) ? globalThis.String(object.child_job_id) : undefined,
+      child_thread_id: isSet(object.child_thread_id) ? globalThis.String(object.child_thread_id) : undefined,
+      child_delegation_id: isSet(object.child_delegation_id)
+        ? globalThis.String(object.child_delegation_id)
+        : undefined,
+      child_admission_state: isSet(object.child_admission_state)
+        ? globalThis.String(object.child_admission_state)
+        : undefined,
     };
   },
 
@@ -11552,14 +11574,14 @@ export const TeamMemberOperationDTO: MessageFns<TeamMemberOperationDTO> = {
     if (message.member !== undefined) {
       obj.member = TeamMemberDTO.toJSON(message.member);
     }
-    if (message.child_session_id !== undefined) {
-      obj.child_session_id = message.child_session_id;
+    if (message.child_thread_id !== undefined) {
+      obj.child_thread_id = message.child_thread_id;
     }
-    if (message.child_message_id !== undefined) {
-      obj.child_message_id = message.child_message_id;
+    if (message.child_delegation_id !== undefined) {
+      obj.child_delegation_id = message.child_delegation_id;
     }
-    if (message.child_job_id !== undefined) {
-      obj.child_job_id = message.child_job_id;
+    if (message.child_admission_state !== undefined) {
+      obj.child_admission_state = message.child_admission_state;
     }
     return obj;
   },
@@ -11575,9 +11597,9 @@ export const TeamMemberOperationDTO: MessageFns<TeamMemberOperationDTO> = {
     message.member = (object.member !== undefined && object.member !== null)
       ? TeamMemberDTO.fromPartial(object.member)
       : undefined;
-    message.child_session_id = object.child_session_id ?? undefined;
-    message.child_message_id = object.child_message_id ?? undefined;
-    message.child_job_id = object.child_job_id ?? undefined;
+    message.child_thread_id = object.child_thread_id ?? undefined;
+    message.child_delegation_id = object.child_delegation_id ?? undefined;
+    message.child_admission_state = object.child_admission_state ?? undefined;
     return message;
   },
 };
@@ -11591,13 +11613,13 @@ function createBaseTeamTaskDTO(): TeamTaskDTO {
     description: "",
     phase: "",
     cycle: 0,
-    assignee_session_id: "",
+    assignee_thread_id: "",
     status: "",
     depends_on_task_ids: [],
     assigned_job_id: undefined,
     summary: undefined,
     error: undefined,
-    updated_by_session_id: "",
+    updated_by_thread_id: "",
   };
 }
 
@@ -11611,7 +11633,7 @@ export const TeamTaskDTO: MessageFns<TeamTaskDTO> = {
       description: isSet(object.description) ? globalThis.String(object.description) : "",
       phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
       cycle: isSet(object.cycle) ? globalThis.Number(object.cycle) : 0,
-      assignee_session_id: isSet(object.assignee_session_id) ? globalThis.String(object.assignee_session_id) : "",
+      assignee_thread_id: isSet(object.assignee_thread_id) ? globalThis.String(object.assignee_thread_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       depends_on_task_ids: globalThis.Array.isArray(object?.depends_on_task_ids)
         ? object.depends_on_task_ids.map((e: any) => globalThis.String(e))
@@ -11619,7 +11641,7 @@ export const TeamTaskDTO: MessageFns<TeamTaskDTO> = {
       assigned_job_id: isSet(object.assigned_job_id) ? globalThis.String(object.assigned_job_id) : undefined,
       summary: isSet(object.summary) ? globalThis.String(object.summary) : undefined,
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
-      updated_by_session_id: isSet(object.updated_by_session_id) ? globalThis.String(object.updated_by_session_id) : "",
+      updated_by_thread_id: isSet(object.updated_by_thread_id) ? globalThis.String(object.updated_by_thread_id) : "",
     };
   },
 
@@ -11646,8 +11668,8 @@ export const TeamTaskDTO: MessageFns<TeamTaskDTO> = {
     if (message.cycle !== 0) {
       obj.cycle = Math.round(message.cycle);
     }
-    if (message.assignee_session_id !== "") {
-      obj.assignee_session_id = message.assignee_session_id;
+    if (message.assignee_thread_id !== "") {
+      obj.assignee_thread_id = message.assignee_thread_id;
     }
     if (message.status !== "") {
       obj.status = message.status;
@@ -11664,8 +11686,8 @@ export const TeamTaskDTO: MessageFns<TeamTaskDTO> = {
     if (message.error !== undefined) {
       obj.error = message.error;
     }
-    if (message.updated_by_session_id !== "") {
-      obj.updated_by_session_id = message.updated_by_session_id;
+    if (message.updated_by_thread_id !== "") {
+      obj.updated_by_thread_id = message.updated_by_thread_id;
     }
     return obj;
   },
@@ -11682,13 +11704,13 @@ export const TeamTaskDTO: MessageFns<TeamTaskDTO> = {
     message.description = object.description ?? "";
     message.phase = object.phase ?? "";
     message.cycle = object.cycle ?? 0;
-    message.assignee_session_id = object.assignee_session_id ?? "";
+    message.assignee_thread_id = object.assignee_thread_id ?? "";
     message.status = object.status ?? "";
     message.depends_on_task_ids = object.depends_on_task_ids?.map((e) => e) || [];
     message.assigned_job_id = object.assigned_job_id ?? undefined;
     message.summary = object.summary ?? undefined;
     message.error = object.error ?? undefined;
-    message.updated_by_session_id = object.updated_by_session_id ?? "";
+    message.updated_by_thread_id = object.updated_by_thread_id ?? "";
     return message;
   },
 };

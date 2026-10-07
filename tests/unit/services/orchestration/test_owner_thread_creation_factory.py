@@ -43,7 +43,7 @@ def test_factory_uses_catalog_resolver(tmp_path: Path) -> None:
     # catalog 权威下入口不因 resolver 模式拒绝，按 catalog 内容正常工作
     #（空 catalog 查未知节点 → 显式 KeyError）。
     with pytest.raises(KeyError, match="会话目录节点不存在"):
-        factory.owner_main_thread_id(SESSION_ID)
+        factory.validate_owner_thread(SESSION_ID, "thr_019bfb6b5f3c72178c7e8393ce89e7a7")
 
 
 async def _create_sessions(sessions_root: Path, count: int) -> list[str]:

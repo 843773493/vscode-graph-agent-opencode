@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import (
-    SessionSubagentAccepted,
-    SessionSubagentProtocol,
+    OwnerThreadCreationFactoryProtocol,
     SessionReaderProtocol,
+    SessionSubagentProtocol,
 )
 from app.abstractions.team import TeamStoreProtocol
 from app.schemas.internal_v2.team import (
@@ -18,306 +18,101 @@ from app.schemas.internal_v2.team import (
 )
 
 from .board_manager import TeamBoardManager
-from .messages import (
-    membership_message,
-    task_assignment_message,
-    task_update_message,
-    trusted_team_context,
-)
-from .rules import (
-    RESOLUTION_STATUSES,
-    require_active_member,
-    required_text,
-)
+from .messages import task_assignment_message, task_update_message, trusted_team_context
+from .rules import RESOLUTION_STATUSES, require_active_member, required_text
 
 
 class TeamCoordinationService:
-    """把团队任务板操作转换为真实的持久化 Session Job。"""
+    """同一 Session 的成员 publication、任务面板与精确线程通知。"""
 
-    def __init__(
-        self,
-        *,
-        store: TeamStoreProtocol,
-        session_service: SessionReaderProtocol,
-        session_orchestrator: SessionOrchestratorProtocol,
-        session_subagent_service: SessionSubagentProtocol,
-    ) -> None:
-        self._boards = TeamBoardManager(store=store)
-        self._session_service = session_service
-        self._session_orchestrator = session_orchestrator
-        self._session_subagent_service = session_subagent_service
+    def __init__(self, *, store: TeamStoreProtocol, session_service: SessionReaderProtocol,
+                 session_orchestrator: SessionOrchestratorProtocol,
+                 session_subagent_service: SessionSubagentProtocol,
+                 thread_creation_factory: OwnerThreadCreationFactoryProtocol) -> None:
+        self._boards = TeamBoardManager(store=store, factory=thread_creation_factory)
+        self._sessions = session_service
+        self._orchestrator = session_orchestrator
+        self._subagents = session_subagent_service
+        self._factory = thread_creation_factory
 
-    async def create_team(
-        self,
-        *,
-        requester_session_id: str,
-        name: str,
-    ) -> TeamBoardDTO:
-        await self._session_service.get(requester_session_id)
-        return self._boards.create(
-            coordinator_session_id=requester_session_id,
-            name=name,
-        )
+    async def create_team(self, *, requester_session_id: str, requester_thread_id: str, name: str) -> TeamBoardDTO:
+        session = await self._sessions.get(requester_session_id)
+        if requester_thread_id != session.thread_id:
+            raise PermissionError("只有当前 Session 的 main thread 可以创建团队")
+        self._factory.validate_owner_thread(requester_session_id, requester_thread_id)
+        return self._boards.create(session_id=requester_session_id, coordinator_thread_id=requester_thread_id, name=name)
 
-    async def list_teams(self, *, requester_session_id: str) -> TeamListDTO:
-        await self._session_service.get(requester_session_id)
-        return self._boards.list_for_session(requester_session_id)
+    async def list_teams(self, *, requester_session_id: str, requester_thread_id: str) -> TeamListDTO:
+        self._factory.validate_owner_thread(requester_session_id, requester_thread_id)
+        return self._boards.list_for_member(requester_session_id, requester_thread_id)
 
-    async def get_board(
-        self,
-        *,
-        requester_session_id: str,
-        team_id: str,
-    ) -> TeamBoardDTO:
-        return self._boards.get_for_member(
-            team_id=team_id,
-            session_id=requester_session_id,
-        )
+    async def get_board(self, *, requester_session_id: str, requester_thread_id: str, team_id: str) -> TeamBoardDTO:
+        return self._boards.get_for_member(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
 
-    async def create_member(
-        self,
-        *,
-        requester_session_id: str,
-        requester_agent_id: str,
-        requester_job_id: str,
-        requester_tool_call_id: str,
-        team_id: str,
-        role: str,
-        startup_prompt: str,
-        instructions: str,
-        work_mode: TeamWorkMode,
-    ) -> TeamMemberOperationDTO:
-        board = self._boards.get_for_coordinator(
-            team_id=team_id,
-            session_id=requester_session_id,
-        )
+    async def create_member(self, *, requester_session_id: str, requester_thread_id: str,
+                            requester_agent_id: str, requester_job_id: str, requester_tool_call_id: str,
+                            team_id: str, role: str, startup_prompt: str, instructions: str,
+                            work_mode: TeamWorkMode) -> TeamMemberOperationDTO:
+        board = self._boards.get_for_coordinator(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
         normalized_role = required_text(role, "role")
-        normalized_startup_prompt = required_text(
-            startup_prompt,
-            "startup_prompt",
+        accepted = await self._subagents.delegate(
+            parent_session_id=requester_session_id, parent_thread_id=requester_thread_id,
+            parent_agent_id=requester_agent_id, parent_job_id=requester_job_id,
+            parent_tool_call_id=requester_tool_call_id, description=required_text(startup_prompt, "startup_prompt"),
+            subagent_type="general-purpose", title=f"{normalized_role} · {board.name}",
+            trusted_context=trusted_team_context(team_id=team_id, coordinator_thread_id=board.coordinator_thread_id,
+                                                role=normalized_role, work_mode=work_mode),
+            untrusted_instructions=instructions,
+            collaboration_member={"role": normalized_role},
         )
-        member_anchor_id: str | None = None
-
-        async def add_member_before_start(
-            accepted: SessionSubagentAccepted,
-        ) -> None:
-            nonlocal member_anchor_id
-            await self._boards.add_member(
-                team_id=team_id,
-                actor_session_id=requester_session_id,
-                # R25：delegated 成员锚点是 owner Session 内的 child
-                # thread id（board 成员键沿用锚点；线程通信归 R26）。
-                target_session_id=accepted.child_thread_id,
-                role=normalized_role,
-                source="delegated",
-                work_mode=work_mode,
-                instructions=instructions,
-            )
-            member_anchor_id = accepted.child_thread_id
-
-        try:
-            accepted = await self._session_subagent_service.delegate(
-                parent_session_id=requester_session_id,
-                parent_agent_id=requester_agent_id,
-                parent_job_id=requester_job_id,
-                parent_tool_call_id=requester_tool_call_id,
-                description=normalized_startup_prompt,
-                subagent_type="general-purpose",
-                title=f"{normalized_role} · {board.name}",
-                trusted_context=trusted_team_context(
-                    team_id=team_id,
-                    coordinator_session_id=board.coordinator_session_id,
-                    role=normalized_role,
-                    work_mode=work_mode,
-                ),
-                untrusted_instructions=instructions,
-                before_start=add_member_before_start,
-            )
-        except Exception as error:
-            if member_anchor_id is not None:
-                await self._boards.set_member_activation(
-                    team_id=team_id,
-                    actor_session_id=requester_session_id,
-                    target_session_id=member_anchor_id,
-                    status="activation_failed",
-                    activation_error=str(error),
-                )
-            raise
-
-        board = await self._boards.set_member_activation(
-            team_id=team_id,
-            actor_session_id=requester_session_id,
-            target_session_id=accepted.child_thread_id,
-            status="active",
-            # R25 不启动真实 child Job：委派成员无激活 Job；R26 接线。
-            activation_job_id=None,
-        )
-        member = require_active_member(
-            board,
-            accepted.child_thread_id,
-        )
+        board = self._boards.get_for_coordinator(session_id=requester_session_id, thread_id=requester_thread_id, team_id=team_id)
         return TeamMemberOperationDTO(
-            board=self._boards.with_recent_events(board),
-            member=member,
-            child_thread_id=accepted.child_thread_id,
-            child_delegation_id=accepted.delegation_id,
+            board=board, member=require_active_member(board, accepted.child_thread_id),
+            child_thread_id=accepted.child_thread_id, child_delegation_id=accepted.delegation_id,
             child_admission_state=accepted.admission_state,
         )
 
-    async def attach_session(
-        self,
-        *,
-        requester_session_id: str,
-        team_id: str,
-        target_session_id: str,
-        role: str,
-        instructions: str,
-        work_mode: TeamWorkMode,
-        notify: bool,
-    ) -> TeamMemberOperationDTO:
-        self._boards.get_for_coordinator(
-            team_id=team_id,
-            session_id=requester_session_id,
-        )
-        await self._session_service.get(target_session_id)
-        board = await self._boards.add_member(
-            team_id=team_id,
-            actor_session_id=requester_session_id,
-            target_session_id=target_session_id,
-            role=role,
-            source="attached",
-            work_mode=work_mode,
-            instructions=instructions,
-        )
-        accepted = None
-        if notify:
-            member = require_active_member(board, target_session_id)
-            try:
-                accepted = await self._session_orchestrator.create_and_run_internal(
-                    target_session_id,
-                    membership_message(board=board, member=member),
-                )
-            except Exception as error:
-                await self._boards.set_member_activation(
-                    team_id=team_id,
-                    actor_session_id=requester_session_id,
-                    target_session_id=target_session_id,
-                    status="activation_failed",
-                    activation_error=str(error),
-                )
-                raise RuntimeError(
-                    "会话已加入团队，但成员激活 Job 启动失败: "
-                    f"team_id={team_id} session_id={target_session_id} error={error}"
-                ) from error
-            board = await self._boards.set_member_activation(
-                team_id=team_id,
-                actor_session_id=requester_session_id,
-                target_session_id=target_session_id,
-                status="active",
-                activation_job_id=accepted.job_id,
-            )
-        member = require_active_member(board, target_session_id)
-        return TeamMemberOperationDTO(
-            board=self._boards.with_recent_events(board),
-            member=member,
-            child_thread_id=target_session_id,
-        )
-
-    async def assign_task(
-        self,
-        *,
-        requester_session_id: str,
-        team_id: str,
-        assignee_session_id: str,
-        title: str,
-        description: str,
-        phase: TeamTaskPhase,
-        cycle: int,
-        depends_on_task_ids: list[str],
-        start_assignee: bool,
-    ) -> TeamTaskOperationDTO:
-        if start_assignee and assignee_session_id == requester_session_id:
-            raise ValueError(
-                "不能在当前 Job 中再次启动当前 Session；"
-                "主会话自行执行的开发任务请使用 start_assignee=false"
-            )
+    async def assign_task(self, *, requester_session_id: str, requester_thread_id: str, team_id: str,
+                          assignee_thread_id: str, title: str, description: str, phase: TeamTaskPhase,
+                          cycle: int, depends_on_task_ids: list[str], start_assignee: bool) -> TeamTaskOperationDTO:
+        if start_assignee and assignee_thread_id == requester_thread_id:
+            raise ValueError("当前线程登记自行执行的任务时必须使用 start_assignee=false")
         board, task = await self._boards.assign_task(
-            requester_session_id=requester_session_id,
-            team_id=team_id,
-            assignee_session_id=assignee_session_id,
-            title=title,
-            description=description,
-            phase=phase,
-            cycle=cycle,
-            depends_on_task_ids=depends_on_task_ids,
-            start_assignee=start_assignee,
+            requester_session_id=requester_session_id, requester_thread_id=requester_thread_id,
+            team_id=team_id, assignee_thread_id=assignee_thread_id, title=title, description=description,
+            phase=phase, cycle=cycle, depends_on_task_ids=depends_on_task_ids, start_assignee=start_assignee,
         )
-
         accepted = None
         if start_assignee:
             try:
-                accepted = await self._session_orchestrator.create_and_run_internal(
-                    assignee_session_id,
-                    task_assignment_message(board=board, task=task),
+                accepted = await self._orchestrator.submit_runtime_event(
+                    requester_session_id, task_assignment_message(board=board, task=task), thread_id=assignee_thread_id,
+                    source_id=f"team:{team_id}:task:{task.task_id}:assignment",
+                    idempotency_key=f"team-assignment:{task.task_id}",
                 )
             except Exception as error:
                 await self._boards.set_task_dispatch_failure(
-                    team_id=team_id,
-                    task_id=task.task_id,
-                    actor_session_id=requester_session_id,
-                    error=str(error),
+                    session_id=requester_session_id, team_id=team_id, task_id=task.task_id,
+                    actor_thread_id=requester_thread_id, error=str(error),
                 )
-                raise RuntimeError(
-                    "团队任务已记录，但目标 Session Job 启动失败: "
-                    f"team_id={team_id} task_id={task.task_id} error={error}"
-                ) from error
+                raise RuntimeError(f"团队任务已记录，目标线程调度失败: team_id={team_id} task_id={task.task_id}: {error}") from error
             board, task = await self._boards.set_task_dispatched(
-                team_id=team_id,
-                task_id=task.task_id,
-                actor_session_id=requester_session_id,
-                job_id=accepted.job_id,
+                session_id=requester_session_id, team_id=team_id, task_id=task.task_id,
+                actor_thread_id=requester_thread_id, job_id=accepted.job_id,
             )
-        return TeamTaskOperationDTO(
-            board=self._boards.with_recent_events(board),
-            task=task,
-            dispatched_job_id=accepted.job_id if accepted is not None else None,
-        )
+        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=accepted.job_id if accepted else None)
 
-    async def update_task(
-        self,
-        *,
-        requester_session_id: str,
-        team_id: str,
-        task_id: str,
-        status: TeamTaskStatus,
-        summary: str,
-    ) -> TeamTaskOperationDTO:
+    async def update_task(self, *, requester_session_id: str, requester_thread_id: str, team_id: str,
+                          task_id: str, status: TeamTaskStatus, summary: str) -> TeamTaskOperationDTO:
         board, task = await self._boards.update_task(
-            requester_session_id=requester_session_id,
-            team_id=team_id,
-            task_id=task_id,
-            status=status,
-            summary=summary,
+            requester_session_id=requester_session_id, requester_thread_id=requester_thread_id,
+            team_id=team_id, task_id=task_id, status=status, summary=summary,
         )
-        notification = None
-        if (
-            requester_session_id != board.coordinator_session_id
-            and status in RESOLUTION_STATUSES
-        ):
-            try:
-                notification = await self._session_orchestrator.create_and_run_internal(
-                    board.coordinator_session_id,
-                    task_update_message(board=board, task=task),
-                )
-            except Exception as error:
-                raise RuntimeError(
-                    "团队任务状态已保存，但协调者通知 Job 启动失败: "
-                    f"team_id={team_id} task_id={task_id} error={error}"
-                ) from error
-        return TeamTaskOperationDTO(
-            board=self._boards.with_recent_events(board),
-            task=task,
-            dispatched_job_id=(
-                notification.job_id if notification is not None else None
-            ),
-        )
+        accepted = None
+        if requester_thread_id != board.coordinator_thread_id and status in RESOLUTION_STATUSES:
+            accepted = await self._orchestrator.submit_runtime_event(
+                requester_session_id, task_update_message(board=board, task=task), thread_id=board.coordinator_thread_id,
+                source_id=f"team:{team_id}:task:{task_id}:update",
+                idempotency_key=f"team-update:{task_id}:{board.version}",
+            )
+        return TeamTaskOperationDTO(board=board, task=task, dispatched_job_id=accepted.job_id if accepted else None)

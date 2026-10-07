@@ -15,15 +15,23 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_job_service, verify_local_token
+from app.api.deps import get_job_service, verify_local_token, workspace_container_scope
+from app.core.identifier import create_prefixed_id
+from app.core.path_utils import workspace_context
 from app.main import app
 from app.schemas.internal_v2.common import JobStatus
 from app.services.business.job.service import JobService, JobState
+from tests.support.job_thread_fixture import (
+    job_fixture_execution_binding,
+    job_fixture_thread_id,
+)
 
 
 class _NeverFinishExecutor:
@@ -45,7 +53,7 @@ def _job(job_id: str, session_id: str, status: JobStatus) -> JobState:
         message_id=f"msg_{job_id}",
         message_created_at=datetime.now(UTC).isoformat(),
         agent_id="default",
-        status=status,
+        status=status, execution_binding=job_fixture_execution_binding(job_id), thread_id=job_fixture_thread_id(session_id),
     )
 
 
@@ -58,19 +66,31 @@ def service(session_lifecycle_guard) -> JobService:
     )
 
 
-def _client(service: JobService) -> TestClient:
+def _client(service: JobService, workspace_root: Path) -> TestClient:
+    workspace_id = "00000000-0000-4000-8000-000000000001"
+
+    async def bind_workspace() -> AsyncIterator[None]:
+        with workspace_context(workspace_id, workspace_root):
+            yield
+
     app.dependency_overrides[get_job_service] = lambda: service
     app.dependency_overrides[verify_local_token] = lambda: "local"
-    return TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides[workspace_container_scope] = bind_workspace
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers={"X-BoxTeam-Workspace-Id": workspace_id},
+    )
 
 
-def test_pause_without_execution_task_maps_to_409(service: JobService) -> None:
+def test_pause_without_execution_task_maps_to_409(service: JobService, tmp_path: Path) -> None:
     """running 但已无执行任务的 Job 被暂停 → 409 + 纯文本 detail（原 500 + 类名）。"""
-    service._jobs["job_no_task"] = _job("job_no_task", "ses_a", JobStatus.running)
-    client = _client(service)
+    job_id = create_prefixed_id("job")
+    service._jobs[job_id] = _job(job_id, "ses_a", JobStatus.running)
+    client = _client(service, tmp_path)
     try:
         response = client.post(
-            "/api/v1/jobs/job_no_task/control",
+            f"/api/v1/jobs/{job_id}/control",
             json={"action": "pause"},
             headers={"X-Request-ID": "req_no_task"},
         )
@@ -80,12 +100,12 @@ def test_pause_without_execution_task_maps_to_409(service: JobService) -> None:
     assert response.status_code == 409
     assert response.headers["X-Request-ID"] == "req_no_task"
     assert response.json() == {
-        "detail": "Job 没有可暂停的执行任务: job_id=job_no_task status=running",
+        "detail": f"Job 没有可暂停的执行任务: job_id={job_id} status=running",
         "request_id": "req_no_task",
     }
 
 
-def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService) -> None:
+def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService, tmp_path: Path) -> None:
     """queued 但不在 pending 队列的 Job 被取消 → 409 + 纯文本 detail。
 
     说明：``control_service`` 的 ``elif job.status == queued`` 分支写的是
@@ -94,11 +114,12 @@ def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService) ->
     因此 ``JobControlRuntimeError.queue_mismatch`` 在当前实现下不可达；此处锁住的是
     真实可达路径（``ValueError`` 经 ``_job_control_http_error`` 落 409，不泄漏 repr）。
     """
-    service._jobs["job_orphan"] = _job("job_orphan", "ses_b", JobStatus.queued)
-    client = _client(service)
+    job_id = create_prefixed_id("job")
+    service._jobs[job_id] = _job(job_id, "ses_b", JobStatus.queued)
+    client = _client(service, tmp_path)
     try:
         response = client.post(
-            "/api/v1/jobs/job_orphan/control",
+            f"/api/v1/jobs/{job_id}/control",
             json={"action": "cancel"},
             headers={"X-Request-ID": "req_queue_mismatch"},
         )
@@ -107,19 +128,20 @@ def test_cancel_queued_job_absent_from_queue_maps_to_409(service: JobService) ->
 
     assert response.status_code == 409
     assert response.json() == {
-        "detail": "队列中不存在 Job: job_id=job_orphan",
+        "detail": f"队列中不存在 Job: job_id={job_id}",
         "request_id": "req_queue_mismatch",
     }
     # 绝不泄漏内部异常类名。
     assert "JobControlRuntimeError" not in response.text
 
 
-def test_unknown_job_still_maps_to_404(service: JobService) -> None:
+def test_unknown_job_still_maps_to_404(service: JobService, tmp_path: Path) -> None:
     """未知 Job 仍落 404：新增的 RuntimeError 归口不得吞掉既有分类。"""
-    client = _client(service)
+    job_id = create_prefixed_id("job")
+    client = _client(service, tmp_path)
     try:
         response = client.post(
-            "/api/v1/jobs/job_missing/control",
+            f"/api/v1/jobs/{job_id}/control",
             json={"action": "cancel"},
             headers={"X-Request-ID": "req_missing"},
         )
@@ -128,6 +150,6 @@ def test_unknown_job_still_maps_to_404(service: JobService) -> None:
 
     assert response.status_code == 404
     assert response.json() == {
-        "detail": "Job job_missing not found",
+        "detail": f"Job {job_id} not found",
         "request_id": "req_missing",
     }

@@ -67,6 +67,10 @@ def validate_commit_contract(
         raise ItemSchemaError(f"未知 storage commit outcome: {outcome}")
     if commit_kind == CommitKind.ACCEPTANCE.value and commit_mode != CommitMode.ITEM_BEARING.value:
         raise ItemSchemaError("acceptance commit 必须是 item-bearing")
+    if commit_kind == CommitKind.EXECUTION_ADMISSION.value and (
+        outcome is not None or item_count not in {0, 1}
+    ):
+        raise ItemSchemaError("execution_admission 只允许一个 notice 或零 item seed/reference，不得伪造终态")
     if commit_kind == CommitKind.ASSEMBLY_SEALED.value and commit_mode != CommitMode.METADATA_ONLY.value:
         raise ItemSchemaError("assembly_sealed commit 必须是 metadata-only")
     if commit_kind == CommitKind.ITEM_CONVERGENCE.value and commit_mode != CommitMode.ITEM_BEARING.value:

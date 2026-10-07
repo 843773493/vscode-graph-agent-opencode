@@ -45,8 +45,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.service import RolloutStorage
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
+)
+from app.services.mapping.itemized.provider_request import (
+    project_runtime_notice_content,
 )
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from tests.support.message_service import build_message_service
@@ -289,10 +293,12 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preaccepted", [False, True])
 async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
     tmp_path,
     session_bundle_factory,
     accept_previous_message,
+    preaccepted,
 ):
     session_id = "ses_019bddf6d61b70acb52e1541440e0c6c"
     session_bundle_factory(tmp_path, session_id)
@@ -336,6 +342,20 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
             "message_metadata": {"turn_id": "turn_after_stale_task"},
         },
     )
+    if preaccepted:
+        saver.accept_turn(
+            session_id,
+            thread_id=thread_id,
+            accepted_ingress_id="msg_after_stale_task",
+            acceptance_idempotency_key="message:msg_after_stale_task",
+            job_id="job_after_stale_task",
+            admission_idempotency_key="admission-job-after-stale-task",
+            payload=message.content,
+            turn_id="turn_after_stale_task",
+            root_item_id="item-msg_after_stale_task",
+        )
+        # 新 Saver 从磁盘读取已接受 root 与旧 checkpoint 控制态。
+        saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -352,6 +372,14 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
             )
             is True
         )
+        assert persist_user_message_checkpoint(
+            checkpointer=saver,
+            session_id=session_id,
+            thread_id=thread_id,
+            job_id="job_after_stale_task",
+            admission_idempotency_key="admission-job-after-stale-task",
+            message=message,
+        ) is False
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -368,6 +396,79 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
         item.response_metadata["message_id"]
         for item in checkpoint["channel_values"]["messages"]
     ] == ["msg_previous", "msg_after_stale_task"]
+
+
+@pytest.fixture
+def seed_execution_intent() -> InternalExecutionIntent:
+    return InternalExecutionIntent(
+        message_id="msg_seed_reference",
+        execution_id="execution-seed-reference",
+        admission_idempotency_key="admission-seed-reference",
+        input_reference_json=json.dumps({
+            "creation_idempotency_key": "creation-seed-reference",
+            "task_seed_hash": sha256_jcs({"content": "冻结任务"}),
+            "reference_binding_hash": sha256_jcs({"references": []}),
+        }),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale_tasks", [False, True])
+async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_tasks(
+    tmp_path, session_bundle_factory, accept_previous_message, seed_execution_intent, stale_tasks,
+):
+    session_id = "ses_019c21595f0c70388c187be23ef92b9b"
+    session_bundle_factory(tmp_path, session_id)
+    saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
+    previous_message = accept_previous_message(saver, session_id)
+    thread_id = saver._storage.main_thread_id(session_id)
+    config = build_checkpoint_config(thread_id)
+    channels = {"messages": [previous_message]}
+    versions = {"messages": "1"}
+    sends = [Send("tools", {"id": "call_seed_stale", "name": "exec_command", "args": {}})]
+    if stale_tasks:
+        channels["__pregel_tasks"] = sends
+        versions["__pregel_tasks"] = "2"
+    with session_thread_owner_scope(
+        MutationIntentOwner(session_id, thread_id), langgraph_thread_id=thread_id,
+    ):
+        await saver.aput(
+            config,
+            {
+                "channel_values": channels,
+                "channel_versions": versions,
+                "updated_channels": list(channels),
+                "pending_sends": sends if stale_tasks else [],
+                "id": "ckpt-seed-reference",
+            },
+            {"source": "test", "step": 1, "writes": {}},
+            versions,
+        )
+        arguments = {
+            "checkpointer": saver, "session_id": session_id, "thread_id": thread_id,
+            "job_id": "job-seed-reference",
+            "admission_idempotency_key": seed_execution_intent.admission_idempotency_key,
+            "message": None, "execution_intent": seed_execution_intent,
+        }
+        assert persist_user_message_checkpoint(**arguments) is stale_tasks
+        assert persist_user_message_checkpoint(**arguments) is False
+        latest = await saver.aget_tuple(config)
+    messages = latest.checkpoint["channel_values"]["messages"]
+    assert len(messages) == 1
+    assert messages[0].response_metadata["message_id"] == "msg_previous"
+    assert latest.checkpoint["pending_sends"] == []
+    assert "__pregel_tasks" not in latest.checkpoint["channel_values"]
+    assert "__pregel_tasks" not in latest.checkpoint["channel_versions"]
+    admission = saver.execution_admission(
+        session_id, thread_id=thread_id, execution_id=seed_execution_intent.execution_id,
+    )
+    assert (admission.session_id, admission.thread_id) == (session_id, thread_id)
+    assert admission.execution_origin == "internal" and admission.turn_id is None
+    assert admission.job_id == "job-seed-reference"
+    assert [item.item_id for item in saver.read_canonical_items(session_id)] == ["item-msg_previous"]
+    with sqlite3.connect(saver._storage.index_path(session_id, thread_id=thread_id)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM turn_records").fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM item_catalog").fetchone() == (1,)
 
 
 @pytest.mark.asyncio
@@ -822,7 +923,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
 
 
 @pytest.mark.asyncio
-async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_state(
+async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     tmp_path,
     session_bundle_factory,
 ):
@@ -933,7 +1034,30 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
                 execution_id="execution-checkpoint-reminder",
                 admission_idempotency_key="admission-checkpoint-reminder",
             ),
-        )
+        ) is False
+    reminder_item = saver.get_canonical_item(
+        session_id,
+        thread_id=thread_id,
+        item_id=f"item-{reminder_message_id}",
+    )
+    assert reminder_item is not None
+    assert reminder_item.semantic_kind == "runtime_notice"
+    assert reminder_item.turn_id is None and reminder_item.turn_scope == "pending_next_turn"
+    assert reminder_item.wire_role == "user"
+    assert reminder_item.producer_ref == {
+        "producer_kind": "runtime",
+        "producer_id": reminder_message_id,
+        "invocation_id": "execution-checkpoint-reminder",
+    }
+    assert reminder_item.payload == prepared_reminder.content
+    reminder_admission = saver.execution_admission(
+        session_id,
+        thread_id=thread_id,
+        execution_id="execution-checkpoint-reminder",
+    )
+    assert reminder_admission.execution_origin == "internal"
+    assert reminder_admission.turn_id is None
+    assert (reminder_admission.session_id, reminder_admission.thread_id) == (session_id, thread_id)
 
     with session_thread_owner_scope(
         MutationIntentOwner(session_id, thread_id),
@@ -1002,15 +1126,23 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_in_agent_st
         tmp_path, checkpointer=saver
     ).get_agent_state_messages(session_id)
     records = [json.loads(line) for line in state_snapshot.jsonl.splitlines()]
-    assert len(records) == 6
-    assert records[3]["role"] == "user"
-    assert "<system_reminder>" in records[3]["content"]
-    assert reminder in records[3]["content"]
+    assert [record["role"] for record in records] == ["user", "assistant", "tool", "assistant"]
+    assert all("<system_reminder>" not in json.dumps(record, ensure_ascii=False) for record in records)
     assert records[-1]["content"] == [
         {"type": "reasoning", "reasoning": final_reasoning},
         {"type": "text", "text": final_text},
     ]
     assert first_reasoning not in json.dumps(records[-1], ensure_ascii=False)
+    assert saver.get_canonical_item(
+        session_id,
+        thread_id=thread_id,
+        item_id=reminder_item.item_id,
+    ) == reminder_item
+    assert project_runtime_notice_content(reminder_item.payload) == prepared_reminder.content
+    (request_notice,) = project_canonical_items((reminder_item,), include_runtime_notices=True)
+    assert isinstance(request_notice, HumanMessage)
+    assert request_notice.content == prepared_reminder.content
+    assert project_canonical_items((reminder_item,)) == []
 
     visible_messages = await build_message_service(tmp_path, checkpointer=saver).list(
         session_id,

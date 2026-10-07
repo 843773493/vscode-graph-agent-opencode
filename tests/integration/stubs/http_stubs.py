@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +15,7 @@ from typing import Any
 @dataclass(slots=True)
 class HTTPStubState:
     requests: list[dict[str, object]] = field(default_factory=list)
+    response_callback: Callable[[dict[str, object]], dict[str, object]] | None = None
 
     def requests_for(self, method: str, path: str) -> list[dict[str, object]]:
         return [
@@ -51,7 +52,7 @@ def generation_target_stub(
     port: int,
     *,
     output_workspace_id: str,
-    backend_workspace_id: str | None = None,
+    backend_workspace_id: str,
     catalog_items: list[dict[str, object]] | None = None,
     catalog_revision: str = "rev_e2e_generation_stub",
 ) -> Iterator[HTTPStubState]:
@@ -63,10 +64,7 @@ def generation_target_stub(
             return
 
         def has_expected_backend_identity(self) -> bool:
-            if (
-                backend_workspace_id is None
-                or self.headers.get("X-BoxTeam-Workspace-Id") == backend_workspace_id
-            ):
+            if self.headers.get("X-BoxTeam-Workspace-Id") == backend_workspace_id:
                 return True
             _json_response(
                 self,
@@ -82,21 +80,12 @@ def generation_target_stub(
             if not self.has_expected_backend_identity():
                 return
             if self.path == "/api/v1/health":
-                if backend_workspace_id is not None:
-                    _json_response(
-                        self,
-                        {
-                            "status": "ok",
-                            "workspace_id": backend_workspace_id,
-                            "process_id": os.getpid(),
-                        },
-                    )
-                    return
                 _json_response(
                     self,
                     {
-                        "data": {"status": "ok"},
-                        "request_id": "req_e2e_generation_stub",
+                        "status": "ok",
+                        "workspace_id": backend_workspace_id,
+                        "process_id": os.getpid(),
                     },
                 )
                 return
@@ -294,6 +283,13 @@ def openai_chat_stub(
                     status=500,
                 )
                 return
+            # 仅替换外部模型响应；生产工具、Job 与 Provider 链路保持真实。
+            reply = (
+                state.response_callback(payload)
+                if state.response_callback is not None
+                else {"content": "E2E 生成器替身回复"}
+            )
+            finish_reason = str(reply.pop("finish_reason", "tool_calls" if reply.get("tool_calls") else "stop"))
             if payload.get("stream") is True:
                 chunks = [
                     {
@@ -306,7 +302,7 @@ def openai_chat_stub(
                                 "index": 0,
                                 "delta": {
                                     "role": "assistant",
-                                    "content": "E2E 生成器替身回复",
+                                    **reply,
                                 },
                                 "finish_reason": None,
                             }
@@ -321,7 +317,7 @@ def openai_chat_stub(
                             {
                                 "index": 0,
                                 "delta": {},
-                                "finish_reason": "stop",
+                                "finish_reason": finish_reason,
                             }
                         ],
                         "usage": {
@@ -353,9 +349,9 @@ def openai_chat_stub(
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": "E2E 生成器替身回复",
+                                **reply,
                             },
-                            "finish_reason": "stop",
+                            "finish_reason": finish_reason,
                         }
                     ],
                     "usage": {

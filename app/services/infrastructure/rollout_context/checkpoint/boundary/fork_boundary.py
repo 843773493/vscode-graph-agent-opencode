@@ -22,8 +22,9 @@ class RolloutForkBoundaryOwnerMixin:
 
     def validate_fork_source_closure(
         self,
-        thread_id: str,
+        session_id: str,
         *,
+        thread_id: str,
         checkpoint_ns: str,
         source_checkpoint_id: str | None,
         cutoff_message_sequence: int | None,
@@ -35,6 +36,7 @@ class RolloutForkBoundaryOwnerMixin:
         前缀。冲突时抛出 ToolProtocolBoundaryConflict，code 为
         tool-protocol-boundary-conflict；本方法全程 read-only。
         """
+        session_id = strict_text(session_id, field="fork_boundary.session_id")
         thread_id = strict_text(thread_id, field="fork_boundary.thread_id")
         strict_text(
             checkpoint_ns,
@@ -52,8 +54,6 @@ class RolloutForkBoundaryOwnerMixin:
                 "fork_boundary.cutoff_message_sequence 必须是 int 或 None: "
                 + repr(cutoff_message_sequence)
             )
-        session_id = thread_id
-        thread_id = self.main_thread_id(session_id)
         with self._connect(
             thread_id, checkpoint_ns, session_id=session_id, read_only=True
         ) as connection:
@@ -75,10 +75,11 @@ class RolloutForkBoundaryOwnerMixin:
                 return
             view_id = strict_text(source[6], field="checkpoints.view_id")
             source_sequences = self._view_message_sequences(
-                session_id,
+                thread_id,
                 checkpoint_ns,
                 view_id,
                 set(),
+                session_id=session_id,
                 connection=connection,
             )
             cutoff = len(source_sequences)

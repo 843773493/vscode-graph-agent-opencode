@@ -59,12 +59,21 @@ class TerminalOperations(ResourceOperations):
     async def mark_terminal_backgrounded(self, terminal_id: str) -> TerminalSnapshot:
         return await self._call(terminal_id, lambda: self._owner._transport.mark_terminal_backgrounded(terminal_id))
 
-    async def claim_terminal_steering(self, terminal_id: str) -> TerminalSnapshot:
-        return await self._call(terminal_id, lambda: self._owner._transport.claim_terminal_steering(terminal_id))
+    async def claim_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+    ) -> TerminalSnapshot:
+        return await self._call(terminal_id, lambda: self._owner._transport.claim_terminal_steering(
+            terminal_id, completion_event_id=completion_event_id,
+            command_start_sequence=command_start_sequence,
+        ))
 
-    async def finish_terminal_steering(self, terminal_id: str, *, dispatched: bool) -> TerminalSnapshot:
+    async def finish_terminal_steering(
+        self, terminal_id: str, *, completion_event_id: str, command_start_sequence: int,
+        dispatched: bool,
+    ) -> TerminalSnapshot:
         return await self._call(terminal_id, lambda: self._owner._transport.finish_terminal_steering(
-            terminal_id, dispatched=dispatched,
+            terminal_id, completion_event_id=completion_event_id,
+            command_start_sequence=command_start_sequence, dispatched=dispatched,
         ))
 
     async def kill_terminal(self, terminal_id: str, *, reason: str = "model_requested") -> TerminalSnapshot:
@@ -113,4 +122,3 @@ class TerminalOperations(ResourceOperations):
             except BaseException as error:
                 self._owner._unknown(record, error)
                 raise
-

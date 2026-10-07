@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
-
 from app.core.identifier import to_epoch_ms
 from app.core.session_catalog_store import (
     SessionCatalogNode,
@@ -25,6 +23,7 @@ from app.core.session_catalog_store import (
 from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.canonical_id_at import thread_id_at, thread_id_for_name_at
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 
 @dataclass(frozen=True, slots=True)

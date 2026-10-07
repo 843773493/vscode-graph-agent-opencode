@@ -20,13 +20,19 @@ class _FakeTerminalClient:
         self.claimed: set[str] = set()
         self.sweep_error: Exception | None = None
         self.closed_session: str | None = None
+        self.operation_active = False
+        self.finish_failures = 0
 
     @asynccontextmanager
     async def operation(self, **arguments: object) -> AsyncIterator[_FakeTerminalClient]:
         assert arguments["thread_id"] == "thr_018f0000000070008000000000000001"
         if arguments["session_id"] == self.closed_session:
             raise SessionDeletionPendingError("来源 Session 正在删除")
-        yield self
+        self.operation_active = True
+        try:
+            yield self
+        finally:
+            self.operation_active = False
 
     async def sweep_orphans(self) -> list[dict[str, object]]:
         if self.sweep_error is not None:
@@ -47,19 +53,38 @@ class _FakeTerminalClient:
     async def claim_terminal_steering(
         self,
         terminal_id: str,
+        *,
+        completion_event_id: str,
+        command_start_sequence: int,
     ) -> dict[str, object]:
-        if terminal_id in self.claimed:
+        terminal = next(t for t in self.terminals if t["terminal_id"] == terminal_id)
+        assert (completion_event_id, command_start_sequence) == (
+            terminal["completion_event_id"], terminal["command_start_sequence"],
+        )
+        if terminal["steering_dispatched"]:
             return {"claimed": False}
         self.claimed.add(terminal_id)
+        terminal["steering_dispatching"] = True
         return {"claimed": True}
 
     async def finish_terminal_steering(
         self,
         terminal_id: str,
         *,
+        completion_event_id: str,
+        command_start_sequence: int,
         dispatched: bool,
     ) -> dict[str, object]:
+        terminal = next(t for t in self.terminals if t["terminal_id"] == terminal_id)
+        assert (completion_event_id, command_start_sequence) == (
+            terminal["completion_event_id"], terminal["command_start_sequence"],
+        )
+        if self.finish_failures:
+            self.finish_failures -= 1
+            raise ConnectionError("finish 回执丢失")
         self.finished.append((terminal_id, dispatched))
+        terminal["steering_dispatching"] = False
+        terminal["steering_dispatched"] = dispatched
         if not dispatched:
             self.claimed.remove(terminal_id)
         return {"terminal_id": terminal_id}
@@ -86,18 +111,22 @@ class _FlakyTerminalClient(_FakeTerminalClient):
 
 
 class _FakeSessionOrchestrator:
-    def __init__(self, *, error: Exception | None = None) -> None:
+    def __init__(self, *, error: Exception | None = None, terminal_client: _FakeTerminalClient | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
         self.error = error
+        self.terminal_client = terminal_client
 
-    async def create_and_run_internal(
+    async def submit_runtime_event(
         self,
         session_id: str,
         message: object,
         *,
+        source_id: str, idempotency_key: str,
         delivery_policy: str = "after_turn",
-        thread_id: str | None = None,
+        thread_id: str,
     ) -> None:
+        if self.terminal_client is not None:
+            assert not self.terminal_client.operation_active
         if self.error is not None:
             raise self.error
         self.calls.append(
@@ -106,6 +135,8 @@ class _FakeSessionOrchestrator:
                 "message": message,
                 "delivery_policy": delivery_policy,
                 "thread_id": thread_id,
+                "source_id": source_id,
+                "idempotency_key": idempotency_key,
             }
         )
 
@@ -126,6 +157,7 @@ def completed_terminal() -> dict[str, object]:
         "steering_dispatching": False,
         "steering_dispatched": False,
         "completion_event_id": "terminal_completed:term_completed:4",
+        "command_start_sequence": 1,
     }
 
 
@@ -134,7 +166,7 @@ async def test_scan_dispatches_one_terminal_completion_message(
     completed_terminal: dict[str, object],
 ) -> None:
     terminal_client = _FakeTerminalClient([completed_terminal])
-    orchestrator = _FakeSessionOrchestrator()
+    orchestrator = _FakeSessionOrchestrator(terminal_client=terminal_client)
     service = TerminalSteeringService(
         terminal_client=terminal_client,
         session_orchestrator=orchestrator,  # type: ignore[arg-type]
@@ -150,6 +182,27 @@ async def test_scan_dispatches_one_terminal_completion_message(
     assert message.metadata["structured_prompt_kind"] == (
         "terminal_execution_completed"
     )
+    assert terminal_client.finished == [("term_completed", True)]
+
+
+@pytest.mark.asyncio
+async def test_pending_claim_retries_original_event_after_finish_failure(
+    completed_terminal: dict[str, object],
+) -> None:
+    terminal_client = _FakeTerminalClient([completed_terminal])
+    terminal_client.finish_failures = 1
+    orchestrator = _FakeSessionOrchestrator(terminal_client=terminal_client)
+    service = TerminalSteeringService(terminal_client=terminal_client, session_orchestrator=orchestrator)
+
+    with pytest.raises(ExceptionGroup, match="未收敛"):
+        await service.scan_once()
+    assert completed_terminal["steering_dispatching"] is True
+    await service.scan_once()
+
+    assert len(orchestrator.calls) == 2
+    assert orchestrator.calls[0]["idempotency_key"] == orchestrator.calls[1]["idempotency_key"]
+    assert orchestrator.calls[0]["message"].metadata == orchestrator.calls[1]["message"].metadata
+    assert completed_terminal["steering_dispatched"] is True
     assert terminal_client.finished == [("term_completed", True)]
 
 

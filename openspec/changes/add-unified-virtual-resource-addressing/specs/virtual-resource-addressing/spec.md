@@ -447,6 +447,8 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 软件内部的配置、skill、状态与资源引用 MUST 默认以 URI 传递；real path MUST 只在最后访问点出现。任何新增持久化字段若需定位资源，MUST 使用 `identity + URI(+ 独立 revision 字段)` 组合，MUST NOT 存储 real path。
 
+该寻址义务只适用于需要定位资源的引用；内部语义聚合是否拥有可访问地址，MUST 按本 capability 的 requirement「内部语义聚合资源不得伪造 URI」处理，不得把稳定身份误当可访问地址。
+
 **来源控制与activation迁移 MUST 表达为必要字段、新写入与读侧切换**，由各自唯一owner核对当前schema与真实producer，不以URI仍未落盘为准入条件。旧开发中间数据按已授权策略清理，MUST NOT 为其增加扫描升级、兼容双读或URI alias。新的URI持久化仍遵守本requirement的身份/地址/位置边界；附件和工具结果旧scheme的生成、读取及投影按 `add-unified-resource-file-tools` 的消费合同完整迁移，不因此扫描旧业务数据。
 
 #### Scenario: 新增持久化字段不得存 real path
@@ -456,13 +458,36 @@ ResourceIdentity MUST 不透明、稳定且 revision-free。同一逻辑名出�
 
 #### Scenario: 模型可见载荷只带 URI
 
-- **WHEN** 资源引用进入模型可见的 prompt、工具结果或历史投影
+- **WHEN** 可寻址资源引用进入模型可见的 prompt、工具结果或历史投影
 - **THEN** 它们携带 URI 与独立 revision 标识，MUST NOT 携带 real path 或 credential
 
 #### Scenario: 迁移是新写字段
 
 - **WHEN** 某个既有持久化字段需要承载资源引用
 - **THEN** 它以 identity + URI 的新格式新写入并切换读路径，旧写入形态物理下线，且不构造任何存量扫描或数据改写
+
+### Requirement: 内部语义聚合资源不得伪造 URI
+
+URI SHALL 只表达由资源 owner 公布模板与访问合同的真实可寻址目标。只用于 Registry 发布和 activation 冻结的内部语义聚合，如果没有这种目标，MUST 保留自身稳定 resource identity、facet、revision、payload 和 lineage，并把 typed `display_uri` 显式保存为 NULL；该字段仍是必填字段，空字符串、缺字段和伪造地址均不得代替 NULL。当前 MCP catalog 聚合与 Skill catalog 聚合属于此类；可访问 Skill 条目和 AGENTS 来源仍必须保留真实 URI。MUST NOT 为内部聚合新增同义 kind、伪装成某个 Skill 文件，或把 resource_id 当作可解析 URI。
+
+无 URI 是该资源 owner 在发布前明确选择的表示，不是解析失败、来源不可用、未知 kind、失权或缺失字段的兜底。每个非 NULL URI MUST 经唯一构造/grammar 与相应 owner binding 校验，非法输入 MUST 显式失败，MUST NOT 转为 NULL。消费者不得把 NULL 转成当前工作区、真实路径、空 URI 或某个默认资源。
+
+这一合同 MUST 在同一完整闭包迁移 descriptor/snapshot、Registry、provenance/serde、activation schema/writer/reader、clone/fork/detail manifest 以及必要的 DTO/协议/投影和 fixture；不增加第二 writer、迁移旧开发数据或兼容双读。NULL 按既有 canonical JSON 规则作为 JSON null 参与原有字段的完整性/hash，不省略字段、不另设 hash 算法。sealed restore/retry/fork MUST 保留原 NULL 与绑定身份，不能根据当前 catalog 补造地址。无 URI 不改变可见性和受保护正文规则，也不让内部 identity 成为普通模型/history 的额外展示字段。
+
+#### Scenario: 内部 catalog 没有可访问地址
+
+- **WHEN** MCP 或 Skill catalog 聚合发布并进入 activation freeze、seal、restart restore 或 fork
+- **THEN** 其 display_uri 为 NULL，原 resource identity、facet、revision、payload、lineage 与成员语义按原合同保留；Skill 条目的 URI 仍可定位原合法资源，不生成 catalog 的伪地址
+
+#### Scenario: 非法地址不能降级为无地址
+
+- **WHEN** producer 为有可寻址目标的资源提供 grammar 不合法或与 owner binding 不一致的 URI
+- **THEN** 发布或请求显式失败，不把该值替换为 NULL，也不改投默认或当前激活资源
+
+#### Scenario: 无地址保持封存与投影边界
+
+- **WHEN** 无 URI 的内部聚合被持久化、恢复或投影
+- **THEN** 必填 display_uri 字段保留 NULL，完整性仍覆盖该字段；不从当前来源补地址，不泄露 locator、内部身份或受保护正文，不把缺地址误报为已可导航
 
 ### Requirement: 配置来源 URI 必须使用 config kind 且只标识来源文件
 
@@ -560,7 +585,7 @@ config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯�
 
 系统 MUST 把 URI scope 由 `builtin` 正名为 `inline`，并 MUST 把 skill catalog 的 `layer` 名同步由 `bundled` 正名为 `inline`（理由：同一概念三个名字——layer `bundled`、scope `builtin`、config layer `inline`——正是本仓库要求根除的）。两处都改名后，`app/agents/skill_runtime.py` 的映射 shim 退化为恒等映射并**已被 `298ef599` 物理删除**（`layer_order` 改为 `(inline, gateway, workspace)`，`scope = {...}[layer]` 改名 shim 已不存在）。
 
-改名 MUST 带影响评估结论并据此定级：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进**内存** `ResourceRegistry`（`semantic_registry.py:20-23` 三个 dict 无持久化写入），全仓唯一持久化 `display_uri` 列的写入方生产从不被调用，故本改名属**契约级调整而非数据迁移**，MUST NOT 构造存量迁移任务。
+改名 MUST 带影响评估结论并据此定级；`layer` 进入 entry identity 与 catalog payload，scope/layer 的统一是契约调整，不构造旧数据扫描或迁移。历史“display_uri writer 生产未调用”只描述当时基线，不能作为实施前置；当前 activation 新写入和恢复消费必须随真实调用闭包迁移，并遵守本 capability 的新写字段与内部聚合无 URI 合同。
 
 **真依赖 URI scope `builtin` 的位置**：`grammar.py` 现**已无 `builtin` 字面量**（`rg 'builtin' grammar.py` 零命中），scope 闭集 `_SCOPE_KEYWORDS`（`grammar.py:18`）已是 `{workspace, user, gateway, inline}`；改名的实际约束落在 `resolver.py` 的 scope 构造校验与 `require_scope_binding`（闭集映射已含 `inline`）。其余 `builtin` 命中（工具 `origin="builtin"`、主题来源、`builtin_tool_registry` 等）是无关同名，MUST NOT 误改。
 
@@ -572,7 +597,7 @@ config `layer` MUST 只表示逻辑配置来源，其闭集与 `precedence` 唯�
 #### Scenario: 改名不构造存量迁移
 
 - **WHEN** 实施 scope/layer 正名
-- **THEN** 因相关字符串只进内存 registry 与响应、不落盘，MUST NOT 扫描或改写任何既有持久化记录
+- **THEN** 同步真实 producer 与新写入/读侧合同，MUST NOT 扫描或改写旧开发持久化记录，也不以是否已有生产写入决定是否保留双轨
 
 #### Scenario: 无关同名不被误改
 

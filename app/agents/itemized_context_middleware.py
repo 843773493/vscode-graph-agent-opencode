@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from inspect import getclosurevars
 from typing import Any
 from uuid import uuid4
@@ -13,6 +13,7 @@ from uuid import uuid4
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT
 from langchain.agents.structured_output import ToolStrategy
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
@@ -32,7 +33,12 @@ from app.core.model_delta_context import get_current_model_delta_sink
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
+from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
+from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
+    LangChainMessageCodec,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
@@ -117,6 +123,42 @@ def _request_wire_options(bound_model: object) -> dict[str, Any]:
     if not isinstance(kwargs, Mapping):
         raise TypeError("itemized context model binding 缺少有效 kwargs")
     return {key: value for key, value in kwargs.items() if key != "tools"}
+
+
+def _bind_response_model_call(
+    response: ModelResponse[Any] | ExtendedModelResponse[Any], *, model_call_id: str,
+) -> ModelResponse[Any] | ExtendedModelResponse[Any]:
+    """在本次 dispatch 返回边界保留真实 callback 身份，不从 vendor ID 推导。"""
+    model_response = response.model_response if isinstance(response, ExtendedModelResponse) else response
+    codec = LangChainMessageCodec()
+    identity = ItemProjectionIdentity(model_call_id=model_call_id)
+    messages = []
+    for message in model_response.result:
+        if isinstance(message, (AIMessage, ToolMessage)):
+            existing = codec.model_call_id(message)
+            if existing is not None and existing != model_call_id:
+                raise ValueError(
+                    "source-mismatch: dispatch response 的 model_call_id 冲突: "
+                    f"message_id={message.id!r}, expected={model_call_id!r}, actual={existing!r}"
+                )
+            if isinstance(message, ToolMessage):
+                matches = [
+                    call
+                    for assistant in messages if isinstance(assistant, AIMessage)
+                    for call in assistant.tool_calls
+                    if matches_tool_call_id(identity, call["id"], message.tool_call_id)
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "source-mismatch: dispatch ToolMessage 缺少唯一 emitting assistant: "
+                        f"tool_call_id={message.tool_call_id!r}"
+                    )
+            message = message.model_copy(update={
+                "response_metadata": {**message.response_metadata, "model_call_id": model_call_id},
+            })
+        messages.append(message)
+    bound = replace(model_response, result=messages)
+    return replace(response, model_response=bound) if isinstance(response, ExtendedModelResponse) else bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,12 +458,15 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             prepared["snapshot"], native_projection=prepared.get("native_projection"),
             callback_model_call_id=prepared["callback_model_call_id"],
         ):
-            return handler(
+            response = handler(
                 request.override(
                     messages=messages,
                     system_message=None,
                     tools=tools,
                 )
+            )
+            return _bind_response_model_call(
+                response, model_call_id=prepared["callback_model_call_id"],
             )
 
     async def awrap_model_call(
@@ -441,12 +486,15 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
             prepared["snapshot"], native_projection=prepared.get("native_projection"),
             callback_model_call_id=prepared["callback_model_call_id"],
         ):
-            return await handler(
+            response = await handler(
                 request.override(
                     messages=messages,
                     system_message=None,
                     tools=tools,
                 )
+            )
+            return _bind_response_model_call(
+                response, model_call_id=prepared["callback_model_call_id"],
             )
 
 

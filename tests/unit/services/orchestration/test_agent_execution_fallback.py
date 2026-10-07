@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
@@ -131,6 +131,7 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
             "mark_execution_lost",
             "frozen_resource_activation_for_admission",
             "save_resource_activation_snapshot",
+            "register_execution_retry_source",
         ]
     )
     saver.frozen_resource_activation_for_admission.return_value = None
@@ -166,6 +167,12 @@ def mock_dependencies(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRe
         "execution_id": "execution_test",
     }
     saver.execution_for_turn.return_value = "execution_test"
+    saver.register_execution_retry_source.side_effect = (
+        lambda admission, *, message_id, message: HumanMessage(
+            id=message_id, content=message.content,
+            response_metadata=dict(message.metadata),
+        )
+    )
     saver.execution_admission_for_job.side_effect = (
         lambda session_id, *, thread_id, job_id, checkpoint_ns: ExecutionAdmission(
             session_id=session_id,

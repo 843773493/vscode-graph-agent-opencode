@@ -27,7 +27,7 @@ class JobPendingRequestService:
         lock: asyncio.Lock,
         store: PendingRequestStoreProtocol | None,
         get_jobs: Callable[[], dict[str, PendingJob]],
-        get_current_jobs: Callable[[], dict[str, str]],
+        get_current_jobs: Callable[[], dict[tuple[str, str], str]],
     ) -> None:
         self._store = store
         self._store_lock = asyncio.Lock()
@@ -110,7 +110,7 @@ class JobPendingRequestService:
         if self._store is None:
             return
         async with self._store_lock:
-            latest = await self._controller.list(snapshot.session_id)
+            latest = await self._controller.list(snapshot.session_id, display=False)
             await self._store.save(latest.session_id, list(latest.requests))
 
     async def persist_current(self, session_id: str) -> None:

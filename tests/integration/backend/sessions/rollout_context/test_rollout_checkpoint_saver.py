@@ -976,6 +976,8 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
                 reminder="任务已超时，请根据已完成结果明确报告失败。",
                 response_metadata={"source": "job_timeout"},
                 checkpoint_source="job_timeout",
+                event_identity="timeout-event-job-1",
+                execution_id=admission.execution_id,
             )
             is True
         )
@@ -1035,6 +1037,13 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
     session_bundle_factory(sessions_dir, SESSION_ID)
     saver = RolloutCheckpointSaver(sessions_dir)
     thread_id = saver.resolve_main_thread_owner(SESSION_ID).thread_id
+    admission = _accept_user_execution(
+        saver,
+        SESSION_ID,
+        thread_id,
+        HumanMessage(content="需要超时提醒的任务", id="user-reminder-events"),
+        turn_id="turn-reminder-events",
+    )
 
     assert submit_checkpoint_reminder(
         checkpointer=saver,
@@ -1043,7 +1052,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         reminder="请继续处理超时任务。",
         response_metadata={"source": "job_timeout", "attempt": "first"},
         checkpoint_source="job_timeout",
-        event_identity="timeout-event-1",
+        event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
     # metadata key 顺序变化不能破坏同一事件的 canonical identity。
     assert submit_checkpoint_reminder(
@@ -1053,7 +1062,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         reminder="请继续处理超时任务。",
         response_metadata={"attempt": "first", "source": "job_timeout"},
         checkpoint_source="job_timeout",
-        event_identity="timeout-event-1",
+        event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
     assert submit_checkpoint_reminder(
         checkpointer=saver,
@@ -1062,7 +1071,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         reminder="请继续处理超时任务。",
         response_metadata={"source": "job_timeout", "attempt": "other"},
         checkpoint_source="job_timeout",
-        event_identity="timeout-event-2",
+        event_identity="timeout-event-2", execution_id=admission.execution_id,
     )
 
     with sqlite3.connect(
@@ -1132,7 +1141,7 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
                 reminder="故障注入提醒",
                 response_metadata={"source": "injected"},
                 checkpoint_source="injected",
-                event_identity="projection-failure",
+                event_identity="projection-failure", execution_id=admission.execution_id,
             )
 
         assert rollout_root.is_dir()

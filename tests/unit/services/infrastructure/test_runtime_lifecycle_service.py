@@ -9,7 +9,7 @@ import pytest
 
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
-from app.core.path_utils import get_session_path_resolver
+from app.core.path_utils import get_session_path_resolver, workspace_context
 from app.domain.itemized.execution_admission import UserExecutionIdentity
 from app.schemas.event import (
     JobFailedEvent,
@@ -155,14 +155,15 @@ async def test_force_interrupt_persists_event_and_cancels_job(
         agent_id="default",
         status=JobStatus.running,
         task=task,
-        thread_id="thr_runtime_test",
+        thread_id=create_prefixed_id("thr"),
         execution_binding=UserExecutionIdentity(job_id="job_running", turn_id=create_prefixed_id("turn"), admission_idempotency_key=create_prefixed_id("adm")),
     )
     jobs._jobs[job.job_id] = job
-    jobs._session_current_job[job.session_id] = job.job_id
+    jobs._thread_current_job[(job.session_id, job.thread_id)] = job.job_id
 
-    draining = await runtime.begin_drain()
-    forced = await runtime.force_interrupt()
+    with workspace_context(runtime._workspace_id, tmp_path):
+        draining = await runtime.begin_drain()
+        forced = await runtime.force_interrupt()
 
     assert [blocker.resource_id for blocker in draining.blockers] == ["job_running"]
     assert forced.lifecycle_state == "stopping"

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.services.infrastructure.rollout_context.runtime.detail_files import DetailFiles
@@ -140,7 +141,9 @@ class ContextPlanDetailStore:
         )
         return PreparedDetail(record, raw)
 
-    def publish(self, prepared: PreparedDetail) -> tuple[Path, ...]:
+    def publish(
+        self, prepared: PreparedDetail, *, creation_record: SessionCreationRecord | None = None,
+    ) -> tuple[Path, ...]:
         """排他发布唯一正文；仅返回本次创建的文件，供 seal 回滚。"""
         if not isinstance(prepared, PreparedDetail):
             raise TypeError("detail publish 必须使用 PreparedDetail")
@@ -148,7 +151,7 @@ class ContextPlanDetailStore:
         _value, record = parse_detail_payload(prepared.raw, detail_ref=ref)
         if record != prepared.record:
             raise DetailUnavailableError("source-mismatch: prepared detail manifest 不一致")
-        return (self._files.publish(ref, prepared.raw),)
+        return (self._files.publish(ref, prepared.raw, creation_record=creation_record),)
 
     @staticmethod
     def discard_published(paths: Iterable[Path]) -> None:

@@ -162,14 +162,16 @@ async def test_writerless_internal_failure_converges_canonical_model_and_executi
     assert assistant_item.turn_id is None
     assert assistant_item.item_id.startswith("item-execution_internal-model-model_internal_failure-block-")
     outcome_sink.assert_awaited_once_with("model_internal_failure", "failed")
-    checkpointer.mark_execution_lost.assert_called_once_with(
+    checkpointer.converge_execution.assert_called_once_with(
         "session",
         thread_id="thread",
         turn_id=None,
         execution_id="execution_internal",
-        reason="execution_error",
+        outcome="failed",
+        turn_status=None,
         checkpoint_ns="",
     )
+    checkpointer.mark_execution_lost.assert_not_called()
     publish.assert_awaited_once_with(
         EventType.ERROR,
         {"error": "internal execution failed", "phase": "agent_execution"},

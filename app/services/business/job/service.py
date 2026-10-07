@@ -155,7 +155,7 @@ class JobService:
         self._finalization_tasks: set[asyncio.Task[object]] = set()
         self._finalization_error: BaseException | None = None
         self._bus: JobEventBusProtocol | None = job_event_bus
-        self._session_current_job: dict[str, str] = {}
+        self._thread_current_job: dict[tuple[str, str], str] = {}
         self._pending_queue = JobPendingQueue()
         self._dispatch_lock = asyncio.Lock()
         self._pending_restore_lock = asyncio.Lock()
@@ -183,11 +183,11 @@ class JobService:
             lock=self._dispatch_lock,
             store=pending_request_store,
             get_jobs=lambda: self._jobs,
-            get_current_jobs=lambda: self._session_current_job,
+            get_current_jobs=lambda: self._thread_current_job,
         )
         self._control_service = JobControlService(
             get_jobs=lambda: self._jobs,
-            get_current_jobs=lambda: self._session_current_job,
+            get_current_jobs=lambda: self._thread_current_job,
             pending_queue=self._pending_queue,
             pending_requests=self._pending_requests,
             dispatch_lock=self._dispatch_lock,
@@ -453,7 +453,7 @@ class JobService:
                     "会话正在准备持久化消息，不能修改 checkpoint: "
                     f"session_id={session_id}, preparation_count={preparation_count}"
                 )
-            active_job_id = self._session_current_job.get(session_id)
+            active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
             if active_job_id is not None:
                 raise RuntimeError(
                     "会话存在运行中或正在收尾的任务，不能修改 checkpoint: "
@@ -481,7 +481,7 @@ class JobService:
                         f"session_id={session_id}, "
                         f"preparation_count={preparation_count}"
                     )
-                active_job_id = self._session_current_job.get(session_id)
+                active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
                 if active_job_id is not None:
                     raise RuntimeError(
                         "会话存在运行中或正在收尾的任务，不能移动物理存储: "
@@ -540,7 +540,7 @@ class JobService:
                         f"session_id={session_id}, "
                         f"preparation_count={preparation_count}"
                     )
-                active_job_id = self._session_current_job.get(session_id)
+                active_job_id = next((value for key, value in self._thread_current_job.items() if key[0] == session_id), None)
                 if active_job_id is not None:
                     raise RuntimeError(
                         "会话存在运行中或正在收尾的任务，不能删除: "
@@ -663,6 +663,11 @@ class JobService:
 
         await self.run_session_preparation(session_id, reject_prepared)
 
+    def _remove_session_slots(self, session_id: str) -> None:
+        for key in tuple(self._thread_current_job):
+            if key[0] == session_id:
+                self._thread_current_job.pop(key)
+
     async def delete_session_jobs(self, session_id: str) -> int:
         async with self._dispatch_lock:
             jobs = [
@@ -670,7 +675,7 @@ class JobService:
                 for job in self._jobs.values()
                 if job.session_id == session_id
             ]
-            self._session_current_job.pop(session_id, None)
+            self._remove_session_slots(session_id)
             self._pending_queue.clear(session_id)
 
             now = datetime.now()  # noqa: DTZ005
@@ -694,7 +699,7 @@ class JobService:
         async with self._dispatch_lock:
             for job in jobs:
                 self._jobs.pop(job.job_id, None)
-            self._session_current_job.pop(session_id, None)
+            self._remove_session_slots(session_id)
             self._pending_queue.clear(session_id)
 
         await self._pending_requests.delete(session_id)
@@ -890,7 +895,7 @@ class JobService:
         )
 
         if dispatch.job_status == JobStatus.queued.value and dispatch.active_job_id is None:
-            await self._start_next_pending(session_id, boundary="idle")
+            await self._start_next_pending(session_id, thread_id=thread_id, boundary="idle")
             dispatch = self._existing_dispatch_snapshot(job)
         await self._publish_pending(
             await self._pending_requests.list(session_id),
@@ -903,11 +908,15 @@ class JobService:
         job: JobState,
     ) -> JobDispatchSnapshotDTO:
         if self._is_terminal_status(job.status):
-            raise RuntimeError(f"预留 Job 已结束，不能重复派发: {job.job_id}")
-        queued_ids = self._pending_queue.ids(job.session_id)
+            return JobDispatchSnapshotDTO(
+                session_id=job.session_id, thread_id=job.thread_id, job_id=job.job_id,
+                job_status=job.status.value, queued_jobs_ahead=0, queued_job_count=0,
+                pending_job_count=0, queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
+            )
+        queued_ids = self._pending_queue.ids(job.session_id, job.thread_id)
         if job.job_id in queued_ids:
             queued_ahead = queued_ids.index(job.job_id)
-            active_job_id = self._session_current_job.get(job.session_id)
+            active_job_id = self._thread_current_job.get((job.session_id, job.thread_id))
             return JobDispatchSnapshotDTO(
                 session_id=job.session_id,
                 thread_id=job.thread_id,
@@ -922,7 +931,7 @@ class JobService:
                 enqueue_sequence=self._pending_queue.entry(job.job_id).enqueue_sequence,
                 queue_snapshot_version=self._pending_queue.snapshot_version(job.session_id),
             )
-        if self._session_current_job.get(job.session_id) != job.job_id:
+        if self._thread_current_job.get((job.session_id, job.thread_id)) != job.job_id:
             raise RuntimeError(
                 "非终态 Job 既不在活动槽也不在持久队列: "
                 f"job_id={job.job_id}, session_id={job.session_id}"
@@ -1064,15 +1073,16 @@ class JobService:
                 job.session_id,
                 job.job_id,
                 delivery_policy,
+                thread_id=job.thread_id,
             )
             job.delivery_policy = delivery_policy
             transition_job_status(job, JobStatus.queued)
-            current_job_id = self._session_current_job.get(job.session_id)
+            current_job_id = self._thread_current_job.get((job.session_id, job.thread_id))
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and self._is_terminal_status(current_job.status):
-                self._session_current_job.pop(job.session_id, None)
+                self._thread_current_job.pop((job.session_id, job.thread_id), None)
                 current_job_id = None
-            waiting_ids = self._pending_queue.ids(job.session_id)
+            waiting_ids = self._pending_queue.ids(job.session_id, job.thread_id)
             queued_ids = tuple(
                 queued_job_id
                 for queued_job_id in waiting_ids
@@ -1103,10 +1113,10 @@ class JobService:
                 if finished_job.status == JobStatus.paused:
                     return
                 if (
-                    self._session_current_job.get(finished_job.session_id)
+                    self._thread_current_job.get((finished_job.session_id, finished_job.thread_id))
                     == finished_job.job_id
                 ):
-                    self._session_current_job.pop(finished_job.session_id, None)
+                    self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id), None)
             # 终态 Job 没有后继消息时也要把内存队列的空状态落盘。否则
             # 上一轮已经取出并失败的队首可能在重启后再次被恢复。
             await self._pending_requests.persist_current(finished_job.session_id)
@@ -1114,7 +1124,7 @@ class JobService:
 
         stale_internal_jobs: list[JobState] = []
         async with self._dispatch_lock:
-            current_job_id = self._session_current_job.get(finished_job.session_id)
+            current_job_id = self._thread_current_job.get((finished_job.session_id, finished_job.thread_id))
             if current_job_id != finished_job.job_id:
                 return
 
@@ -1122,10 +1132,11 @@ class JobService:
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     finished_job.session_id,
                     parent_job_id=finished_job.job_id,
+                    thread_id=finished_job.thread_id,
                 )
 
-            if not self._pending_queue.peek_head(finished_job.session_id):
-                self._session_current_job.pop(finished_job.session_id, None)
+            if not self._pending_queue.peek_head(finished_job.session_id, finished_job.thread_id):
+                self._thread_current_job.pop((finished_job.session_id, finished_job.thread_id), None)
                 should_dispatch = False
             else:
                 should_dispatch = True
@@ -1141,6 +1152,7 @@ class JobService:
             return
         await self._start_next_pending(
             finished_job.session_id,
+            thread_id=finished_job.thread_id,
             boundary=finished_job.delivery_boundary or "after_turn",
             tool_result_available=False,
         )
@@ -1150,10 +1162,11 @@ class JobService:
         session_id: str,
         *,
         parent_job_id: str,
+        thread_id: str,
     ) -> list[JobState]:
         """失败后丢弃尚未执行的终端收尾提醒，避免创建孤立 continuation stream。"""
         stale_jobs: list[JobState] = []
-        for job_id in tuple(self._pending_queue.ids(session_id)):
+        for job_id in tuple(self._pending_queue.ids(session_id, thread_id)):
             job = self._jobs.get(job_id)
             if job is None or not self._is_terminal_followup(job):
                 continue
@@ -1627,6 +1640,7 @@ class JobService:
                     restored.append(
                         QueueEntry(
                             job_id=record.job_id,
+                            thread_id=record.thread_id,
                             enqueue_sequence=record.enqueue_sequence,
                             delivery_policy=record.delivery_policy,
                             waiting_reason=record.waiting_reason,
@@ -1637,7 +1651,8 @@ class JobService:
                 self._pending_queue.restore(session_id, restored)
                 should_resume = bool(restored)
             if should_resume:
-                await self._start_next_pending(session_id, boundary="idle")
+                for restored_thread_id in dict.fromkeys(record.thread_id for record in records):
+                    await self._start_next_pending(session_id, thread_id=restored_thread_id, boundary="idle")
 
     async def _publish_pending(
         self,
@@ -1686,13 +1701,14 @@ class JobService:
         self,
         session_id: str,
         *,
+        thread_id: str,
         boundary: DeliveryBoundary = "idle",
         tool_result_available: bool = True,
     ) -> bool:
         stale_internal_jobs: list[JobState] = []
         stale_parent_job_id: str | None = None
         async with self._dispatch_lock:
-            current_job_id = self._session_current_job.get(session_id)
+            current_job_id = self._thread_current_job.get((session_id, thread_id))
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and not self._is_terminal_status(current_job.status):
                 return False
@@ -1701,14 +1717,16 @@ class JobService:
                 stale_internal_jobs = self._discard_stale_terminal_followups(
                     session_id,
                     parent_job_id=current_job.job_id,
+                    thread_id=thread_id,
                 )
             entry = self._pending_queue.take_head(
                 session_id,
                 boundary,
+                thread_id=thread_id,
                 tool_result_available=tool_result_available,
             )
             if entry is None:
-                self._session_current_job.pop(session_id, None)
+                self._thread_current_job.pop((session_id, thread_id), None)
                 next_job = None
             else:
                 next_job = self._jobs.get(entry.job_id)
@@ -1717,7 +1735,7 @@ class JobService:
                         "FIFO 队列引用不存在的 Job: "
                         f"session_id={session_id}, job_id={entry.job_id}"
                     )
-                self._session_current_job[session_id] = next_job.job_id
+                self._thread_current_job[(session_id, thread_id)] = next_job.job_id
                 next_job.delivery_policy = entry.delivery_policy
                 next_job.delivery_boundary = entry.last_boundary
                 transition_job_status(next_job, JobStatus.running)
@@ -1742,18 +1760,20 @@ class JobService:
         session_id: str,
         boundary: DeliveryBoundary,
         *,
+        thread_id: str,
         tool_result_available: bool = True,
     ) -> PendingRequestListDTO:
         """记录边界，并在允许时从队列取出队首消息开始执行。"""
         await self._ensure_pending_loaded(session_id)
         async with self._dispatch_lock:
-            current_job_id = self._session_current_job.get(session_id)
+            current_job_id = self._thread_current_job.get((session_id, thread_id))
             current_job = self._jobs.get(current_job_id) if current_job_id else None
             if current_job is not None and not self._is_terminal_status(current_job.status):
                 current_job.delivery_boundary = boundary
         if current_job is None or self._is_terminal_status(current_job.status):
             await self._start_next_pending(
                 session_id,
+                thread_id=thread_id,
                 boundary=boundary,
                 tool_result_available=tool_result_available,
             )

@@ -216,13 +216,20 @@ async def do_create(
     artifacts: dict[str, object] | None = None,
     collaboration_member: dict[str, object] | None = None,
 ) -> ThreadCreationResult:
+    default_metadata = (
+        make_metadata(
+            task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id}
+        )
+        if delegation_id is not None
+        else make_metadata()
+    )
     return await service.create(
         idempotency_key=key,
         session_id=owner.session_id,
         thread_id=thread_id,
         delegation_id=delegation_id,
         initial_state=initial_state,
-        session_metadata=metadata if metadata is not None else make_metadata(),
+        session_metadata=metadata if metadata is not None else default_metadata,
         artifact_manifest=artifacts if artifacts is not None else make_artifacts(),
         collaboration_member=collaboration_member,
     )
@@ -257,9 +264,6 @@ def materialize_node(
     """按服务同款确定性内容手工落位 child node（恢复窗口测试用）。"""
     files = child_node_files(record, owner, artifacts)
     base.mkdir(parents=True, exist_ok=True)
-    (base / "rollout").mkdir(exist_ok=True)
-    (base / "artifacts").mkdir(exist_ok=True)
-    (base / "runs").mkdir(exist_ok=True)
     for rel_path, payload in files.items():
         target = base / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -285,7 +289,14 @@ def prepare_manual_record(
     preimage/清单与服务同源（compute_thread_creation_preimage_hash /
     build_thread_node_inventory），保证后续 create() 重入能幂等命中。
     """
-    effective_metadata = metadata if metadata is not None else make_metadata()
+    default_metadata = (
+        make_metadata(
+            task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id}
+        )
+        if delegation_id is not None
+        else make_metadata()
+    )
+    effective_metadata = metadata if metadata is not None else default_metadata
     effective_artifacts = artifacts if artifacts is not None else make_artifacts()
     preimage_hash = compute_thread_creation_preimage_hash(
         workspace_id=WORKSPACE_ID,
@@ -396,12 +407,10 @@ async def test_create_writes_expected_thread_node_content(
 ) -> None:
     result = await do_create(service, owner)
     final_dir = owner.session_dir / result.final_relative_locator
-    # 根条目集恰为 5（5 文件/目录；artifacts/notes 为嵌套目录）
+    # 创建只落盘冻结的 manifest 与 caller artifact，runtime 按实际执行初始化。
     assert sorted(p.name for p in final_dir.iterdir()) == [
         "artifact-manifest.json",
         "artifacts",
-        "rollout",
-        "runs",
         "thread.json",
     ]
     thread_manifest = json.loads(
@@ -425,12 +434,6 @@ async def test_create_writes_expected_thread_node_content(
     assert thread_manifest["graph_binding"] == make_graph_binding()
     assert thread_manifest["task_seed"] == {"task": "做一件事"}
     assert thread_manifest["task_reference"] == {"ref": "doc-1"}
-    # 初始 ContextStore 占位
-    context_store = json.loads(
-        (final_dir / "rollout" / "context-store.json").read_text(encoding="utf-8")
-    )
-    assert context_store["thread_id"] == result.child_thread_id
-    assert context_store["items"] == []
     # caller artifact 落位 artifacts/ 下
     artifact_file = final_dir / "artifacts" / "notes" / "plan.md"
     assert artifact_file.read_text(encoding="utf-8") == "# 计划\n步骤一\n"
@@ -451,8 +454,8 @@ async def test_create_artifact_manifest_hash_matches_record(
     assert (
         final_dir / "artifact-manifest.json"
     ).read_bytes() == serialize_artifact_manifest_bytes(inventory)
-    # runs/ 空目录存在（初始 execution runs 占位）
-    assert (final_dir / "runs").is_dir()
+    assert not (final_dir / "runs").exists()
+    assert not (final_dir / "rollout").exists()
 
 
 async def test_create_idle_child_without_seed(
@@ -849,7 +852,10 @@ async def test_concurrent_sibling_delegations_each_publish_without_poisoning(
             thread_id=None,
             delegation_id=key,
             initial_state="running",
-            session_metadata=make_metadata(task_seed={"task": "任务 " + key}),
+            session_metadata=make_metadata(
+                task_seed={"task": "任务 " + key},
+                task_reference={"ref": "doc-1", "parent_thread_id": owner.main_thread_id},
+            ),
             artifact_manifest={},
             collaboration_member={
                 "role": "delegated_subagent",
@@ -960,12 +966,12 @@ async def test_concurrent_publish_reentry_recovers_same_child_deterministically(
     original_publish = cs_a.publish_thread_creation_record
     injected = {"done": False}
 
-    def publish_with_race(key: str):
+    def publish_with_race(key: str, *, session_id: str):
         if not injected["done"]:
             injected["done"] = True
             # 另一个执行根（独立 store/连接）先抵达唯一可见性提交点。
-            cs_b.publish_thread_creation_record(key)
-        return original_publish(key)
+            cs_b.publish_thread_creation_record(key, session_id=owner.session_id)
+        return original_publish(key, session_id=owner.session_id)
 
     cs_a.publish_thread_creation_record = publish_with_race  # type: ignore[method-assign]
     svc_a = ThreadCreationService(
@@ -1049,16 +1055,16 @@ async def test_publish_reentry_rejects_preimage_drift_without_reuse(
     other_control = SessionControlStore(owner.session_dir / "session-control.sqlite")
     original_publish = control.publish_thread_creation_record
 
-    def publish_then_corrupt(key: str):
+    def publish_then_corrupt(key: str, *, session_id: str):
         # 另一执行根先抵达唯一可见性提交点，随后 record 被外部直改改坏
         # preimage；本实例的 publish 因而失败（已发布），走 published 恢复分支。
-        other_control.publish_thread_creation_record(key)
+        other_control.publish_thread_creation_record(key, session_id=owner.session_id)
         other_control.connection.execute(
             "UPDATE thread_creation_records SET preimage_hash = ? "
             "WHERE thread_creation_idempotency_key = ?",
             ("f" * 64, key),
         )
-        return original_publish(key)
+        return original_publish(key, session_id=owner.session_id)
 
     control.publish_thread_creation_record = publish_then_corrupt  # type: ignore[method-assign]
     service = ThreadCreationService(
@@ -1103,8 +1109,8 @@ async def test_publish_reentry_rejects_child_thread_id_drift_without_reuse(
     original_publish = control.publish_thread_creation_record
     other_child_id = make_thread_id()
 
-    def publish_then_corrupt(key: str):
-        other_control.publish_thread_creation_record(key)
+    def publish_then_corrupt(key: str, *, session_id: str):
+        other_control.publish_thread_creation_record(key, session_id=owner.session_id)
         row = other_control.connection.execute(
             "SELECT child_created_at FROM thread_creation_records "
             "WHERE thread_creation_idempotency_key = ?",
@@ -1123,7 +1129,7 @@ async def test_publish_reentry_rejects_child_thread_id_drift_without_reuse(
                 key,
             ),
         )
-        return original_publish(key)
+        return original_publish(key, session_id=owner.session_id)
 
     control.publish_thread_creation_record = publish_then_corrupt  # type: ignore[method-assign]
     service = ThreadCreationService(
@@ -1213,20 +1219,21 @@ async def test_crash_after_publish_before_terminal_response_recovers(
     owner: OwnerSession,
 ) -> None:
     """崩溃点 4：publish 后/terminal 响应前——record published 幂等恢复
-    （含 catalog child row 复验与 admission intent 补写）。"""
+    （含 catalog child row 与同事务 admission intent 复验）。"""
     record = prepare_manual_record(owner)
     final_dir = owner.session_dir / record.final_relative_locator
     materialize_node(final_dir, record, owner, make_artifacts())
-    # 模拟：publish 已在崩溃前完成（record → published + child row），
-    # 但 admission intent 尚未写入、terminal 响应未返回。
-    owner.control.publish_thread_creation_record("key-1")
-    assert count_rows(owner.control, "thread_execution_intents") == 0
+    # 模拟：publish 已原子提交 record、child row 与 intent，响应尚未返回。
+    owner.control.publish_thread_creation_record("key-1", session_id=owner.session_id)
+    assert count_rows(owner.control, "thread_execution_intents") == 1
+    published_intent = owner.control.get_initial_execution_intent("key-1")
     result = await do_create(service, owner)
     assert result.child_thread_id == record.child_thread_id
     assert result.record_state == "published"
-    # intent 已补写且恰一条
+    # 重入复用同一 intent，不能补造第二条执行身份。
     assert count_rows(owner.control, "thread_execution_intents") == 1
     intent = owner.control.get_initial_execution_intent("key-1")
+    assert intent == published_intent
     assert intent.thread_id == record.child_thread_id
 
 
@@ -1238,7 +1245,7 @@ async def test_crash_after_intent_before_response_recovers(
     record = prepare_manual_record(owner)
     final_dir = owner.session_dir / record.final_relative_locator
     materialize_node(final_dir, record, owner, make_artifacts())
-    owner.control.publish_thread_creation_record("key-1")
+    owner.control.publish_thread_creation_record("key-1", session_id=owner.session_id)
     owner.control.create_or_get_initial_execution_intent(
         admission_idempotency_key="key-1",
         session_id=owner.session_id,
@@ -1530,7 +1537,7 @@ async def test_published_reentry_with_deleted_final_fails_closed(
     final_dir = owner.session_dir / record.final_relative_locator
     staging_dir = owner.session_dir / record.staging_locator
     materialize_node(final_dir, record, owner, make_artifacts())
-    owner.control.publish_thread_creation_record("key-1")
+    owner.control.publish_thread_creation_record("key-1", session_id=owner.session_id)
     assert owner.control.get_thread_creation_record("key-1").state == "published"
     # 外部删除已发布线程的可见性产物
     shutil.rmtree(final_dir)
@@ -1809,37 +1816,35 @@ def test_thread_node_files_deterministic() -> None:
     # store 侧 publish 校验覆盖；此处仅断言纯函数稳定性。
 
 
+@pytest.mark.parametrize("symlink_kind", ["directory", "file"])
 def test_node_directory_rejects_symlink(
     service: ThreadCreationService,
     owner: OwnerSession,
+    symlink_kind: str,
 ) -> None:
     """symlink 目录/文件一律 fail closed（逐级 no-follow 保护）。"""
     record = prepare_manual_record(owner)
     staging_dir = owner.session_dir / record.staging_locator
     materialize_node(staging_dir, record, owner, make_artifacts())
-    # 构造 symlink 目录（rollout → 外部目标）
+    # 两个场景独立构造实际 artifact 的目录或文件 symlink。
     external = owner.session_dir / "external-target"
     external.mkdir(exist_ok=True)
-    rollout = staging_dir / "rollout"
-    (rollout / "context-store.json").unlink()
-    rollout.rmdir()
-    os.symlink(external, rollout)
+    external_file = external / "plan.md"
+    external_file.write_text("# 计划\n步骤一\n", encoding="utf-8")
+    notes = staging_dir / "artifacts" / "notes"
+    artifact_file = notes / "plan.md"
+    artifact_file.unlink()
+    if symlink_kind == "directory":
+        notes.rmdir()
+        os.symlink(external, notes)
+    else:
+        os.symlink(external_file, artifact_file)
     with pytest.raises(RuntimeError, match="symlink"):
         verify_node_directory(
             staging_dir,
             child_node_files(record, owner, make_artifacts()),
             child_node_inventory(record, owner, make_artifacts()),
-            stage="symlink 负向",
-        )
-    # symlink 文件同样拒绝
-    rollout2 = staging_dir / "rollout"
-    os.symlink(external / "missing.json", rollout2 / "context-store.json")
-    with pytest.raises(RuntimeError, match="symlink"):
-        verify_node_directory(
-            staging_dir,
-            child_node_files(record, owner, make_artifacts()),
-            child_node_inventory(record, owner, make_artifacts()),
-            stage="symlink 文件负向",
+            stage=f"symlink {symlink_kind} 负向",
         )
 
 

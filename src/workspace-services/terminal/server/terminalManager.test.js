@@ -187,7 +187,7 @@ test("完成 steering 返回统一的终端信封", async () => {
   };
   const session = {
     finishSteering(options) {
-      assert.deepEqual(options, { dispatched: true });
+      assert.deepEqual(options, { completionEventId: "terminal_completed:term_steering:4", commandStartSequence: 1, dispatched: true });
     },
     snapshot() {
       return snapshot;
@@ -199,6 +199,8 @@ test("完成 steering 返回统一的终端信封", async () => {
   manager.sessions.set("term_steering", session);
 
   const result = await manager.finishSteering("term_steering", {
+    completionEventId: "terminal_completed:term_steering:4",
+    commandStartSequence: 1,
     dispatched: true,
   });
 

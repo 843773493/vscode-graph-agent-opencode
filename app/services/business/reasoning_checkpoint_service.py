@@ -277,13 +277,14 @@ def persist_user_message_checkpoint(
     thread_id: str,
     job_id: str,
     admission_idempotency_key: str,
-    message: HumanMessage,
+    message: HumanMessage | None,
     execution_intent: InternalExecutionIntent | None = None,
     checkpoint_ns: str = "",
 ) -> bool:
     """在模型执行前固化真实 Turn acceptance 或 Turn-less internal admission。"""
-    response_metadata = message.response_metadata or {}
-    message_id = response_metadata.get("message_id")
+    response_metadata = message.response_metadata if message is not None else {}
+    message_id = (execution_intent.message_id if message is None and execution_intent is not None
+                  else response_metadata.get("message_id"))
     if not isinstance(message_id, str) or not message_id:
         raise ValueError("用户消息缺少持久化 message_id")
     if not isinstance(thread_id, str) or not thread_id:
@@ -308,6 +309,7 @@ def persist_user_message_checkpoint(
     ):
         raise TypeError("checkpoint saver 缺少 v2 execution admission owner 端口")
 
+    acceptance_changed = False
     if execution_intent is not None:
         if not isinstance(execution_intent, InternalExecutionIntent):
             raise TypeError("internal job execution_intent 类型非法")
@@ -329,6 +331,8 @@ def persist_user_message_checkpoint(
             checkpoint_ns=checkpoint_ns,
         )
     else:
+        if message is None:
+            raise TypeError("user-turn admission 必须携带真实 HumanMessage")
         message_metadata = response_metadata.get("message_metadata")
         turn_id = (
             message_metadata.get("turn_id")
@@ -358,6 +362,9 @@ def persist_user_message_checkpoint(
         )
         if not isinstance(accepted, Mapping):
             raise TypeError("RolloutCheckpointSaver.accept_turn 返回值非法")
+        if not isinstance(accepted["idempotent"], bool):
+            raise TypeError("Turn acceptance idempotent 必须是布尔值")
+        acceptance_changed = not accepted["idempotent"]
         execution_id = accepted.get("execution_id")
         if not isinstance(execution_id, str) or not execution_id:
             raise RuntimeError("Turn acceptance 未返回 initial execution identity")
@@ -406,15 +413,22 @@ def persist_user_message_checkpoint(
             f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
         )
 
-    for existing in raw_messages:
-        if not isinstance(existing, HumanMessage):
-            continue
-        existing_metadata = existing.response_metadata or {}
-        if existing_metadata.get("message_id") == message_id:
-            return False
-
-    messages = [*raw_messages, message]
-    channel_values["messages"] = messages
+    append_user_input = execution_intent is None and not any(
+        isinstance(existing, HumanMessage)
+        and existing.response_metadata.get("message_id") == message_id
+        for existing in raw_messages
+    )
+    stale_execution_state = (
+        _STALE_EXECUTION_CHANNEL in channel_values
+        or _STALE_EXECUTION_CHANNEL in checkpoint.get("channel_versions", {})
+        or _STALE_EXECUTION_CHANNEL in checkpoint.get("updated_channels", [])
+        or bool(checkpoint.get("pending_sends"))
+    )
+    # acceptance 已提交的 root 会立即出现在 message view；首次提交与旧任务
+    # 清理不能因此被当成幂等早退，也不能再追加一份相同输入。
+    if not (append_user_input or acceptance_changed or stale_execution_state):
+        return False
+    channel_values["messages"] = [*raw_messages, message] if append_user_input else list(raw_messages)
     # 失败/重启后的 LangGraph checkpoint 可能仍保留上一轮已经失效的
     # Pregel task。新用户消息只能从干净的会话上下文启动，不能把旧工具
     # Send 重新交给当前 AgentLoop；否则新 job 会显示 running，却永远等

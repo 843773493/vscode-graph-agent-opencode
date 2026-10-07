@@ -18,7 +18,7 @@ class FakeMutationIntentOwner:
     def put(self, **_kwargs: object) -> None:
         raise AssertionError("reminder 不得直接写入 LangGraph checkpoint")
 
-    def consume_mutation_intent(self, intent: object) -> None:
+    def submit_execution_pending_source(self, intent: object) -> None:
         if not isinstance(intent, ApplySourceLifecycleDecision):
             raise TypeError(f"收到错误的 mutation intent: {intent!r}")
         self.intents.append(intent)
@@ -32,7 +32,7 @@ def test_persist_interrupt_checkpoint_submits_pending_source_intent() -> None:
         session_id="sess_interrupt",
         thread_id=THREAD_ID,
         active_tool_name=None,
-        event_identity="turn-interrupt",
+        event_identity="turn-interrupt", execution_id="execution-fixture",
     )
 
     assert len(owner.intents) == 1
@@ -46,8 +46,8 @@ def test_persist_interrupt_checkpoint_submits_pending_source_intent() -> None:
     assert decision.content is not None
     assert "<system_reminder>" in decision.content
     assert "文本生成" in decision.content
-    assert decision.metadata["source"] == "interrupt"
-    assert decision.metadata["internal"] is True
+    assert decision.extensions["boxteam.checkpoint.annotations"]["value"]["source"] == "interrupt"
+    assert decision.extensions["boxteam.checkpoint.annotations"]["value"]["internal"] is True
 
 
 def test_persist_interrupt_checkpoint_submits_tool_reminder_without_checkpoint_mutation() -> (
@@ -60,7 +60,7 @@ def test_persist_interrupt_checkpoint_submits_tool_reminder_without_checkpoint_m
         session_id="sess_interrupt",
         thread_id=THREAD_ID,
         active_tool_name="python_exec",
-        event_identity="turn-tool-interrupt",
+        event_identity="turn-tool-interrupt", execution_id="execution-fixture",
     )
 
     assert len(owner.intents) == 1
@@ -69,5 +69,5 @@ def test_persist_interrupt_checkpoint_submits_tool_reminder_without_checkpoint_m
     assert decision.content is not None
     assert "<system_reminder>" in decision.content
     assert "python_exec" in decision.content
-    assert decision.metadata["phase"] == "tool"
-    assert decision.metadata["tool_name"] == "python_exec"
+    assert decision.extensions["boxteam.checkpoint.annotations"]["value"]["phase"] == "tool"
+    assert decision.extensions["boxteam.checkpoint.annotations"]["value"]["tool_name"] == "python_exec"

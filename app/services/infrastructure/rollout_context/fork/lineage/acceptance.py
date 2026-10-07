@@ -475,7 +475,7 @@ class ForkAcceptanceMappingMixin:
             for execution_id, job_id, key, payload_hash, turn_id, ingress in internal_rows:
                 if turn_id is not None or ingress is not None:
                     raise RuntimeError("full copy internal execution 不得绑定 Turn/ingress")
-                self._validate_fork_internal_admission(
+                preimage = self._validate_fork_internal_admission(
                     source_connection, session_id=source_session_id, thread_id=source_thread_id,
                     checkpoint_ns=checkpoint_ns, execution_id=execution_id,
                     job_id=job_id, admission_key=key, admission_hash=payload_hash,
@@ -494,7 +494,8 @@ class ForkAcceptanceMappingMixin:
                              "target": {"session_id": target_session_id, "thread_id": target_thread_id,
                                         "execution_id": target_execution, "execution_origin": "internal", "job_ref": job_ref,
                                         "turn_id": None, "accepted_ingress_id": None,
-                                        "admission_idempotency_key": target_key, "admission_payload_hash": payload_hash}},
+                                        "admission_idempotency_key": target_key, "admission_payload_hash": payload_hash},
+                             "admission_preimage": preimage},
                     timestamp=timestamp,
                 )
                 result = connection.execute(

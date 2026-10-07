@@ -275,6 +275,20 @@ class ExecutionIntentMixin:
         key 确定性派生、重试不变）与完整 preimage hash；claim 字段为
         NULL，等待 8.5-B worker 领取。
         """
+        with self._write_transaction() as connection:
+            return self._create_or_get_initial_execution_intent_transaction(
+                connection, admission_idempotency_key=admission_idempotency_key,
+                session_id=session_id, thread_id=thread_id, initial_state=initial_state,
+                creation_idempotency_key=creation_idempotency_key,
+            )
+
+    def _create_or_get_initial_execution_intent_transaction(
+        self, connection: sqlite3.Connection, *, admission_idempotency_key: str,
+        session_id: str, thread_id: str, initial_state: str, creation_idempotency_key: str,
+    ) -> ThreadExecutionIntent:
+        """publication 和独立端口共用唯一事务内写入实现。"""
+        if not connection.in_transaction:
+            raise RuntimeError("initial execution intent 需要活动 Session transaction")
         validate_thread_creation_key(admission_idempotency_key)
         validate_thread_creation_key(creation_idempotency_key)
         validate_session_id(session_id)
@@ -293,106 +307,105 @@ class ExecutionIntentMixin:
             execution_binding_id=binding_id,
             job_id=job_id,
         )
-        with self._write_transaction() as connection:
-            record_row = self._fetch_thread_creation_record(
-                connection, creation_idempotency_key
+        record_row = self._fetch_thread_creation_record(
+            connection, creation_idempotency_key
+        )
+        if record_row is None:
+            raise KeyError(
+                "thread creation record 不存在，无法建立初始 execution "
+                f"intent: creation_key={creation_idempotency_key!r}"
             )
-            if record_row is None:
-                raise KeyError(
-                    "thread creation record 不存在，无法建立初始 execution "
-                    f"intent: creation_key={creation_idempotency_key!r}"
-                )
-            if str(record_row["state"]) != "published":
-                raise RuntimeError(
-                    "thread creation record 尚未 published，拒绝建立初始 "
-                    f"execution intent: creation_key="
-                    f"{creation_idempotency_key!r}, state={record_row['state']!r}"
-                )
-            if str(record_row["child_thread_id"]) != thread_id:
-                raise RuntimeError(
-                    "initial execution intent thread_id 与 creation record "
-                    f"冻结 child 不一致（fail closed）: thread_id={thread_id!r}, "
-                    f"record_child={record_row['child_thread_id']!r}"
-                )
-            if str(record_row["initial_state"]) != initial_state:
-                raise RuntimeError(
-                    "initial execution intent initial_state 与 creation "
-                    f"record 冻结值不一致（fail closed）: "
-                    f"requested={initial_state!r}, "
-                    f"frozen={record_row['initial_state']!r}"
-                )
-            visible = connection.execute(
-                SELECT_THREAD_CATALOG_CHILD_ROW,
-                (thread_id,),
-            ).fetchone()
-            if visible is None:
-                raise RuntimeError(
-                    "child thread 尚未出现在 thread catalog（唯一可见性提交"
-                    f"点未过），拒绝建立初始 execution intent: "
-                    f"thread_id={thread_id!r}"
-                )
-            now_text = datetime.now(UTC).isoformat()
-            existing = _fetch_execution_intent_row(connection, admission_idempotency_key)
-            if existing is not None:
-                if (
-                    str(existing["thread_id"]) != thread_id
-                    or str(existing["initial_state"]) != initial_state
-                    or str(existing["creation_idempotency_key"])
-                    != creation_idempotency_key
-                    or str(existing["session_id"]) != session_id
-                ):
-                    raise RuntimeError(
-                        "initial execution intent 幂等冲突（同 admission key "
-                        f"不同身份，拒绝复用）: admission_key="
-                        f"{admission_idempotency_key!r}, "
-                        f"existing_thread_id={existing['thread_id']!r}"
-                    )
-                if (
-                    str(existing["execution_binding_id"]) != binding_id
-                    or str(existing["job_id"]) != job_id
-                    or str(existing["binding_preimage_hash"])
-                    != binding_preimage_hash
-                ):
-                    raise RuntimeError(
-                        "initial execution intent 冻结 identity 与确定性派生"
-                        "值不一致（库被外部改动，fail closed）: "
-                        f"admission_key={admission_idempotency_key!r}, "
-                        f"existing_binding={existing['execution_binding_id']!r}"
-                    )
-                return self._thread_execution_intent_from_row(existing)
-            duplicate_thread = connection.execute(
-                "SELECT 1 FROM thread_execution_intents WHERE thread_id = ?",
-                (thread_id,),
-            ).fetchone()
-            if duplicate_thread is not None:
-                raise RuntimeError(
-                    "该 child thread 已存在初始 execution intent（唯一索引，"
-                    f"拒绝第二个 admission key）: thread_id={thread_id!r}"
-                )
-            connection.execute(
-                f"INSERT INTO thread_execution_intents ({_THREAD_EXECUTION_INTENT_COLUMNS}) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL, NULL, ?, ?)",
-                (
-                    admission_idempotency_key,
-                    session_id,
-                    thread_id,
-                    creation_idempotency_key,
-                    initial_state,
-                    binding_id,
-                    job_id,
-                    binding_preimage_hash,
-                    now_text,
-                    now_text,
-                ),
+        if str(record_row["state"]) != "published":
+            raise RuntimeError(
+                "thread creation record 尚未 published，拒绝建立初始 "
+                f"execution intent: creation_key="
+                f"{creation_idempotency_key!r}, state={record_row['state']!r}"
             )
-            inserted = _fetch_execution_intent_row(connection, admission_idempotency_key)
-            if inserted is None:
-                # 防御性兜底：同事务内刚插入必然可见。
+        if str(record_row["child_thread_id"]) != thread_id:
+            raise RuntimeError(
+                "initial execution intent thread_id 与 creation record "
+                f"冻结 child 不一致（fail closed）: thread_id={thread_id!r}, "
+                f"record_child={record_row['child_thread_id']!r}"
+            )
+        if str(record_row["initial_state"]) != initial_state:
+            raise RuntimeError(
+                "initial execution intent initial_state 与 creation "
+                f"record 冻结值不一致（fail closed）: "
+                f"requested={initial_state!r}, "
+                f"frozen={record_row['initial_state']!r}"
+            )
+        visible = connection.execute(
+            SELECT_THREAD_CATALOG_CHILD_ROW,
+            (thread_id,),
+        ).fetchone()
+        if visible is None:
+            raise RuntimeError(
+                "child thread 尚未出现在 thread catalog（唯一可见性提交"
+                f"点未过），拒绝建立初始 execution intent: "
+                f"thread_id={thread_id!r}"
+            )
+        now_text = datetime.now(UTC).isoformat()
+        existing = _fetch_execution_intent_row(connection, admission_idempotency_key)
+        if existing is not None:
+            if (
+                str(existing["thread_id"]) != thread_id
+                or str(existing["initial_state"]) != initial_state
+                or str(existing["creation_idempotency_key"])
+                != creation_idempotency_key
+                or str(existing["session_id"]) != session_id
+            ):
                 raise RuntimeError(
-                    "initial execution intent 插入后不可见（事务异常）: "
-                    f"admission_key={admission_idempotency_key!r}"
+                    "initial execution intent 幂等冲突（同 admission key "
+                    f"不同身份，拒绝复用）: admission_key="
+                    f"{admission_idempotency_key!r}, "
+                    f"existing_thread_id={existing['thread_id']!r}"
                 )
-            return self._thread_execution_intent_from_row(inserted)
+            if (
+                str(existing["execution_binding_id"]) != binding_id
+                or str(existing["job_id"]) != job_id
+                or str(existing["binding_preimage_hash"])
+                != binding_preimage_hash
+            ):
+                raise RuntimeError(
+                    "initial execution intent 冻结 identity 与确定性派生"
+                    "值不一致（库被外部改动，fail closed）: "
+                    f"admission_key={admission_idempotency_key!r}, "
+                    f"existing_binding={existing['execution_binding_id']!r}"
+                )
+            return self._thread_execution_intent_from_row(existing)
+        duplicate_thread = connection.execute(
+            "SELECT 1 FROM thread_execution_intents WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if duplicate_thread is not None:
+            raise RuntimeError(
+                "该 child thread 已存在初始 execution intent（唯一索引，"
+                f"拒绝第二个 admission key）: thread_id={thread_id!r}"
+            )
+        connection.execute(
+            f"INSERT INTO thread_execution_intents ({_THREAD_EXECUTION_INTENT_COLUMNS}) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL, NULL, ?, ?)",
+            (
+                admission_idempotency_key,
+                session_id,
+                thread_id,
+                creation_idempotency_key,
+                initial_state,
+                binding_id,
+                job_id,
+                binding_preimage_hash,
+                now_text,
+                now_text,
+            ),
+        )
+        inserted = _fetch_execution_intent_row(connection, admission_idempotency_key)
+        if inserted is None:
+            # 防御性兜底：同事务内刚插入必然可见。
+            raise RuntimeError(
+                "initial execution intent 插入后不可见（事务异常）: "
+                f"admission_key={admission_idempotency_key!r}"
+            )
+        return self._thread_execution_intent_from_row(inserted)
 
     def get_initial_execution_intent(
         self,

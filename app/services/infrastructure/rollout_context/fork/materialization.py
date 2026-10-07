@@ -13,6 +13,10 @@ from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import CommitKind, CommitMode, ControlOutcome
+from app.services.infrastructure.rollout_context.fork.assembly_copy import (
+    copy_selected_context_for_fork,
+    prepare_selected_detail_mappings,
+)
 from app.services.infrastructure.rollout_context.fork.node_debug_journal import (
     NodeDebugForkJournalMixin,
 )
@@ -24,6 +28,12 @@ from app.services.infrastructure.rollout_context.fork.validation import (
     one_of_text,
     optional_text,
     required_text,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_fork import (
+    ForkDetailCapability,
+)
+from app.services.infrastructure.rollout_context.runtime.detail_store import (
+    ContextPlanDetailStore,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
 
@@ -84,8 +94,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         source_snapshot_sha256 = _required_sha256(
             source_snapshot_sha256, field="source_snapshot_sha256"
         )
-        if self._resolve_thread_identity(source_session_id, None) != source_thread_id:
-            raise RuntimeError("fork journal source thread 与 source main owner 不匹配")
+        self._resolve_thread_node(source_session_id, source_thread_id)
         if self.main_thread_id(target_session_id) != target_thread_id:
             raise RuntimeError("fork journal target thread 与 target main owner 不匹配")
         self.initialize(
@@ -147,6 +156,13 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
             )
             if result.rowcount != 1:
                 raise RuntimeError("fork materialization journal 未写入")
+            if fork_mode != "full_rollout_copy":
+                prepare_selected_detail_mappings(
+                    self, connection, source_session_id=source_session_id,
+                    source_thread_id=source_thread_id, target_session_id=target_session_id,
+                    target_thread_id=target_thread_id, source_checkpoint_id=source_checkpoint_id,
+                    fork_id=fork_id, checkpoint_ns=checkpoint_ns, timestamp=_now(),
+                )
             self._active_fork_materializations.add(
                 (target_session_id, target_thread_id, checkpoint_ns)
             )
@@ -249,6 +265,8 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         target_thread_id: str,
         source_snapshot_sha256: str,
         defer_completion: bool = False,
+        detail_capability: ForkDetailCapability | None = None,
+        detail_store: ContextPlanDetailStore | None = None,
     ) -> str:
         """在目标库收敛 fork，并幂等完成父库 retention。
 
@@ -284,8 +302,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
         source_snapshot_sha256 = _required_sha256(
             source_snapshot_sha256, field="source_snapshot_sha256"
         )
-        if self._resolve_thread_identity(source_session_id, None) != source_thread_id:
-            raise RuntimeError("fork commit source thread 与 source main owner 不匹配")
+        self._resolve_thread_node(source_session_id, source_thread_id)
         if self.main_thread_id(target_session_id) != target_thread_id:
             raise RuntimeError("fork commit target thread 与 target main owner 不匹配")
         if source_view_id is None:
@@ -293,6 +310,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 source_session_id,
                 source_checkpoint_id,
                 checkpoint_ns,
+                source_thread_id=source_thread_id,
             )
         source_finalizations = (
             ()
@@ -301,6 +319,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 source_session_id,
                 source_checkpoint_id,
                 checkpoint_ns,
+                source_thread_id=source_thread_id,
             )
         )
         with (
@@ -414,6 +433,7 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                     else None
                 )
                 if fork_mode == "full_rollout_copy":
+                    prepared_context_details = ()
                     self._map_copied_acceptance_identities(
                         connection,
                         source_session_id=source_session_id,
@@ -431,14 +451,6 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                         timestamp=timestamp,
                     )
                 else:
-                    source_thread_id = self._resolve_thread_identity(
-                        source_session_id,
-                        None,
-                    )
-                    target_thread_id = self._resolve_thread_identity(
-                        target_session_id,
-                        None,
-                    )
                     self._copy_source_overlays_for_fork(
                         connection,
                         source_session_id=source_session_id,
@@ -449,6 +461,15 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                         checkpoint_ns=checkpoint_ns,
                         timestamp=timestamp,
                     )
+                    prepared_context_details = copy_selected_context_for_fork(
+                        self, connection, source_session_id=source_session_id,
+                        source_thread_id=source_thread_id, target_session_id=target_session_id,
+                        target_thread_id=target_thread_id, source_checkpoint_id=source_checkpoint_id,
+                        fork_id=fork_id, checkpoint_ns=checkpoint_ns, timestamp=timestamp,
+                        detail_capability=detail_capability,
+                    )
+                    if prepared_context_details and detail_store is None:
+                        raise ValueError("detail-unavailable: fork source 缺少目标 detail 发布 owner")
                 if fork_mode != "full_rollout_copy":
                     for source_turn_id, source_final_message_id in source_finalizations:
                         identities = dict(connection.execute(
@@ -724,7 +745,23 @@ class ForkMaterializationMixin(NodeDebugForkJournalMixin, ForkOverlayCopyMixin):
                 )
                 if result.rowcount != 1:
                     raise RuntimeError("fork materialization 未进入 target_committed")
-                connection.commit()
+                published = []
+                try:
+                    for prepared in prepared_context_details:
+                        published.extend(detail_store.publish(
+                            prepared, creation_record=self._prepared_target_record(target_session_id),
+                        ))
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    committed = connection.execute(
+                        "SELECT status FROM fork_materializations WHERE materialization_id=?",
+                        (materialization_id,),
+                    ).fetchone()
+                    if committed != ("target_committed",) and published:
+                        detail_store.discard_published(published)
+                    raise
 
         # 私有 full-copy staging 先保留 target_committed journal；安装后才
         # 由正式 owner 补写 source retention 与 committed，不发布半成品。

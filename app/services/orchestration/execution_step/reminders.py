@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
-from langchain_core.messages import HumanMessage
-
+from app.abstractions.internal_message import PreparedInternalMessage
 from app.prompting import PromptSection, internal_message_factory
 from app.services.orchestration.event_stream.contracts import (
     SuccessfulToolCall,
@@ -114,24 +113,19 @@ def build_missing_custom_tool_retry_reminder(
     )
 
 
-def internal_retry_human_message(
+def internal_retry_message(
     *,
-    message_id: str,
     kind: str,
     reminder: str,
     metadata: Mapping[str, object],
-) -> HumanMessage:
-    prepared = internal_message_factory.build(
+) -> PreparedInternalMessage:
+    return internal_message_factory.build(
         kind=kind,
         control=reminder,
         sections=(PromptSection("control_context", metadata),),
         metadata=metadata,
     )
-    return HumanMessage(
-        id=message_id,
-        content=prepared.content,
-        response_metadata=prepared.metadata,
-    )
+
 
 
 __all__ = [
@@ -142,5 +136,5 @@ __all__ = [
     "custom_tools_requested_by_message",
     "has_valid_delegated_report",
     "has_valid_session_question_reply",
-    "internal_retry_human_message",
+    "internal_retry_message",
 ]

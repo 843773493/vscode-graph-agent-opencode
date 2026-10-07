@@ -456,10 +456,10 @@ async def test_agent_includes_background_message_collection_tool(monkeypatch, tm
     assert "send_message_to_session" in tool_names
     assert "task" in tool_names
     assert "create_team" in tool_names
-    assert "attach_team_session" in tool_names
+    assert "attach_team_session" not in tool_names
     assert "assign_team_task" in tool_names
     assert "update_team_task" in tool_names
-    assert len(tools) == 19
+    assert len(tools) == 18
 
 
 @pytest.mark.asyncio
@@ -519,8 +519,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(monkeypatch, tmp_pat
             "list_my_teams",
             "get_team_board",
             "create_team_member",
-            "attach_team_session",
-            "assign_team_task",
+                "assign_team_task",
             "update_team_task",
         }
     )
@@ -583,7 +582,6 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(monkeypat
         "list_my_teams",
         "get_team_board",
         "create_team_member",
-        "attach_team_session",
         "assign_team_task",
         "update_team_task",
     ]

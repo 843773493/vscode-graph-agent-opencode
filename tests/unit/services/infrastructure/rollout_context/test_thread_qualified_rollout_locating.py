@@ -104,7 +104,7 @@ def _publish_child_thread(
             artifact_manifest=manifest,
             artifact_manifest_hash=hashlib.sha256(manifest.encode("utf-8")).hexdigest(),
         )
-        published = control.publish_thread_creation_record(key)
+        published = control.publish_thread_creation_record(key, session_id=session_dir.name)
         locator = published.final_relative_locator
     finally:
         control.close()

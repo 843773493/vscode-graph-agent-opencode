@@ -2086,11 +2086,19 @@ async def test_fork_preserves_real_retry_internal_and_closed_tool_lineage(
                 execution_id=row[0], job_id=row[3], admission_idempotency_key=row[4],
                 accepted_ingress_id=row[7], payload_hash=payload_hash,
             )
-        notice_hash = connection.execute(
-            "SELECT content_hash FROM item_catalog WHERE execution_id = ? AND semantic_kind = 'runtime_notice'",
-            (internal[0],),
-        ).fetchone()[0]
-        assert internal[5] == notice_hash
+        lineage = json.loads(connection.execute(
+            "SELECT lineage_json FROM fork_identity_mappings "
+            "WHERE entity_type='execution' AND target_local_id=?", (internal[0],),
+        ).fetchone()[0])
+        preimage = lineage["admission_preimage"]
+        assert preimage["session_id"] == source.session_id
+        assert preimage["thread_id"] == source_owner.thread_id
+        assert preimage["execution_id"] == "execution-internal-notice"
+        assert preimage["input"]["kind"] == "runtime_notice"
+        assert internal[5] == sha256_jcs(preimage) == lineage["source"]["admission_payload_hash"]
+        assert context.saver._storage.internal_execution_request_input(
+            child.session_id, target_owner.thread_id, internal[0],
+        ) == preimage["input"]
     with sqlite3.connect(_main_thread_node(context, child.session_id) / "rollout" / "index.sqlite") as connection:
         connection_execution_by_item = dict(connection.execute("SELECT item_id, execution_id FROM item_catalog"))
     calls = [item for item in target_items if item.semantic_kind == SemanticKind.TOOL_CALL]
@@ -2371,7 +2379,7 @@ async def test_fork_rejects_internal_admission_hash_without_notice_preimage(
             "WHERE item_id = 'item-retry-user') WHERE execution_id = 'execution-internal-notice'"
         )
         connection.commit()
-    with pytest.raises(RuntimeError, match="internal admission hash 与冻结 notice 不一致"):
+    with pytest.raises(RuntimeError, match="internal admission hash 与冻结 request 不一致"):
         await context.forks.fork(source.session_id, mode=mode)
     assert (await context.sessions.list(limit=100)).total == 1
     assert _retention_refs(context, source.session_id) == []

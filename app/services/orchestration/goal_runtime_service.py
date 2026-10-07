@@ -131,8 +131,21 @@ class GoalRuntimeService:
                 self._task_error = error
             logger.error("Goal 后台状态转换失败", exc_info=error)
 
+    async def _submit_goal(
+        self, goal: SessionGoalDTO, message: PreparedInternalMessage, *, event_identity: str, delivery_policy="after_turn",
+    ):
+        session_id = goal.session_id
+        thread_id = await self._session_orchestrator.resolve_main_thread(session_id)
+        return await self._session_orchestrator.submit_runtime_event(
+            session_id, message, thread_id=thread_id, source_id=f"goal:{goal.goal_id}:state",
+            idempotency_key=f"goal:{goal.goal_id}:{event_identity}:{message.metadata['structured_prompt_kind']}",
+            delivery_policy=delivery_policy,
+        )
+
     async def _capture_started_job(self, job_id: str) -> None:
         job = await self._job_service.get(job_id)
+        if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
+            return
         goal = await self._goal_service.get(job.session_id)
         if goal is not None and goal.status == GoalStatus.active:
             self._job_goal_ids[job_id] = goal.goal_id
@@ -145,6 +158,8 @@ class GoalRuntimeService:
     async def _continue_after_agent_end(self, job_id: str, tokens: int = 0) -> None:
         await self._wait_for_goal_capture(job_id)
         job = await self._job_service.get(job_id)
+        if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
+            return
         goal = await self._goal_service.get(job.session_id)
         owner_goal_id = self._job_goal_ids.pop(job_id, None)
         if goal is None or owner_goal_id != goal.goal_id:
@@ -168,8 +183,8 @@ class GoalRuntimeService:
         if goal.status == GoalStatus.budget_limited:
             async with self._continuation_admission() as admitted:
                 if admitted:
-                    await self._session_orchestrator.create_and_run_internal(
-                        job.session_id,
+                    await self._submit_goal(
+                        goal,
                         self._budget_limited_message(
                             goal,
                             metadata={
@@ -179,12 +194,13 @@ class GoalRuntimeService:
                                 "goal_budget_limited": True,
                             },
                         ),
+                        event_identity=job_id,
                     )
             return
 
         async def dispatch(current: SessionGoalDTO) -> None:
-            await self._session_orchestrator.create_and_run_internal(
-                job.session_id,
+            await self._submit_goal(
+                current,
                 self._continuation_message(
                     current,
                     metadata={
@@ -193,6 +209,7 @@ class GoalRuntimeService:
                         "goal_objective": current.objective,
                     },
                 ),
+                event_identity=job_id,
             )
 
         async with self._continuation_admission() as admitted:
@@ -203,11 +220,15 @@ class GoalRuntimeService:
 
     async def _ensure_after_job_completed(self, job_id: str) -> None:
         job = await self._job_service.get(job_id)
+        if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
+            return
         await self.ensure_active_goal_running(job.session_id)
 
     async def _stop_after_terminal_error(self, job_id: str, event_type: str) -> None:
         await self._wait_for_goal_capture(job_id)
         job = await self._job_service.get(job_id)
+        if job.thread_id != await self._session_orchestrator.resolve_main_thread(job.session_id):
+            return
         goal = await self._goal_service.get(job.session_id)
         owner_goal_id = self._job_goal_ids.pop(job_id, None)
         if goal is None or owner_goal_id != goal.goal_id:
@@ -235,12 +256,14 @@ class GoalRuntimeService:
             if goal is None or goal.status != GoalStatus.active:
                 return
             jobs = await self._job_service.list(session_id=session_id)
-            if any(item.status.value in {"queued", "running", "accepted"} for item in jobs):
+            main_thread_id = await self._session_orchestrator.resolve_main_thread(session_id)
+            if any(item.thread_id == main_thread_id
+                   and item.status.value in {"queued", "running", "accepted"} for item in jobs):
                 return
 
             async def dispatch(goal: SessionGoalDTO) -> None:
-                await self._session_orchestrator.create_and_run_internal(
-                    session_id,
+                await self._submit_goal(
+                    goal,
                     self._continuation_message(
                         goal,
                         metadata={
@@ -249,6 +272,7 @@ class GoalRuntimeService:
                             "goal_objective": goal.objective,
                         },
                     ),
+                    event_identity=f"idle:{goal.goal_id}:{goal.revision}",
                 )
 
             await self._goal_service.dispatch_continuation_if_active(
@@ -260,30 +284,18 @@ class GoalRuntimeService:
         async with self._continuation_admission() as admitted:
             if not admitted:
                 return
-            prompt = self._objective_updated_prompt(goal)
-            pending = await self._job_service.list_pending(goal.session_id)
-            for request in pending.requests:
-                if request.message_metadata.get("goal_id") != goal.goal_id:
-                    continue
-                await self._job_service.update_pending(
-                    goal.session_id,
-                    request.message_id,
-                    content=prompt,
-                    attachments=request.attachments,
-                )
-
+            main_thread_id = await self._session_orchestrator.resolve_main_thread(goal.session_id)
             running_job_ids = [
                 job.job_id
                 for job in await self._job_service.list(session_id=goal.session_id)
-                if job.status.value in {"accepted", "running", "streaming"}
+                if job.thread_id == main_thread_id
+                and job.status.value in {"accepted", "running", "streaming"}
                 and self._job_goal_ids.get(job.job_id) == goal.goal_id
             ]
-            if not running_job_ids:
-                return
 
             async def dispatch(current: SessionGoalDTO) -> None:
-                await self._session_orchestrator.create_and_run_internal(
-                    goal.session_id,
+                await self._submit_goal(
+                    current,
                     self._objective_updated_message(
                         current,
                         metadata={
@@ -293,6 +305,7 @@ class GoalRuntimeService:
                             "goal_objective_updated": True,
                         },
                     ),
+                    event_identity=f"objective:{goal.revision}",
                     delivery_policy="after_turn",
                 )
 

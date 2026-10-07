@@ -24,10 +24,10 @@
 
 ## 4. 持久化与迁移
 
-- [ ] 4.1 盘点只描述单工作区前提的持久化字段，逐项决定「显式迁移」或「显式失效」，不双读、不留别名。
-- [ ] 4.2 实现幂等迁移步骤；迁移遇到旧字段 MUST 显式处理，MUST NOT 静默按旧语义继续解释。
+- [ ] 4.1 盘点只描述单工作区前提的旧持久化字段，按用户授权显式失效并删除旧读取分支，保留新写字段与单一读路径，不双读、不留别名。
+- [ ] 4.2 核验旧开发运行数据清理与新 writer 切换：停止对应写入后清理不兼容开发数据，保普通源码及独有未集成改动；不新增旧数据迁移/扫描/回填，fresh writer 与精确恢复错误必须修复并验证。
 - [ ] 4.3 校验**真实路径 / real path** 不变量（**三层分离 / three-layer separation**）：迁移后新增/变更的持久化记录与 API 响应体 MUST NOT 出现 real path，只允许 `资源身份 / ResourceIdentity` + `资源 URI`（+ 独立 revision 字段）。
-- [ ] 4.4 记录不可回滚点与其理由；确认回滚边界可被明确陈述。**明确本形态无存量 URI 数据迁移**：权威表实测 URI 零落盘（157 live + 44 dev/temp SQLite 对 `boxteam://` 零命中、无 `resource_activation*` 表；`display_uri` 仅测试写入、container 无装配、生产 seal 恒为 `None`），故回滚边界在 URI 侧为代码层回滚。
+- [ ] 4.4 记录代码、数据与生成快照的回滚边界及不可回滚点：旧开发数据按授权失效/清理，不承诺恢复；新形态数据不能交旧 reader。原零 URI、无装配、seal 恒为空是历史取证，A01 `16f09ee7` 已接通真实 activation freeze/seal/restore，不重复派发已完成接线，不虚构旧 URI 迁移。
 
 ## 5. 契约快照与门禁
 
@@ -36,7 +36,7 @@
 
 ## 6. 测试影响面（因无存量迁移而重述为接口契约层）
 
-因 URI 零落盘、无存量迁移，本形态的实施风险**主要落在接口契约变更**（路由路径形态、显式身份载体、拒绝路径、分区隔离断言），而非数据迁移。
+本形态不迁移旧开发数据；验收重点为接口契约（路由路径形态、显式身份载体、拒绝路径、分区隔离）、新写入和精确恢复，不能沿用历史零 URI 取证判断当前生产状态。
 
 - [ ] 6.1 「只需加 workspace 参数」层：为受影响的服务层/API 单测显式传入 `workspace_id`（优先复用 `tests/unit/core/catalog_workspace_helper.py` 的 `build_catalog_workspace(tmp_path, workspace_id=...)`），不做语义重写。
 - [ ] 6.2 「必须重写」层：重写断言单一工作区/直接读 `WORKSPACE_ROOT`/跨工作区复用解析器实例的用例。
@@ -108,3 +108,15 @@
 - **owner 裁定（2026-09-30，书面）**：锁版本或整体升级作为**独立切片**，MUST NOT 夹带进任何功能提交；在独立切片完成前，任何 `buf generate` / `bun run gen:openapi` 都会引入上述非预期生成物漂移。
 
 - [x] 生成器版本漂移收口（独立切片）：`7596a841` 将 ts-proto 固定为当前产物 `v2.12.1`；真实生成又暴露 es header 漂移，故同时固定两个 es 为 `v2.15.0`、python 为 `v36.2`。`bun run gen:protocol` 退出 0，四个生成根相对 HEAD 零差异；Python/Node 跨文件 oneof 绑定测试各 1 项通过。未升级业务协议或夹带功能修改。证据：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/g03-validation.json`。后续功能切片在独立 worktree 使用此配置生成，主树串行集成。
+
+## 10. 共享 Backend 生命周期收口（唯一合同 owner）
+
+本节承接原3.3、8.2及D9的共享生命周期缺口，不重复实施已经受验的后端双mount寻址/隔离。唯一合同见本 change 的 `managed-backend-lifecycle` delta；同一作者一次迁齐源码、DTO/调用方和核心公共fixture，少量真实核心修通后集中补边界，最终停写只冻结一次完整候选。
+
+- [ ] 10.1 将共享 Backend 进程handle/generation/显式完整启动清单归一个Gateway managed owner；成员只引用，辅助服务仍按target拥有。控制面只维护一份共享成员权威，不按相同URL或运行target推导组。普通新增保持独立singleton启动，attached/external及默认target限制不变。
+- [ ] 10.2 沿现有lifecycle入口贯通完整组 `expected_backend_generation`/`expected_workspace_ids` 前置条件及owner级串行锁；共享组普通单target操作blocked且不改成员意图。实现generation内mount集合不可变，显式成员进退经全组drain/重建/验证后才公布，失败恢复完整旧组。 明确成员变更独立的desired_workspace_ids完整目标集合，joining项须已登记managed且不归其它活动owner；失败以旧已公布集合为唯一权威，无法恢复时全组offline，明确完整组start是恢复出口。包含默认成员的整组stop、移除默认成员在drain前拒绝。
+- [ ] 10.3 汇总全组Job/tool/background及proxy request/stream blockers；safe沿原30秒期限，超时撤销drain并保旧组。force先持久化全部受影响执行interrupted再唯一close；贯通 `backend_generation`、`affected_workspace_ids` 和blocker `workspace_id` 至DTO/OpenAPI/协议、Web请求/阻塞显示/确认及fixture，不混Gateway target ID与Backend UUID。
+- [ ] 10.4 统一registry remove/upsert/runtime替换、stop/close、Gateway shutdown/preserve/adopt/startup recovery按owner一次处理；共享故障使全成员offline/路由失效，按完整启动合同只恢复一次，UUID/root/membership不符明确拒绝。最后成员退出只关闭Backend一次。 覆盖Gateway候选proof/CAS成功前保旧owner/handle/完整启动清单、proof失败旧组继续服务和新旧均失效时完整组恢复，禁止部分/重复adopt。
+- [ ] 10.5 配置pending restart沿原candidate/journal/proof状态机执行整组切换，只promotion发起成员的匹配candidate，sibling只核自身身份/健康；失败恢复完整旧generation/mount集合，补偿失败按原recovery_required反馈。 proof missing/mismatch及recovery_required的retry/resolve/discard须绑定owner generation与完整旧/目标mount集合，全部sibling身份/健康未确认不公布候选或恢复generation在线；普通非配置offline恢复不新造配置状态机。
+- [ ] 10.6 先跑真实一个Gateway/一个managed Backend/两个mount核心：身份/数据隔离、普通单targetblocked、明确完整组重启及handle只关闭一次；随后集中覆盖陈旧generation/成员集、同组并发、sibling blockers/force、成员进退、故障及一次恢复/adopt、配置补偿、external同URL和默认target限制，带进程外保护并保真实退出码。 同批边界补目标集合输入、切换与旧组补偿均失败后的完整组start恢复、默认共享成员stop/remove拒绝、Gateway generation proof成败及配置域retry/resolve/discard的完整组证明。
+- [ ] 10.7 按新完整候选独立核全部生命周期调用方及旧handle/逐target恢复链已物理下线，复用依赖未变证据、增审受影响差异；完成静态/生成类型/Web构建及相关真实客户端验收，再更新本节与原关联任务，不以规划或核心绿灯勾整个change。

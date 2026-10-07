@@ -55,6 +55,7 @@ from tests.support.catalog_session_bundle import (
     fixture_main_thread_id,
     seed_catalog_session_bundle,
 )
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING_JSON
 from tests.support.node_debug_dependencies import TEST_THREAD_ID
 
 _PARENT_SESSION_ID = "ses_00000000400070008000000000000001"
@@ -634,7 +635,7 @@ def _publish_catalog_child_thread(session_node: Path) -> str:
             idempotency_key=key,
             initial_state="idle",
             preimage_hash="a" * 64,
-            graph_binding=json.dumps({"graph_id": "node-debug-drain"}),
+            graph_binding=TEST_THREAD_GRAPH_BINDING_JSON,
             capability_profile="{}",
             created_at=created_at,
             thread_id=thread_id,
@@ -646,7 +647,7 @@ def _publish_catalog_child_thread(session_node: Path) -> str:
             artifact_manifest_hash=hashlib.sha256(manifest.encode("utf-8")).hexdigest(),
         )
         relative_locator = control.publish_thread_creation_record(
-            key
+            key, session_id=session_node.name
         ).final_relative_locator
     finally:
         control.close()

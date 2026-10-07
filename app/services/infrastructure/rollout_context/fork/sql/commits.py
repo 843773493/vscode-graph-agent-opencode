@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.domain.itemized.enums import CommitKind
 from app.services.infrastructure.rollout_context.fork.remap_state import (
     FullCopyRemapState,
 )
@@ -252,12 +253,7 @@ def rewrite_full_copy_control_and_commits(state: FullCopyRemapState) -> None:
         )
         commit_kind = one_of_text(
             commit_kind,
-            {
-                "acceptance",
-                "item_convergence",
-                "terminal_convergence",
-                "assembly_sealed",
-            },
+            {value.value for value in CommitKind},
             field="storage_commits.commit_kind",
         )
         commit_mode = one_of_text(
@@ -309,6 +305,7 @@ def rewrite_full_copy_control_and_commits(state: FullCopyRemapState) -> None:
         )
         subject_map = {
             "acceptance": "turn",
+            "execution_admission": "execution",
             "item_convergence": "item",
             "terminal_convergence": "turn",
             "assembly_sealed": "assembly",

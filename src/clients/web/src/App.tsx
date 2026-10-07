@@ -1,3 +1,4 @@
+import { requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
 import { useWorkspaceTerminalResources } from "./hooks/workspace/useWorkspaceTerminalResources";
 import { controlWorkspaceResource, getWorkspaceResource } from "./api/workspaceResources";
 import { getSessionMainThread } from "./api/session/sessions";
@@ -304,6 +305,7 @@ export default function AppShell() {
   } = useNodeDebugWorkbench({
     apiPort: resolvedApiPort,
     workspaceId: activeSessionWorkspaceId,
+    workspaces: state.gatewayWorkspaces,
     sessionId: activeSession?.session_id ?? null,
     enabled: auxiliaryVisible && auxiliaryTab === "debug",
     onStatusChange: setStatus,
@@ -971,7 +973,7 @@ export default function AppShell() {
                           onOwnerControl={async (entry, action, thread) => {
                             if (action === "attach" && !thread) {
                               if (!activeSession || activeSessionWorkspaceId !== entry.workspace_id) throw new Error("请选择同工作区的目标会话");
-                              const main = await getSessionMainThread(resolvedApiPort, activeSession.session_id, entry.workspace_id);
+                              const main = await getSessionMainThread(resolvedApiPort, activeSession.session_id, requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, entry.workspace_id));
                               thread = { session_id: main.session_id, thread_id: main.thread_id };
                             }
                             await extensionResources.ownerControl(entry, action, thread);

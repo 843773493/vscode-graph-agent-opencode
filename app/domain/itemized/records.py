@@ -54,6 +54,23 @@ _DISPLAY_PROVENANCE_FIELDS = frozenset(
         "source_item_id",
     }
 )
+GENERATED_RESULT_ANNOTATION_FIELDS = frozenset({
+    "structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id",
+})
+
+
+def validate_generated_result_extensions(extensions: Mapping[str, object]) -> None:
+    """生成结果的扩展只承载已知结构标记，来源由闭合 payload 独占。"""
+    validate_extensions(extensions)
+    annotation_schema = "boxteam.checkpoint.annotations"
+    unknown = set(extensions) - {annotation_schema}
+    envelope = extensions.get(annotation_schema)
+    if envelope is not None:
+        if envelope["extension_version"] != "1" or not isinstance(envelope["value"], Mapping):
+            raise ItemSchemaError("generated_session_result annotations 必须使用已知的闭合版本")
+        unknown.update(set(envelope["value"]) - GENERATED_RESULT_ANNOTATION_FIELDS)
+    if unknown:
+        raise ItemSchemaError("generated_session_result extensions 含未知或控制字段: " + ",".join(sorted(unknown)))
 
 
 def _strict_mapping(value: object, allowed: frozenset[str], name: str) -> Mapping[str, object]:
@@ -207,6 +224,7 @@ def _validate_payload(
     status: str,
     payload: object,
     tool_result_evidence: ToolResultEvidence | None,
+    extensions: Mapping[str, object],
 ) -> None:
     _ensure_json_value(payload)
     if payload_kind == PayloadKind.TEXT and not isinstance(payload, str):
@@ -221,7 +239,9 @@ def _validate_payload(
         and isinstance(payload, Mapping)
         and set(payload) & _RUNTIME_NOTICE_PAYLOAD_FIELDS
     ):
-        RuntimeNoticePayload.from_dict(payload)
+        notice = RuntimeNoticePayload.from_dict(payload)
+        if notice.display_part.kind == "generated_session_result":
+            validate_generated_result_extensions(extensions)
     if payload_kind == PayloadKind.SUMMARY and not isinstance(payload, Mapping):
         raise ItemSchemaError("summary payload 必须是 object")
     if payload_kind in {PayloadKind.OPAQUE, PayloadKind.EXTENSION}:
@@ -555,7 +575,7 @@ class CanonicalItemRecord:
         relation_keys = [canonical_json_bytes(entry.to_dict()) for entry in self.provenance_relations]
         if len(relation_keys) != len(set(relation_keys)):
             raise ItemSchemaError("provenance_relations 不得重复")
-        _validate_payload(semantic, payload_type, status, self.payload, self.tool_result_evidence)
+        _validate_payload(semantic, payload_type, status, self.payload, self.tool_result_evidence, self.extensions)
         expected_hash = content_hash(payload_type, self.payload)
         if self.content_hash != expected_hash:
             raise ItemSchemaError("content_hash 与 payload 不一致")

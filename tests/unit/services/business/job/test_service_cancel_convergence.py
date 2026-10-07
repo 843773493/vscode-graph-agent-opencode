@@ -17,6 +17,7 @@ from app.core.job_event_bus import JobEventBus
 from app.schemas.internal_v2.common import ControlAction, JobStatus
 from app.schemas.internal_v2.job import JobControlRequest
 from app.services.business.job.service import JobService
+from tests.support.job_thread_fixture import job_fixture_thread_id
 
 
 class _InstantExecutor:
@@ -31,7 +32,7 @@ class _InstantExecutor:
 
 async def _wait_slot_cleared(service: JobService, session_id: str) -> None:
     for _ in range(200):
-        if service._session_current_job.get(session_id) is None:
+        if service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) is None:
             return
         await asyncio.sleep(0.005)
     raise AssertionError(f"会话活动槽未释放: session_id={session_id}")
@@ -57,7 +58,7 @@ async def test_cancel_before_task_body_runs_converges_to_cancelled(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     job = service._jobs[dispatch.job_id]
 
@@ -83,7 +84,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     await service.control(
         first.job_id,
@@ -95,7 +96,7 @@ async def test_cancel_before_task_body_releases_fifo_head(
         "第二条",
         message_id="msg_second",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     for _ in range(200):
         if service._jobs[second.job_id].status == JobStatus.completed:
@@ -138,7 +139,7 @@ async def _run_concurrent_cancel_case(index: int, session_lifecycle_guard) -> No
         "消息",
         message_id=f"msg_{index}",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     holder.append(dispatch.job_id)
     started.set()
@@ -165,7 +166,7 @@ async def test_pause_before_task_body_runs_resumes_cleanly(
         "第一条",
         message_id="msg_pause",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     job = service._jobs[dispatch.job_id]
 
@@ -217,7 +218,7 @@ async def test_cancel_after_task_body_started_keeps_task_path_terminal(
         "消息",
         message_id="msg_running",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     job = service._jobs[dispatch.job_id]
     await entered.wait()
@@ -280,7 +281,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     await executor.started.wait()
     second = await service.start_job(
@@ -288,7 +289,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
         "第二条",
         message_id="msg_second",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     assert service._jobs[second.job_id].status == JobStatus.queued
 
@@ -306,7 +307,7 @@ async def test_cancel_paused_after_task_done_releases_slot_and_wakes_fifo(
     assert service._jobs[first.job_id].status == JobStatus.cancelled
     # paused 被取消后活动槽必须立刻让位：要么空队列时清空，要么直接交给
     # 下一条 FIFO 队首；绝不允许仍停留在已终态的 first.job_id。
-    assert service._session_current_job.get(session_id) != first.job_id, (
+    assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) != first.job_id, (
         "取消 paused Job 后活动槽仍停留在已终态 Job（终态与槽释放未在同一链路）"
     )
 
@@ -337,7 +338,7 @@ async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> 
         "第一条",
         message_id="msg_first",
         message_created_at=datetime.now(UTC).isoformat(),
-        thread_id="thr_cancel_test",
+        thread_id=job_fixture_thread_id(session_id),
     )
     await executor.started.wait()
 
@@ -351,6 +352,6 @@ async def test_force_interrupt_paused_releases_slot(session_lifecycle_guard) -> 
 
     assert drained == 1
     assert service._jobs[first.job_id].status == JobStatus.cancelled
-    assert service._session_current_job.get(session_id) is None, (
+    assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) is None, (
         "排空 paused Job 后活动槽必须已释放"
     )

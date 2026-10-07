@@ -4,8 +4,8 @@ import httpx
 import pytest
 
 from app.gateway.control.coordinator import SessionGeneratorCoordinator
-from app.schemas.gateway_control import GeneratorDefinitionCreateRequest
 from app.gateway.registry import WorkspaceTarget
+from app.schemas.gateway_control import GeneratorDefinitionCreateRequest
 
 
 class _Registry:
@@ -132,12 +132,14 @@ async def test_duplicate_session_locators_share_one_catalog_probe() -> None:
                 "kind": "live_session",
                 "workspace_id": "gw_test",
                 "session_id": "ses_shared",
+                "thread_id": "thr_shared",
             },
             session_strategy={
                 "mode": "continue_existing",
                 "target": {
                     "workspace_id": "gw_test",
                     "session_id": "ses_shared",
+                    "thread_id": "thr_shared",
                 },
                 "concurrency": "queue",
                 "report_back": "none",

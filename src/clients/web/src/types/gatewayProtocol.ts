@@ -234,9 +234,10 @@ export type GeneratorContextSourceDTO = Omit<OptionalFields<GatewayProtocol.Gene
   session_id?: string | null;
   snapshot_id?: string | null;
 };
+export type GeneratorTargetDTO = Pick<GatewayProtocol.GeneratorTargetDTO, "workspace_id" | "session_id" | "thread_id">;
 export type GeneratorSessionStrategyDTO = Omit<OptionalFields<GatewayProtocol.GeneratorSessionStrategyDTO>, "mode" | "target" | "concurrency" | "report_back"> & {
   mode?: "new_per_run" | "continue_existing" | "fork_new_and_report_back";
-  target?: SessionLocatorDTO | null;
+  target?: GeneratorTargetDTO | null;
   concurrency?: "queue";
   report_back?: "none" | "link" | "summary" | "summary_and_link" | "full" | "continue_agent";
 };

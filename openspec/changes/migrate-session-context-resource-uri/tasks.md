@@ -1,4 +1,4 @@
-> 台账口径说明：本 change 对应的**生产实现尚未开工**，本文件同时登记 (a) **规范层可机械定稿**项（已在 `specs/session-context-resource-addressing/spec.md` 与 `design.md` 写清 MUST 断言，或为对 owner / 在途 change 的具名引用与核验）与 (b) **生产实现**项。凡 `[x]` 均只表示「规范层已定稿 / 已具名引用 / 已核验」，MUST NOT 读作「生产已实现」；其余 `[ ]` 为待实现或需 owner 裁定，逐项注明还差什么。
+> 台账口径说明：本 change 混合登记规范定稿与生产验收，`[x]` 的含义以每项明示证据为准；规范定稿不等于生产完成。配置来源 URI/layer 和本地会话结构化解析已有集成与具名证据，A01 又集成 activation/detail 接线；不再沿用“生产尚未开工”的历史总判定。第 3、4、5、9 组未勾项仍分别承担真实入口、联邦、持久字段与 send/read/wait 的完整验收。
 
 ## 1. 依赖与前置对齐
 
@@ -32,7 +32,7 @@
 
 - [x] 5.1 让入口停止接受旧式上下文 URI：对含身份/领域段 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
 - [ ] 5.2 记录并复核**零存量**取证基线（见 design D5 与 spec「旧式上下文 URI 只能被入口拒绝」）：旧式上下文 URI 无任何持久化实例，故 MUST NOT 构造扫描/规范化/失效的历史数据迁移脚本。
-- [ ] 5.3 新写字段切换：让既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）与 `context_source_control_states`（来源追踪事实），不得保留旧写入形态或兼容读写双轨。
+- [ ] 5.3 新写字段切换：让确需资源定位的既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri` 与 `context_source_control_states`（来源追踪事实），不为不需定位的状态增加冗余URI列。内部聚合的必填nullable display_uri引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」，activation读写/serde/fork/detail/projection在同一闭包迁齐；不得保留旧写入形态或兼容读写双轨。
 - [ ] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。
 
 ## 5A. 配置来源真实路径持久化的迁移（正名出处：`add-unified-virtual-resource-addressing`）

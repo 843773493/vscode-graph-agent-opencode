@@ -22,6 +22,7 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
         session_id: str,
         prompt: str,
         *,
+        thread_id: str,
         phase: str,
         ledger_path: Path,
     ) -> tuple[str, str]:
@@ -40,9 +41,12 @@ class SessionGenerationMessageDispatchSupport(SessionGenerationReportingSupport)
             message = await self._session_orchestrator.prepare_user_message(
                 session_id,
                 prompt,
+                thread_id=thread_id,
                 metadata=self._message_metadata(payload, phase),
             )
             self._persist_prepared_message(payload, phase, message)
+        if message.thread_id != thread_id:
+            raise RuntimeError("生成消息的持久线程与冻结目标不一致")
         self._update_execution_phase(
             ledger_path,
             phase="message_prepared",

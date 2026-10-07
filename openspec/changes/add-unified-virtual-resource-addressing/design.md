@@ -123,6 +123,10 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 
 **备选**：让 URI 兼任 identity 用于去重（被否：URI 允许悬空，悬空后无法去重）。
 
+### D8a：内部 catalog 无真实地址时显式无 URI
+
+MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没有 owner 公布的可访问模板，统一采用必填 `display_uri=null`；真实 Skill 条目与 AGENTS 地址不变。字段、校验、完整性、持久化和恢复只引用 spec requirement「内部语义聚合资源不得伪造 URI」。一次迁齐 descriptor/snapshot→Registry→provenance/serde→activation schema/read/write/fork/detail→必要协议/投影/fixture，不为当前强制字符串 carrier 增兼容层或伪造 kind。该合同已定，源码实施与动态验收仍待。
+
 ### D8b：kind 闭集在唯一 owner 登记（owner 裁定，消除待登记）
 
 **决定**：kind 闭集定稿为 `agent-spec` | `skills` | `config` | `session` | `files`。`files` 只用于 workspace scope 的源码根；新增实现见第8组，原四值历史证据保留其验证边界。会话上下文资源（会话定位）**自身**的 kind 取 `session`，由本 change 在此登记；`config` 承载配置来源文件本身。两者都不再由别的 change 新登记。
@@ -153,7 +157,7 @@ identity 不可解析、不做寻址；URI 可解析、不承担身份。同一�
 
 **理由**：同一概念三个名字（layer `bundled`、scope `builtin`、config layer `inline`）——正是本仓库要求根除的。两处都改名后 shim 退化为恒等映射可删。
 
-**影响评估（已独立核验）**：`layer` 进入 `entry_identity`（`skill_runtime.py:558`）与 catalog payload（`:605`），但二者只进内存 `ResourceRegistry`（`semantic_registry.py:20-23`），无持久化写入；全仓唯一持久化 `display_uri` 列（`resource_activation_schema.py:85`）的写入方 `ResourceActivationStore.persist_snapshot` 生产从不被调用：`app/container.py` 无任何 `resource_activation`/`activation_store` 装配（`rg` 退出 1），`attach_resource_activation_store` 的全部调用方都在 `tests/unit/services/infrastructure/rollout_context/test_resource_activation_{storage,retention,fork_identity}.py`。故**安全改名，无需迁移任务**。真依赖 URI scope `builtin` 的位置现落在 `grammar.py:18` 的 scope 闭集 `_SCOPE_KEYWORDS` 与 `resolver.py` 的 scope 构造校验（grammar.py 已无 `builtin` 字面量、`_SKILL_SCOPES` 已不存在），其余为无关同名。
+**影响评估**：`layer` 参与 entry identity 与 catalog payload；scope/layer 必须在实际 producer 和消费者一起收敛，不构造旧开发数据迁移。历史“activation writer 生产未调用”的调查已被真实 execution/Runner/Factory/Saver 接线取代，不能继续当准入门；当前新写入与恢复按 D8a 及 spec 的单一合同处理。真依赖 URI scope 的 grammar/resolver 与无关工具 origin/主题等 `builtin` 同名继续分开核对。
 
 **备选**：只改 scope 名不改 layer 名（被否：留下 layer `bundled` 与 config layer `inline` 的同概念异名，且 shim 无法退化为恒等）。
 

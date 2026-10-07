@@ -215,6 +215,10 @@ def prepare_registered_context(
                 sources=tuple(source for source in frozen.sources if source.descriptor.source_id in allowed),
             )
             csm_batch = batch
+            if admission.execution_origin == "internal":
+                seed_source = owner.internal_seed_source(session_id, thread_id, execution_id)
+                if seed_source is not None:
+                    batch = PendingContextSourceBatch(deltas=batch.deltas, sources=(*batch.sources, seed_source))
             with owner._context_reader.open_snapshot(session_id, thread_id, checkpoint_ns) as read_snapshot:
                 previous = owner._storage.latest_context_assembly(read_snapshot)
             batch = _activation_guidance_batch(

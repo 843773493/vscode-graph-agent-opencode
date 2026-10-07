@@ -13,8 +13,9 @@ from app.domain.itemized.enums import PayloadKind
 from app.domain.itemized.execution_admission import (
     ExecutionAdmission,
     InternalExecutionIntent,
+    internal_execution_request_preimage,
 )
-from app.domain.itemized.hashing import content_hash
+from app.domain.itemized.hashing import content_hash, sha256_jcs
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -117,9 +118,16 @@ def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity
         None,
         None,
         "internal",
-            expected.job_id,
-            expected.admission_idempotency_key,
-        expected_notice.content_hash,
+        expected.job_id,
+        expected.admission_idempotency_key,
+        sha256_jcs(internal_execution_request_preimage(
+            session_id=SESSION_ID,
+            thread_id=thread_id,
+            execution_id=expected.execution_id,
+            job_id=expected.job_id,
+            admission_idempotency_key=expected.admission_idempotency_key,
+            request_input={"kind": "runtime_notice", "payload": expected_notice.payload},
+        )),
     )
     item = saver._storage.read_items(
         SESSION_ID,

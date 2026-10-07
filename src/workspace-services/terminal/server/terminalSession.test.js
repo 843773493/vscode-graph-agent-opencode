@@ -8,7 +8,7 @@ import { TerminalSession, validateTerminalRecord } from "./terminalSession.js";
 const workspaceRoot = path.join(process.cwd(), "out", "tests", "src", "workspace-services", "terminal", "server", "terminalSession", "workspace");
 mkdirSync(workspaceRoot, { recursive: true });
 
-function completedSession() {
+function completedSession(overrides = {}) {
   const manager = {
     workspaceId: "00000000-0000-4000-8000-000000000001",
     workspaceRoot,
@@ -27,18 +27,46 @@ function completedSession() {
       last_command_status: "completed",
       last_command_exit_code: 0,
       completion_event_id: "terminal_completed:term_completed:1",
+      command_start_sequence: 0,
+      ...overrides,
     },
   });
 }
 
 test("只有返回给模型的后台 execution 可以 claim steering", () => {
   const session = completedSession();
+  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
 
-  assert.equal(session.claimSteering(), false);
+  assert.equal(session.claimSteering(identity), false);
   session.markModelBackgrounded();
-  assert.equal(session.claimSteering(), true);
-  assert.equal(session.claimSteering(), false);
-  session.finishSteering({ dispatched: true });
+  assert.equal(session.claimSteering(identity), true);
+  assert.equal(session.claimSteering(identity), true);
+  session.finishSteering({ ...identity, dispatched: true });
+  session.finishSteering({ ...identity, dispatched: true });
+  assert.equal(session.claimSteering(identity), false);
+  assert.equal(session.snapshot().steering_dispatched, true);
+});
+
+test("迟到 claim 和 finish 不得修改另一命令 generation", () => {
+  const session = completedSession({ steering_dispatching: true });
+  const current = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
+  const before = session.toRecord();
+
+  for (const stale of [
+    { ...current, completionEventId: "terminal_completed:term_completed:old" },
+    { ...current, commandStartSequence: 2 },
+  ]) {
+    assert.throws(() => session.claimSteering(stale), /event\/generation 不匹配/);
+    assert.throws(() => session.finishSteering({ ...stale, dispatched: true }), /event\/generation 不匹配/);
+  }
+  assert.deepEqual(session.toRecord(), before);
+});
+
+test("恢复持久 claim 保留原 completion event 和 generation", () => {
+  const session = completedSession({ steering_dispatching: true });
+  const identity = { completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence };
+  assert.equal(session.claimSteering(identity), true);
+  session.finishSteering({ ...identity, dispatched: true });
   assert.equal(session.snapshot().steering_dispatched, true);
 });
 
@@ -49,7 +77,7 @@ test("模型读取完成输出后抑制 terminal completion steering", async () 
   await session.readModelOutput();
 
   assert.equal(session.snapshot().completion_observed_by_model, true);
-  assert.equal(session.claimSteering(), false);
+  assert.equal(session.claimSteering({ completionEventId: session.completionEventId, commandStartSequence: session.commandStartSequence }), false);
 });
 
 test("持久记录只承载工作区内相对路径，绝不落盘任何真实绝对路径", () => {

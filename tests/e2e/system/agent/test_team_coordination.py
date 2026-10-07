@@ -3,12 +3,22 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.gateway_processes import (
+    LOCAL_TOKEN_HEADERS,
+    GatewayProcess,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
+)
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.trace import get_trace_payload
 
 
@@ -45,6 +55,37 @@ def e2e_workspace_config_path(
     return str(target_path)
 
 
+@pytest.fixture(scope="module")
+def team_gateway(
+    request: pytest.FixtureRequest,
+    e2e_backend_process: object,
+    e2e_workspace_root_path: str,
+    client_base_url: str,
+) -> Generator[GatewayProcess, None, None]:
+    """本文件通过真实 Gateway 代理独立 Workspace 后端。"""
+    port = e2e_port_block_for_file(Path(request.node.fspath)).port(1)
+    gateway = start_gateway_process(
+        workspace_root=Path(e2e_workspace_root_path),
+        default_backend_url=client_base_url,
+        port=port,
+    )
+    try:
+        yield gateway
+    finally:
+        close_gateway_process(gateway)
+
+
+@pytest.fixture
+async def client(team_gateway: GatewayProcess) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{team_gateway.port}",
+        headers=LOCAL_TOKEN_HEADERS,
+        timeout=30,
+    ) as gateway_client:
+        await acquire_gateway_guest(gateway_client)
+        yield gateway_client
+
+
 async def _create_session(client: httpx.AsyncClient, title: str) -> str:
     response = await client.post("/api/v1/sessions", json={"title": title})
     assert response.status_code == 200, response.text
@@ -71,19 +112,63 @@ async def _run_turn(
     return job_id
 
 
+async def _job_traces(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    job_id: str,
+) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    cursor = None
+    while True:
+        params = {"limit": 200}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = await client.get(
+            f"/api/v1/sessions/{session_id}/traces", params=params
+        )
+        assert response.status_code == 200, response.text
+        page = response.json()["data"]
+        events.extend(event for event in page["items"] if event["job_id"] == job_id)
+        if not page["has_more"]:
+            return events
+        next_cursor = page["next_cursor"]
+        assert next_cursor and next_cursor != cursor, page
+        cursor = next_cursor
+
+
 async def _job_tool_names(
     client: httpx.AsyncClient,
     *,
     session_id: str,
     job_id: str,
 ) -> list[str]:
-    response = await client.get(f"/api/v1/sessions/{session_id}/traces")
-    assert response.status_code == 200, response.text
     return [
-        str(get_trace_payload(event).get("tool_name"))
-        for event in response.json()["data"]["items"]
-        if event.get("job_id") == job_id and event.get("type") == "tool_call_start"
+        str(get_trace_payload(event)["tool_name"])
+        for event in await _job_traces(client, session_id=session_id, job_id=job_id)
+        if event["type"] == "tool_call_start"
     ]
+
+
+async def _job_tool_result(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    job_id: str,
+    tool_name: str,
+) -> dict[str, object]:
+    results = [
+        get_trace_payload(event)
+        for event in await _job_traces(client, session_id=session_id, job_id=job_id)
+        if event["type"] == "tool_call_end"
+        and get_trace_payload(event).get("tool_name") == tool_name
+    ]
+    assert len(results) == 1, f"{tool_name} 必须恰有一次真实结果: {results}"
+    result = results[0]
+    assert result["status"] == "success" and not result["failed"], result
+    payload = json.loads(result["result"])
+    assert isinstance(payload, dict), payload
+    return payload
 
 
 async def _run_required_tool_turn(
@@ -95,9 +180,7 @@ async def _run_required_tool_turn(
 ) -> str:
     job_id = await _run_turn(client, session_id=session_id, prompt=prompt)
     tool_names = await _job_tool_names(
-        client,
-        session_id=session_id,
-        job_id=job_id,
+        client, session_id=session_id, job_id=job_id
     )
     assert required_tool in tool_names, (
         f"会话未调用要求的工具 {required_tool}: {tool_names}"
@@ -105,39 +188,60 @@ async def _run_required_tool_turn(
     return job_id
 
 
-def _team_board(workspace_root: Path, name: str) -> tuple[Path, dict[str, object]]:
-    boards = []
-    for path in (workspace_root / ".boxteam" / "teams").glob("team_*/team.json"):
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload["name"] == name:
-            boards.append((path, payload))
-    assert len(boards) == 1, f"找不到唯一团队面板 name={name}: {boards}"
-    return boards[0]
+def _team_board_path(workspace_root: Path, session_id: str, team_id: str) -> Path:
+    session_node = get_session_path_resolver(
+        workspace_root / ".boxteam" / "sessions"
+    ).resolve_session_node(session_id)
+    path = session_node / "teams" / team_id / "team.json"
+    assert path.is_file(), path
+    return path
+
+
+async def _child_threads(
+    client: httpx.AsyncClient, session_id: str
+) -> list[dict[str, object]]:
+    response = await client.get(f"/api/v1/sessions/{session_id}/child-threads")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["parent_session_id"] == session_id
+    assert data["total"] == len(data["items"])
+    return data["items"]
+
+
+async def _session_ids(client: httpx.AsyncClient) -> set[str]:
+    response = await client.get("/api/v1/session-catalog/export")
+    assert response.status_code == 200, response.text
+    return {
+        item["node_id"]
+        for item in response.json()["data"]["items"]
+        if item["kind"] == "session"
+    }
 
 
 async def _wait_for_review_completion(
     client: httpx.AsyncClient,
     *,
     board_path: Path,
-    reviewer_session_id: str,
+    session_id: str,
+    reviewer_thread_id: str,
+    task_id: str,
     max_attempts: int = 180,
 ) -> dict[str, object]:
     assigned_job_id = None
     for _ in range(max_attempts):
         board = json.loads(board_path.read_text(encoding="utf-8"))
-        review_tasks = [
-            task
-            for task in board["tasks"]
-            if task["assignee_session_id"] == reviewer_session_id
-            and task["phase"] == "review"
-        ]
-        if review_tasks:
-            task = review_tasks[-1]
-            assigned_job_id = task.get("assigned_job_id")
-            if assigned_job_id and task["status"] == "completed":
-                return task
-            if task["status"] in {"failed", "cancelled"}:
-                pytest.fail(f"审查任务失败: {task}")
+        task = next(task for task in board["tasks"] if task["task_id"] == task_id)
+        assert task["assignee_thread_id"] == reviewer_thread_id
+        assigned_job_id = task["assigned_job_id"]
+        if assigned_job_id and task["status"] == "completed":
+            job = await wait_for_job_done(
+                client, assigned_job_id, max_attempts=max_attempts
+            )
+            assert job["session_id"] == session_id
+            assert job["thread_id"] == reviewer_thread_id
+            return task
+        if task["status"] in {"failed", "cancelled"}:
+            pytest.fail(f"审查任务失败: {task}")
         await asyncio.sleep(1)
     if assigned_job_id:
         response = await client.get(f"/api/v1/jobs/{assigned_job_id}")
@@ -153,12 +257,14 @@ async def test_parent_creates_reviewer_and_drives_review_cycle(
     workspace_root = Path(e2e_workspace_root_path)
     target = workspace_root / "team-created-review.txt"
     target.write_text("before\n", encoding="utf-8")
-    parent_session_id = await _create_session(client, "团队 E2E：自动审查会话")
+    session_id = await _create_session(client, "团队 E2E：自动审查线程")
+    sessions_before = await _session_ids(client)
+    assert await _child_threads(client, session_id) == []
     team_name = "E2E 自动创建审查成员"
 
     await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="apply_patch",
         prompt=(
             "必须真实调用 apply_patch，把 team-created-review.txt 的唯一一行 before 改成 after。"
@@ -166,159 +272,198 @@ async def test_parent_creates_reviewer_and_drives_review_cycle(
         ),
     )
     assert target.read_text(encoding="utf-8") == "after\n"
-    await _run_required_tool_turn(
+    team_job_id = await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="create_team",
         prompt=(
             f"只调用 create_team 创建名称为“{team_name}”的团队。"
             "工具成功后只回复 TEAM_OK。"
         ),
     )
-    board_path, board = _team_board(workspace_root, team_name)
+    board = await _job_tool_result(
+        client, session_id=session_id, job_id=team_job_id, tool_name="create_team"
+    )
+    assert board["session_id"] == session_id and board["name"] == team_name
     team_id = board["team_id"]
+    board_path = _team_board_path(workspace_root, session_id, team_id)
     member_job_id = await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="create_team_member",
         prompt=(
             f"只调用 create_team_member：team_id={team_id}，role=reviewer，"
-            "work_mode=read_only，startup_prompt=只调用 send_message_to_session 向父会话报告 "
-            "REVIEWER_READY 后等待，instructions=只读审查且禁止修改文件。"
-            "不要调用旧 task 工具；成功后只回复 MEMBER_OK。"
+            "work_mode=read_only，startup_prompt=确认只读审查角色后只回复 REVIEWER_READY，"
+            "instructions=只读审查且禁止修改文件。成功后只回复 MEMBER_OK。"
         ),
     )
     assert "task" not in await _job_tool_names(
-        client,
-        session_id=parent_session_id,
-        job_id=member_job_id,
+        client, session_id=session_id, job_id=member_job_id
     )
-    _, board = _team_board(workspace_root, team_name)
-    reviewers = [member for member in board["members"] if member["role"] == "reviewer"]
-    assert len(reviewers) == 1
-    assert reviewers[0]["source"] == "delegated"
-    reviewer_session_id = reviewers[0]["session_id"]
-    await _run_required_tool_turn(
+    operation = await _job_tool_result(
+        client, session_id=session_id, job_id=member_job_id, tool_name="create_team_member"
+    )
+    reviewer_thread_id = operation["child_thread_id"]
+    member = operation["member"]
+    assert member["thread_id"] == reviewer_thread_id
+    assert member["delegation_id"] == operation["child_delegation_id"]
+    assert member["role"] == "reviewer" and member["source"] == "delegated"
+    assert operation["board"]["session_id"] == session_id
+    children = await _child_threads(client, session_id)
+    assert len(children) == 1
+    assert children[0]["thread_id"] == reviewer_thread_id
+    assert children[0]["delegation_id"] == operation["child_delegation_id"]
+    # 成员以控制库为权威，磁盘 team.json 不保存第二份成员投影。
+    assert json.loads(board_path.read_text(encoding="utf-8"))["members"] == []
+
+    assign_job_id = await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="assign_team_task",
         prompt=(
             f"只调用 assign_team_task：team_id={team_id}，"
-            f"assignee_session_id={reviewer_session_id}，title=审查父会话修改，phase=review，"
-            "cycle=1，start_assignee=true，depends_on_task_ids=[]。description 必须要求读取 "
-            "team-created-review.txt，确认内容精确为 after，然后调用 update_team_task，"
-            "以 completed 和包含 AUTO_REVIEW_OK 的 summary 写回。分派后只回复 ASSIGNED_OK。"
+            f"assignee_thread_id={reviewer_thread_id}，title=审查协调者修改，phase=review，"
+            "cycle=1，start_assignee=true，depends_on_task_ids=[]。description 必须要求先调用 "
+            "get_team_board，再读取 team-created-review.txt，确认内容精确为 after，"
+            "然后调用 update_team_task，以 completed 和包含 AUTO_REVIEW_OK 的 summary 写回。"
+            "分派后只回复 ASSIGNED_OK。"
         ),
+    )
+    assignment = await _job_tool_result(
+        client, session_id=session_id, job_id=assign_job_id, tool_name="assign_team_task"
     )
     task = await _wait_for_review_completion(
         client,
         board_path=board_path,
-        reviewer_session_id=reviewer_session_id,
+        session_id=session_id,
+        reviewer_thread_id=reviewer_thread_id,
+        task_id=assignment["task"]["task_id"],
     )
+    assert task["assigned_job_id"] == assignment["dispatched_job_id"]
     assert "AUTO_REVIEW_OK" in task["summary"]
     reviewer_tools = await _job_tool_names(
-        client,
-        session_id=reviewer_session_id,
-        job_id=task["assigned_job_id"],
+        client, session_id=session_id, job_id=task["assigned_job_id"]
     )
     assert "get_team_board" in reviewer_tools
     assert "update_team_task" in reviewer_tools
+    assert target.read_text(encoding="utf-8") == "after\n"
+    assert await _session_ids(client) == sessions_before
 
 
 @pytest.mark.asyncio
-async def test_parent_attaches_refined_manual_reviewer_without_creating_another(
+async def test_parent_reuses_refined_reviewer_child_without_creating_another(
     client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ) -> None:
     workspace_root = Path(e2e_workspace_root_path)
-    target = workspace_root / "team-attached-review.txt"
+    target = workspace_root / "team-refined-review.txt"
     target.write_text("draft\n", encoding="utf-8")
-    reviewer_session_id = await _create_session(client, "人工调校的审查会话")
-    await _run_turn(
+    session_id = await _create_session(client, "团队 E2E：复用审查线程")
+    sessions_before = await _session_ids(client)
+    assert await _child_threads(client, session_id) == []
+    team_name = "E2E 复用既有审查成员"
+    team_job_id = await _run_required_tool_turn(
         client,
-        session_id=reviewer_session_id,
-        prompt="记住审查规则：只有目标文件内容精确匹配验收值才能通过。只回复 RULE_V1_OK。",
+        session_id=session_id,
+        required_tool="create_team",
+        prompt=f"只调用 create_team 创建名称为“{team_name}”的团队，成功后只回复 TEAM_OK。",
     )
-    await _run_turn(
+    board = await _job_tool_result(
+        client, session_id=session_id, job_id=team_job_id, tool_name="create_team"
+    )
+    team_id = board["team_id"]
+    board_path = _team_board_path(workspace_root, session_id, team_id)
+    member_job_id = await _run_required_tool_turn(
         client,
-        session_id=reviewer_session_id,
-        prompt="补充审查规则：审查时必须先读团队面板，最后写回任务状态。只回复 RULE_V2_OK。",
+        session_id=session_id,
+        required_tool="create_team_member",
+        prompt=(
+            f"只调用 create_team_member：team_id={team_id}，role=reviewer，"
+            "work_mode=read_only，startup_prompt=确认只读审查角色后只回复 REVIEWER_READY，"
+            "instructions=只读审查且禁止修改文件。成功后只回复 MEMBER_OK。"
+        ),
     )
-    parent_session_id = await _create_session(client, "团队 E2E：复用审查会话")
-    sessions_before = await client.get("/api/v1/sessions")
-    assert sessions_before.status_code == 200
-    session_ids_before = {
-        session["session_id"] for session in sessions_before.json()["data"]["items"]
-    }
-    team_name = "E2E 挂接人工审查成员"
+    member = await _job_tool_result(
+        client, session_id=session_id, job_id=member_job_id, tool_name="create_team_member"
+    )
+    reviewer_thread_id = member["child_thread_id"]
+    children_before = await _child_threads(client, session_id)
+    assert len(children_before) == 1
+    assert children_before[0]["thread_id"] == reviewer_thread_id
+    assert children_before[0]["delegation_id"] == member["child_delegation_id"]
 
+    rules_job_id = await _run_required_tool_turn(
+        client,
+        session_id=session_id,
+        required_tool="assign_team_task",
+        prompt=(
+            f"只调用 assign_team_task：team_id={team_id}，assignee_thread_id={reviewer_thread_id}，"
+            "title=精炼审查规则，phase=review，cycle=1，start_assignee=true，depends_on_task_ids=[]。"
+            "description=先调用 get_team_board，记住 RULE_V1：只有目标文件内容精确匹配验收值才通过；"
+            "RULE_V2：审查前必须读取团队面板，完成后写回任务状态。接受两条规则后调用 "
+            "update_team_task，以 completed 和包含 RULES_READY 的 summary 写回。"
+            "分派后只回复 RULES_ASSIGNED。"
+        ),
+    )
+    rules_assignment = await _job_tool_result(
+        client, session_id=session_id, job_id=rules_job_id, tool_name="assign_team_task"
+    )
+    rules_task = await _wait_for_review_completion(
+        client,
+        board_path=board_path,
+        session_id=session_id,
+        reviewer_thread_id=reviewer_thread_id,
+        task_id=rules_assignment["task"]["task_id"],
+    )
+    assert "RULES_READY" in rules_task["summary"]
     await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="apply_patch",
         prompt=(
-            "必须真实调用 apply_patch，把 team-attached-review.txt 的唯一一行 draft 改成 final。"
+            "必须真实调用 apply_patch，把 team-refined-review.txt 的唯一一行 draft 改成 final。"
             "不要调用 read_file、glob 或其他工具；成功后只回复 PATCH_OK。"
         ),
     )
     assert target.read_text(encoding="utf-8") == "final\n"
-    await _run_required_tool_turn(
+    review_job_id = await _run_required_tool_turn(
         client,
-        session_id=parent_session_id,
-        required_tool="create_team",
-        prompt=(
-            f"只调用 create_team 创建名称为“{team_name}”的团队。"
-            "工具成功后只回复 TEAM_OK。"
-        ),
-    )
-    board_path, board = _team_board(workspace_root, team_name)
-    team_id = board["team_id"]
-    attach_job_id = await _run_required_tool_turn(
-        client,
-        session_id=parent_session_id,
-        required_tool="attach_team_session",
-        prompt=(
-            f"只调用 attach_team_session：team_id={team_id}，session_id={reviewer_session_id}，"
-            "role=reviewer，work_mode=read_only，notify=true，"
-            "instructions=沿用该会话已经形成的严格审查方案。"
-            "不要调用 create_team_member 或旧 task 工具；成功后只回复 ATTACHED_OK。"
-        ),
-    )
-    attach_tool_names = await _job_tool_names(
-        client,
-        session_id=parent_session_id,
-        job_id=attach_job_id,
-    )
-    assert "create_team_member" not in attach_tool_names
-    assert "task" not in attach_tool_names
-    _, board = _team_board(workspace_root, team_name)
-    reviewer = next(
-        member for member in board["members"] if member["session_id"] == reviewer_session_id
-    )
-    assert reviewer["source"] == "attached"
-    await _run_required_tool_turn(
-        client,
-        session_id=parent_session_id,
+        session_id=session_id,
         required_tool="assign_team_task",
         prompt=(
-            f"只调用 assign_team_task：team_id={team_id}，"
-            f"assignee_session_id={reviewer_session_id}，title=使用既有规则复审，"
-            "phase=review，cycle=1，start_assignee=true，depends_on_task_ids=[]。"
-            "description 必须要求沿用已有审查规则，读取 team-attached-review.txt，确认精确为 final，"
-            "然后调用 update_team_task，以 completed 和包含 ATTACHED_REVIEW_OK 的 summary 写回。"
-            "分派后只回复 ASSIGNED_OK。"
+            f"只调用 assign_team_task：team_id={team_id}，assignee_thread_id={reviewer_thread_id}，"
+            "title=使用既有规则复审，phase=review，cycle=2，start_assignee=true，"
+            f"depends_on_task_ids=[\"{rules_task['task_id']}\"]。description 必须要求先调用 "
+            "get_team_board，核对前一审查规则任务已经 completed，沿用此前 RULE_V1 与 RULE_V2，"
+            "读取 team-refined-review.txt，确认内容精确为 final，然后调用 update_team_task，"
+            "以 completed 和包含 REUSED_REVIEW_OK 的 summary 写回。分派后只回复 ASSIGNED_OK。"
         ),
+    )
+    review_tools = await _job_tool_names(
+        client, session_id=session_id, job_id=review_job_id
+    )
+    assert "create_team_member" not in review_tools
+    assert "task" not in review_tools
+    assignment = await _job_tool_result(
+        client, session_id=session_id, job_id=review_job_id, tool_name="assign_team_task"
     )
     task = await _wait_for_review_completion(
         client,
         board_path=board_path,
-        reviewer_session_id=reviewer_session_id,
+        session_id=session_id,
+        reviewer_thread_id=reviewer_thread_id,
+        task_id=assignment["task"]["task_id"],
     )
-    assert "ATTACHED_REVIEW_OK" in task["summary"]
-
-    sessions_after = await client.get("/api/v1/sessions")
-    assert sessions_after.status_code == 200
-    session_ids_after = {
-        session["session_id"] for session in sessions_after.json()["data"]["items"]
-    }
-    assert session_ids_after == session_ids_before
+    assert "REUSED_REVIEW_OK" in task["summary"]
+    assert task["assigned_job_id"] != rules_task["assigned_job_id"]
+    assert task["depends_on_task_ids"] == [rules_task["task_id"]]
+    reviewer_tools = await _job_tool_names(
+        client, session_id=session_id, job_id=task["assigned_job_id"]
+    )
+    assert "get_team_board" in reviewer_tools
+    assert "update_team_task" in reviewer_tools
+    children_after = await _child_threads(client, session_id)
+    assert {child["thread_id"] for child in children_after} == {reviewer_thread_id}
+    assert children_after[0]["delegation_id"] == member["child_delegation_id"]
+    assert await _session_ids(client) == sessions_before
+    assert target.read_text(encoding="utf-8") == "final\n"

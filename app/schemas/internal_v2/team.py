@@ -7,9 +7,8 @@ from pydantic import BaseModel, Field
 
 from .common import TimestampedDTO
 
-
-TeamMemberSource = Literal["coordinator", "delegated", "attached"]
-TeamMemberStatus = Literal["active", "activation_failed", "removed"]
+TeamMemberSource = Literal["coordinator", "delegated"]
+TeamMemberStatus = Literal["active", "pending", "cancelled"]
 TeamWorkMode = Literal["write", "read_only"]
 TeamTaskPhase = Literal["development", "review", "test", "fix", "other"]
 TeamTaskStatus = Literal[
@@ -23,14 +22,13 @@ TeamTaskStatus = Literal[
 
 
 class TeamMemberDTO(BaseModel):
-    session_id: str
+    thread_id: str
+    delegation_id: str | None = None
     role: str
     source: TeamMemberSource
     work_mode: TeamWorkMode
     instructions: str = ""
     status: TeamMemberStatus = "active"
-    activation_job_id: str | None = None
-    activation_error: str | None = None
     joined_at: datetime
     updated_at: datetime
 
@@ -41,20 +39,21 @@ class TeamTaskDTO(TimestampedDTO):
     description: str
     phase: TeamTaskPhase
     cycle: int = Field(ge=1)
-    assignee_session_id: str
+    assignee_thread_id: str
     status: TeamTaskStatus
     depends_on_task_ids: list[str] = Field(default_factory=list)
     assigned_job_id: str | None = None
     summary: str | None = None
     error: str | None = None
-    updated_by_session_id: str
+    updated_by_thread_id: str
 
 
 class TeamEventDTO(BaseModel):
     event_id: str
     team_id: str
     type: str
-    actor_session_id: str
+    session_id: str
+    actor_thread_id: str
     created_at: datetime
     payload: dict[str, object] = Field(default_factory=dict)
 
@@ -62,7 +61,8 @@ class TeamEventDTO(BaseModel):
 class TeamBoardDTO(TimestampedDTO):
     team_id: str
     name: str
-    coordinator_session_id: str
+    session_id: str
+    coordinator_thread_id: str
     version: int = Field(ge=1)
     members: list[TeamMemberDTO] = Field(default_factory=list)
     tasks: list[TeamTaskDTO] = Field(default_factory=list)

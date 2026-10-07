@@ -1,24 +1,8 @@
-"""初始 execution intent 消费 worker（OpenSpec 8.5-B，R23）。
+"""消费 SessionControlStore 冻结的初始 execution intent。
 
-对应 ``add-itemized-rollout-context`` 任务 8.5-B 与
-``rounds/R23-task-brief.md``：
-
-- worker 只消费 :class:`SessionControlStore` 的持久状态索引
-  （``list_pending_initial_execution_intents``），不扫磁盘、不读
-  ``thread.json``、不感知当前 Agent 配置或 task seed。
-- binder 是可注入协议；binder 输入携带冻结 intent 与软件生成的稳定
-  ``execution_binding_id`` / ``job_id``。R25/R26 提供真实 thread
-  binder 前，本模块不提供默认 binder，也不注册任何会启动父 Session
-  Job 的实现（红线：R23 不启动真实 thread Job）。
-- binder 成功返回的 identity 必须与冻结值完全一致才 ``mark bound``；
-  binder 异常或 identity 漂移经 ``record_initial_execution_failure``
-  记录后在本轮结束时显式抛出，绝不静默吞掉。
-- 并发 worker 对同一 intent 只能产生一次有效 binding：claim 由 store
-  的单事务闸门保证（不同 claim 冲突 fail closed）。
-- 生产容器当前尚未构造本 worker（零装配）；OpenSpec 8.5-B 要求的
-  接线为「生产装配只建立 worker 生命周期（显式 start/stop 入口），
-  缺 binder 时启动明确报告 unavailable」，但该装配与 start/stop 入口
-  尚未落地，故当前生产运行期不会消费任何 initial execution intent。
+binder 接收稳定 execution/job 身份，经生产生命周期闸门准入真实 child
+Job；claim 与 bound 状态由唯一 store 管理。失败保留 pending 与 last_error，
+并显式抛出；缺 binder 时启动立即报告 unavailable，不伪造 bound。
 """
 
 from __future__ import annotations
@@ -49,7 +33,7 @@ class InitialExecutionBindingTarget:
 
     ``intent`` 是 store 状态索引的冻结投影（含身份、initial state、
     preimage hash 与稳定 identity）；binder 不得读取磁盘或进程内闭包
-    补齐身份——R25/R26 的真实 thread binder 以该输入重新通过生命周期
+    补齐身份；真实 thread binder 以该输入重新通过生命周期
     准入后建立 thread-qualified execution。
     """
 
@@ -142,7 +126,7 @@ class InitialExecutionBindingWorker:
 
     @property
     def binder_available(self) -> bool:
-        """是否已注入 binder（缺省 None：R25/R26 前生产装配形态）。"""
+        """是否已显式装配真实 thread binder。"""
         return self._binder is not None
 
     def start(self) -> None:
@@ -150,8 +134,7 @@ class InitialExecutionBindingWorker:
         if self._binder is None:
             raise RuntimeError(
                 "InitialExecutionBindingWorker 缺少 binder，启动 unavailable"
-                "（R25/R26 提供真实 thread binder 前不得注册会启动父 "
-                "Session Job 的默认 binder）；未把任何 intent 标成 bound"
+                "；未把任何 intent 标成 bound"
             )
         if self._started:
             raise RuntimeError("InitialExecutionBindingWorker 已启动")
@@ -183,6 +166,8 @@ class InitialExecutionBindingWorker:
         attempts: list[InitialExecutionBindingAttempt] = []
         failures: list[str] = []
         for intent in self._store.list_pending_initial_execution_intents():
+            if intent.initial_state == "idle":
+                continue
             attempt = self._consume_one(intent, binder)
             attempts.append(attempt)
             if attempt.error is not None:
@@ -199,6 +184,13 @@ class InitialExecutionBindingWorker:
         binder: InitialExecutionBinder,
     ) -> InitialExecutionBindingAttempt:
         """消费单条 intent；claim 冲突按并发契约分类，binder 失败记录。"""
+        creation = self._store.get_thread_creation_record(intent.creation_idempotency_key)
+        if creation.state != "published" or creation.child_thread_id != intent.thread_id:
+            raise RuntimeError("initial execution readiness 缺少已发布 creation/child")
+        if creation.delegation_id is not None:
+            member = self._store.get_collaboration_member(creation.delegation_id)
+            if member.state != "published" or member.child_thread_id != intent.thread_id:
+                raise RuntimeError("initial execution readiness 缺少已发布 collaboration member")
         key = intent.admission_idempotency_key
         claim_kwargs = {
             "claim_owner": self._claim_owner,

@@ -70,6 +70,9 @@ from app.services.infrastructure.rollout_context.execution.model_calls import (
 from app.services.infrastructure.rollout_context.execution.replay import (
     RolloutReplayMixin,
 )
+from app.services.infrastructure.rollout_context.execution.runtime_wakeup import (
+    RuntimeWakeupStorageMixin,
+)
 from app.services.infrastructure.rollout_context.execution.turn_index import (
     RolloutTurnIndexMixin,
 )
@@ -182,7 +185,9 @@ class SerializerPort(Protocol):
     def loads_typed(self, value: tuple[str, bytes]) -> object: ...
 
 
+
 class RolloutStorage(
+    RuntimeWakeupStorageMixin,
     RolloutTurnsMixin,
     RolloutReplayMixin,
     RolloutTurnIndexMixin,

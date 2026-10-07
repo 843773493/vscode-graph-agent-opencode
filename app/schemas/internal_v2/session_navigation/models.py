@@ -87,12 +87,20 @@ class SessionGenerationContextSourceDTO(BaseModel):
     kind: Literal["fresh", "live_session", "snapshot"] = "fresh"
     workspace_id: str | None = None
     session_id: str | None = None
+    thread_id: str | None = None
     snapshot_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> SessionGenerationContextSourceDTO:
+        if self.kind == "live_session" and not all((self.workspace_id, self.session_id, self.thread_id)):
+            raise ValueError("live_session context source 缺少 workspace_id/session_id/thread_id")
+        return self
 
 
 class SessionGenerationTargetDTO(BaseModel):
     workspace_id: str
     session_id: str
+    thread_id: str = Field(min_length=1)
 
 
 class SessionGenerationStrategyDTO(BaseModel):
