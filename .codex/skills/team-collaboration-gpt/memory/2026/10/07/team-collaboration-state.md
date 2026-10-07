@@ -1,302 +1,68 @@
-# 团队协作实时状态与实测改进
-
-主代理独占维护；稳定规则见 [共同流程](team-collaboration-workflow.md)。更新时间：2026-10-07 本轮（北京时间）。goal **active、无预算上限**；交接与原七个 change 尚未全部验收；本次新增文件工具 change 的规划已写，实施未启动。
+# 团队协作实时状态
 
-## 授权与恢复坐标
+主代理独占维护；只记录当前队列和验收边界，已结束 attempt 查外部证据。更新时间：2026-10-07（北京时间）。原 goal **active、无预算上限，尚未完成**；最新文件工具建议已完成规划，实施未启动。
 
-- 唯一生产源码实现者 `/root/sol_vertical_implementer`，实际已核 **gpt-6.1-sol/max**；只读审查者 `wire_contract_reviewer`、`wire_http_acceptance_reviewer` 沿已核 **gpt-6-luna/max** 会话复用。注册15，不新增/复活失败agent凑人数。默认技能仍是无前缀Luna/max，本轮试验不改变永久默认。当前报告与接受范围查外部`A/current-recovery-receipt.json`，历史报告按task检索，不全文重读。
-- 用户授权架构熵减、唯一 owner、删除源码开发生成的新旧中间数据、移除旧兼容，不再逐项询问。普通源码、未集成独有改动和来源不明文件保留；不能删 fresh 数据掩盖 writer 缺陷。
-- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧 `/data/hyf/20260629_agent/vscode-graph-agent-opencode` 是软链接。
-- TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial。下文证据均相对 A，派单必须展开成完整绝对路径。
-- 主独占 history-loading、context_source_manager、Gateway context 三文件及导航 test_catalog_service/test_operations_queue；精确路径见各自 freeze.json。本轮另接手崩溃测试、四领域caller/golden、正式Web两文件、`tests/unit/domain/itemized/test_plan_contract.py` 的required键矩阵及 `tests/integration/backend/sessions/test_itemized_dispatch_contract.py` 的wire HTTP断言；生产writer不编辑这些主线程测试。四领域已以a0b2b3c2集成；Web固定f29222、attempt16完整1pass且112个现存运行依赖匹配，独审已接受并进入本次串行集成；required矩阵在匹配WT的领域上12case通过；本轮发送前binding/purpose已固定并集成，ROOT9项实际验收与927源码指纹匹配；新文件工具仍仅规划。epoch/source-cut已集成，Sol当前继续ToolSet safe-boundary唯一applied owner闭包，不实施新增文件工具。此次是核验后释放归属的范围纠正，不因观察超时另换writer；失败旧agent不重启制造重复工作。N01报告f73ba2f6、P06更正版85494965及P08整组关闭9989f604/七文件f2b527b7已主核；不能把直接owner blob相同扩大成全运行依赖相同。
-- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。已集成wire组合c0d7554c与HEAD4a9b88b2的当前坐标以A/current-recovery-receipt.json为准；ROOT集成index=TEMP/coordinator/git/wire-ROOT-integration.idx。旧0b064/history及其它早包索引只作历史证据，不作为当前生产恢复基线。固定tree与WT live分开，默认HEAD不代表完整在途组合。
-- 主串行集成与机械冻结导出，作者仅编辑指定WT owned源码和必要测试、定向Ruff；测试/Git由主承担，不改 index/refs、不派生。每命令固定绝对 workdir/index 与 GIT_OPTIONAL_LOCKS=0；不共享 index、不 amend/reset/rebase/pathspec commit。测试始终 matrix 或 timeout+ulimit。
-- 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不新建整树副本/archive/.venv，不 /tmp，不复用迁移排除的历史工作区。
-- 另一聊天草稿 `docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md` 按用户新授权只读参考，其原件仍不改写。
+## 授权、队伍与目录
 
-已裁定：assembly_ref=ResourceIdentity；unsupported_view；Gateway 创建拒绝保留 ID current；config layer=runtime_override、原 precedence 保留、active/pending 分开；delegate publication 使用 Session SQLite 同事务，不造 Team JSON 权威；internal admission 无 Turn/accepted ingress，保真实 execution link。精确决定见 TEMP/coordinator/artifacts/owner-decisions.json。
+- 本轮唯一实现者 `/root/sol_vertical_implementer`，实际已核 **gpt-6.1-sol/max**；`wire_contract_reviewer`、`wire_http_acceptance_reviewer` 沿已核 **gpt-6-luna/max** 只读审查。已注册15，不新增或复活失败agent凑人数；技能永久默认仍为无前缀Luna/max。分工按实测选择，当前无同起点A/B，不报告模型速度倍率。
+- 用户授权架构熵减、唯一owner、移除旧兼容、直接清理源码开发生成的新旧中间数据，无需重复询问。普通源码、未集成独有改动和来源不明业务文件保留；不能删fresh数据掩盖writer错误。
+- ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
+- TEMP=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=TEMP/coordinator/artifacts/sol-efficiency-trial；D=A/r01-generation-refresh-dispatch。以下证据相对A；实际派单必须展开成完整绝对路径。
+- WT=ROOT/out/worktrees/2026/10/04/024121-team-execution/thread_owner_implementer。ROOT观察index=TEMP/coordinator/git/docs-skills-r01-recovery.idx；WT观察index=TEMP/coordinator/git/r01-author-observe.idx。私有观察index不替代候选preimage/tree。
+- 主独占Git、冻结、测试、串行集成与技能文档；Sol本轮仅编辑明确owned源码/测试并定向Ruff，不Git/测试/服务/派生。每命令显式物理cwd、私有index和GIT_OPTIONAL_LOCKS=0；禁共享index写、amend/reset/rebase/pathspec commit。进程外timeout+ulimit或matrix保护所有测试。
+- 三保护：`app/gateway/control/generators.py`、`app/services/business/session_generation/service.py`、`examples/demos/Itemized_context_storage/`。不/tmp、不整树复制/archive/自建.venv，不复用迁移排除的历史业务工作区；正式测试沿对应out/tests镜像路径，不注册源码根。
+- 另一聊天草稿`docs/handoff/20261005-164605-vrn-directory-navigation-openspec-handoff.md`仅作已授权只读参考，不改原件。
 
-## 当前主树与真实运行
+裁定入口TEMP/coordinator/artifacts/owner-decisions.json：assembly_ref=ResourceIdentity；unsupported_view；Gateway拒绝创建current用户；config layer=runtime_override且原优先级不变、active/pending分开；delegate publication归Session SQLite同事务；internal admission无Turn/accepted ingress，保真实execution link。
 
-**当前收据（2026-10-07）**：ToolSet原19＋终态六生产＋主两合同文档＋继承attribution测试共28path已串行提交 **55fcadedaf6b7a89c86d008194c0ad258613eb8c**，tree **09f11105ba19099f2171111a57d294edb97200d8**。epoch/source-cut此前56path a22f4f87保持，不重放。全部作者停写，无活测试runner。共享index SHA仍 **c77082e3e590fa4dde7b97dab516959212e80ed9cb5b4918768560e88763a494**；当前文档后HEAD与状态以外部`A/current-recovery-receipt.json`为准，不追逐自身提交坐标。
+## 已集成结果与范围
 
-最终同tree真实行为分批收终态：ToolSet14＋noncompleted4 **18pass actual0/82.184s**；checkpoint/protocol四file **39pass actual0/23.673s**；helper原红两协议、真实tool-loop及直接mapping/recovery三个file **81pass actual0/58.025s**，各批1460–1463运行依赖前后不变。此前208/12/7/20和4pass只按具名候选与实际入口复用，不拼成整file/全仓绿；原native超时、14/6红、37pass2fail与helper2fail保留。原overlay旧tombstone期待经主迁完整detail前像，typed admission旧caller经同Sol迁真实notice前像，归继承fixture；helper推导None是真实mapping身份丢失，沿原纯mapping保typed model_call_id，原红断言保留后通过。证据均`r-toolset-sealed-owner-dispatch/`具名attempt。
+当前提交和归属查`current-recovery-receipt.json`，效率只按`efficiency-comparison.json`的当前task键读取，不全文恢复。文档提交后HEAD只写外部收据，避免追逐自身坐标。
 
-静态/机械接受：22 Python文件Ruff/compileall0；完整28path标准Git补丁strict0、候选外10path精确defer；guard record/verify、精确tree和双祖先通过，共享index逐bytes未变。P08原19范围16a9dc5b、终态映射4c978887与最终test/caller/mapping增量 **5e3d211c7e9a2e40a77c93f8e8deed503014d22ffa8303bd74e44bf92019ba79**限范围接受；P07两合同/主overlay **8b15ff3f72e0bf587f4dcef04c97c14df980869b9f704195bc6e53713eab9800**接受。作者两terminal函数与主unknown-overlay从共同前像合成，其余AST/decorators/旧assert保留。未把审查标题代覆盖。
+| 最近闭包 | 接受范围与证据 |
+|---|---|
+| 术语与统一寻址 | ae58a883：机制=统一资源寻址，地址=资源URI/URI，业务稳定身份=ResourceIdentity，文件位置=真实路径；保boxteam://字节和协议字段号。`uri-terminology-plan/integration-receipt.json` |
+| Chat转换owner | 45e23e0c：唯一纯history/message转换、未设参数省略与非流式行为；ROOT58pass actual0，仅此范围。`chat-finalize-owner-migration-integration/` |
+| 完整发送合同 | 4a9b88b2：固定c0d7554c的171path，纯数据Saver、临时binding、真实Provider正文/profile/hash/namespace联校及全部必要caller；Agent缺binding拒绝、ToolTest显式用途。ROOT9定向实际0，不称全仓绿。`wire-binding-purpose-focused-dispatch/ROOT-integration/` |
+| epoch与source cutoff | a22f4f87：56path已集成，history/rewind/replay/compaction/CSM真实事务边界按原具名收据复用，不重做早包。`current-recovery-receipt.json`对应epoch字段 |
+| ToolSet与终态 | 55fcaded：28path，ToolSet唯一sealed applied、canonical映射保model-call归属、非completed结果与真实terminal outcome分开。最后同tree三组18/39/81pass、actual0，1460–1463依赖前后不变，各组有重叠不相加。`r-toolset-sealed-owner-dispatch/`具名attempt |
+| 持久资源与Web | persistent 23/23，崩溃SIGKILL恢复、unknown窗口及正式Web5.2已集成；Web固定f29222的attempt16完整1pass/112依赖未变。只按已验入口复用。`persistent-crash-primary/`、`persistent-web-primary/` |
 
-完整dev恢复：CLI actual0/25.081s，实际浏览器 **actual0/3.279s**，8027的Gateway health/workspaces及workspace三API均200、body/header request_id相同、零page/request/console error。两次Chrome启动失败为深TMPDIR的Unix socket路径过长；主未先读错误就猜内存并重复一次，成本归主。第三次只用out短symlink指向本attempt runtime，alias已finally删除；仍有scope MemoryMax4G与timeout60，不/tmp、不另造工作区，失败raw保留。
+开发服务上次完整恢复实际0：offset16，backend8026/frontend8027/Gateway8030；8027实际三API与浏览器均通过、request_id body/header一致、零page/request/console error。Chromium两次深TMPDIR socket失败及主错误猜测保raw；第三次out短别名指向原runtime通过后finally删除。本轮测试修改无需重启服务；生产变化后按受影响链路验证。
 
-用户可导航根与统一文件工具建议已规划在统一寻址/context/new file-tools，strict0按未变范围复用；新文件工具 **0/22**、未实施，itemized **52/89**、context **20/59**，1.1/5.4未全勾。P07新固定只读报告已核R01–R07实际接线，4.6的旧零caller状态已撤；下一切片是R01配置revision→真实generation/factory/CSM→同线程prepare/seal测试，条件双向矩阵仍待后续。此为验收缺口，不预判生产bug。主手写业务生产0、终态六生产含身份修复净减24行；主/继承/审查成本分列，无同起点模型倍率证据。
+## R01 已验收，继续条件来源闭包
 
-## 已集成切片与证据
+ROOT `c0975751f0f29222ac6629015987f63da1ab438b` 已集成3path、完整tree `70f3e6ee21f23a3a515a62b04c86c0046acea089`。生产与unit均未改；Runner737行只加真实请求记录器，新`rollout_context/generation/test_r01_config_reload.py`380行、102assert，复用原fixture和真实owner，目录有AGENTS。
 
-| 切片 | 已兑现范围 | 证据（相对 A） |
-|---|---|---|
-| 统一资源寻址术语 | ae58a883，162无重命名路径；源码、SQL、API/proto、生成类型、当前规范与引用统一；机制=统一资源寻址，地址=资源 URI/URI，身份=ResourceIdentity，位置=真实路径。无旧别名，boxteam://字节与字段号保留 | uri-terminology-plan/integration-receipt.json；原317/104后端、16/123 Web、50定向组、独立tsc/build与strict40/0复用，重叠不相加 |
-| Chat转换owner与旧测试caller | 45e23e0c，固定1dce368e五路径；纯history/message转换唯一owner，保未设置参数省略及非流式行为；完整Saver/Responses/profile/binding待实现 | chat-finalize-owner-migration-integration/；ROOT58pass actual0/20.419s、Ruff0、指纹不变；三生产独审4f7a2a2、caller独审60e6d3eb复用 |
-| 封存请求与发送归属 | 4a9b88b2，固定c0d7554c的171路径；纯数据Saver、唯一临时binding、真实Provider正文/profile/hash与namespace联校，Agent缺binding拒绝，ToolTest显式用途；必要caller及旧链删除 | wire-binding-purpose-focused-dispatch/ROOT-integration/integration-receipt.json；WT各批4/88/8/92/64(+7skip)/14实际0；ROOT9实际0；不相加成新全仓覆盖 |
-| R公共合同 | 8ac，22路径；descriptor root policy与selected ToolSet联合校验、protected完整manifest token修复；独审通过 | r-public-primary-review/final-composed-attempt-1/；ROOT95pass actual0/16.936s，原组重叠不相加 |
-| R封存事务前置 | 39509，固定e4d十路径；assembly/source applied/前驱CAS同事务、重试复用原binding；producer/Provider尚未接 | r-seal-transaction-primary-review/root-composed-attempt-1/；ROOT61pass actual0/19.759s，boundary-review scoped pass |
-| 来源语义修订号 | 0e423，固定58e1七路径；首次observe→prepare→intent保owner token，content hash独立，重复helper删除 | r-semantic-revision-primary-review/root-composed-attempt-1/；ROOT75pass actual0/14.114s，AST/Ruff0，主独立窄审 |
-| plan extensions 隐私 | 9b45239b，固定ea4ddd单生产路径；在原唯一owner校验extension凭据/marker，保合法未知extension bytes/version和恢复合同 | registry-extension-privacy-primary/attempt-1/；原privacy＋seal组95pass actual0/27.956s，七指纹不变，继承41失败闭合；N01报告f73ba2f6无新阻断，限extension/draft/creation范围 |
-| 领域caller与golden | a0b2b3c2，固定22e273四测试/fixture路径；必填thread身份、typed来源及同plan hash迁移，原38 assert全部保留、最终39，decorator不变；golden由独立Bun verifier重算 | domain-caller-primary/attempt-1/及typed-detail-golden/；169pass actual0/28.049s、84pass actual0/14.712s、三preimage核验；没有新全domain单轮绿，不证明normalizer调用闭包 |
-| typed canonical / importer | 1c20集成完整139路径及两轮恢复：f838→f2c→9bec→8958。全量 typed writer/SQLite/JSONL/checkpoint/fork/provider 与独立 importer；实际 R producers尚待 | typed-canonical-production/final-delivery-attempt-1/；importer-initial-audit-recovery-attempt-1/initial-next-write-recovery-attempt-1/final-attempt-1/primary-mechanical-attempt-1/root-integration.json |
-| 持久资源失败重读与竞争 | e38f70f，固定6f93四路径；Session控制失败 await新GET并整体替换、原错误保留、身份/generation fence阻止旧回执污染；真实owner lock/lease竞争。4.3/5.1已勾 | persistent-failure-and-races/final-delivery-attempt-2/；作者19Web/44owner及AST/Ruff/tsc/build；ROOT19Web0/0.316s、build0/16.901s、tsc0/19.552s |
-| fork/Runner/Graph/runtime | 0b355主体及4cf1/847e/36e增量已审集成；真实factory/Runner取消与明确owner。compiled reasoning-only/retry最终范围随activation补证 | fork-intent-verification/、runner-verification/、graph-runtime-verification/及对应独审 |
-| WVL/catalog/residency | 29513/9fbb完整合同、closing准入、迟到Goal/Job writer、registry持有到释放；9e7013冷读不造slot、成功drain回收、失败保owner | wvl-catalog-owner-verification/attempt-2/、residency-stable-pre-review/、residency-guard/attempt-1/ |
-| Terminal/Browser owner | 11a925主体与后续释放、锁及恢复已集成；真实PTY/Chromium、promote、正式Session删除、保留发现及重连等临时产品场景通过 | terminal-owner-production/、browser-owner-production/、root-product-verification/terminal-product-acceptance.json 与 browser-product-acceptance.json |
-| 远端真实资源与重启 | 145759远端身份、5fef WS接收、8989fresh连接事务/reader、1de547重启认证consumer。正式attempt7完整Browser/Terminal WS、Gateway重启和fresh SQLite后访问通过，实际0/74.575秒，精确监听无残留 | root-product-verification/remote-browser-terminal-attempt-7/acceptance.json |
-
-严格重建、blob/hash、live preimage、三保护、guard与双祖先已通过。主补业务源码仍 **0**；术语机械迁移按用户授权单列。上述成功不证明外置 unknown 崩溃窗口、正式Web全生命周期、R/activation/delegate或联邦URI全部完成。
-
-## 当前执行与后续顺序
-
-发送前binding/purpose本轮已集成；旧候选和失败按历史查收据，下一轮不重复检查未变范围。
-1. **已完成persistent 5.4/5.5**。17路径340dc以1b6305d7集成，23/23；5.2 Web和5.3崩溃证据按未变范围复用，6.1仅规范验收。Chat最终消息model-call身份修复已以a4b19e0b验收集成；同Sol接后续R，不重复整组关闭。
-2. **R instruction producer真实刷新验收**。ToolSet/terminal窄闭包28path已以55fcaded集成，服务恢复；按收据复用已接受范围。R01–R07注册已接线，下一步从真实ConfigService revision触发AgentExecutionService generation、新factory/CSM与同线程prepare/seal，验旧root/封存重试和新tail；初始只开放正式测试，发现具体红再扩唯一owner源码。R03/R04/R06/R07条件启用/移除/恢复矩阵后续，context4.6/5.x不因窄闭包全勾。
-3. **activation**：现有组件接到真实user/internal执行，唯一freeze owner；assembly_ref=ResourceIdentity，不用execution ID冒充turn，不造internal Turn。保真实资源激活快照、来源控制、sealed重试；复验编译reasoning-only合法body及耗尽收敛。
-4. **runtime/source/wakeup、delegate publication与mailbox**：Session SQLite publication ledger与child发布同事务，真实factory/start caller与abort/recovery闭合，不倒删published，不造第二JSON账本。原task E01–E07、同Session team/fanout及8.15均保留；`create_and_run_internal`已有InternalExecutionIntent，Terminal已有精确source_thread/claim，缺口是pending source与durable wakeup，禁止重建已完成admission。证据 `runtime-event-task-evidence-review/attempt-1/report.md`。
-5. **durable communication recovery、联邦URI与target-main**：通信accepted→binding→cold recovery/持久观察仍待验；联邦复用现有authority/grant/channel/cursor。已有GET `/api/v1/sessions/{session_id}/main-thread` 是合同来源，不新增同义endpoint；稳定Gateway authority、受控peer-hub-star最多transit1/hops2/deadline，真实B⇄A⇄C与零副作用拒绝。证据 `remaining-addressing-contract-review/attempt-1/report.md`。
-6. **DTO/reducer、继承关闭风险与最终验收**：9.1架构证据已勾；9.2按DTO域直接迁import、9.3只提纯reducer，保Store事务顺序，交同Sol后续，不插R。报告 `mounting-architecture-review/attempt-1/report.md`。通用fixture10秒强杀Gateway父级的关闭风险仍待精确owner handle回收和透明失败，正常attempt7不能证明强杀安全，见 `remote-cleanup-review/attempt-1/report.md`。最后逐原task/入口验收七change及handoff，不能当前阶段完成就结束goal；新增文件工具保持0/22，独立排期。
-
-## Persistent 5.4/5.5 本轮收尾（已集成）
-
-- D=A/persistent-shutdown-grant-focused-dispatch；最终340dc/17路径以1b6305d7集成，D/full-candidate-5.json及ROOT-integration-final/integration-receipt.json。Sol报告a4ffc9ee；process763/叶模块83行，无wrapper/alias；未拆分bdde与最终两文件AST/多重集独立相同。
-- 原940d只查root的绿不证明组回收；主probe确认root已退、child仍活，Managed/Adopted原生产2红。最终7unit actual0/5.659s（新增root已退且child未登记故障），生产等627f的48caller actual0/11.881s与真实非preserve关闭1pass/35.707s复用；三个服务PGID活成员全部退、owner scope/revision断言保留。模型TCP Responses cassette，非完整模型E2E；1458–1461依赖匹配且前后未变。8秒未增，强杀不等于unload，重试保同错误，Windows/其它POSIX未验。
-- P07四路径原627f报告b922保留P2清理窗口，340dc窄复核4f6fd4ac闭合；test finally整体回收/reap子组，outer timeout按root实例回执重扫PGID/session。主一次嵌套probe字符串换行错误在编译预检捕获、测试前修正，计主成本。
-- Grant生产/测试未变，Node15/client17/真实HTTP2及P08静态0aec4a80复用。本地verified终态先于Thread admission拒绝只证明资源拒绝；未改remote/retired存量风险分列，非本包引入。
-- 627f作者WT机械17/43 outside通过；最终340dc主ROOT组合机械17/15 exact outside通过11.093s，R writer已在独立WT、最终unit由主写。ROOT首次只用Git差异列defer，漏6个ignored本地/演示产物，actual2/11.707s原raw保留；逐路径声明，不改保护源码/运行输入，不夹提交。旧index-dir两误调用保留。最终guard/双祖先/shared index c770不变。
-- Chat原Job在关闭前typed provenance/extensions失败已由a4b19e0b闭合，最终reasoning17pass及真实双协议Job/关闭2pass，旧首包不再排队。D/chat-provenance-followup.json事实转录与原service日志保留，不伪造被fixture重建的Trace；guard未放宽。client首轮主fixture漏page_id修后17绿，主成本单列。
-- 17规划逐字匹配strict41/0，新文件工具0/22未实施。普通Skill读/activation与URI分段编码规范旧冲突已改。
+- 正式workspace.jsonc→真实ConfigService.reload→snapshot/source revision→AgentExecutionService新generation→builder R01/factory/CSM/prepare-seal，三真实Job、新唯一user-tail、旧root/epoch/stable prefix/sealed retry及第三wire/旧sealed bytes全部通过：`D/r01-only-real-entry-attempt-3-corrected-tree/receipt.json`，1pass actual0/35.364s、1464依赖前后相同。
+- 原recorder影响的主/child隔离和generation/scope关闭两node actual0/37.756s；1463运行依赖在最终tree逐字未变，精确复用见`D/r01-fixed-attempt-3/validation-reuse.json`。完整原Runner12由前置d030已验；不宣称本轮重跑全文件。
+- 三路径补丁严格重建actual0/10.696s、9候选外文件精确defer。P07组织与P08最终pending增量接受、无可行动finding；`D/r01-integration-attempt-1/receipt.json`含guard、双祖先、共享index bytes/stage不变（SHA c77082e3…）。
+- attempt1 actual1/21.561s是作者误把source_paths的SQLite载体当workspace JSONC逻辑来源，首Job/reload内容已过；attempt2 actual1/39.904s是作者误要求全manager pending为空，三Job/R01已过但末尾断言未到达。只替换这两错误断言并增加source_details/权威record和未启用policy pending/control前后事实检查，原其余断言保留，不改生产。
+- 主attempt3抄错tree导致Git128在测试前退出；corrected-tree从manifest取实际对象后通过。主成本单列，不计作者运行红。所有原raw保留，不增timeout、不删fresh数据求绿。
 
-## 实测改进与未证结论
+前置identity闭包为d030的5path，guard保typed空身份、临时展示ID单一计算与真实registry/cold caller；12 identity/入口和完整原Runner12均已验。其详细阶段收据在D，旧流水见`skill-state-maintenance/pre-r01-acceptance-state-20261007.md`，不重新派单。
 
-- 固定交付、真实入口与增量早审已实际阻止残缺包落地；同树已过审查按路径/依赖复用，不重审未变全量。125+27path旧审保留；报告baseline转录更正不是源修复。
-- importer首份audit曾漏目录创建后退出，首修又漏空/截断next。真实O_EXCL+部分写入+os._exit73的recover/direct retry四红；8958净增9生产行后固定64全文件通过（pytest79.44s、实际0/81.290s），完整/错误身份/未知残留/已发布损坏/恢复自身再次退出均核；规则效果已验证。
-- reviewer恢复读错schema3 tree，误撤缺陷；纠正base/target/报告根后回到9bec真实caller/callee。计审查返工，不归Sol；后续效果继续观察。
-- 主线程错误诊断“Gateway缺句柄”已撤销。固定7f8dc已有两handle，真实Bun退出3约155ms和SIGTERM均可见，无源码/测试增量。清旧库后服务恢复；此前等待为何未看到退出仍未证明。证据 `dev-launcher-early-exit/final-readonly-attestation.json`。不对反证已推翻的诊断派实现或写镜像测试。
-- 主错误成本单列：不存在preload前置失败0.081s、首次依赖patch含已相同新增文件被拒（未写源码）、初始化探针猜错字段connection_state。原raw/exit保留，不计作者返工，不以重试覆盖。
-- ROOT共享index当前观察98850fa4…；WT默认index当前4f4eba12…（此前e1cb50fd…）。早前f2afa→98850字节变化，但ls-files --stage逐字相同（stage SHA2ae32540…），发起者未归因、未恢复共享index。每次集成核fresh现场，不能宣称全期字节未变。
-- R完整对象早审在生产大包前发现两个P2，forward/protected候选独审与ROOT95绿已验证规则效果；机械完整仍不代联合业务约束。审查中的封存后脱敏假workflow、猜测transition previous字段/source-selected旁路已按实际caller/type及低层合同撤回，计主/审查成本，无作者业务返工，不要求旧算法兼容。e4d scoped pass不代尚未接的生产投影。技能入口规则简短修订，原报告保留。
-- 比较数据只维护 `efficiency-comparison.json`；首完整候选、真实入口遗漏、返工、依赖等待、主补救分开计。没有同起点可比试验，不给速度倍率，不宣布永久最佳模型。当前一个Sol贯穿、独审、主串行集成继续；不把继承缺陷、主协调错误或过去Luna投入全归当前作者。
+P08报告根TEMP/wire_http_acceptance_reviewer/artifacts/r01-generation-acceptance；P07组织TEMP/wire_contract_reviewer/artifacts/r01-identity-owner-review/r01-generation-organization-review.md；下一条件矩阵入口TEMP/wire_contract_reviewer/artifacts/r-producer-conditional-matrix/report.md。该矩阵报告中旧“Runner整体stub”判断已由d030真实fixture替换，仅复用未变policy/source与缺口分析，不再次迁fixture。
 
-## Chat 身份闭包本轮改进（已验证）
+R01只验配置刷新，**不能勾完整context4.6**。当前无活测试runner，Sol已停写；下一实施仍由同Sol，两个Luna只读审查。
 
-- 原codec首次final省略`model_call_id`，checkpoint再次prepare从消息取到真实值，typed group严格比较后拒绝。同Sol在唯一codec收口读取、显式冲突拒绝及fork身份重映射；最初生产真实Chat失败原Trace保留，修后真实双协议Job通过。未放宽guard或加旧数据兼容。
-- 作者三unit首轮70pass1fail：新回归均通过，旧compose caller漏必填ToolSetSnapshot。同作者窄迁caller，拒绝前deepcopy后完整比较checkpoint/config/metadata，原JSONL字节及全量canonical断言保留；更正版17pass。P07旧P2保历史，最终8117窄审闭合。
-- 主真实Job首轮Responses通过、Chat请求前一已停替身，原因是module业务active snapshot跨参数复用。只修本正式fixture，在每个协议初始化前重置Gateway状态和工作区`.boxteam`；更正版2pass。主fixture返工与69.031s验收单列，不计Sol生产返工或模型速度倍率。
-- 当前Chat参数的原始服务Trace及日志已保存在 `r-chat-provenance-focused-dispatch/ROOT-chat-responses-real-fixed-attempt-2/service-evidence/`，双参数完整pytest raw保留；参数重建清除了本轮Responses服务文件，未补造它的Trace。旧Responses已过范围保留原收据。比较仍缺同起点计时，未宣布永久默认或总体提速。
+## 待完成队列
 
-## 当前 R 候选的验证边界
+1. R03/R04/R06/R07各用独立fixture走启用→隐藏模型可见性→恢复，验证hard rebase epoch+1、root/source/ToolSet一致及旧sealed retry不变；另外用真实ConfigService team↔非team→AgentExecutionService generation→create_team生产注册/移除。前置R01已完成，不重做。
+2. activation boundary、runtime source/wakeup和四类execution retry按同source lifecycle收口；不得直接追加未登记internal HumanMessage。保原attempt2真实retry/admission失败事实，不因成功响应绕过删除证据。
+3. 同Session child/team、delegate publication同SQLite事务、durable通信binding、cold recovery/mailbox、联邦target-main及send/read/wait目标归一；DTO分域/reducer及真实客户端入口按原任务验收。
+4. 按原task ID与真实入口复核七change及bug handoff剩余项，完成适当静态/正式测试/产品验证后才勾项和结束原goal。planning complete和窄组绿灯不代整体完成。
 
-| 固定增量 | 已核范围 | 证据（相对 A） |
-|---|---|---|
-| d29→6248 | Saver唯一seal、Agent/Bridge真实caller、R01–R07 producer；旧visibility与Skill第二commit链删除。ROOT201pass | r-agent-consumer-primary-review/root-composed-attempt-1/；r-agent-consumer-boundary-review/attempt-1/ |
-| ff1/414/5a89/1ff0 | 投影回provider/mapping owner；冻结visibility及AAD/密文配对纠正；offline owner与真实退出恢复。ROOT分别57、189、114、64项，各自有重叠 | r-structure-owner-primary-review/；r-hash-fixture-primary-review/；r-protected-fixture-primary-review/；r-schema-recovery-primary-review/ |
-| ce768→7df | source receipt/control、终态取消、Turn恢复、typed detail、snapshot证据调用、active overlay进入compiler；detail在读快照外恢复，保body/hash/guard断言 | r-source-receipt、r-source-control-consumers、r-terminal-consumers、r-turn-recovery、r-typed-detail、r-dispatch-overlay、r-projection-consumers各报告 |
-| 180d | 真实Chat/Responses HTTP正文、媒体拒绝及新进程重开，ROOT11pass actual0。完整normalized wire/profile仍待 | r-chat-wire-primary-review/root-composed-attempt-1/；r-chat-wire-boundary-review/attempt-1/ |
-| 180d→209481 | 旧实验v2升级与专属tests/helper退休；空选集reader与迟到terminal修复；checkpoint43+unit SQL6，ROOT单轮49pass actual0，AST23/Ruff0 | r-producers-and-toolset-production/legacy-v2-retirement-final-primary-export-attempt-1/；r-legacy-v2-retirement-final-primary-review/root-composed-attempt-1/ |
+当前context **20/59**、itemized **52/89**；context1.1/4.6/5.4尚未全勾。历史“生产零caller”已纠正，R01–R07已有接线，不重派已完成epoch、发送合同或persistent验收。`current-task-index.json`、`implementation-queue.json`只作导航，不代源码/规范证据。
 
-209481由主机械导出，不假称作者自主交终包。patch SHA=`157c0fd2303e5836bcd300f78dbde10c2a7aa167d1019f7becfef30e4c6bb1fb`；62差异路径/37删除、累计136owned。strict重建、pre/post hash/mode、删除、三保护和两个默认index通过。reader/terminal生产blob与3ba433早审逐字相同；imports102、v1及v1→fork31、typed terminal18与fork未变检查复用，不与49相加。
+## 最新文件工具建议：仅规划
 
-generic事务/备份恢复/journal/原子DDL、schema10、独立v1 importer十生产路径、普通/protected detail及真实fork保留。冻结schema3.sql只作拒绝/零改写负向输入，SHA=`81d84bd8baef17eb336d3b42babebc8736231b01ccfc3979c4e6459a40b939b2`。schema_v4_fixtures/AGENTS已改只读说明，并非删除；退休目录剩20个pyc核验后清掉，报告保留。
+统一寻址新增directory/file/domain_object、skills多层与files/root、UTF-8分段编码、轻量访问；context明确读Skill无activation/tracking，skill_load保冻结来源唯一owner；Session沿现有send/read/wait归一；新`add-unified-resource-file-tools`承接七文件工具、目标端执行、有界输出、预期版本冲突、单根patch部分/unknown结果、旧boxteam-session产物URI收口及首批验收。
 
-原42pass/1fail、恢复单例1pass保原raw/exit，不拼成43绿。ROOT49是一次完整组合；replay保cp-1完整tool pairing、恰两新item、旧cp-2只旧view、JSONL逐字前缀，hydration四字段按messages SQLite权威行联校，不用canonical时间替代。SQL6case全文逐字从integration移到unit。
+17规划中13份仍与原已验bytes相同，4份context后来修订并独立strict0；**不能称整批41项当前重跑**。`file-tools-openspec-plan/current-byte-attestation-after-final28.json`。新文件工具 **0/22、未实施**；终端/Python/浏览器/调试执行、跨根复制、通用目录mutation、二进制写入、watch/tail与通用operation_id留后续切片，本轮不扩大实现范围。
 
+## 技能维护与历史入口
 
-Display最终0b064由主机械导出两路径，patch SHA=`96f0823366d1c1e5bddee6cb317a840fad11ae020ba3a4bf6b79756fba55a0dd`；全部16个test函数含decorator AST不变，22参数case保留。生产复用既有require_context_view_order_integrity并去重复unknown-kind查询，session/thread在空结果前校同database_meta。主strict/hash/保护/default index、独立窄审及ROOT22单轮通过，主手写业务源码0；作者新runner的baseline字段仍180d，原记录保留，正式收据以209481→0b064归属，不伪装标签准确。证据 `r-display-primary-review/root-composed-attempt-1/` 和 `r-producers-and-toolset-production/internal-display-final-primary-export-attempt-1/`。
+已在入口既有fixture规则补真实事件名/trace字段；第三fixture实际越过对应两个错误，只证明此窄修效果；R01来源/条件pending验收规则已由固定70f3e6完整用例验证，后续切片效果未测。此次实时台账去除重复历史和已完成“下一动作”，旧状态完整保存在`skill-state-maintenance/pre-r01-current-state-compaction-20261007.md`；按task/关键词查历史，不再把全流水读作现行队列。未变固定检查按范围复用；main/继承fixture/作者返工/审查成本分列，不报告模型倍率。
 
-## 下一闭包与尚未完成的合同
-
-| 顺序 | 实际状态及验收 | 证据入口（相对 A） |
-|---|---|---|
-| history-loading caller | 主接手完成并物化ROOT，base0b064→fc518，ROOT组合534082、owned139（业务未提交）。复用Sol8e9签名，主五处user admission、typed projection_manifest＋同model_call scope、真实internal notice admission，不造Turn。18测试/142断言：139原断言与decorator不变；一条空items旧断言按冻结include改为精确轻量摘要/无正文，另增query_mode拒绝2断言，所有分页/完整性/预算保留。full-file-primary-attempt-1实际5pass1fail/37.967秒保留；remaining-attempt-1又在旧around跨mode请求失败/30.543秒，不覆盖。修为明确拒绝后用同Turn锚点，remaining-attempt-2 **15pass actual0/290.976秒**，生产/测试SHA不变，原128轮有界读通过（单项228.30秒）；复用前五未变测试和依赖的检查，不能拼成“单轮20绿”。ROOT strict/pre-post/AST/Ruff/三保护/默认index通过，生产依赖匹配固定基线；曾因ROOT职责文档差异过强阻断，核非源码后单列主成本。原签名低seed4pass、user准入4pass、特殊单例复验保历史不相加；context_source_manager仍待真实transition联合边界 | r-history-loading-primary-review/cursor-query-mode-primary-attempt-2/；full-file-primary-attempt-1/；remaining-entries-primary-attempt-1/及2/；root-composed-attempt-1/ |
-| wire/profile | 先固定真实Chat `_create_message_dicts→_astream`及Responses `_responses_payload→aresponses`最终规范化HTTP正文，含projector/version/provider/model/tools/attachment/loss/redaction，按真实载体剔除auth/transport/attempt，drift发送前拒绝。contract修订4及验收增量133行已主核，SHA25aaa65c：完整消息/params唯一转换归agents/providers，ToolSet bridge留原service/provider，Saver编排调用同转换并seal/hash，发送复用产物或全等守卫；不放宽AGENTS、不保现存越界布局、bridge不二次prepare/seal。HTTP更正版118行复用，seal幂等不约束HTTP次数。两个实际反例仍未修：timestamp schema属性type变化被递归删除得到同hash；password/access_token普通schema声明被误认凭据拒绝，而实际顶层api_key明文仍正确拒绝。前者另已证真实Chat参数构造保schema；后者仅域normalizer actual0。均无TCP碰撞/修复证据，不禁止正常属性名。参数未封存、语义字段误删与凭据声明误拒均并下一wire闭包；profile/params传递、非Agent用途及摘要边界仍须实际caller核。主无业务源码改动 | r-wire-preimage-owner-review/attempt-1/；r-wire-normalizer-primary-review/semantic-response-format-attempt-1/；semantic-credential-property-attempt-1/；TEMP/wire_contract_reviewer/artifacts/wire-preimage-contract/report.md |
-| transition/CSM | epoch intent仍NotImplemented；view事务未pending transition；prepare未传transition；checkpoint-versioned CSM未恢复。原owner同事务view+CSM+pending，首成功新epoch seal才consume/applied。paired barrier已有rewind/replay/compaction接线，不重做；source_manager live WIP的20测试/120断言/decorator保留、Ruff0；主fail-fast actual1/9.224秒：3pass、1fail，手动restore后seal旧epoch冲突。此fixture未走真实boundary，不单凭其红灯证明生产缺陷；另remaining-fixture-entries-attempt-1的16项actual0/16.076秒（SHA不变），只闭合其余caller，不把first3和16拼为完整20绿；结合原独审推进真实view/CSM/pending事务，固定包及闭包仍待 | r-transition-owner-boundary-review/attempt-1/；r-csm-caller-primary-review/early-wip-review-attempt-1/ |
-| ToolSet与后续 | producer已消费新selection并联合seal，不报漏接；SessionControl第二applied只在未接helper/tests，按8.3-B/C清理。activation、delegate publication/runtime source/wakeup、同Session child/team、通信binding/cold recovery/mailbox仍待 | runtime-event-task-evidence-review/attempt-1/ |
-| 联邦/继承caller | target-main及联邦URI沿原grant/channel。GatewaySessionContextClient三个旧test已迁并实际验收，无None旁路；真实SessionTargetResolver由backend identity映射Gateway route，gateway scope绑定health真实ID。unit5pass/4.626秒、integration1pass/50.214秒、Docker E2E1pass/75.398秒分别actual0、不相加；三个source SHA稳定，integration随后仅缩进AST不变复用。首attempt因辅助服务未启动actual1/51.701秒保留；主误把专用context公开代理判成401已撤，原200断言恢复，成本计主。三个test增量strict重建候选1c377，owned142，ROOT业务未提交；DTO分域/reducer、强杀关闭风险仍待 | gateway-context-caller-primary/attempt-1/；remaining-addressing-contract-review/；local-uri-task-acceptance/；mounting-architecture-review/；remote-cleanup-review/ |
-| outbox/最终产品 | Web runtime/worker/flock/generation、旧sync第二writer下线已有，不重做。两pending-parent建child入口、test_catalog_service/test_operations_queue旧caller已独立集成46453e8a（原49成功项复用＋失败项复验1通过），App/Gateway/backend真实验收仍待，8.1/10.8不勾；persistent unknown崩溃及正式WebE2E待 | session-catalog-outbox-current-owner-review/attempt-1/；persistent-remaining-review/attempt-1/ |
-| persistent真实崩溃 | 真实Node Terminal/Browser、外置SIGKILL与新Python registry重开。最终测试SHAfdab7b1d：Thread/Workspace × kind × 已发生/未发生的8 stop场景actual0/344.113秒，父进程在kill后恢复前核同一持久record/lease与真实Node身份/终态；72原断言保留，新增4断言，只有parent stop函数AST变化。4 orphan原测试/worker/fixture未变，复用early159285通过，不称最终单轮12绿。production/support前后指纹及ROOT/WT默认index未变，Ruff0。1.4/5.3已按证据勾选19/21，已独立集成aea3cc22（固定9b471bb7），原独审与主新增断言/初始化差异核验已接受，P06 task-closure更正版已交；5.2正式Web已新增未验收及6.1引用仍待。fixture storage.initialize确为间接依赖，HEAD与组合旧schema拒绝差异不改变当前fresh DDL/bootstrap；不能写全部blob同一 | persistent-crash-primary/post-sigkill-authority-attempt-1/；TEMP/wire_http_acceptance_reviewer/artifacts/persistent-crash-boundary/ |
-
-正式WebE2E唯一入口 `tests/e2e/clients/web/test_basic_chat_tool_loop.py`。最后按原task ID/真实入口复核七change与handoff；当前绿灯或planning complete不结束goal。`current-task-index.json`和`implementation-queue.json`只作导航。
-
-## 新增规划及技能调整效果
-
-- 新建议已纳四组：统一寻址拥有directory/file/domain_object、files/root、技能多层、分段编码、产物单文件模板和轻量访问；context拥有读取/skill_load分离；Session拥有send/read/wait归一；独立add-unified-resource-file-tools拥有七工具、目标端、条件写/部分/unknown与旧boxteam-session迁移。两处旧规范已直接改写，不只加任务；保原read_file媒体及original/thumbnail、文本Delete File/Move to、两端点preimage及逐路径部分结果，通用目录mutation仍延期。恢复到46453e8a后17规划文件逐项SHA及HEAD blob核验仍与已验9f59888e相同，复用strict41/0，不重复重测；新增22项实施任务全部未勾/未启动。既有收据file-tools-openspec-plan/final-coherence-attestation-attempt-11/及text-patch-preservation-attempt-10/；原strict、skill quick_validate及diff check均actual0。终端/浏览器/团队保业务ID，其余mutation/watch/跨Gatewaycopy/generaloperation_id留后续。
-- fixed/direct/helper/间接/deferred分列已发现漏caller；真实callee/MRO规则纠正不存在Saver.main_thread_id阻断28项，固定209481 ROOT49验证checkpoint迁移效果。named旧API归零不能代完整签名闭包。
-- 作者无超时rg扫`/`找日志，主核PID/cwd后只SIGTERM该rg，延迟534.29秒；恢复同Sol并重发绝对WT/index/A，入口限定根及外部超时。恢复replay通过，后续自主完整交付效果待证。证据 `sol-unbounded-search-correction/attempt-1/`。
-- 两退休reviewer容量错误无新报告，主独审增量并复用删除边界。主误把AGENTS owned路径当删除已撤；旧Gateway缺句柄假诊断、private index/旧tree混读、preload猜错等另计主成本，不归作者/模型。
-- Sol对固定tree跑git log/-S得到空结果，不能据此判断提交来源；已纠正为先核对象类型，仅commit核历史，入口原基线条款补一句，后续效果待证。cursor旧items为空断言又与active design:692的冻结include冲突；主独核合同，允许迁为精确轻量摘要/不读完整body，保分页完整性，其它断言仍保留，尚未验收。证据 `skill-object-type-correction/attempt-1/receipt.json`。
-- 再次上下文恢复后Sol用裸Git读到相对旧WT HEAD的1057路径及history既有67+/21-历史差异；重发坐标并初始化0b064私有观察index后，真实工具已确认当前history与base相同、display匹配已绿blob，尚未交新增候选。18测试/140断言基线清单在 `r-history-loading-primary-review/baseline-inventory-attempt-1/`；已调整顺序为先一次迁完已明确签名并验证代表入口，再闭合复杂fixture，完整验收不减。证据 `r-history-loading-primary-review/restore-state-index-attempt-1/receipt.json`；不因观察超时或没有shell进程重启活跃agent，不为这次重复问题新增同义技能规则。
-- 主用ROOT HEAD观察index跨WT diff误报conftest删除；直接固定blob逐字复核它未变后立即撤回，不要求作者恢复。source_manager测试确有live WIP117行迁移，旧_commit_model_call_pending已归零；固定0b064包仍不包含此WIP，不把两个状态混同。证据 `r-history-loading-primary-review/deferred-direct-blob-check-attempt-1/`。成本计主协调，入口补充对应比较规则，效果仅为此次纠错，后续交付待验。
-- 为纠正首增量顺序曾主动中断同Sol，核history SHA仍8b14f12a、无剩余测试进程、两个默认index未变后已恢复，不更换writer/model。证据 `r-history-loading-primary-review/caller-focus-recovery-attempt-1/`。先交已确定的五处user put准入迁移及Ruff，再处理internal-leading与typed dedup特殊fixture；原六处及全文验收范围不减，8e9早包未集成，不以工具观察间隔判agent停止。首批新候选仍待。
-- 新域探针核0b064 serialization逐字相同：properties.password/access_token={type:string}误触redaction marker校验，display_name不变，实际顶层api_key仍拒绝。探针初次缺PYTHONPATH导致import退出1，补显式ROOT后actual0、Ruff0；属于主探针配置，不算模型业务返工。原技能字段排除条款只窄加schema声明/凭据值区分，quick_validate0；原reviewer已将三类验收追加同一report，未重复探针。规则后续业务交付及HTTP效果仍待，证据 `r-wire-normalizer-primary-review/semantic-credential-property-attempt-1/`。
-- history例行迁移长时间调查无新增代码后，主核preimage/index/进程并接手，原同Sol转wire。主五处user准入及特殊fixture不可继续写成补救0；首轮缺control_context另计主fixture失败；history所有入口已验并固定物化（分轮未变检查复用），wire交付与可比效率仍待。技能只窄加显式归属转交和成本口径，不推成全仓分工模板。
-- 主在ROOT发现前序已提交provider职责放宽与已接受C3不符，按原0b064的ToolSet-only指引收回，仅改职责文档、未改生产源码；完整messages/params转换仍归agents/providers，不能用文档扩权保越界布局。证据 `provider-boundary-instruction-convergence-attempt-1/`；相应wire实施效果仍待。
-- Gateway context caller收口已通过三类真实入口；unit原15断言数保留且新增token轮换语义，integration八个test中七个AST逐字不变/目标增加3断言，Docker原32→37断言。主最初凭通用代理印象要求401，实际专用context路由明确公开；失败真正原因是overview所需辅助服务未启动。恢复原200并启动显式目标辅助服务后integration通过；窄修技能的精确路由/前置核验，不将主错误归Sol。Docker复用长期容器、Git快照、数据盘TMPDIR，测试无跳过；未创建整树副本/新venv。mechanical-attempt-1漏登记七个既有候选外文件未通过，attempt-2逐路径登记后strict通过，不吞保护路径。证据 `gateway-context-caller-primary/attempt-1/`。
-- Sol阶段1 serialization增量与作者141域测试actual0已收到，尚未集成；主固定SHA f6b4a042纯域探针证metadata.timestamp/request_id/headers仍被递归删，任意data.properties可绕credential marker。已发作者按真实wire载体识别，不是任意同名key；无实际TCP碰撞结论，完整wire/profile仍待。证据 `r-wire-normalizer-primary-review/stage1-carrier-context-attempt-1/`。
-- 新用途报告最终9e7d已主核，S1–S5/S9固定caller图保持；原1d51建议用admission缺失放行非Agent不符合原显式purpose合同，窄改第6/7/8节及一致性收尾已闭合。摘要D01按原design的独立derived sealed assembly/root、request-only控制和canonical summary→pending区分，不再当未定产品选择；候选身份/具体接线仍待作者兑现。epoch报告最终b783已完成四处窄纠正，联合view/CSM/pending及seal durable消费不可拆，prefix既有分支不加if，同view不同seal key普通请求允许。两报告均静态证据，没有实际rewind/HTTP复现；control payload/表布局只是建议，不约束作者以未经验证机制实现。原报告保留，业务效果仍待。
-- 主接手两导航测试：19＋30测试函数、183原assert AST全部保留，最终191断言，所有decorator不变；44函数AST不变、5函数迁调用/回执。首两文件单轮49pass/1fail actual1/36.426秒，失败探针仍计旧BFS而真实读取走catalog_snapshot；核callee后只将该测试观测改成一次原子快照且旧BFS零调用，单项1pass actual0/4.226秒，原49成功参数入口AST/依赖逐字不变复用，不称单轮50绿。主生产源码0；测试fixture改动、首轮失败与mechanical首命令index-dir误指定不存在子目录actual2另计主成本。报告 `navigation-caller-primary/attempt-1/`。
-- 主恢复首条裸git status违反已有私有index规则；本轮ROOT默认index字节观察从98850变为c770，但stage SHA2ae32540与已有备份逐字相同，未恢复/改写共享index，不归因Sol。后续观察均固定私有index与GIT_OPTIONAL_LOCKS=0。另主以未验证thread ID误调用read_thread后终止，未读到任何实际线程，成本归主协调；不据此推断作者停工。原规则已覆盖这些错误，不新增同义条款。证据 `recovery-current-attestation-attempt-1/receipt.json`。
-- 比较只维护 `efficiency-comparison.json`；继承前置、作者返工、依赖等待、主机械导出和主错误分列。无同起点可比计时，不报倍率/永久最佳模型；继续一个Sol贯穿、独审和主串行集成。
-- 既有“正常退出不能证明强杀安全”规则本轮获得真实Terminal/Browser unknown窗口的8场景证据；回执替身与时钟注入明确标integration，不冒充完整Web或墙钟30分钟。测试首场景实际0/39.802秒、全8实际0/222.586秒；全8后主发现library默认临时目录未显式定位，窄改fixture并复验Browser实际0/37.905秒。所有受影响断言保留、mechanical两包均0；主写测试及错误路径猜测的工具成本另计，不归Sol。没有新的严重模型失败，不叠同义技能条款；P06原报告已交；最新增量审查仍待，现状见上表。
-
-旧流水归档 `skill-state-maintenance/pre-compaction-ac34da2e-current-r209481.md`，只作历史证据，不作为现行指令；更早看Git及原报告。default index当前观察ROOT=`c77082e3…`、WT=`4f4eba12…`；此前字节变化但stage相同，不称全期精确恢复。每集成核fresh现场。
-
-- 主按原persistent Workspace恢复Scenario补scope参数，保留原Thread四场景和orphan四场景。固定b27f2cb9（base当前组合d989914）、测试SHA825056a4、owned仍145。新增Workspace四场景与原Thread四场景同轮actual0/341.056秒（pytest8pass/336.59秒）；Session释放只移除关联、保Workspace资源，再owner显式delete，unknown无盲重放。orphan两worker/测试与fixture AST及生产支撑依赖不变复用既有4绿，不称最终单轮12绿。ROOT/WT Ruff0、仅同步该测试、strict重建0、共享index不变；这是上一固定版本；当前新增恢复前断言通过并已勾1.4/5.3、集成aea3cc22，增量报告更正待。证据persistent-crash-primary/workspace-scope-attempt-1/；遗漏scope及新增验收计主成本，不归Sol。
-- Sol serialization阶段2 SHA89c2187已保业务metadata.timestamp/request_id/headers，普通data.properties凭据也拒绝；主0.233秒纯域探针发现任意metadata伪装type=function/json_schema仍绕marker。已要求由tools/response_format/text.format真实入口路径与合同识别schema，入口技能只修同一条规则；无实际HTTP结论，修复待验。证据r-wire-normalizer-primary-review/stage2-shape-probe-attempt-1/；主临时probe Ruff首I001已规范导入修正后0，不改生产。
-- N01两导航测试独审无代码缺陷，报告ed06f588首次建议最终两文件整跑，主要求先核49未变成功入口与依赖复用、纠正函数数49与参数case50；没有单轮终版50绿为限制，不自动成为必重跑缺口。更正版cdf3ad88已完成计数和复用说明，本轮不重复整跑；不删原失败raw、不用静态审冒充运行。
-- 17规划文件再次逐项核SHA与HEAD均匹配已验版本，strict41/0复用；新增文件工具22项仍未启动。主核公开工具证Sol在完整baseline-0b064-tree副本跑pytest并写/tmp/baseline-privacy.log，已收窄此wire切片到指定WT源码/Ruff，Git/测试由主承接。核3458 tracked源码逐blob相同、无额外源码和子目录活进程/日志句柄后删353MB副本；原114105-byte raw保留于r-wire-profile-production/checks/baseline-copy-audit-attempt-1/，receipt/cleanup.json记录来源和SHA，不复建。基线同失败不当绿。此次主首次status漏私有index，随后ROOT/WT默认index仍与既有精确hash相同，未发生索引恢复，工具成本单列。
-- N01公开工具又把文件SHA256作为Git对象查询，继而裸git环境调查；主已停该审查者Git权限、只准已有字节/AST证据修报告。技能在既有基线条款补辨Git ID与文件SHA256，路径条款不叠同义规则；收窄后N01已仅按字节/AST证据完成更正版导航报告，无新Git/测试/源码操作；这是本次窄审效果，不证明全部后续任务。主基线进程核查首inline Python括号错误actual1已立即修正，后audit/cleanup实际0，计主协调错误。ROOT/WT默认index仍匹配原精确hash，没有宣称做过恢复。
-
-- 崩溃独审曾漏fixture→Saver→storage.initialize，将直接owner同blob扩大为全部依赖相同。主纠正真实callee链，固定当前fresh初始化差异，并只补parent恢复前4断言，原worker/fixture/orphan审查复用。8 stop实际0/344.113秒；主核schema/version及Saver/maintenance入口同AST，schema_plans导入DDL确有两个CHECK差异，fresh acceptance不写plan导入记录；旧schema拒绝差异不影响本fresh输入，独立集成aea3cc22。初次过强报告仍留证，P06增量报告更正未交，不宣称其已完成。入口只窄改原审查复用条款，不叠新清单。
-- registry extensions继承缺口：privacy.py仅校envelope/JSON，tool_policy才校凭据/marker；版本化annotation.value中的raw api_key/Authorization可漏过。既有integration＋seal组actual1、41failed/54passed，基线同红是继承缺口，不是绿灯或Sol新回归。交同Sol在真实wire入口修完后补该唯一owner；N01窄审未交，合法未知extension需保bytes/version，不解释业务schema或让其决定selection/dispatch。原证据r-wire-profile-production/checks/serialization-wire-carrier-privacy-integration-2.raw.log。
-
-- normalizer阶段3首18用例actual0，但合法carrier类型边界新增3case全红；阶段4修类型后wrapper直接凭据6case全红，HEAD同6全绿，是本次Sol回归。阶段5统一字段名/marker投影后全domainactual1/210.553秒（1322pass、6fail、10error），冻结6指纹不变；红项9直接测试/fixture/域签名/planhash同HEAD，ToolSet thread_id、typed overlay binding及typed-detail独立golden迁移仍待。主新测试去无关golden依赖后27case ROOT actual0/5.780秒，两生产未变；固定1fa245三path strict第2次0，第一次漏6个忽略的候选外文件deferred登记actual2，计主机械成本且不交付这些保护/生成文件。实际provider_request_preimage仍把wire放request包装下，顶层schema识别未接此真实caller；同Sol继续full wire/profile与privacy，不为域绿集成残缺调用闭包。技能现有真实入口/统一字段校验规则已在27域case验证，HTTP及全部caller效果仍待。证据r-wire-normalizer-primary-review/permanent-regression-attempt-1/。
-- P06崩溃报告已交新增恢复前4断言及初始化依赖更正（SHA2a4c41c9），列出schema_plans两CHECK差异和未独审路径；主已要求把“fresh bootstrap逐字一致”精确为入口函数相同但导入SQL有差异，依据本输入不写plan import复用。该更正不要求重跑8stop，5.2完整Web仍待。同P06复用只读审normalizer实际caller增量，无新writer/副本。
-- 本恢复重新核17规划文件与HEAD/已验9f59888e全部逐字一致，strict41/0复用；新增file-tools22未勾、实施未启动，不重复改写已完成规划。证据file-tools-openspec-plan/current-goal-plan-attestation-attempt-14/。主首条裸status再次违反私有index观察规则，后续已固定绝对index；不叠同义条款、不归作者。主机械漏候选外清单、猜错两源码路径及一次校验报告cwd错误另计协调成本。
-
-- 真实producer探针actual1：Chat tools与Responses text.format的合法schema在direct normalizer均通过，经provider_request_preimage包装后两个入口均hash-redaction-invalid，4生产指纹不变；无网络发送。已拒收局部候选，交同Sol联验preimage/seal/dispatch/restore，不递归识别任意request键。窄改既有实际依赖规则，修订效果待真实闭包验收；证据final-stage5/caller-entry-probe.*。
-
-- 本轮17规划文件在HEAD0a185再次逐字匹配已验9f59888e，复用strict41/0，新增file-tools22未勾、实施未启动；证据file-tools-openspec-plan/current-goal-plan-attestation-attempt-15/。原142blob在新HEAD严格组合成1a603acc，两个默认index精确hash不变，未吸收作者新WIP。
-- 正式persistent5.2主测试首轮actual1/48.440秒因长TMPDIR触发Chromium SingletonSocket上限，未发模型请求/建资源；主用持有目录fd的/proc短引用指向正式runtime/tmp，独立探针actual0/0.983秒，无外部目录/副本，复跑实际Chromium已成功。第二轮actual1/63.989秒真实首Job失败。后核trace纠正最初诊断：primary big-pickle已有一次HTTP，被OpenCode免费服务拒绝；其后四fallback在封存profile变更检查被合法拒绝，未发送。不能据此判初始化缺陷或Sol回归，已向作者/审查者撤回先前假诊断。第三轮仅在隔离workspace.jsonc选已配置backup_3真实Provider、禁fallback并用ExitStack恢复原字节；schema/Ruff通过，原全局配置不变。第三轮actual1/61.593秒真实模型Job已完成，Terminal创建时报PTY立即SIGHUP；核生产launch与最近AGENTS要求Node、主fixture却用Bun启动，已改Node并Ruff0，第四轮正在运行。两轮raw/exit及阶段报告保留，原Web用例函数AST/文本逐字不变，Ruff0；退出后无本测试残留进程。主测试/路径/诊断成本单列，不算Sol新增回归；新测试两文件未固定/集成，5.2不勾。技能仅在既有路径规则补Unix socket预算及fd生命周期，探针/正式启动验证效果，整业务仍待。证据persistent-web-primary/attempt-1、attempt-2及socket-path-probe-attempt-2。
-
-- 正式Web辅助进程先核生产launch与最近AGENTS的运行时，不能因项目常用Bun就替换Node PTY worker；本轮首个真实PTY失败属主fixture错误，已修测试而未改生产。原raw、阶段JSON保留，不删断言或冒充资源业务绿。
-
-- P07正式Web attempt4 actual1/93.624秒、attempt5 actual1/94.238秒：真实模型完成/Terminal创建200但WS断开重连，主核attached外部backend没有Gateway辅助runtime，不能只设置aux URL环境就代替route登记。已改真实Gateway managed及正式restart-safe（保两aux）并核backend PID变化；不增加生产测试接口。attempt6 actual1/41.808秒因主把model-stream env设空而显式拒绝，改用既有helper生成mode=off正式runtime配置；attempt7带外置strace只观察wait4/kill/exit_group，待核旧PID正常退出0，避免safe restart的强杀fallback冒充unload。新Web仍未固定/集成、5.2不勾，各轮raw/源码指纹留存，主测试成本不归模型。
-
-- P07正式Web attempt7 actual1/146.320秒：真实模型完成、PTY输出及Terminal promote200，Browser创建200但popup attached-state等待失败；尚未进入restart-safe，不能称真实unload或5.2验收。主失败诊断只截主窗口漏popup，已仅扩诊断为全部实际page/frame与独立截图，ESM静态通过；attempt8使用完整142 owned指纹、原测试函数逐字对照及同一外置保护/strace，运行中。新Web仍未固定/集成；未证原因不派生产缺陷，主诊断成本单列。N02包装schema入口缺陷已核，嵌套volatile metadata无实际producer证据、仅未验项，已要求纠正报告措辞，不递归豁免正文、不新增旧数据兼容。P06最新报告SHA85494965已读并接受fresh8stop复用。
-
-- P07 attempt8 actual1/140.311秒，142 owned及两测试全部前后指纹不变。真实popup/iframe诊断与截图确认Browser client初始化失败、未attach；不勾5.2。随后direct静态前端短探针actual0、CLIENT_READY=true、无console/page/request错误（无模型与业务资源），正在对照Gateway静态转发短探针取具体错误；不再用完整模型E2E重复盲诊断。
-
-- N02更正版ea22c30e已主核：真实preimage包装隐藏schema路径是已证缺陷；probe实际先在properties含redaction_class处触发marker早检，不能说所有schema均失败；嵌套volatile无真实producer，仅未验，且禁止递归豁免业务metadata或旧snapshot兼容。两个短模块探针（direct2.157s、开发Gateway1.764s）均CLIENT_READY=true；带query/窄viewport仍ready，只有预期未登录401，不归正式5.2。正式attempt9仅增console/request/aria诊断后运行中；P08独审managed整组关闭顺序，P07仍审真实unload方法，两者不重跑测试。
-
-- P07正式attempt9 actual1/138.168秒已证Browser模块图有16项net::ERR_NETWORK_CHANGED；真实popup显示初始化失败，未走restart。既有integration manual_browser_connection用route.fulfill绕网络，正式E2E严禁复用。主仅加有证一次产品“点击画面重新加载”并留首次失败/恢复动作，ESM静态通过，attempt10运行中；恢复效果未验，不改生产网络默认、不称首次初始化绿。SKILL窄增全部实际窗口/iframe console/request/aria诊断与无模型加载探针规则。固定9 shutdown日志已交P08，清理顺序独立于5.2重启。领域caller集成后原6fail/10error有实际改动依据，启动一次full-domain定向复核；不代wire producer验收。
-
-- full-domain-after-caller-attempt1 actual124/120.024秒，源码指纹未变，日志推进至53%+27项、没有最终报告；仅表示外置硬超时，不称域绿，不归Sol返工。主先核原全域耗时再选分组/上限，已过窄caller与normalizer27项不重复重跑。
-
-- domain full-after-caller-attempt2 actual0/209.779秒、1338pass、所有domain/test源码指纹不变，原6fail/10error闭合；范围仅domain+当前normalizer live候选，不代实际producer/HTTP/profile。attempt1硬上限120s低于原210.553s，主预算错误单计，正式2采用360s保护。P07 attempt10 actual1、pytest148.92秒/外runner405.460秒；before阶段真实模型/PTY/Browser导航与两资源promote全部通过，未用初始化reload；restart-safe明示2proxy_stream blocker（Browser导航完整Gateway app可能额外SSE，尚待核）。清理留下本轮明确owned backend/aux，主逐PID/cwd/pgid核后TERM清理，strace随后结束，不据清理exit证明正常unload。142owned仅preparation.py发生ROOT漂移，旧签名callee仍四参数而新caller三参数；live与fixed均保至attempt10/source-drift，待唯一writer确认后定向恢复，不对错配入口求绿。
-
-- ROOT漂移唯一preparation.py的live与fixed已保留；主核无二次变化后恢复固定blob SHA6de2aa35、Ruff0，不触作者WT，归属确认待回。P07 attempt11只把Browser导航改真实Gateway health静态地址，保全部原业务断言与有证一次user reload规则；142owned重新全核一致，原测试函数逐字不变，运行中。
-
-- P07 attempt11 actual1/192.702秒（pytest189.50秒），142owned及两测试前后未变、原Web函数逐字不变；真实模型、PTY/Browser promote、restart-safe换backend、同ID running和旧关联清空、另一Thread Terminal attach/PTY/detach均通过。失败为主新测试点击扩展窗口隐藏会话按钮；Browser frame实际attached且无page/console错误，不能归生产回归。主只改为核aria-current bootstrap，不force点击、不删业务断言；attempt12运行中。真实uvicorn0.46 capture_signals正常_serve返回后重新raise SIGTERM，旧383455 trace无SIGKILL、自发SI_TKILL，不能要求一律exit0或仅凭-15称完成；P07核lifespan/unload证据，P08仍审整组backend/aux顺序。5.2未勾、Web未固定/集成。正式workspace.jsonc恢复为primary+4fallback，SHA7532b957，进程按workspace/PID核无残留；两个默认index精确hash仍c77082e3/4f4eba12。证据persistent-web-primary/attempt-11/与attempt-12/。
-
-- P07 attempt12 actual1/127.875秒（pytest124.57），源码前后不变、原Web函数逐字不变；真实Job完成，Terminal模块初始化明确ERR_NETWORK_CHANGED，未到Browser bootstrap或restart。主仅在该已证模块错误下允许一次真实主窗口重载，恢复后仍跑完整业务断言，效果未验；attempt13准备中。主runner曾将未触达after阶段的上轮JSON一并复制，现按来源mtime/本轮起点留provenance并删除错误归档副本，原attempt11保留，不把陈旧report算本轮结果。5.2不勾，主测试/证据成本不归Sol；证据persistent-web-primary/attempt-12/。
-
-- P07 attempt13 actual1/177.920秒（pytest174.40），110个现存文件指纹前后未变、原Web函数逐字不变；前置真实Job/两资源promote/restart/同ID/旧关联清空过，两种资源另一Thread attach/detach、409明确反馈与owner重取均过。bootstrap aria-current修正与Terminal网络错误下一次真实页面重载已实际验证；失败仅主通用API helper把正式enqueue202误设200，router与已有正式场景都明确202，已修精确202保accepted_count和committed/settled等待，attempt14运行中。未验Session删除后访问与末尾stop/delete，不勾5.2、不称整E2E绿。阶段归档已按本轮起点排除陈旧after11报告；证据persistent-web-primary/attempt-13/及artifact-provenance.json。
-
-- P07 attempt14 actual1/195.198秒（pytest191.98），110个现存文件指纹不变、原Web函数逐字不变。首批5.2所有业务事实已到Session正式committed删除后，两资源running、真实Terminal输出和Browser attach成功；末尾Terminal stop真实503 TimeoutError。Python owner保持unknown，Noderevision7落盘但状态running；原两owner文件及最终Gateway/backend/aux日志已归档，不伪报已停/回滚。独立超时/进程扫描原因待窄复现，不立即增加timeout或删末尾断言，5.2仍不勾、不集成。Sol已确认ROOT仅preparation.py一次误写，原因宿主apply_patch相对路径按turn ROOT cwd解析，live782daf与主现场完全一致，已恢复fixed6de2aa35且无其他ROOT/Git/index写；后续所有patch用WT绝对路径。当前WT仅preimage三参增量处于半迁移，Sol继续原wire/profile闭包。
-
-- P07 stop窄复现：真实terminateProcessTree独立sleep无跟踪0.590秒、有strace3.017秒；进一步实际TerminalManagerClient→Node HTTP→交互bash，同配置无跟踪2.960秒停止并返回terminated/verified，strace -f（wait4/kill/exit_group）10.004秒触发原10秒TimeoutError、owner镜像仍running。已证明跟踪显著放大该入口时序，不据此改生产timeout或丢业务断言。证据persistent-web-primary/terminal-http-stop-probe/result.json及ttt trace，Ruff0、外置timeout/内存保护actual0；探针只复制80K完整fixture至分配临时workspace，未注册项目/WT。runner已移除ptrace，仍保600秒/ulimit和110个现存文件指纹，正式attempt15运行中，5.2不勾。日志归档窄修为实际Gateway-owned/test-helper日志及mtime/复制时间，不扫Chromium数据库日志。完整Web及整组关闭安全仍待。
-- 当前OpenSpec17规划文件再次核与严格已验版本及b5eeHEAD逐字一致，新增文件工具22项全未勾；复用41pass/0fail，不重复修改或验证。收据file-tools-openspec-plan/current-attestation-20261006.json。P07/P08已催先交可行动只读结论；writer仍仅Sol，当前模型与路径沿原授权。
-
-- P07 attempt15完整场景actual0/91.298秒，pytest1pass/89.62秒，110个现存文件指纹及原函数不变；最终Terminal stop/Browser close及delete均实际通过。两测试已固定base4a388→f29222（py0af0cd40、mjsfc63ed95），Ruff/ESM0；mechanical首轮漏候选外精确路径actual2，第二轮逐路径登记12项后strict0，原失败保留。主随后核到两normalizer runtime依赖并不在原110文件监测内、与fixed base不同（匹配未接受1fa245），未把live绿归固定包；已保存原WIP并仅物化ROOT fixed两blob、WT未动，Ruff0，attempt16监测112个现存文件定向复验中，5.2仍不勾/未集成。证据persistent-web-primary/fixed-attempt15/normalizer-dependency-alignment/；主补救/额外验收成本单列，不叠已覆盖的依赖规则。
-- P08正式报告789fe62f已交并主核，固定源码/attempt9栈证整组TERM全部owned进程与backend unload→aux revision同步之间的退出竞态；restart-safe保aux不能替整组安全，attempt14无异常不否定竞态。主按既有owner选择backend完成drain后再终止aux，不以已关aux镜像当已知终态、不吞unknown；已要求报告收窄“必然”及移除错误降级建议。生产关闭顺序尚未修复，安排当前wire闭包之后。报告路径TEMP/wire_http_acceptance_reviewer/artifacts/persistent-web-shutdown-order/report.md。
-
-- P07 fixed dependency attempt16 actual0/102.798秒，pytest1pass/101.14秒；112个实际现存文件指纹前后一致并逐blob匹配fixed candidate f29222，原Web函数逐字不变，全部业务阶段过；5.2及测试集成仍待P07独审。此前147/149是主误把142 owned清单（含39删除）当SHA文件数，已按raw修正：attempt11为105，12–15为110，16为112；39删除路径由owned manifest单独核，不伪称runner逐次监测它们。normalizer ROOT现保持fixed两blob，原WIP与1fa245保留，先前1338domain绿仍仅归当时normalizer WIP，不外推当前fixed。
-- P08更正版9989f604主已读：退出竞态而非每次必然；拒绝aux已退出即已核实的降级建议，验收必须整组非preserve路径。首真实fixture/调用入口保原报告，未运行新测试；附注fixture含身份文件的说法须以实际source为准（当前fixtures源码无.boxteam，正式helper负责创建），不据建议复制旧数据。
-- Sol已交七文件caller增量，主已发继续wire/profile且不等待例行回执；新serde已实际改为必需request_input_hash键，nullable按非prepare语义，拒绝旧缺字段snapshot兼容。七文件尚未固定验收；主继续核commit唯一事实/重试及原测试caller。
-
-- 本恢复规划收口：17文件逐字匹配已验版本及4195ce93，复用strict41/0，file-tools仍0/22；收据file-tools-openspec-plan/plan-attestation-4195ce93.json。恢复坐标文档已提交4195ce93（仅台账），guard及双祖先通过，两默认index精确hash仍c77082e3/4f4eba12。142 owned重新组合为870fa4b1，index=TEMP/coordinator/git/current-owned142-post-doc-4195-composition.idx，103现存逐blob一致、39删除逐路径核不存在；不吸收作者wire、Web或新增unit WIP，receipt=persistent-web-primary/post-doc-composition-4195-receipt.json。
-- 主已在tests/unit/domain/itemized/test_plan_contract.py已有必填manifest缺键矩阵增加request_input_hash（唯一新增行），Ruff0，保持原fixture/其它断言。已核WT原测试只缺该行，物化主独占测试后在匹配serde的WT跑12项全过（pytest1.95秒、runner3.498秒、actual0），domain/test前后指纹不变；只归current WT领域恢复边界，尚未固定/提交、不代完整wire/HTTP验收。证据r-wire-caller-early-seven/required-envelope-matrix/。正式integration707处仍等真实wire合同迁移，不把wire当LangChain envelope解码。main生产业务手写仍0，文档/测试/机械/诊断成本照记。
-- Browser deleted grant边界已核：attempt16/local-backend-40647.log:182→workspace_resources/owner.py:_grant→BrowserManager.issueTransportGrant。已deleted且verified仍进入grant，目标确定非running抛普通Error经HTTP500令Python_unknown污染已核终态；同Sol排wire和整组关闭之后修复，不能吞异常或返回假成功，验确定拒绝和实际target race。5.2已过场景证据保留，未修缺陷单列。P07/P08仍running；主只核其最近公开工具确认在推进，收窄重复整组关闭调查并催可行动结论，不因等待重启agent。主初次恢复裸status、数次猜目录和log尾部UTF-8解析actual1均属协调成本，未改生产/共享index。
-- 当前文档维护4195/c2b5均只提交台账，真实提交后HEAD查file-tools-openspec-plan/*forward-receipt.json，不追逐文档自身坐标再造提交。恢复反复全文读历史状态/50K-token效率JSON、重复同17规划attestation的成本已暴露；入口只补“当前坐标/相关收据＋按任务/JSON键查询、未变检查复用”规则，Skill validator0，随后窄JSON键读取实际成功，交付速度效果未量化，不归作者。
-- P07持续扩大到已由P08完成的整组关闭调查，主已中断只读旧审查者；新persistent_web_closure_reviewer按无历史最小证据包只审fixedf29222/task5.2，显式gpt-6-luna/max，团队注册达15不再新增。该调整尚未出报告，不能宣称提速。Sol仍唯一writer且继续真实finalize/profile，P08仍审fixed51b642七文件；主测试缺键迁移不动生产。当前只读窄审复用wire_contract_reviewer与wire_http_acceptance_reviewer，分别查验收缺口和SDK实际正文变换，不重做关闭调查。
-- Sol下一段已定型为agents/providers/wire_finalize.py唯一纯Chat/Responses编码面、完整params/stop、profile与封存/发送共用；主核既定合同2.2和最近AGENTS后接受该职责，不挪到明确禁止wire bridge的mapping/itemized，不import动态模型/CSM/storage。源码尚未交本段；语义参数不能窄白名单丢失，实际HTTP、profile漂移零发送及全部caller仍待验。
-
-- P08七文件更正版f2b527b7已读：保留同seal唯一事实/required键与retry链结论，撤回旧preimage形状必失配推断；缺request_input_hash键确拒绝，保原preimage+原hash恢复未实测。主迁移真实HTTP恢复caller：ROOT/WT单函数SHA d8bc08a2一致，Chat/Responses均比较snapshot.request_hash_preimage与独立TCP实际完整正文的规范化结果；原overlay/order/restore断言和参数矩阵保留，其余函数AST不变，Ruff0。只静态交付，实际HTTP待Sol完整wire；不在ROOT旧生产上跑错配新test。证据wire-http-caller-migration-attempt-1/；12case领域缺键矩阵通过范围不扩大。
-- 本恢复读取的一次效率JSON顶层标量及宽目录符号检索产生截断/猜路径错误，主协调成本单列。随后只按相关键提取；SKILL在既有审查复用段窄增先交分配任务、关联问题单列规则，新Web审查报告尚待，不宣称已提速。已注册15，不新增；新文件工具规划17文件41/0收据复用，0/22实施未启动。
-
-- P07最小证据闭包审查已交：task5.2接受，报告SHA f00cea9017fc99a60fd87d93f88a7bf7025e6ff5355df15461bf689fad9376d9，确认recover/observe只对账、records原样加载关联，旧backend lifespan→tracker.close→release_thread才清来源Thread关联；不凭PID变化或-15判断。主核报告与attempt16/f29222指纹后复用完整1pass，不重复Web。两测试与5.2以a759cf49串行集成、当时persistent20/21；当时6.1和已登记整组关闭/deleted grant缺陷不勾，idle30分钟触发未由本场景覆盖。技能收窄派单取得本次可行动报告，但无可比计时，不称交付速度倍率或永久最优。
-
-- P61只读三规范的报告SHA ebacf4acdf01d9a79dd1f2ed2dcc82372a64edebd2d7d6143057c1042b3bb0bc已主核：6.1的禁止项与唯一owner引用存在，勾选只证明normative写入。关闭顺序与已删除Browser迟到grant分别落为5.4/5.5、design第8节和两个scenario；persistent最新21/23、strict1/0，不能归档。两修复排当前wire后同Sol实施；新文件工具仍0/22。17规划本轮逐blob/SHA与HEAD和已验记录相同，继续复用strict41/0。
-- WHTTP更正版报告SHA 1742eb527f8a935f8becb01c354935afe4464de8a3965b76cdb9d35dadbcfc13已主核，独立TCP正文全等断言符合既定完整wire合同；旧版dda57467作废。只更正报告，不改测试或增加运行，生产完整wire未验。漏给原合同定位属主协调成本，不归Sol返工。
-
-- wire参数WIP早验两项原最小配置单测1pass/1fail（11.913秒、源码指纹未变）：新send helper重新带入temperature=None等未设置字段。真实sync/async非流式调用对照ROOT actual0、WT actual1，WT共享入口强制stream=True/include_usage；两边指纹未变，只mock网络边界。证据wire-finalize-early-minimal-options-attempt-1与wire-finalize-early-nonstream-attempt-1；同Sol收修正，主未补生产源码，完整wire仍未验。
-
-- 主另独占并同步ROOT/WT的tests/unit/agents/providers/test_provider_request_options.py（SHA c1fe8c48cf200473d6f5b2c267522987431b0c7bf1d6d2d8e82dc13eb455dd8b），新增sync/async非流式原行为测试；ROOT2pass/actual0/11.766秒、Ruff0，原None省略控制组1pass/actual0/10.769秒，两次指纹未变。测试三文件固定8331fef93ab19ddb5b3cca27b1a4fd580b2b5ff1，收据wire-http-caller-migration-attempt-1/fixed-three-tests-receipt.json；都未随完整wire集成，WT修复复验待交。主仍未手写生产源码，测试补救/验收成本另计。
-
-- 两参数回归已由同Sol修正：WT4case actual0/12.687秒，后相关参数+format两文件33pass/actual0/17.686秒，agents/mapping/tests指纹均未变，Ruff0。早固定08323627仅含新增wire_finalize、chat adapter和输出mixin三路径，完整wire未集成；freeze与原始日志见wire-parameter-fix-acceptance-attempt-1/及attempt-2/。新增非流式测试独审SHA8d209548接受，属于保原行为的纯新增，不代完整HTTP。SKILL记录同作者修正与窄复验效果，暂不换默认模型。SDK更正版333a6c8f纠正num_ctx/stream/语义参数静默剔除建议，只复用静态定位；无原始离线运行收据，不归完整TCP通过。
-
-- 本恢复主新增G1/G2/封存后漂移14case并同步WT，三测试固定9b2c4df9、HTTP测试SHAad5d927e；原12函数及后续新增函数AST逐次保留，Ruff0、collection14/43实际0/8.988秒，行为尚未跑。G1真实Bridge/Saver→bind_tools→SDK/TCP且不写回答回历史；同selection后另固定第一plan重算参数/profile hash排除assembly身份假阳性。G2真实Agent有Saver/admission但无bridge，四case期望零HTTP；漂移四case调用真实Saver prepare后改变实际model，不改plan/reseal。证据wire-binding-missing-test-preparation、wire-profile-parameter-test-preparation、wire-postseal-drift-test-preparation、wire-new-tests-collection-attempt-1。
-- probe5独审07d338f3：真实TCP、adapter人工消息input与SDK相同，但无tools、不经Saver、缺command/exit/source收据；不能证明完整seal/send，不为补历史日志重跑或造收据。原SDK线索保留，完整实际验收待新包。两参数4/33通过说明已以ba1b4c43提交，guard/双祖先/默认index通过；提交后的外部收据首次错定位到artifacts顶层导致exit1，提交本身成功，改绝对A后已更新并重组c2eb3bde，142 owned blob全同，属主协调错误。
-- 09:07–09:31 UTC同Sol仍活跃公开工具，下一Responses/Saver/binding路径无源码增量，多次读取主新增测试；主连续状态通知与作者重复独审共同增加依赖等待，不能按无源码时间判停止或换模型。现主将14case一次固定、后续消息明确非新增准入，作者继续已有合同生产增量，独审者只读固定包；入口窄加合并验收通知规则，实际下一交付效果待证，不称已提速。三个已核会话继续running，注册15不新增；新文件工具17规划再逐SHA/HEAD匹配，strict41/0复用，0/22实施未启动。
-- 固定三生产08323627窄审4f7a2a2已接受，AST转换逐字保留、输出normalization唯一调用保留；但固定候选test_opencode_zen_provider仍6次调用旧normalize_history_content。主接手四测试函数的精确callee迁移，全部fixture/输入/断言AST按替换归一全等，匹配WT Ruff0、4pass实际0/8.118秒、源码指纹不变。ROOT首次Ruff因新wire_finalize尚未集成而误分third-party为I001，不能为错配依赖重排import求绿；匹配组合检查已过，成本属主。四主测试连早三生产组合b1b31c41，增量仍未随完整wire集成；证据wire-history-normalizer-test-migration/，独审待交。该调整闭合已删除helper的测试caller，不增加alias，后续完整wire待验。
-- 主对完整test_opencode_zen_provider做一次相关owner复验：25pass实际0/16.077秒、providers/mapping/test指纹不变，闭合上述6旧callee及历史转换所在文件；不与4/33统计相加、不代完整wire。四测试caller固定b1b31c41独审60e6d3eb已接受，27顶层函数AST按精确callee归一全等；HTTP新增测试仍由P08独审、行为待生产。证据wire-history-normalizer-test-migration/full-provider-owner-attempt-1/receipt.json。
-
-- Chat转换owner五路径以45e23e0c串行集成：ROOT相关58pass实际0/20.419秒、源码指纹未变，私有index树等于固定1dce368e，guard/双祖先/默认index不变。两provider测试已集成，其余两主测试及技能WIP未吞入；WT不动。主提交前首次把受GIT_INDEX_FILE影响的git --git-path index误作共享index路径，私有文件尚未存在导致exit1，发生在read-tree/add/commit之前；改absolute git dir/index后完成，留preflight-attempt-1-error.json，属主协调错误，既有技能规则已覆盖，不重复增加同义条款。142owned重组65d0ced5，blob全同；17规划指纹仍同，strict41/0复用，新文件工具0/22未实施。
-- 当前队列残留已完成Web验收的“第四轮运行中”，与新收据和后文冲突；本次按实际依赖修正当前队列，历史失败证据仍保留。技能窄加当前动作与历史attempt分开维护，静态验证不证明未来免于重复派单，效果待后续恢复实测。
-- 本轮G1/G2静态窄审c005f3b3已主核：真实typed输入、Saver/SDK/TCP链及同plan排除身份假阳性成立，无需立即改测试；漂移段仍未行为验证。非Agent入口审查d9fe0ff7发现ToolTestService现测均fake builder，self_check仅本地转换。主新增真实默认builder→bind_tools→TCP→隔离fixture文件→evaluate/store一条测试，原15顶层定义AST不变、Ruff0；首轮及诊断轮因主使用未知模型名触发SDK fake_stream把SSE读作JSON，换既有HTTP套件openai/gpt-4.1配置后1pass实际0/18.211秒、ROOT源码指纹不变。失败16.325秒及诊断21.265秒均计主testsetup成本，不归Sol返工；raw不覆盖。候选0fe67950、单增量基线392991bc，HTTP test SHAb83ff727，已同步WT主独占测试，独审待交。它只证明当前非Agent可用，显式purpose与完整binding仍未实施。
-- Sol在固定合同后持续展开Saver/purpose全链调查、Responses三个路径截至09:58UTC未变；主确认会话仍running后显式中断，再同一gpt-6.1-sol/max会话派三路径具体转换任务，完整wire目标保留。10:12后公开fileChange与实际wire_finalize差异已确认，adapter正接通，未冻结/验证前不称正确或整体提速。preimage收据responses-finalize-focused-dispatch/dispatch-preimage.json；入口以此实证收窄调查规则，不按观察超时自动换模型，注册15不新增。
-
-- Responses收窄派单已兑现三路径完整增量：最终3c2c0c76与早审53b4仅注释变化，三AST全等；相关WT84pass实际0/29.853秒、源码指纹未变，主Ruff0，旧绑定及两个adapter清洗方法已物理删除。ROOT三路径前镜像逐字等于固定基线0fe67950，84收据中其它依赖逐SHA也与ROOT一致；窄独审仍在运行，不能按测试绿灯代完整wire验收。同Sol已接Saver/profile，不等待这轮审查或重复检查主独占测试。17规划与当前HEAD逐SHA再核无差异，strict41/0复用，新文件工具仍0/22；本次恢复未修改或启动该范围。
-
-- Responses窄审多次“证据已足/马上报告”后仍追加行号与边界检索，主在明确催交未兑现后显式interrupt，同一Luna会话只派既有证据报告，236秒后实际交13行c8d5c498并保留native执行覆盖未知。主补native scope探针：ROOT2组实际0/10.372秒、WT2组实际0/10.585秒，input/tools优先级、reasoning清洗、chatgpt归并、五项覆盖拒绝与stop保原行为，正文hash逐组全同，指纹未变；仅adapter边界，不代HTTP/Saver。三生产已ae53fc8a串行提交，guard/双祖先/共享index通过，四主WIP未吞入；strict-export重建3c2c树完全相同。报告专派兑现只证明这次收口，不给整体效率结论。
-- 主曾把Saver/profile四路径相对旧候选的差异说成本轮开始写代码，核公开turn与mtime05:22–07:20UTC后已更正：属于先前WIP，本turn新增未证；现场观测与本轮作者产出须有前镜像/时间依据，不归Sol提速或返工。
-
-- 10:57UTC第二次收窄Sol派单：本轮只交实际ModelRequest参数/profile提取和三生产端口透传，前镜像逐SHA保留，未引入默认/alias；完整Saver封存、恢复和发送义务仍保留。现有“先具体生产增量”的技能规则复用，不追加同义禁令，效果待实际交付。P08 caller清单8e1ff3a7已主核，只归固定G1/drift调用/断言，未定签名待Sol固定后由主迁；无需再调查测试阻挡前置。
-
-- Saver三端口固定d4fd4e96（baseline09635583），52新增/10删除，三个源码SHA与实际WT匹配；作者报告实际SHA3428e080与口头540ed64不一致，主按落盘报告记，不影响源码交付。早审b8a18e1d明确未接受参数提取：framework strategy改写/省略tool_choice、Responses固定stream未纳提取；尚未消费wire不算已观测HTTP回归。缺口已回同Sol九路径继续修＋接seal/preimage/retry，纯profile端口已定，测试归主，不增agent。收窄规则已兑现可行动增量，正确性/完整wire与模型总体效率仍待验。
-- 主冻结10测试27直接prepare前镜像（ROOT/WT完全一致）；低层metadata seal15测试42call增显式wire_profile=None/wire_params=None，删除这两kwargs后AST完全相同、ROOT/WT逐fileRuff0；仅静态迁移，生产新签名未交前不跑错配行为。证据saver-wire-caller-migration/caller-inventory.json及metadata-seal-explicit-ports/receipt.json。三会话最新turn_context再核Sol=gpt-6.1-sol/max、两审查=gpt-6-luna/max；共享index/生产源码主手写规则保持。
-
-- Saver pure-seal九路径固定4c87713b（baseline b5f23591），八现存一删除、native未变，binary/full-index严格重建树全等；报告实际SHA64d7b124。producer参数profile进入统一finalize/preimage/seal-input、committed retry复用原snapshot；旧request_preimage物理下线。独审8486b115接受生产端口/seal窄范围，结构化ToolSet、发送binding/purpose和normalizer仍未闭合，不勾完整wire。其单test caller阻断实际已在主独占测试候选6d528d迁好，要求审查者仅核组合该路径并纠正d4证据标签；旧verify_delivery的候选外55项未逐path声明失败仍保留，不称完整包审计通过。
-- 主完成23测试typed-profile/metadata端口迁移，ROOT/WT逐fileRuff0；6d528d固定包含frozen_provider_wire合成fixture、真实manager/supplier及唯一seal_input_hash caller显式None。collection-attempt-1实际0/17.141秒、165collect，只收集不代行为。恢复收据primary_uncommitted_paths已补26项含23迁移与原主测试/技能，141 accepted-owned原blob未重放。
-- 首轮Saver行为8a24c422实际1/65.982秒，53pass4fail：3项schema4仅改变旧provider/target字符串，未同步pure profile；1项旧SessionControl第二applied不再是真实prepare权威。主修前者成组有效输入，所有assert AST/match不变；后者迁真实B prepare/seal、persisted assembly binding、旧A retry不读supplier且不回写最新B，其它顶层定义AST不变。新测试增量e41b3caf，尚未行为接受；原失败不覆盖，也不归Sol生产回归。首轮一个真实middleware测试依赖未留指纹的在途Bridge，已收窄receipt，不把它的绿灯归固定HTTP验收。
-- Sol下一结构化ToolSet先授权Bridge/producer/factory三路径，发现真实数组顺序不同后保存前镜像扩ToolSetSnapshot及唯一toolset bridge两路径；基线4c87713b，收据structured-toolset-focused-dispatch/order-expansion-preimage.json。图注册structured工具正向冻结与真实绑定消费由同作者推进，不新增agent；不能把synthetic工具反建第二ToolSet、重复追加或拒合法strategy求闭包。工具顺序须进入唯一manifest/hash；当前源码尚在写、不作最终候选。
-- 主6项有效profile漂移复验actual0/18.429秒，但期间上述domain/provider两路径被写，相关指纹变化；该结果不算固定候选通过，待作者冻结后定向复验。此排期成本归主，技能已有固定候选/依赖指纹规则，不追加同义禁令。入口只窄补profile声明成组与applied唯一owner的fixture规则，修正效果仍待实测。共享index仍c77082e3e590fa4dde7b97dab516959212e80ed9cb5b4918768560e88763a494，HEAD84903f17未变；17规划/strict41/0继续复用，新文件工具0/22未实施。
-
-- 六路径结构化ToolSet最终ea8dc6a1冻结且严格重建全等，Ruff0；桥在create_agent后绑定真实图，复用框架真实_get_bound_model，不自建策略和第二ToolSet。原包漏assembly_snapshot/serde/assembly/runtime/composer三必需request_input_hash字段，主机械补required-only540e47e24，独审2cee0826接受前置静态闭合。实际runtime90775另含两未接受normalizer，明确隔离，live绿灯不归缺字段固定包。主两条只读diff曾错用共享旧index，已私有index重核，不作证；无共享mutation，计主成本。
-- 主26caller/fixture静态审查215f814b已接受：有效profile成组漂移、真实A→B seal/applied与旧A retry、真实producer/图绑定、旧断言AST保留。匹配90775行为首轮57pass3fail实际1/68.306秒，指纹不变：child旧GraphBinding由主迁真实四字段；另两omitted是真正owner回归。Sol先修manifest比较ac9ce767、Ruff0，主完整小diff独审；affected43项实际1/40.98秒（41pass2fail），指纹不变，又在serde identity-only恢复重造public完整ToolSet失败。同Sol四路径修真实seal→serde→retry，公开完整ref校验不放宽、不读registry补正文、不回救旧数据，效果待验。证据toolset-omitted-comparison-fix/affected-behavior-attempt-1/；入口窄补原CSM/领域ref恢复条款。
-- 新8case真实graph/SDK/TCP结构化HTTP首轮0315ec8d实际1/30.83秒（3pass2fail、maxfail2），指纹不变。Provider-responses sealed preimage多response_format等，待同Sol接真实SDK映射闭包；auto_tool-gpt4.1的false profile仍被框架模型名fallback判Provider，主改已知gpt3.5测试输入、全部断言保留，ROOT/WT Ruff0，尚待行为复验。主首次直接调用不存在ROOT/.venv/bin/ruff失败127，改uv run --project后0，计主工具成本。新case与SSE fixture由P08窄审，未变26caller复用；不弱正文/hash/parsed/synthetic断言。证据structured-toolset-focused-dispatch/test-migration/structured-HTTP-attempt-1/与auto-tool-model-input-correction/，入口窄补策略fixture核实际框架兜底，未称已解决。
-
-- 同Sol的omitted最终六路径严格重建83831ab4全等，作者e011a3c6与文件SHA逐项核对；主完整diff独审。affected四文件43pass actual0/40.982秒，930实际源码/SQL/测试前后指纹不变，实际app与固定组合差异为零，无候选外app源码。新typed身份从seal起不载正文，serde/retry同类；included与完整registry仍strict。P08正做六路径静态独审。此证据验证窄补恢复规则的本次效果，未集成完整wire、未外推两normalizer。
-- 新8case静态审5917e70c已接受默认SSE保原行为、原assert AST及实际graph/SDK/TCP范围；指工具顺序只比长度偏弱，主新增顺序值与完整注册schema/body独立等式，原断言全留，ROOT/WT Ruff0。固定62c75718全8实际1/37.631秒（6pass2fail），927指纹不变，候选app/两fixture与WT逐blob一致；Auto-tool两协议均过，原模型输入错配已闭合。剩Provider/AutoProvider-responses两项正文仍不同，未把red视为已验收；同Sol已派唯一finalize/adapter两路径，前镜像responses-structured-wire-focused-dispatch，不删schema/放normalizer求绿。原2轮raw保留，新增独立等式计主测试成本。
-- P08报告完成后恢复曾扩大核checkout并询问已明确runtime范围，主收窄为固定测试报告交付，已交5917e70c且未跑测试/改源码；属审查恢复/协调成本。主一次在WT用ROOT-relative路径找报告失败，已改ROOT绝对根；此前ROOT旧生产两段只读探索未用作候选诊断，结论均核固定blob，不归Sol错误。不叠同义技能条款，后续恢复继续核效果。
-
-- Responses结构化映射两路径5a61共享SDK helper，sealed input/tools先隔离后原值恢复（含空tools）；旧adapter直接helper链删除，独审b61fb55f无阻断，完整8真实graph/SDK/TCP actual0/37.39秒。最新normalizer auth单路径fcdb独审更正版0e93114d接受，主四schema/type hash、210拒绝/180合法marker探针actual0/0.342秒；10schema/structured HTTP actual0/37.341秒、38provider/default参数/native/nonAgent actual0/32.397秒，927/929实际源码/SQL/测试指纹不变并匹配固定tree。新2HTTP验证同sealed plan的schema类型敏感性。旧report-initial保留：审查者误要求root auth先marker校验，核spec1158与原7180报告后撤回，不为此新增生产gate；这是审查成本，不归Sol。
-- 主把preexisting27case normalizer文件新增12header/marker case和3合法schema属性，旧顶层函数仅fixture声明变化，其余AST不变；固定5ecb重建全等、ROOT/WT Ruff0，domain39+redaction43合82pass actual0/14.429秒，929指纹不变，新增tests独审待。主首次Ruff I001自动修正、旧status漏私有index、宽JSON输出/猜路径、技能长段局部patch未匹配均计协调成本；共享index精确SHA仍c77082e3，无恢复宣称。入口只补现有包装层字段匹配的header别名，不叠新流程；本次域/HTTP证明窄规则效果，未证明完整wire或模型倍率。当前28主WIP登记，Sol新8生产purpose/binding派单已存完整preimage，测试/Git仍主承担，新增文件工具0/22。
-
-- 发送前六生产c3de＋主accessor组合bdb首25项实际1（23pass2fail），两红来自主fixture在同epoch换profile，并非Sol生产回归。主保有效参数原断言，能力False/True分别首次真实HTTP并校同plan hash敏感性，同epoch变化明确拒绝且无新HTTP/assembly；fixed9ac4项0。五直连fixture逐测试标tool_test、逆AST原输入/断言全留，88项0。独审b26a接受；合法runtime rebuild归后续R，不能声称已验。
-- P07早审发现middleware/Saver getter漏checkpoint_ns；同Sol沿既有namespace owner两路径修正，缺失转source-mismatch保cause。efd5复审闭合；fixedf8b namespace/native8项0，包含scope reset、并发隔离、tool-loop和缺失零HTTP。非model非空namespace的真实Agent图入口仍未独立验，现有固定静态确认透传，不外推该场景已跑。
-- fixed17cf恢复/history/unknown overlay/corrupt owner及domain92项0；fixedc0d间接capture与custom ToolTest/agent factory64项0、7个live-only跳过，final purpose/G1/drift/default builder14项0。各批927–935源码/SQL/fixture前后不变并匹配fixed tree。ROOT同步后9项0/25.434秒、128文件Ruff0；4a9b88b2精确171路径提交、guard/双祖先及共享index c77082e3均通过。旧已批准删除的request_preimage.py曾在ROOT物理残留未跟踪，保存preimage、零模块caller后移除；ROOT app与fixed全等。
-- 主协调成本：首机械kw插入被AST预检发现位置错误，第二文件未落盘，全部从before重建；并行校验共用私有index的write-tree缓存锁导致一个preflight失败、测试未启动，换独立index后14项0；whole audit首次漏三份WT前日memory的defer，逐路径补归属后final171/43 audit0。技能仅窄补namespace、epoch fixture和并行index既有条款，quick_validate0；效率账不把主错误算Sol返工，不给无同起点证据的模型倍率。证据wire-binding-purpose-focused-dispatch/、normalizer-auth-carrier-focused-dispatch/binding-*及efficiency-comparison.json。
-
-- detail 12路径稳定包已固定4ba850cd（baseline3ff6）：逐SHA、ROOT前镜像、binary/full-index fresh私有index严格重建与精确overlay通过，Ruff0，共享index不变；未复制两个typed WIP。首轮full facts/key实际1/10.088秒、1461依赖不变，4pass/2fail/1setup error：新鲜session的registry先登记却要求尚未publish的detail父目录存在，阻首次prepare及sensitive故障注入；同作者修原owner，不预造fixture求绿。原红记录保留。主schema4补8个prepare禁分配探针，全部50原assert AST不变、ROOT/WT Ruff0，固定c654bcef；WT前镜像仅缺原主schema迁移，已精确同步，该次preflight拒绝计主协调。P08固定新diff独审中、生产未接受。证据detail-same-seal-fixed-attempt-1/、detail-full-facts-and-key-behavior-attempt-1/及main-detail-prepare-allocation-probes-attempt-2/。
-
-- detail fresh路径单修0b65已P08静态报告bbd1f4ef接受其原因闭合，无新阻断；原7场景第二次6pass1fail/12.385秒，source失败只差两条新增compact provenance（8→10、无既存改删），诊断actual1/7.928秒，P07确认原全表不变是测试假阳性；同作者精确迁既存ID完整行及新草稿无绑定，未改生产registry。其余detail/store/registry/schema三个整文件168pass1fail/71.398秒、1462不变，唯一红是主继承tombstone期待；主单函数迁完整旧详情行及body/cipher/key不变，原错误/audit/no assembly/retry与其它定义AST保留，ROOT/WT Ruff0，严格固定54c80bd2，单场景复验与P08独审中。首个复验误填tree实际git128/runner1、测试未启动，原错误保preflight-failure；随后从manifest取实际ID，计主协调，不归作者。旧168通过不拼新单例成169整轮绿。
-
-- history generic active-view合同存在直接冲突（P07 df7616ab），主在itemized五现有规划文件明确only-projection、history_view_id只读selector/put拒绝、不换execution head且原pending归属不变，新增5.6-A/B未勾；strict CLI实际41pass0fail（session87507，工具原始输出保存于会话），不是仅追加任务或声明原规范全一致。Sol typed/history12路径与五主文档固定e8a08515，逐SHA/严格重建/精确ROOT overlay/Ruff0/shared index不变；7真实场景actual0/22.497秒、1461不变，覆盖贡献草稿精确边界、真实history后新Turn及rewind/compaction intent rollback/retry、首次sensitive失败；32 typed-unit及既有history-selector入口actual0/22.423秒、1463不变，范围分列不相加。主tombstone测试单例1pass/9.681秒、P08 fd461bd2静态接受；额外typed详情两参数2pass/5.573秒、1460不变，其他顶层AST不变。P07审typed与贡献断言、P08审history正式caller，defaultroot同作者在途；未做完整epoch机械接受/源码提交/服务恢复。
-
-- history写口窄闭包：P08先发现put_writes漏只读guard，原四写d42实际3pass；再次清单核查发现rewind/rewind_to_turn同样接受history selector。同Sol以唯一_checkpoint_identity(for_write=True)收口四同步入口及四异步wrapper，严格固定b664c5c2、Ruff0、ROOT精确overlay与共享index不变；正式history真实入口1pass/actual0/14.677秒、1460源码/SQL/fixture指纹不变，八写全部拒绝、get/aget保持可读且完整SQLdump/JSONL不变。新diff的P08静态审查待交；范围仅此selector边界，不能代全部epoch闭合。入口仅窄补现有CSM条款，不扩一套流程。
-- 继承caller/范围成本单列：joint完整12compose caller补必填ToolSetSnapshot，111原assert AST全保，fixed6591整文件38pass/actual0/20.651秒；原四文件77pass10fail不改写或拼成整轮全绿。恢复全文件43pass10fail已回同作者迁真实thread/admission/typed投影输入，terminal成功fixture缺生产codec必填messageID，不放宽生产guard；包仍在途。typed Protocol唯一漏登记路径事后具名纠正，现67existing/4new lease，原scope失败保留；这是主协调/清单成本，不称之前已精确登记或归当前生产回归。作者完整库存54420已结束、48差异只作观察，旧docs不反向覆盖当前规划，恢复在途不自动defer。
-
-- 恢复caller5720a单test严格重建fixed6bff8276；首裸AST预检误拒3处必填thread签名，未写ROOT/未启动测试，精确归一该参数后172原assert全部保留、仅新增messages=0，Ruff0。正式整file52pass1fail/actual1/27.217秒、1460依赖不变；sole red仍是原工具shadow逻辑数期待2，真实locals显示同typed model-call的canonical call和raw shadow各入一条、result一条。单节点PDB诊断actual2为主动quit/4.996秒、1460不变，不算验收。现68existing/4new，新增原catalog投影owner一path已落前镜像，不改2为3、不从正文猜身份；同Sol待missing-checkpoint包交后修。主另一次裸diff经陈旧共享index误报技能删除，只读未写、不作证，私有read-tree HEAD重核实际技能+state共2修改；复用现有索引规则，不新增同义条款。
-- P07 typed最终报告aeb1ab53接受精确intent字段及同事务consumer路径，发现显式rewind无效checkpoint静默成功P2，已回同writer原boundary两path修详细KeyError和正式无副作用入口。P08八写报告a2dd8f08静态接受fixedb664与主正式行为合用；未跑测试不冒称。规划17份当前SHA仍全等，文件工具0/22未实施；此前strict41/0继续复用。
-
-- P07无效checkpoint同owner两路径修正fixed85bebb3c：source缺失/不可用在view/control/intent前报详细context-boundary-checkpoint-unavailable，成功view_id必填，不再空view假成功；无第二parser/默认head。主非作者完整diff独审及19既有顶层AST相同，新正式sync/async×missing/pruned4项真实拒绝零dump/JSONL/cache/facade/CSM/intent副作用、合法retry→重启epoch2 seal全部通过actual0/18.505秒、1460依赖不变；Ruff0/严格重建/精确overlay。复用typed原报告不整队重审，未验更早anchor仍单列。
-
-- shadow首修fddb单owner严格重建/Ruff0，P08报告9579d489静态未见新回归；真实组合仍65pass1fail/actual1/31.083秒、1462不变，原无message projection入口item_count仍3。首修只在selected_tool非空路径归一，派生message尚不存在分支遗漏，退回同作者先把typed canonical选择放到共同路径，保原2期待，不重造fixture。下一轮先sole红＋跨model四变体，不在未知修复上反复整file。另主猜错test_checkpoint_message_groups子目录导致actual4/4秒无tests ran，原raw保留，实际rg --files定位后才有上述行为；这是主调用成本。scope核验也须联合作者68existing/4new与主独占3test，不把后者误报作者越界，source54更正审计0差异/三保护0，原失误保留。
-
-- shadow第二修ef26共同路径收口先5真实sole/modelscope项actual0/5.852秒，再完整恢复/checkpoint消息组/activity unit三file87pass/actual0/42.528秒、1462不变；P08增量报告72306f87静态接受signature/typed scope/parallel/无counterpart边界，未由其跑测试。原65pass1fail保留，不能拼首轮为绿；同owner净删除重复和不可达分支，未弱原item_count2。
-- 同checkpoint早user-anchor正式回归仅新增test02f1，20既存顶层AST全等，严格固定a5f9889b/Ruff0；实际1fail/8.006秒、1460不变，prepare messages中snapshot body复活，首次静态疑点现在已有具名行为。P07原报告5aa1b73a保持静态等级，不改写其历史证据；真实replay before-anchor与inclusive用例合同均有caller，下一动作同Sol在checkpoint cutoff/source-selection owner确定权威membership后修，不只在compiler猜source身份/ordinal。入口仅窄补现CSM规则并明确待验，不声称完整epoch通过。
-
-## Source cutoff 本轮边界验收（已集成；下列保留各 attempt 历史）
-
-本节开始时文档HEAD为fb7a5175；主精确冻结九生产为d06ba681（新HEAD＋原54source，九增量，最新docs保留），ROOT Ruff0、严格重建/共享index不变。source与transition位置均在既有同行/原事务持久；初始提案root一概记start被P07早审拦下，改为真实canonical/admission前沿及精确ref/revision继承，不另ledger。九生产窄审仍待最终报告。
-
-原02f1同checkpoint红未改，现真实1pass/7.706s，1460依赖不变，重启正文/frame/状态/pending/源零读/旧assembly字节全部执行通过；证据 `source-cut-frontier-original-red-real-behavior-attempt-1/receipt.json`。原相关三file首轮41pass11fail/119.877s，1463指纹不变；11红均在seal transaction共同手造fixture缺真实root backing，未到原rollback/stale断言，退同Sol完整迁fixture，不弱guard。原raw保留 `source-cut-frontier-existing-epoch-seal-detail-real-behavior-attempt-1/`。
-
-新同file测试b483固定9ba54671：原17个test AST全部保留，仅EpochCase.rewind透传anchor_mode、load_snapshot接受显式root_eligible；新增root提升inclusive/before/complete三场景与r1A后/r2B后cutB单例。首轮3pass1fail/21.693s：提升root三边界全过，多revision在visible基准首断言红，后续未执行，证据 `source-cut-promotion-revisions-four-real-behavior-attempt-1/receipt.json`。同Sol单path89d2eeb1严格固定719ce6c5，复用retained owner在原boundary restore事务校正untracked visible，checkpoint saved rows/observed不改、单次state_revision。多revision修后1pass/8.318s、1460指纹不变，后续只carryr1/零skill读/原checkpoint(2,2)/pending与旧bytes均通过，证据 `source-cut-two-revisions-visible-real-behavior-attempt-2/receipt.json`；tracked基准临时语义交P07核owner，不据假设扩大改动。
-
-完整epoch＋typed ports在719ce6c5组合下40pass/actual0/122.573s，1462依赖指纹不变；证据 `source-cut-final-epoch-and-typed-ports-real-behavior-attempt-1/receipt.json`。同Sol仅迁seal事务共同fixture为真实root backing、canonical/admission与同epochcheckpoint，49原assert AST保留；固定e1a6c574、ROOT Ruff0，整file13pass/actual0/19.503s，1463依赖不变，证据 `source-cut-seal-fixture-full-real-behavior-attempt-1/receipt.json`。两批分别记录，不拼成一轮全仓绿灯。P07确认tracked pending保留checkpointed已应用基准符合下次prepare/seal合同；untracked surviving引用必须同事务校正，不能把该窄修扩成无依据的tracked修改。
-
-同Sol唯一新增真实rewind(before)→replay_as_new_turn→新admission→prepare/seal/reopen单节点，24既有顶层AST全保，固定1ce243e8；1pass/actual0/8.797s，1460依赖不变，旧root/snapshot/checkpoint保全及重启零来源/ToolSet读取、pending只消费一次通过。P08新测试、seal fixture和replay三份窄审无语义阻断，promotion complete ref ID/owner tuple显式断言缺口为非阻断，现不外推该证据。主固定55paths Ruff/compile0、机械strict重建55/44 actual0/12.068s，三保护0、交付内作者差异0；候选外44为旧/缺文档与两继承WebE2E，精确defer，不回带。原九包审查保untracked红历史，后续visible新增diff及结构审查待终结；主11相关files325节点整批在240.141s被进程外保护收终态124，1470依赖不变、285已执行含1F，原raw保留，不记整批绿或挂死；按固定collection对应后，唯一观测红为fullcopy detail/overlay fixture的两compose调用缺必填tool_set，单红25.422s实际1、尚未到后续断言，同Sol只迁该caller。分组6unitfiles129pass/52.625s、4integrationfiles126pass/81.26s，分别actual0和1465/1463指纹不变，不拼原超时为成功。本次组批选择、重复成本归主；不提高生产timeout。该组批记录当时生产未集成、服务停写；最新结果以下述当前收据为准。新文件工具17规划未改，strict41/0复用，0/22仅规划。主业务源码手写0，测试/冻结/协调成本单列，没有模型效率倍率证据。
-
-- 本次结构报告只审具名新增/大文件，不能按“final55”标题外推全55已核；主补核boundary/operations.py后发现直接SQLite I/O违反最近AGENTS。审查者先把CSM委托误认为文件无直接SQL，具名反证后更正P2；这属于审查/主核成本，不归Sol业务返工。已派同Sol整模块归位既有durable/operations.py、唯一storage导入平移，原方法/事务/异常保持，旧模块删除；禁止改AGENTS或加shim。技能仅窄补实际scope和I/O职责判断，归位增量已由主独立AST/行多重集、两真实边界及P08三路径窄审接受，详见当前收据。
-
-
-## ToolSet 5.4 首次交付历史（当前状态以上方收据为准）
-
-派单精确15paths（动态扩展均先核ROOT/WT preimage同字节），旧epoch lease已撤销；同Sol仍唯一writer，主尚未overlay新生产。公共合同已固定：typed union三分支、完整ToolSetSnapshot输入、sealed binding唯一applied，删除SessionControl工具镜像及旧升级双轨，fresh schema9在journal/WAL前拒旧库；不恢复alias。context1.1已重开，5.4/完整R仍未勾。P07公共四文档一致性及P08七边界映射并行；后者原报告把factory重试判“直接/强”，主核其spy `_tool_set_supplier` 已删而真实为producer.snapshot。限定ROOT原node实测actual1/7.961s、1546py指纹不变，更早在fake model无bind_tools而NotImplementedError，尚未到retry；原红归继承fixture/主审查成本，不归Sol生产返工。测试caller同第15lease迁完整真实binding/spy，保原断言，独审报告需纠正。证据 `r-toolset-sealed-owner-dispatch/old-factory-hook-baseline-attempt-1/receipt.json`；未运行完整ToolSet候选，不把一般rollback/hash unit填作七项已验。
-
-P07公共合同窄审发现proposal两处仍称四intent、design步骤3在seal前推进applied、no-op未显式wire order；主已同四文档修齐，tasks2.2限定原tracking/catalog一次性维护记录，不授权SessionControl旧schema升级。P08七边界报告已纠正①等级，SHA21de5ad5保原首红，无测试重跑。最终公共合同差异仍待P07窄复审，不能用strict替语义一致性。
+其它细则按需要读[条件性失败细则](delivery-failure-rules.md)；目录/Git/派单只读[共同流程](team-collaboration-workflow.md)。本轮原始失败、检查收据与独有源码保留，无源码副本或正式测试数据清理。
