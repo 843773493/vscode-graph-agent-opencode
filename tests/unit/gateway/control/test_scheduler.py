@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import asyncio
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.gateway.control.generators import SessionGeneratorStore
@@ -17,6 +18,19 @@ class _UnusedCoordinator:
     pass
 
 
+class _FailingCoordinator:
+    async def run_scheduled(
+        self,
+        generator_id: str,
+        *,
+        scheduled_for: datetime,
+        trigger_type: str,
+        request_id: str,
+    ) -> None:
+        del generator_id, scheduled_for, trigger_type, request_id
+        raise RuntimeError("调度测试协调器失败")
+
+
 def test_scheduler_runtime_config_updates_next_poll_and_wakes_loop(tmp_path: Path) -> None:
     store = SessionGeneratorStore(root=tmp_path)
     scheduler = SessionGeneratorScheduler(
@@ -28,6 +42,70 @@ def test_scheduler_runtime_config_updates_next_poll_and_wakes_loop(tmp_path: Pat
 
     assert scheduler._poll_interval_seconds == 2.5
     assert scheduler._wake_event.is_set()
+
+
+def test_deleted_definition_clears_scheduler_error_on_next_poll(
+    tmp_path: Path,
+) -> None:
+    async def exercise_lifecycle() -> None:
+        now = datetime.now(UTC)
+        store, definition = _definition(
+            tmp_path,
+            misfire="run_latest",
+            created_at=now - timedelta(minutes=2),
+        )
+        store.write_schedule_state(
+            definition.generator_id,
+            {
+                "schema_version": 1,
+                "definition_revision": definition.revision,
+                "last_evaluated_at": (now - timedelta(minutes=2)).isoformat(),
+                "next_run_at": (now - timedelta(seconds=1)).isoformat(),
+            },
+        )
+        scheduler = SessionGeneratorScheduler(
+            store=store,
+            coordinator=_FailingCoordinator(),  # type: ignore[arg-type]
+            poll_interval_seconds=0.01,
+        )
+        await scheduler.start()
+        try:
+            failure = None
+            for _ in range(100):
+                try:
+                    scheduler.assert_healthy()
+                except RuntimeError as error:
+                    if definition.generator_id in str(error):
+                        failure = error
+                        break
+                await asyncio.sleep(0.01)
+            assert failure is not None
+            assert "调度测试协调器失败" in str(failure)
+
+            # 失败定义仍在 store 中时，实际轮询保留其诊断。
+            await asyncio.sleep(0.03)
+            try:
+                scheduler.assert_healthy()
+            except RuntimeError as error:
+                assert definition.generator_id in str(error)
+                assert "调度测试协调器失败" in str(error)
+            else:
+                raise AssertionError("仍存在的失败定义不应清除健康错误")
+
+            store.delete_definition(definition.generator_id)
+            for _ in range(100):
+                try:
+                    scheduler.assert_healthy()
+                except RuntimeError:
+                    await asyncio.sleep(0.01)
+                else:
+                    break
+            else:
+                raise AssertionError("后续实际轮询未清理已删除定义的健康错误")
+        finally:
+            await scheduler.stop()
+
+    asyncio.run(exercise_lifecycle())
 
 
 def _definition(

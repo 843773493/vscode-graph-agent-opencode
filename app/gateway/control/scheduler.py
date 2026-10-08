@@ -128,7 +128,12 @@ class SessionGeneratorScheduler:
             self._wake_event.clear()
 
     async def _run_due(self, now: datetime) -> None:
-        for definition in self._store.list_definitions().items:
+        definitions = self._store.list_definitions().items
+        active_generator_ids = {definition.generator_id for definition in definitions}
+        for generator_id in self._definition_errors.keys() - active_generator_ids:
+            self._definition_errors.pop(generator_id)
+
+        for definition in definitions:
             try:
                 if not definition.enabled or definition.status != "ready":
                     self._definition_errors.pop(definition.generator_id, None)
