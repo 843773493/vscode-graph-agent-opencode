@@ -3446,3 +3446,138 @@ def test_uuidv7_primary_key_ordering_matches_time_order(
     assert sorted_ids == sorted(
         sorted_ids, key=lambda value: int(value[4:16], 16)
     )
+
+
+def test_write_transaction_rolls_back_real_deferred_commit_failure(store: SessionCatalogStore) -> None:
+    generation = store.current_generation()
+    connection = store.connection
+    connection.execute("CREATE TABLE commit_parent(id INTEGER PRIMARY KEY)")
+    connection.execute(
+        "CREATE TABLE commit_child(parent_id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"), store.write_transaction() as transaction:
+        transaction.execute("INSERT INTO commit_child VALUES (101)")
+    assert not connection.in_transaction
+    assert store.current_generation() == generation
+    assert connection.execute("SELECT count(*) FROM commit_child").fetchone()[0] == 0
+    with store.write_transaction() as transaction:
+        transaction.execute("INSERT INTO commit_parent VALUES (101)")
+        transaction.execute("INSERT INTO commit_child VALUES (101)")
+    assert store.current_generation() == generation + 1
+
+
+@pytest.mark.parametrize("failure_site", ["body", "generation"])
+def test_write_transaction_preserves_first_failure_and_allows_next_write(
+    store: SessionCatalogStore, monkeypatch: pytest.MonkeyPatch, failure_site: str,
+) -> None:
+    generation = store.current_generation()
+    failure = RuntimeError(failure_site)
+    bump = store._bump_generation
+
+    def fail_generation(_connection: sqlite3.Connection) -> None:
+        raise failure
+
+    if failure_site == "generation":
+        monkeypatch.setattr(store, "_bump_generation", fail_generation)
+    with pytest.raises(RuntimeError) as raised, store.write_transaction():
+        if failure_site == "body":
+            raise failure
+    assert raised.value is failure
+    assert not store.connection.in_transaction
+    assert store.current_generation() == generation
+    monkeypatch.setattr(store, "_bump_generation", bump)
+    with store.write_transaction():
+        pass
+    assert store.current_generation() == generation + 1
+
+
+@pytest.mark.parametrize("failure_site", ["body", "commit"])
+def test_read_transaction_rolls_back_failure_and_allows_next_transaction(
+    store: SessionCatalogStore,
+    failure_site: str,
+) -> None:
+    generation = store.current_generation()
+    connection = store.connection
+
+    if failure_site == "body":
+        failure = RuntimeError("读事务体失败")
+        with pytest.raises(RuntimeError) as raised, store.read_transaction():
+            raise failure
+        assert raised.value is failure
+    else:
+        connection.execute("CREATE TABLE read_commit_parent(id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE read_commit_child(parent_id INTEGER REFERENCES read_commit_parent(id) DEFERRABLE INITIALLY DEFERRED)"
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"), store.read_transaction() as transaction:
+            transaction.execute("INSERT INTO read_commit_child VALUES (101)")
+    assert not connection.in_transaction
+    assert store.current_generation() == generation
+    if failure_site == "commit":
+        assert connection.execute("SELECT count(*) FROM read_commit_child").fetchone()[0] == 0
+    with store.read_transaction():
+        pass
+    assert store.current_generation() == generation
+    with store.write_transaction():
+        pass
+    assert store.current_generation() == generation + 1
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.parametrize("transaction_kind", ["read", "write"])
+def test_transaction_closes_store_when_rollback_fails(
+    store: SessionCatalogStore,
+    monkeypatch: pytest.MonkeyPatch,
+    close_fails: bool,
+    transaction_kind: str,
+) -> None:
+    connection = store.connection
+    failure = RuntimeError("原业务失败")
+
+    class RollbackFailure:
+        close_called = False
+
+        @property
+        def in_transaction(self) -> bool:
+            return connection.in_transaction
+
+        def execute(self, statement: str):
+            if statement == "ROLLBACK":
+                raise sqlite3.OperationalError("rollback 拒绝")
+            return connection.execute(statement)
+
+        def close(self) -> None:
+            self.close_called = True
+            if close_fails:
+                raise sqlite3.OperationalError("close 拒绝")
+            connection.close()
+
+    wrapped_connection = RollbackFailure()
+    transaction = (
+        store.read_transaction()
+        if transaction_kind == "read"
+        else store.write_transaction()
+    )
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(store, "_connection", wrapped_connection)
+            with pytest.raises(RuntimeError) as raised, transaction:
+                raise failure
+        assert raised.value is failure
+        assert any("rollback 拒绝" in note for note in raised.value.__notes__)
+        assert wrapped_connection.close_called
+        if close_fails:
+            assert any("close 拒绝" in note for note in raised.value.__notes__)
+        else:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+
+        with pytest.raises(RuntimeError, match="已关闭"), store.read_transaction():
+            pass
+        with pytest.raises(RuntimeError, match="已关闭"), store.write_transaction():
+            pass
+        with pytest.raises(RuntimeError, match="已关闭"):
+            _ = store.connection
+    finally:
+        if close_fails:
+            connection.close()

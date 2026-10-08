@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas.gateway import WebUISettingsDTO, WebUISettingsUpdateDTO
+from app.schemas.gateway.ui_settings import WebUISettingsDTO, WebUISettingsUpdateDTO
 
 
 def merge_web_ui_settings_values(

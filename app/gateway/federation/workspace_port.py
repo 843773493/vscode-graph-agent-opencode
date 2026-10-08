@@ -22,7 +22,7 @@ from app.gateway.federation.errors import (
 )
 from app.gateway.federation.rpc import FederationSpoke
 from app.gateway.proxy_upstream import load_proxy_gateway_id
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from urllib.parse import quote
 
 import httpx
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     HTTPException,
     Query,
@@ -31,14 +33,19 @@ from app.gateway.routes._shared import (
     _gateway_root,
     _managed_workspace_list,
     get_registry,
+    get_workspace_runtime_controller,
 )
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.server.port_forwarding import get_port_forward_manager
-from app.schemas.gateway import (
-    CreateGatewayManagedWorkspaceRequest,
+from app.schemas.gateway.federation import (
     GatewayInboundAccessListDTO,
     GatewayInboundPeerDTO,
     GatewayInboundWorkspaceDTO,
+)
+from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
+from app.schemas.gateway.workspaces import (
+    CreateGatewayManagedWorkspaceRequest,
     GatewayManagedWorkspaceListDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -251,16 +258,24 @@ async def create_gateway_managed_workspace(
 )
 async def remove_gateway_managed_workspace(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
+    force: bool = False,
     gateway_connection_id: str | None = Query(default=None),
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
     port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
 ):
     remote_data: dict[str, object] | None = None
     try:
         if gateway_connection_id is None:
-            remove_direct_managed_workspace(registry, workspace_id)
+            result = await remove_direct_managed_workspace(
+                registry, workspace_id, controller=controller, request_id=request_id,
+                group_request=payload, force=force,
+            )
+            if result.status == "blocked":
+                raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
         else:
             remote_data = await request_remote_gateway_management(
                 gateway_url=registry.remote_gateway_url(gateway_connection_id),
@@ -268,9 +283,10 @@ async def remove_gateway_managed_workspace(
                 method="DELETE",
                 path=(
                     "/api/gateway/federation/managed-workspaces/"
-                    f"{quote(workspace_id, safe='')}"
+                    f"{quote(workspace_id, safe='')}?force={'true' if force else 'false'}"
                 ),
-                request_id=request_id,
+                payload=payload.model_dump(mode="json") if payload is not None else None,
+                request_id=request_id, timeout_seconds=150,
             )
             await refresh_remote_gateway_projections(
                 registry=registry,
@@ -285,9 +301,10 @@ async def remove_gateway_managed_workspace(
         raise HTTPException(status_code=409, detail=str(error)) from error
     except httpx.HTTPStatusError as error:
         status_code = error.response.status_code
+        remote_detail = error.response.json().get("detail") if status_code == 409 else _remote_http_error_detail(error)
         raise HTTPException(
             status_code=status_code if 400 <= status_code < 500 else 502,
-            detail=_remote_http_error_detail(error),
+            detail=remote_detail,
         ) from error
     except (OSError, RuntimeError, httpx.HTTPError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -28,7 +27,7 @@ class BrowserManagerClient:
         self, *, workspace_id: str, backend_url: str | None = None,
         config_service: ConfigService | None = None,
     ) -> None:
-        configured = backend_url or os.environ.get("BOXTEAM_BROWSER_BACKEND_URL")
+        configured = backend_url
         self._config_service = config_service if configured is None else None
         self._backend_url = (configured or DEFAULT_BROWSER_BACKEND_URL).rstrip("/")
         self._workspace_id = validate_workspace_id(workspace_id)

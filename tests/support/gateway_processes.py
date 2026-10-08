@@ -130,17 +130,19 @@ def start_gateway_process(
     ssh_tunnel_port_range: tuple[int, int] | None = None,
     extra_env: dict[str, str] | None = None,
     refresh_config: bool = False,
+    boxteam_home: Path | None = None,
+    artifacts_dir: Path | None = None,
 ) -> GatewayProcess:
     ensure_local_port_available(port, service_name="Gateway")
     project_root = Path.cwd().resolve()
     python_executable = resolve_workspace_python_executable(project_root)
-    boxteam_home = _test_boxteam_home(workspace_root)
+    boxteam_home = boxteam_home or _test_boxteam_home(workspace_root)
     _install_current_user_configuration(
         config_root=boxteam_home / "config",
         project_root=project_root,
         force=refresh_config,
     )
-    log_dir = workspace_root / ".boxteam" / "logs"
+    log_dir = artifacts_dir or workspace_root / ".boxteam" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_file = open(  # noqa: SIM115
         log_dir / "gateway.stdout.log", "a", encoding="utf-8"

@@ -32,7 +32,7 @@ def _local_target() -> WorkspaceTarget:
         workspace_id="local-workspace",
         name="Local workspace",
         root_path="/local",
-        backend_url="http://local",
+        backend_url="http://127.0.0.1:41000",
         connection_kind="local",
         backend_workspace_id="00000000-0000-4000-8000-000000000001",
         owner="system",
@@ -58,31 +58,22 @@ def _remote_connection() -> RemoteGatewayConnection:
     )
 
 
-def test_workspace_runtime_health_rejects_exited_owned_process() -> None:
+def test_workspace_runtime_health_rejects_exited_owned_process(managed_backend_factory) -> None:
     process = _FakeProcess(alive=False)
-    runtime = WorkspaceRuntime(
-        service_urls={"workspace_api": "http://local"},
-        processes={"workspace_api": process},
-    )
-
-    with pytest.raises(RuntimeError, match="运行时进程已退出"):
+    graph = managed_backend_factory((_local_target(),), backend_url="http://127.0.0.1:41000", process=process)
+    runtime = graph.runtimes["local-workspace"]
+    with pytest.raises(RuntimeError, match="managed Backend 未运行"):
         runtime.assert_healthy()
 
 
-def test_registry_health_rejects_unhealthy_workspace_process(tmp_path: Path) -> None:
+def test_registry_health_rejects_unhealthy_workspace_process(tmp_path: Path, managed_backend_factory) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    process = _FakeProcess(alive=False)
-    registry.upsert(
-        _local_target(),
-        runtime=WorkspaceRuntime(
-            service_urls={"workspace_api": "http://local"},
-            processes={"workspace_api": process},
-        ),
-    )
-
+    target = _local_target()
+    registry.upsert(target)
+    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=_FakeProcess(alive=False))
+    graph.publish(registry)
     with pytest.raises(RuntimeError, match="workspace_id=local-workspace"):
         registry.assert_runtime_consumers_healthy()
-
     registry.close()
 
 

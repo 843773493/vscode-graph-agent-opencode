@@ -9,7 +9,13 @@ from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
+)
 
 from .core import _REGISTRY_SCHEMA_VERSION, WorkspaceTarget
 
@@ -35,6 +41,8 @@ class RegistryPersistenceMixin:
             raise ValueError(
                 f"Gateway registry schema_version 必须是正整数: {self._storage_path}"
             )
+        if schema_version < _REGISTRY_SCHEMA_VERSION:
+            raise ValueError("Gateway registry 旧单工作区合同已失效；停止 writer 后显式清理旧开发数据")
         if schema_version > _REGISTRY_SCHEMA_VERSION:
             raise ValueError(
                 "Gateway registry 版本高于当前程序支持范围: "
@@ -117,11 +125,9 @@ class RegistryPersistenceMixin:
         if not isinstance(targets, list):
             raise ValueError(
                 f"Gateway registry targets 必须是数组: {self._storage_path}"
-            )  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
+            )
         persisted_active_id = payload.get("active_workspace_id")
-        workspace_id_remap: dict[str, str] = {}
         parent_workspace_ids: dict[str, str | None] = {}
-        migrated = schema_version < _REGISTRY_SCHEMA_VERSION
         for item in targets:
             if not isinstance(item, dict):
                 raise ValueError(f"Gateway registry target 必须是对象: {self._storage_path}")  # noqa: TRY004 — 保留注册表格式校验既有拒绝类型。
@@ -143,38 +149,14 @@ class RegistryPersistenceMixin:
                 )
             managed = bool(item.get("managed", False))
             system_default = bool(item.get("system_default", False))
-            if schema_version >= 9:
-                desired_running_value = item.get("desired_running", False)
-                if not isinstance(desired_running_value, bool):
-                    raise ValueError(
-                        "Gateway registry desired_running 必须是布尔值: "
-                        f"workspace_id={original_workspace_id}"
-                    )
-                desired_running = desired_running_value
-            else:
-                # TODO: schema<9 没有记录显式启动意图，只能可靠迁移当前激活的
-                # 本地托管工作区；完成一次性迁移后移除此兼容分支。
-                desired_running = (
-                    connection_kind == "local"
-                    and managed
-                    and original_workspace_id == persisted_active_id
+            desired_running = item.get("desired_running", False)
+            if not isinstance(desired_running, bool):
+                raise ValueError(  # noqa: TRY004 — 保留持久化格式既有拒绝类型。
+                    f"Gateway registry desired_running 必须是布尔值: workspace_id={original_workspace_id}"
                 )
-            # TODO: 旧 12 位 Gateway ID 完成一次性迁移后，在下一个持久化格式大版本移除。
-            workspace_id = self._migrate_legacy_workspace_id(
-                workspace_id=original_workspace_id,
-                root_path=root_path,
-                backend_url=backend_url,
-                connection_kind=connection_kind,
-                managed=managed,
-                system_default=system_default,
-                schema_version=schema_version,
-            )
+            workspace_id = original_workspace_id
             if workspace_id in self._targets:
-                raise ValueError(
-                    "Gateway registry 工作区 ID 迁移后发生冲突: "
-                    f"original={original_workspace_id}, migrated={workspace_id}"
-                )
-            workspace_id_remap[original_workspace_id] = workspace_id
+                raise ValueError(f"Gateway registry 工作区 ID 重复: {workspace_id}")
             raw_parent_workspace_id = item.get("parent_workspace_id")
             if raw_parent_workspace_id is not None and not isinstance(
                 raw_parent_workspace_id,
@@ -185,7 +167,6 @@ class RegistryPersistenceMixin:
                     f"workspace_id={original_workspace_id}"
                 )
             parent_workspace_ids[workspace_id] = raw_parent_workspace_id
-            migrated = migrated or workspace_id != original_workspace_id
             raw_local_service_urls = item.get("local_service_urls", {})
             if not isinstance(raw_local_service_urls, dict) or not all(
                 isinstance(name, str) and isinstance(url, str)
@@ -246,7 +227,6 @@ class RegistryPersistenceMixin:
                 ),
                 active_request_count=int(item.get("active_request_count", 0)),
                 active_stream_count=int(item.get("active_stream_count", 0)),
-                # TODO: 所有 schema<4 的 Registry 完成一次性迁移后，在下一个持久化格式大版本移除默认值。
                 name_customized=bool(item.get("name_customized", False)),
                 managed=managed,
                 removable=bool(item.get("removable", True)),
@@ -268,6 +248,8 @@ class RegistryPersistenceMixin:
                     else None
                 ),
                 remote_service_names=tuple(item.get("remote_service_names", ())),
+                remote_backend_generation=item.get("remote_backend_generation"),
+                remote_affected_workspace_ids=tuple(item.get("remote_affected_workspace_ids", ())),
                 local_service_urls={
                     str(name): str(url)
                     for name, url in raw_local_service_urls.items()
@@ -303,28 +285,56 @@ class RegistryPersistenceMixin:
         for workspace_id, raw_parent_workspace_id in parent_workspace_ids.items():
             if raw_parent_workspace_id is None:
                 continue
-            parent_workspace_id = workspace_id_remap.get(
-                raw_parent_workspace_id,
-                raw_parent_workspace_id,
-            )
+            parent_workspace_id = raw_parent_workspace_id
             if parent_workspace_id not in self._targets:
                 raise ValueError(
                     "Gateway registry 父工作区不存在: "
                     f"workspace_id={workspace_id}, parent_workspace_id={parent_workspace_id}"
                 )
             self._targets[workspace_id].parent_workspace_id = parent_workspace_id
+        raw_owners = payload.get("managed_backends")
+        if not isinstance(raw_owners, list):
+            raise TypeError("Gateway registry 缺少 managed_backends 完整合同数组")
+        seen_members: set[str] = set()
+        for item in raw_owners:
+            if not isinstance(item, dict) or set(item) != {"owner_id", "generation", "members", "backend_url", "debug_port"} or not isinstance(item["members"], list):
+                raise TypeError("managed Backend owner 必须为完整合同对象")
+            member_payloads = item["members"]
+            for member in member_payloads:
+                if not isinstance(member, dict) or set(member) != {"workspace_id", "mount"}:
+                    raise TypeError("managed Backend member 必须包含 Gateway ID 与完整 mount")
+                mount = member["mount"]
+                if not isinstance(mount, dict) or set(mount) != {
+                    "workspace_id", "workspace_root", "terminal_backend_url", "browser_backend_url",
+                    "config_candidate_ref", "config_generation", "config_fencing_token",
+                }:
+                    raise TypeError("managed Backend mount 必须为完整启动合同")
+            members = tuple(
+                ManagedBackendMember(member["workspace_id"], MountedWorkspace(
+                    member["mount"]["workspace_id"], Path(member["mount"]["workspace_root"]),
+                    member["mount"]["terminal_backend_url"], member["mount"]["browser_backend_url"],
+                    member["mount"]["config_candidate_ref"], member["mount"]["config_generation"], member["mount"]["config_fencing_token"],
+                )) for member in member_payloads
+            )
+            contract = ManagedBackendContract(item["owner_id"], item["generation"], members, item["backend_url"], item["debug_port"])
+            if contract.owner_id in self._backend_owners or seen_members.intersection(contract.workspace_ids):
+                raise ValueError("managed Backend owner 或成员重复")
+            for member in members:
+                target = self.resolve(member.workspace_id)
+                if not target.managed or target.connection_kind != "local" or target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
+                    raise ValueError("持久化 Backend 完整合同与成员 UUID/根不匹配")
+            if len({self.resolve(workspace_id).desired_running for workspace_id in contract.workspace_ids}) != 1:
+                raise ValueError("同一 Backend 完整组启动意图不一致")
+            seen_members.update(contract.workspace_ids)
+            self._backend_owners[contract.owner_id] = ManagedBackendOwner(contract)
         self._validate_parent_graph()
-        migrated_active_id = (
-            workspace_id_remap.get(persisted_active_id, persisted_active_id)
-            if isinstance(persisted_active_id, str)
-            else None
-        )
+        migrated_active_id = persisted_active_id if isinstance(persisted_active_id, str) else None
         if migrated_active_id is not None and migrated_active_id in self._targets:
             self._active_workspace_id = migrated_active_id
         elif self._targets:
             self._active_workspace_id = next(iter(self._targets))
         self._order_customized = bool(payload.get("order_customized", False))
-        if migrated or migrated_to_sqlite:
+        if migrated_to_sqlite:
             if migrated_to_sqlite and self._storage_path.is_file():
                 backup_path = self._storage_path.with_name(
                     f"{self._storage_path.name}.migrated.bak"
@@ -338,18 +348,34 @@ class RegistryPersistenceMixin:
         *,
         owner: str = "registry",
         remote_gateway_connection_ids: tuple[str, ...] = (),
+        targets: dict[str, WorkspaceTarget] | None = None,
+        backend_contracts: tuple[ManagedBackendContract, ...] | None = None,
+        publish: Callable[[], None] | None = None,
     ) -> None:
         previous_state = getattr(self, "_last_committed_snapshot", None)
+        selected_targets = targets if targets is not None else self._targets
+        selected_active = self._active_workspace_id
+        if selected_active not in selected_targets:
+            selected_active = next(
+                (target.workspace_id for target in selected_targets.values() if target.system_default),
+                next(iter(selected_targets), None),
+            )
         payload = {
             "schema_version": _REGISTRY_SCHEMA_VERSION,
-            "active_workspace_id": self._active_workspace_id,
+            "active_workspace_id": selected_active,
             "order_customized": self._order_customized,
             "runtime_generation": self._runtime_generation,
+            "managed_backends": [
+                contract.to_payload() for contract in (
+                    backend_contracts if backend_contracts is not None
+                    else tuple(owner.contract for owner in self._backend_owners.values())
+                )
+            ],
             "remote_gateway_connections": [
                 asdict(connection)
                 for connection in self._remote_gateway_connections.values()
             ],
-            "targets": [asdict(target) for target in self._targets.values()],
+            "targets": [asdict(target) for target in selected_targets.values()],
         }
         if self._state_store is not None:
             try:
@@ -360,35 +386,38 @@ class RegistryPersistenceMixin:
                     remote_gateway_connection_ids=remote_gateway_connection_ids,
                 )
             except Exception:
-                if previous_state is not None:
+                if publish is None and previous_state is not None:
                     self._restore_registry_state(previous_state)
                 raise
-            self._last_committed_snapshot = self._capture_registry_state()
-            self._notify_commit_observers()
-            return
-        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._storage_path.name}.",
-            dir=self._storage_path.parent,
-        )
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
-            # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-            if os.name != "nt":
-                temporary_path.chmod(0o600)
-            os.replace(temporary_path, self._storage_path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        else:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{self._storage_path.name}.",
+                dir=self._storage_path.parent,
+            )
+            temporary_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                    json.dump(payload, file, ensure_ascii=False, indent=2)
+                    file.write("\n")
+                    file.flush()
+                    os.fsync(file.fileno())
+                # TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
+                if os.name != "nt":
+                    temporary_path.chmod(0o600)
+                os.replace(temporary_path, self._storage_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        # Backend 候选在持久化成功后整体公布，旧 target/URL 映射不接受原位补丁。
+        if publish is not None:
+            publish()
+        self._active_workspace_id = selected_active
         self._last_committed_snapshot = self._capture_registry_state()
         self._notify_commit_observers()
     def _capture_registry_state(self) -> dict[str, object]:
         return {
             "targets": deepcopy(self._targets),
+            "backend_contracts": {owner_id: owner.contract for owner_id, owner in self._backend_owners.items()},
             "active_workspace_id": self._active_workspace_id,
             "order_customized": self._order_customized,
             "remote_gateway_connections": deepcopy(self._remote_gateway_connections),
@@ -397,6 +426,15 @@ class RegistryPersistenceMixin:
         }
     def _restore_registry_state(self, snapshot: dict[str, object]) -> None:
         self._targets = deepcopy(snapshot["targets"])
+        contracts = snapshot["backend_contracts"]
+        for owner_id in tuple(self._backend_owners):
+            if owner_id not in contracts:
+                self._backend_owners.pop(owner_id)
+        for owner_id, contract in contracts.items():
+            if owner_id in self._backend_owners:
+                self._backend_owners[owner_id].contract = contract
+            else:
+                self._backend_owners[owner_id] = ManagedBackendOwner(contract)
         self._active_workspace_id = snapshot["active_workspace_id"]
         self._order_customized = bool(snapshot["order_customized"])
         self._remote_gateway_connections = deepcopy(

@@ -11,6 +11,7 @@ import {
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
+  GatewayRuntimeGroupRequest,
   WebUiSettings,
   WebUiSettingsUpdate,
 } from "../../types/backend";
@@ -21,6 +22,7 @@ import {
 import type { FinishWorkspaceRefresh, SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
 import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
+import { pauseWorkspaceObservations } from "../workspace/workspaceObservationLifecycle";
 
 export function useGatewayWorkspaceMutations({
   apiPort,
@@ -140,7 +142,11 @@ export function useGatewayWorkspaceMutations({
   );
 
   const removeGatewayWorkspace = useCallback(
-    async (workspaceId: string) => {
+    async (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest, force = false) => {
+      const resumeObservations = pauseWorkspaceObservations([
+        workspaceId, ...(groupRequest?.expected_workspace_ids ?? []),
+        ...(groupRequest?.desired_workspace_ids ?? []),
+      ]);
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const removedActiveWorkspace = workspaceId === activeGatewayWorkspaceId;
       let workspaceRemoved = false;
@@ -159,6 +165,8 @@ export function useGatewayWorkspaceMutations({
         const workspaceList = await apiRemoveGatewayWorkspace(
           resolvedApiPort,
           workspaceId,
+          groupRequest,
+          force,
         );
         workspaceRemoved = true;
         const activeWorkspaceChanged =
@@ -258,6 +266,8 @@ export function useGatewayWorkspaceMutations({
           isBootstrapping: false,
         }));
         throw error;
+      } finally {
+        resumeObservations();
       }
     },
     [

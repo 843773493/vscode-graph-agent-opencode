@@ -78,7 +78,16 @@ def _projected_workspace_targets(
     """只构造投影 target，不修改 registry，供 config batch 做原子提交。"""
 
     projected: list[WorkspaceTarget] = []
+    remote_ids = {str(item["workspace_id"]) for item in remote_workspaces}
     for remote in remote_workspaces:
+        generation = remote.get("backend_generation")
+        affected = remote.get("affected_workspace_ids", [])
+        if generation is not None and (
+            not isinstance(generation, str) or not generation or not isinstance(affected, list)
+            or not affected or len(affected) != len(set(affected))
+            or str(remote["workspace_id"]) not in affected or not set(affected).issubset(remote_ids)
+        ):
+            raise ValueError("远程 Gateway 完整 Backend generation/成员合同非法")
         remote_workspace_id = str(remote["workspace_id"])
         workspace_id = build_projected_workspace_id(
             connection.connection_id,
@@ -120,6 +129,10 @@ def _projected_workspace_targets(
                 remote_gateway_connection_id=connection.connection_id,
                 remote_workspace_id=remote_workspace_id,
                 remote_config_event_cursor=effective_cursor,
+                remote_backend_generation=generation,
+                remote_affected_workspace_ids=tuple(
+                    build_projected_workspace_id(connection.connection_id, member_id) for member_id in affected
+                ),
                 remote_service_names=tuple(
                     str(service)
                     for service in remote.get("services", ("workspace_api",))

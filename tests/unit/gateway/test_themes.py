@@ -10,10 +10,9 @@ from app.core.path_utils import get_user_gateway_config_path
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.user_access import UserAccessService, USER_ACCESS_COOKIE_NAME
+from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME, UserAccessService
 from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.main import app
-from app.schemas.gateway import GatewayThemeBackgroundDTO, WebUISettingsDTO
 from app.gateway.theme import (
     import_ui_asset,
     load_validated_theme_config,
@@ -23,6 +22,7 @@ from app.gateway.theme import (
     theme_catalog,
 )
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
+from app.schemas.gateway.ui_settings import GatewayThemeBackgroundDTO, WebUISettingsDTO
 
 
 def _png_bytes() -> bytes:

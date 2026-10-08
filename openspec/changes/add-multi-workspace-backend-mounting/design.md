@@ -113,7 +113,7 @@
 
 后端已挂载注册表负责一个 generation 的实际 workspace UUID→根寻址；Gateway 的 managed Backend owner 只负责控制面的一份完整启动合同、generation 与唯一进程句柄。每项绑定 Gateway target ID、Backend UUID、规范化根；成员 runtime 只引用 owner，Terminal/Browser 仍归各 target。共享关系显式登记，不按相同 URL 或所有运行 target 推导，也不维护重复的双向成员权威。普通新增 managed workspace 保持现有独立 singleton 启动行为；只有显式加入共享组才等待整组切换。
 
-唯一生命周期规范为本 change 的 `managed-backend-lifecycle` delta；mounting capability 只引用，不另写排空/force/adopt/close 规则。Backend generation 的 mount 集合不可变；增删成员走现有受控整组 drain→新集合启动→全量身份/健康验证→路由公布，不预造动态 mount RPC。旧组未排空或新组失败时保留/恢复完整旧组，不以一个成员成功代表组成功。
+唯一生命周期规范为本 change 的 `managed-backend-lifecycle` delta；mounting capability 只引用，不另写排空/force/adopt/close 规则。Backend generation 的 mount 集合不可变；运行中增删成员走现有受控整组 drain→新集合启动→全量身份/健康验证→路由公布，不预造动态 mount RPC。旧组未排空或新组失败时保留/恢复完整旧组，不以一个成员成功代表组成功。
 
 复用现有 Gateway runtime start/stop/safe/force 入口。共享组普通单 target 请求返回 blocked；显式整组请求同时携带 `expected_backend_generation` 与 `expected_workspace_ids`，后者是 Gateway target ID 的完整无重复集合，使用路由 ID 的命名空间，不混成 Backend UUID。owner 锁内重新核 generation/成员，再修改意图或 drain。响应与 runtime 状态提供 `backend_generation` 和完整 `affected_workspace_ids`，blocker 增加归属 `workspace_id`；DTO、OpenAPI、Web runtime hook/确认与必要协议同批迁齐，不把旧单target force 偷偷扩成全组。
 
@@ -124,6 +124,12 @@ safe 在原30秒期限内汇总全组执行与代理引用；超时撤销 drain�
 实施仍采用整批源码/DTO/调用方/核心公共fixture→少量真实共享进程核心→集中边界回归→最终一次停写冻结。首个核心须经一个Gateway/一个真实managed Backend/两个mount验证身份与数据隔离；边界覆盖单target blocked、完整集合/陈旧generation、全组排空与force、成员进退、一次close/adopt/recovery、配置失败补偿以及外部target边界。
 
 成员变更另有显式 `desired_workspace_ids` 完整目标集合，不从当前集合或path target推导；只接纳已登记managed target，运行中的独立singleton先受控stop，不隐式合并两个活动owner。新组验证前不提交成员权威/运行意图；普通切换若新旧组都不可用，保唯一旧已公布集合、全组offline和候选失败诊断，明确完整组start按最近公布generation/旧启动合同执行恢复。配置恢复仍沿原candidate/journal状态机，不将其recovery_required套给普通成员变更。包含默认target的整组stop和移除默认成员都拒绝，restart仍按合同执行。
+
+desired 未提供表示不变更成员，显式空集合表示已确认全员退出；HTTP、协议与生成绑定保留 presence，不以 repeated 字段默认空值替代确认。发起成员只需属于完整 expected 集合，可以退出 desired 集合；空目标经受控排空后只唯一close并释放 owner，不启动空 mount Backend。
+
+现有 DELETE 保持成功返回完整 WorkspaceList，并委托同一个 owner 成员退出流程。共享组携带同一 GatewayRuntimeGroupRequest，force 使用显式 query 确认；safe blockers 用409 detail返回完整typed lifecycle结果，失败保持target/owner/意图，成功退出与清理后才移除控制面登记。Web按完整影响面确认和暂停/恢复观察流，直接托管与联邦删除同批迁齐；registry.remove不得成为活跃managed Backend的直接close旁路。外部管理/remote target仍沿原控制面归属删除。
+
+停机成员变更使用相同拓扑锁、owner锁与generation/完整集合前置；旧进程/辅助句柄必须已停或清理成功。非空目标经同一次staged/CAS更新唯一owner的generation与完整恢复启动输入，并删除指定target；全affected仍offline/停止意图且无runtime lease，DELETE不启动Backend。safe保留未释放引用时的旧状态，force沿现有引用owner撤销并等待，不向不存在的Backend发业务HTTP。发布前失败保旧generation/成员/登记；发布后观察者错误不回退。后续start全量验证新剩余集合，旧请求陈旧。remote删除先完成可失败SSH转发清理，再移除登记，失败仍可按原target重试。
 
 Gateway自身generation proof/CAS成功前保旧共享owner/handle/完整清单；失败保完整旧组，成功一次接管全组，不逐target adopt。共享配置proof missing/mismatch及retry/resolve/discard均核同一owner generation/完整mount集合；只promotion发起成员的匹配proof，sibling未验证不能公布候选/恢复generation在线，已确认完整旧组按原合同继续服务。
 

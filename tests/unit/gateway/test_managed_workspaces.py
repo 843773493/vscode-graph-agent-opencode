@@ -1,4 +1,6 @@
+from dataclasses import replace
 from pathlib import Path
+from typing import Self
 
 import httpx
 import pytest
@@ -10,6 +12,9 @@ from app.gateway.managed_workspaces import (
     remove_direct_managed_workspace,
 )
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.gateway.runtime.workspace import WorkspaceRuntime
+from tests.support.gateway_managed_backends import ProcessProbe
 
 
 @pytest.fixture(autouse=True)
@@ -36,10 +41,28 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture
+def controlled_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def build(registry: GatewayWorkspaceRegistry) -> GatewayWorkspaceRuntimeController:
+        controller = GatewayWorkspaceRuntimeController(
+            registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
+            drain_timeout_seconds=0,
+        )
+        async def action(*_, **__):
+            return {}
+        async def status(*_, **__):
+            return {"lifecycle_state": "ready", "accepting_jobs": True, "blockers": []}
+        monkeypatch.setattr(controller, "_runtime_action", action)
+        monkeypatch.setattr(controller, "_runtime_status", status)
+        return controller
+    return build
+
+
 @pytest.mark.asyncio
 async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    controlled_controller,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     workspace_root = tmp_path / "created" / "workspace"
@@ -47,6 +70,24 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         "app.gateway.managed_workspaces.resolve_backend_workspace_id",
         lambda *_: "00000000-0000-4000-8000-000000000001",
     )
+
+    backend = ProcessProbe("backend")
+    async def start_runtime(*, owner, **_):
+        owner.set_process(backend)
+        member = owner.contract.members[0]
+        mount = replace(member.mount, terminal_backend_url="http://127.0.0.1:42001", browser_backend_url="http://127.0.0.1:42002")
+        contract = replace(owner.contract, members=(replace(member, mount=mount),), backend_url="http://127.0.0.1:42000")
+        runtime = WorkspaceRuntime(
+            service_urls={"terminal_manager": mount.terminal_backend_url, "browser_manager": mount.browser_backend_url},
+            backend_owner=owner, backend_workspace_id=mount.workspace_id,
+        )
+        owner.unpublished_runtimes[member.workspace_id] = runtime
+        return contract, {member.workspace_id: runtime}
+    async def listed():
+        return []
+    monkeypatch.setattr("app.gateway.runtime.group_actions.resolve_backend_workspace_id", lambda *_: "00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr("app.gateway.runtime.group_actions.start_managed_backend_runtime", start_runtime)
+    monkeypatch.setattr(registry, "list_dtos", listed)
 
     target = await create_direct_managed_workspace(
         registry=registry,
@@ -60,9 +101,11 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
     assert workspace_root.is_dir()
     assert target.name == "Remote project"
     assert target.managed is True
-    assert target.backend_url == ""
-    assert registry.has_runtime(target.workspace_id) is False
-    assert (await registry.list_dtos())[0].status == "offline"
+    assert target.backend_url == "http://127.0.0.1:42000"
+    assert registry.has_runtime(target.workspace_id) is True
+    owner = registry.backend_owner(target.workspace_id)
+    assert owner is not None and owner.process is backend
+    assert owner.contract.workspace_ids == (target.workspace_id,)
     assert registry.resolve(target.workspace_id).root_path == str(workspace_root)
 
     registry.upsert(
@@ -78,9 +121,13 @@ async def test_create_and_remove_direct_managed_workspace_preserves_directory(
         activate=False,
     )
 
-    remove_direct_managed_workspace(registry, target.workspace_id)
+    result = await remove_direct_managed_workspace(
+        registry, target.workspace_id, controller=controlled_controller(registry), request_id="remove",
+    )
+    assert result.status == "stopped"
 
     assert workspace_root.is_dir()
+    assert backend.closed
     with pytest.raises(LookupError, match="不存在"):
         registry.resolve(target.workspace_id)
 
@@ -112,8 +159,9 @@ async def test_create_direct_managed_workspace_requires_existing_directory_when_
         )
 
 
-def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
-    tmp_path: Path,
+@pytest.mark.asyncio
+async def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
+    tmp_path: Path, controlled_controller,
 ) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert(
@@ -143,12 +191,13 @@ def test_remove_direct_managed_workspace_rejects_default_and_external_targets(
     )
 
     with pytest.raises(PermissionError, match="默认工作区"):
-        remove_direct_managed_workspace(registry, "default")
+        await remove_direct_managed_workspace(registry, "default", controller=controlled_controller(registry), request_id="default")
     with pytest.raises(ValueError, match="直接托管"):
-        remove_direct_managed_workspace(registry, "external")
+        await remove_direct_managed_workspace(registry, "external", controller=controlled_controller(registry), request_id="external")
 
 
-def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path, controlled_controller) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
     registry.upsert(
         WorkspaceTarget(
@@ -163,7 +212,7 @@ def test_remove_direct_managed_workspace_keeps_last_target(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="至少需要保留"):
-        remove_direct_managed_workspace(registry, "only")
+        await remove_direct_managed_workspace(registry, "only", controller=controlled_controller(registry), request_id="only")
 
 
 @pytest.mark.asyncio
@@ -182,7 +231,7 @@ async def test_remote_management_request_forwards_federation_and_request_ids(
         def __init__(self, *, timeout: int) -> None:
             assert timeout == 45
 
-        async def __aenter__(self) -> "ManagementClient":
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *_: object) -> None:

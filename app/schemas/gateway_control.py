@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.gateway import GatewayConnectionKind
+from app.schemas.gateway.workspaces import GatewayConnectionKind
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
 
 WorkspaceNavigationNodeKind = Literal["workspace_folder", "workspace_ref"]

@@ -4,9 +4,14 @@ import asyncio
 from pathlib import Path
 
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import build_managed_local_workspace_id
-from app.schemas.gateway import GatewayManagedWorkspaceDTO
+from app.schemas.gateway.lifecycle import (
+    GatewayRuntimeGroupRequest,
+    GatewayRuntimeRestartResultDTO,
+)
+from app.schemas.gateway.workspaces import GatewayManagedWorkspaceDTO
 
 
 async def list_direct_managed_workspaces(
@@ -74,13 +79,23 @@ async def create_direct_managed_workspace(
         managed=True,
     )
     registry.upsert(target, activate=False)
-    return target
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry, project_root=project_root, log_dir=log_dir,
+    )
+    try:
+        await controller.start_managed_backend(workspace_id, request_id=f"create_{workspace_id}")
+    except BaseException as error:
+        registry.mark_connection_error(workspace_id, str(error))
+        raise
+    return registry.resolve(workspace_id)
 
 
-def remove_direct_managed_workspace(
+async def remove_direct_managed_workspace(
     registry: GatewayWorkspaceRegistry,
     workspace_id: str,
-) -> None:
+    *, controller: GatewayWorkspaceRuntimeController, request_id: str,
+    group_request: GatewayRuntimeGroupRequest | None = None, force: bool = False,
+) -> GatewayRuntimeRestartResultDTO:
     target = registry.resolve(workspace_id)
     if target.connection_kind != "local" or not target.managed:
         raise ValueError(f"工作区不属于当前 Gateway 的直接托管目标: {workspace_id}")
@@ -93,4 +108,6 @@ def remove_direct_managed_workspace(
     ]
     if len(direct_managed_targets) == 1:
         raise ValueError("Gateway 至少需要保留一个直接托管工作区")
-    registry.remove(workspace_id, owner="manual_crud")
+    return await controller.remove_managed_workspace(
+        workspace_id, request_id=request_id, group_request=group_request, force=force,
+    )

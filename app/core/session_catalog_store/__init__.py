@@ -404,11 +404,12 @@ class SessionCatalogStore(
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 yield self._connection
-            except BaseException:
-                self._connection.execute("ROLLBACK")
+                self._bump_generation(self._connection)
+                self._connection.execute("COMMIT")
+            except BaseException as error:
+                # bump 和 COMMIT 也属于同一事务；清理失败不能覆盖首个业务异常。
+                self._rollback_transaction_or_close(error)
                 raise
-            self._bump_generation(self._connection)
-            self._connection.execute("COMMIT")
 
     @staticmethod
     def _bump_generation(connection: sqlite3.Connection) -> None:
@@ -422,6 +423,19 @@ class SessionCatalogStore(
                 "session catalog 缺少 catalog_metadata 单例行，拒绝提交写事务"
                 "（库被外部改动，须进入维护模式核对）"
             )
+
+    def _rollback_transaction_or_close(self, error: BaseException) -> None:
+        """清理事务失败；回滚本身失败时隔离连接并保留首错。"""
+        try:
+            if not self._connection.in_transaction:
+                return
+            self._connection.execute("ROLLBACK")
+        except BaseException as rollback_error:  # noqa: BLE001 — 清理错误不得覆盖首错。
+            error.add_note(f"Session catalog 回滚失败: {rollback_error!r}")
+            try:
+                self.close()
+            except BaseException as close_error:  # noqa: BLE001 — 关闭错误也只作为诊断附加。
+                error.add_note(f"Session catalog 关闭失败: {close_error!r}")
 
     def current_generation(self) -> int:
         """返回 catalog 当前单调 generation（备份/一致性快照的版本锚点）。"""
@@ -464,7 +478,7 @@ class SessionCatalogStore(
             self._connection.execute("BEGIN DEFERRED")
             try:
                 yield self._connection
-            except BaseException:
-                self._connection.execute("ROLLBACK")
+                self._connection.execute("COMMIT")
+            except BaseException as error:
+                self._rollback_transaction_or_close(error)
                 raise
-            self._connection.execute("COMMIT")

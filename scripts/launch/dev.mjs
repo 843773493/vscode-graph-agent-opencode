@@ -473,10 +473,16 @@ async function main() {
       : null;
   if (backendWorkspaceId !== null) {
     environment.BOXTEAM_WORKSPACE_ID = backendWorkspaceId;
+    environment.BOXTEAM_BACKEND_GENERATION = `development_backend_${process.pid}`;
     environment.BOXTEAM_MOUNTED_WORKSPACES = JSON.stringify([
       {
         workspace_id: backendWorkspaceId,
         workspace_root: defaultWorkspaceRoot,
+        terminal_backend_url: null,
+        browser_backend_url: null,
+        config_candidate_ref: null,
+        config_generation: null,
+        config_fencing_token: null,
       },
     ]);
   }

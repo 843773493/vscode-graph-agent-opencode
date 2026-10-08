@@ -221,13 +221,54 @@ singleton 的现有 start/stop/restart 入口 MUST 保持原行为与默认工�
 
 ### Requirement: generation 内 mount 集合不可变且成员变更必须整组切换
 
-Backend generation 启动后的 mount 集合 MUST 不可变。显式加入/退出共享组、移除共享成员或其它改变实际 mount 集合的操作 MUST 在唯一 owner 中准备目标集合，先校验当前完整 generation/成员并排空当前全组，再创建和验证目标集合的新 generation，最后公布新成员/路由。新集合未验证前 MUST NOT 将新增成员标为可用；失败 MUST 恢复完整旧集合，不能留下部分在线组或错误的运行意图。MUST NOT 预造动态 mount RPC、从磁盘重建成员关系或偷偷合并独立 singleton。
+Backend generation 启动后的 mount 集合 MUST 不可变。运行中的显式加入/退出共享组、移除共享成员或其它改变实际 mount 集合的操作 MUST 在唯一 owner 中准备目标集合，先校验当前完整 generation/成员并排空当前全组，再创建和验证目标集合的新 generation，最后公布新成员/路由。新集合未验证前 MUST NOT 将新增成员标为可用；失败 MUST 恢复完整旧集合，不能留下部分在线组或错误的运行意图。MUST NOT 预造动态 mount RPC、从磁盘重建成员关系或偷偷合并独立 singleton。
 
 成员变更 MUST 显式提供 `desired_workspace_ids`，使用无重复的 Gateway target ID 完整目标集合，与 `expected_workspace_ids` 的当前集合严格分开。加入项 MUST 是已登记的本地managed target，不能属于另一个活动Backend owner；运行中的singleton必须先经自身受控stop，不自动合并两个活动owner。移除项 MUST 属于当前集合；默认工作区不可被移除。所有目标身份/成员/所有权条件 MUST 在drain和意图写入前校验；路径target、`desired_running`或当前集合筛选不能代替完整目标输入。新owner切换成功前，旧成员权威与运行意图 MUST 保持；目标集合只属于此次待验证操作，不建立第二份可运行成员权威。
 
 普通成员变更或整组restart若新组失败且旧组也无法恢复，Gateway MUST 保持旧完整成员集合为唯一已公布权威，全组offline/路由失效，并保留本次目标集合、失败generation及错误作为操作诊断，MUST NOT 伪报恢复或让部分成员在线。显式完整组start MUST 作为owner恢复出口：校验最近已公布generation和完整旧集合，按原已公布启动合同重建一次并全量验证；成功公布恢复generation，失败仍全组offline。需要改目标集合时必须另发完整成员变更命令，不借retry采纳失败候选；不把配置域的recovery_required自动套给普通成员变更。
 
+已经停机的 owner MUST 允许相同完整前置条件下的合法显式成员变更与 DELETE，无需先启动旧 Backend。操作 MUST 在同一拓扑锁与 owner 锁内确认旧进程和辅助运行时已停止或完成清理，并校验目标身份、所有权及路由引用；safe 被引用阻挡时保留旧权威，force 只沿既有引用 owner 撤销并等待释放，不向不存在的 Backend 请求业务中断。非空目标 MUST 原子公布同一 owner 的新 generation、完整目标启动合同及必要 target 删除，受影响成员仍 offline、运行意图为停止且不持有成员 runtime lease，MUST NOT 启动业务进程或伪报在线。清理、校验或提交失败 MUST 保留旧 generation、成员集合和 target 登记；已提交后的观察者错误不得回退权威状态。后续显式完整组 start MUST 使用新 generation 和完整剩余启动合同，验证全部成员后才公布在线；旧 generation 请求 MUST 被拒绝。普通 stop/start 不变更成员时仍遵循原 generation 合同。在线及停机 DELETE 的 target 删除、子节点解绑与剩余 owner 合同 MUST 在同一次权威 SQLite snapshot/CAS 提交中落地；写入 owner 范围不得把被删除的 manual target 合并保留，重开数据库后仍须确认精确删除及其它 owner/sibling 登记不变。
+
 目标集合为空时 MUST 只完成已确认的最后成员退出与唯一close，不启动空mount进程；有默认成员的集合不得以stop或remove使默认成员退出。
+
+`desired_workspace_ids` 未提供与显式提供空集合 MUST 有不同语义：未提供表示本次不请求改变成员集合，显式空集合表示确认全部当前成员退出。HTTP DTO、协议载体、生成绑定与解码映射 MUST 保留该 presence，MUST NOT 把缺省 repeated 字段的空值解释为退出全部成员。发起路由的工作区 MUST 属于 expected 当前集合，但 MAY 不属于 desired 目标集合；退出发起成员不能被提前拒绝。
+
+现有 `DELETE /api/gateway/workspaces/{workspace_id}` 删除本地托管 target 时 MUST 委托同一 owner 级完整组成员退出流程，MUST NOT 经 registry CRUD 直接关闭活跃 Backend。共享组删除 MUST 使用同一 `GatewayRuntimeGroupRequest` 承载 generation 与完整当前成员确认；DELETE 的目标集合 MUST 等于当前集合去掉路由指定 target，显式 desired 不匹配时 MUST 在副作用前拒绝，MUST NOT 借此添加成员或删除其它 target 登记。force MUST 由显式请求确认，运行中先取得全组 interrupted 持久化确认；停机时沿上述引用释放合同执行。safe 被真实 blockers 阻挡时 MUST 返回 HTTP 409，detail 携带完整 typed lifecycle 结果与准确影响集合，保持旧成员、owner、运行意图与 target 登记；成功删除仍返回完整工作区列表。Web、直接托管与联邦调用方 MUST 消费同一结果，失败不得伪造删除成功，页面观察流按既定租约恢复。外部管理与远程 target 保留原控制面删除归属，不被当成本地 managed 进程关闭；存在 SSH 转发时 MUST 先成功清理转发再删除 target，清理失败 MUST 保留 target 登记并报告真实错误。
+
+#### Scenario: 停机共享组删除非末成员后恢复
+
+- **WHEN** 已停机的共享组在完整 generation/当前成员确认下删除一个可移除成员，目标集合仍非空
+- **THEN** Gateway MUST 在同一 owner 原子公布剩余集合的新 generation 和完整启动输入，删除指定 target，剩余成员保持 offline 且不启动 Backend；旧 generation 请求被拒绝，后续显式 start 验证完整剩余组后才公布在线
+
+#### Scenario: 停机退出的清理或发布失败
+
+- **WHEN** 停机成员退出的进程/辅助清理、身份校验或原子发布失败
+- **THEN** 系统 MUST 保留旧 generation、完整成员和 target 登记并报告原因，不重新启动旧组；提交后的观察者错误不得回退已提交权威
+
+#### Scenario: 远程 target 转发清理失败
+
+- **WHEN** DELETE 远程 target 的 SSH 转发清理失败
+- **THEN** Gateway MUST 返回真实失败并保留 target 登记及未清理转发供重试，MUST NOT 先删除 target 后留下失去归属的转发
+
+#### Scenario: 缺省目标集合不能退出全部成员
+
+- **WHEN** 请求没有提供 desired 集合，或协议解码只得到缺省 repeated 空值
+- **THEN** 系统 MUST 保留原成员集合；只有有 presence 的显式空集合及匹配完整前置条件才能进入全部成员退出流程
+
+#### Scenario: 发起成员可以退出完整组
+
+- **WHEN** 发起 target 属于完整 expected 集合，而 desired 合法集合不再包含该 target
+- **THEN** 系统 MUST 按同一 owner 完成排空与成员切换，MUST NOT 仅因发起成员退出而拒绝；desired 为空时只关闭和释放 owner，不启动空 mount Backend
+
+#### Scenario: 删除最后成员被活动任务阻挡
+
+- **WHEN** safe DELETE 删除最后一个可移除托管成员，而 Backend 仍有 Job、tool、background 或代理引用 blocker
+- **THEN** Gateway MUST 返回 HTTP 409 的完整 typed blocker 结果，撤销 drain 并保持原 owner、target、运行意图与进程，不经 registry.remove 绕过阻塞
+
+#### Scenario: 强制删除最后成员先持久化中断
+
+- **WHEN** 调用方确认匹配完整 generation 与成员集合，并显式 force 删除最后成员
+- **THEN** Backend MUST 先持久化受影响执行的 interrupted 状态，再唯一关闭 handle、清理所属辅助服务并释放 owner/target，且不创建空 mount 进程
 
 #### Scenario: 显式加入共享组
 

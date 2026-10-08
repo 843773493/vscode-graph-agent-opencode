@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.protocol.generated.boxteam.common.v1 import service_lifecycle_pb2
 from app.protocol.generated.boxteam.gateway.v1 import health_pb2
-from app.schemas.gateway import GatewayHealthDTO
+from app.schemas.gateway.diagnostics import GatewayHealthDTO
 
 
 def gateway_health_to_proto(

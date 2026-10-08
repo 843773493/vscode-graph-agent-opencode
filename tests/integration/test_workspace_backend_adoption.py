@@ -9,8 +9,17 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import (
+    MountedWorkspace,
+    mounted_workspace_manifest_digest,
+)
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.gateway.runtime.local_workspace import start_managed_local_workspace_runtime
+from app.gateway.runtime.local_workspace import start_managed_backend_runtime
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +28,8 @@ class _Backend:
     workspace_root: Path
     workspace_id: str
     port: int
+    generation: str
+    manifest_digest: str
 
 
 @pytest.fixture
@@ -27,6 +38,8 @@ async def adopted_backend(
 ) -> AsyncIterator[_Backend]:
     workspace_root = Path(integration_workspace_root_path)
     workspace_id = load_or_create_workspace_id(workspace_root)
+    generation = "backend_generation_adoption"
+    digest = mounted_workspace_manifest_digest((MountedWorkspace(workspace_id, workspace_root),))
     # 独立 HTTP 替身提供真实健康身份与进程组；父进程的 stdin 管道关闭时，
     # 服务也停止，进程外测试超时不会留下独立运行的替身。
     server_source = """
@@ -36,14 +49,14 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
-workspace_id = sys.argv[1]
+workspace_id, generation, digest = sys.argv[1:4]
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/api/v1/health":
             self.send_error(404)
             return
-        body = json.dumps({"workspace_id": workspace_id, "process_id": os.getpid()}).encode()
+        body = json.dumps({"workspace_id": workspace_id, "process_id": os.getpid(), "status": "ok", "backend_generation": generation, "mount_manifest_digest": digest}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -66,6 +79,8 @@ server.server_close()
         "-c",
         server_source,
         workspace_id,
+        generation,
+        digest,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         start_new_session=True,
@@ -74,7 +89,7 @@ server.server_close()
         assert process.stdout is not None
         port_line = await asyncio.wait_for(process.stdout.readline(), timeout=3)
         assert port_line, "托管测试 Workspace API 未启动"
-        yield _Backend(process, workspace_root, workspace_id, int(port_line))
+        yield _Backend(process, workspace_root, workspace_id, int(port_line), generation, digest)
     finally:
         assert process.stdin is not None
         process.stdin.close()
@@ -108,14 +123,15 @@ async def test_preferred_port_mismatch_rejects_without_stopping_adopted_backend(
         fail_if_started,
     )
 
+    owner = ManagedBackendOwner(ManagedBackendContract(
+        "backend_owner_adoption", backend.generation,
+        (ManagedBackendMember("registered-target", MountedWorkspace(backend.workspace_id, backend.workspace_root)),),
+        f"http://127.0.0.1:{backend.port}",
+    ))
     with pytest.raises(RuntimeError, match="端口与首选端口不匹配") as raised:
-        await start_managed_local_workspace_runtime(
-            project_root=Path.cwd(),
-            workspace_root=backend.workspace_root,
-            log_dir=tmp_path / "logs",
-            preferred_backend_port=preferred_backend_port,
-            reusable_backend_url=f"http://127.0.0.1:{backend.port}",
-            adopt_existing_backend=True,
+        await start_managed_backend_runtime(
+            owner=owner, project_root=Path.cwd(), log_dir=tmp_path / "logs",
+            preferred_backend_port=preferred_backend_port, adopt_existing_backend=True,
         )
 
     assert f"actual={backend.port}" in str(raised.value)

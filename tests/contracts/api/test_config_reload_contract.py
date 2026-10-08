@@ -7,7 +7,7 @@ import pytest
 
 from app.gateway.main import app as gateway_app
 from app.main import app as workspace_app
-from app.schemas.gateway import GatewayConfigEventDTO
+from app.schemas.gateway.config import GatewayConfigEventDTO
 from app.schemas.internal_v2.config import ConfigEventDTO
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.diagnostics import diagnose_configuration

@@ -12,7 +12,7 @@ from app.core.trace_middleware import (
     require_current_request_id,
 )
 from app.gateway.federation.grants import ContextGrantTarget
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,

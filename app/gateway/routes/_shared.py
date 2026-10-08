@@ -23,11 +23,12 @@ from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.managed_workspaces import list_direct_managed_workspaces
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.schemas.gateway import (
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.schemas.gateway.directory import (
     GatewayDirectoryEntryDTO,
     GatewayDirectoryListDTO,
-    GatewayManagedWorkspaceListDTO,
 )
+from app.schemas.gateway.workspaces import GatewayManagedWorkspaceListDTO
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +160,12 @@ def _current_user_access(
     if context is None:
         raise HTTPException(status_code=401, detail="user_session_required")
     return context
+
+
+def get_workspace_runtime_controller(
+    request: Request,
+) -> GatewayWorkspaceRuntimeController:
+    controller = getattr(request.app.state, "workspace_runtime_controller", None)
+    if not isinstance(controller, GatewayWorkspaceRuntimeController):
+        raise TypeError("Gateway 工作区运行时控制器尚未初始化")
+    return controller

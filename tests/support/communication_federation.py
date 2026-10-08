@@ -17,7 +17,11 @@ from pathlib import Path
 import commentjson
 import httpx
 
-from app.core.workspace_identity import workspace_identity_path
+from app.core.mounted_workspaces import MountedWorkspace
+from app.core.workspace_identity import (
+    load_or_create_workspace_id,
+    workspace_identity_path,
+)
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     start_terminal_backend,
@@ -119,6 +123,8 @@ async def open_communication_triad(
             workspace_identity_path(workspace).unlink()
             reset_gateway_persistent_state(workspace_root=workspace)
             environment = {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
+            terminal_url = None
+            browser_url = None
             if name in resource_service_nodes:
                 terminal_port = ports.port(offset + 4)
                 browser_port = ports.port(offset + 5)
@@ -140,13 +146,15 @@ async def open_communication_triad(
                     register_test_process(process, lambda process=process: terminate_process(process))
                     resources.push_async_callback(asyncio.to_thread, unregister_test_process, process)
                 resources.push_async_callback(asyncio.to_thread, close_browser_manager_processes, browser)
-                environment.update({
-                    "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{terminal_port}",
-                    "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{browser_port}",
-                })
+                terminal_url = f"http://127.0.0.1:{terminal_port}"
+                browser_url = f"http://127.0.0.1:{browser_port}"
             backend = await asyncio.to_thread(
                 start_backend_process, workspace_root=str(workspace), port=ports.port(offset),
                 log_name="c3-backend", env_overrides=environment,
+                startup_mount=MountedWorkspace(
+                    load_or_create_workspace_id(workspace), workspace.resolve(),
+                    terminal_backend_url=terminal_url, browser_backend_url=browser_url,
+                ),
             )
             resources.push_async_callback(asyncio.to_thread, close_backend_process, backend)
             workspaces[name], backends[name] = workspace, backend

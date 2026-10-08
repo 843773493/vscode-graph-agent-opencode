@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from app.api.config import get_config, get_config_sources
 from app.core.config_sources import ConfigSourceLayer
-from app.schemas.gateway import GatewayConfigSourceDTO
+from app.schemas.gateway.config import GatewayConfigSourceDTO
 from app.schemas.internal_v2.config import ConfigSourceDTO, ConfigSourcesDTO
 from app.services.infrastructure.config_service import ConfigService
 

@@ -24,6 +24,7 @@ from app.agents.tools.session_history import (
 )
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.core.workspace_identity import load_or_create_workspace_id
@@ -243,14 +244,14 @@ def gateway_local_token_supplier() -> Callable[[], str]:
 @pytest.fixture
 def context_auxiliary_services(
     request: pytest.FixtureRequest,
-) -> Iterator[Callable[[Path], dict[str, str]]]:
+) -> Iterator[Callable[[Path], MountedWorkspace]]:
     """为 overview 的真实资源查询启动目标工作区专属辅助服务。"""
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     terminal_port, browser_port, browser_frontend_port = (
         port_block.port(offset) for offset in (40, 42, 43)
     )
     with ExitStack() as lifetime:
-        def start(workspace_root: Path) -> dict[str, str]:
+        def start(workspace_root: Path) -> MountedWorkspace:
             for port in (terminal_port, browser_port, browser_frontend_port):
                 ensure_local_port_available(port, service_name="context 测试辅助服务")
             terminal = start_terminal_backend(
@@ -264,10 +265,11 @@ def context_auxiliary_services(
                 backend_host="127.0.0.1",
             )
             lifetime.callback(close_browser_manager_processes, browser)
-            return {
-                "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{terminal_port}",
-                "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{browser_port}",
-            }
+            return MountedWorkspace(
+                load_or_create_workspace_id(workspace_root), workspace_root.resolve(),
+                terminal_backend_url=f"http://127.0.0.1:{terminal_port}",
+                browser_backend_url=f"http://127.0.0.1:{browser_port}",
+            )
 
         yield start
 
@@ -561,7 +563,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
         workspace_root=str(secondary_workspace),
         port=port_block.port(21),
         log_name="context-tool-secondary-backend",
-        env_overrides=context_auxiliary_services(secondary_workspace),
+        startup_mount=context_auxiliary_services(secondary_workspace),
     )
     gateway = start_gateway_process(
         workspace_root=primary_workspace,

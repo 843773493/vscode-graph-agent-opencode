@@ -191,6 +191,7 @@ describe("selectHealthyGatewayWorkspace", () => {
       status: "ready",
       active: false,
       managed: true,
+      affected_workspace_ids: [],
       removable: true,
       system_default: false,
       runtime_action: "safe_restart_managed_backend",

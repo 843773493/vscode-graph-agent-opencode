@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { GatewayWorkspace } from "../../types/backend";
+import * as gatewayApi from "../../gatewayApi";
+import { HttpRequestError } from "../../api/http";
+import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../types/backend";
 import { useSessionCatalogActions } from "./useSessionCatalogActions";
 
 /**
@@ -14,11 +16,15 @@ interface MountOptions {
   activeSessionId?: string | null;
   gatewayWorkspaces?: GatewayWorkspace[];
   confirmResult?: boolean;
+  confirmResults?: boolean[];
+  removalFailure?: Error;
 }
 
 const mountedRenderers: ReactTestRenderer[] = [];
+const spies: Array<{ mockRestore: () => void }> = [];
 
 afterEach(() => {
+  for (const spy of spies.splice(0)) spy.mockRestore();
   for (const renderer of mountedRenderers.splice(0)) {
     act(() => renderer.unmount());
   }
@@ -38,6 +44,8 @@ function mountHook(options: MountOptions = {}) {
   const created: Array<[string | undefined, string | null | undefined, string | null | undefined]> = [];
   const activated: string[] = [];
   const removed: string[] = [];
+  const removalRequests: Array<[string, GatewayRuntimeGroupRequest | undefined, boolean | undefined]> = [];
+  const confirmations: Array<{ message: string; confirmText: string }> = [];
   const deleted: Array<[string, string | null | undefined]> = [];
   const renamed: Array<[string, string, string | null | undefined]> = [];
   const statuses: string[] = [];
@@ -56,7 +64,10 @@ function mountHook(options: MountOptions = {}) {
         : "ses-active",
       sessionsByWorkspace: new Map(),
       gatewayWorkspaces: options.gatewayWorkspaces ?? [],
-      confirm: async () => options.confirmResult ?? true,
+      confirm: async (input) => {
+        confirmations.push(input);
+        return options.confirmResults?.[confirmations.length - 1] ?? options.confirmResult ?? true;
+      },
       setStatus: (text) => statuses.push(text),
       activateGatewayWorkspace: async (workspaceId) => {
         activated.push(workspaceId);
@@ -66,8 +77,10 @@ function mountHook(options: MountOptions = {}) {
         return {} as never;
       },
       openWorkspaceSession: async () => {},
-      removeGatewayWorkspace: async (workspaceId) => {
+      removeGatewayWorkspace: async (workspaceId, request, force) => {
         removed.push(workspaceId);
+        removalRequests.push([workspaceId, request, force]);
+        if (options.removalFailure && !force) throw options.removalFailure;
       },
       deleteSession: async (sessionId, workspaceId) => {
         deleted.push([sessionId, workspaceId]);
@@ -96,6 +109,8 @@ function mountHook(options: MountOptions = {}) {
     created,
     activated,
     removed,
+    removalRequests,
+    confirmations,
     deleted,
     renamed,
     statuses,
@@ -227,5 +242,57 @@ describe("会话目录编排链路", () => {
     // §10.3 前端半边：删除成功路径 MUST NOT 无条件重拉会话列表或强制刷新目录树；
     // 会话列表已在 deleteSession 内本地收敛，目录树由会话集合派生的 sync key 驱动。
     expect(mounted.hook().sessionCatalogRefreshVersions.get("ws-1")).toBeUndefined();
+  });
+});
+
+
+describe("托管工作区删除的完整组确认", () => {
+  const members = [
+    workspace({ workspace_id: "ws-a", name: "A", managed: true, connection_kind: "local", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"] }),
+    workspace({ workspace_id: "ws-b", name: "B", managed: true, connection_kind: "local", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"] }),
+  ];
+  function snapshot() {
+    const spy = spyOn(gatewayApi, "listGatewayWorkspaces").mockResolvedValue({ active_workspace_id: "ws-b", items: members });
+    spies.push(spy);
+    return spy;
+  }
+  const blocked = () => new HttpRequestError(409, "删除被阻塞", {
+    workspace_id: "ws-a", status: "blocked", backend_generation: "generation-1", affected_workspace_ids: ["ws-a", "ws-b"],
+    blockers: [{ workspace_id: "ws-b", kind: "job", resource_id: "job-b", detail: "Job 正在执行" }],
+  }, "/api/gateway/workspaces/ws-a");
+  test("完整确认后 safe 请求移除发起成员，并保留其余成员", async () => {
+    snapshot();
+    const mounted = mountHook({ gatewayWorkspaces: members });
+    await mounted.mount();
+    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
+    expect(mounted.removalRequests).toEqual([["ws-a", {
+      expected_backend_generation: "generation-1", expected_workspace_ids: ["ws-a", "ws-b"], desired_workspace_ids: ["ws-b"],
+    }, undefined]]);
+    expect(mounted.confirmations[0]?.message).toContain("ws-b");
+  });
+  test("safe 阻塞后单独确认 force，并原样保留已确认合同", async () => {
+    const listed = snapshot();
+    const mounted = mountHook({ gatewayWorkspaces: members, removalFailure: blocked(), confirmResults: [true, true] });
+    await mounted.mount();
+    await act(async () => { mounted.hook().removeWorkspace("ws-a", "A"); });
+    expect(listed).toHaveBeenCalledTimes(1);
+    expect(mounted.removalRequests.length).toBe(2);
+    expect(mounted.removalRequests[1]?.[1]).toBe(mounted.removalRequests[0]?.[1]);
+    expect(mounted.removalRequests[1]?.[2]).toBe(true);
+    expect(mounted.confirmations[1]?.message).toContain("Job 正在执行");
+    expect(mounted.confirmations[1]?.message).toContain("interrupted");
+  });
+  test("取消 force 保留阻塞删除结果，陈旧409不触发 force", async () => {
+    snapshot();
+    const declined = mountHook({ gatewayWorkspaces: members, removalFailure: blocked(), confirmResults: [true, false] });
+    await declined.mount();
+    await act(async () => { declined.hook().removeWorkspace("ws-a", "A"); });
+    expect(declined.removalRequests.length).toBe(1);
+    const stale = mountHook({ gatewayWorkspaces: members, removalFailure: new HttpRequestError(409, "generation 已陈旧", "generation 已陈旧", "/api/gateway/workspaces/ws-a") });
+    await stale.mount();
+    await act(async () => { stale.hook().removeWorkspace("ws-a", "A"); });
+    expect(stale.removalRequests.length).toBe(1);
+    expect(stale.confirmations.length).toBe(1);
+    expect(stale.statuses[stale.statuses.length - 1]).toContain("generation 已陈旧");
   });
 });

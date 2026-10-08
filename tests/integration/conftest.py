@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
 from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.paths import output_root_for_test
 from tests.support.ports import integration_port_block_for_file
@@ -119,7 +120,14 @@ def integration_backend_port(request: pytest.FixtureRequest) -> int:
 
 
 @pytest.fixture(scope="module")
+def integration_startup_mount() -> MountedWorkspace | None:
+    """需要辅助服务的场景通过 fixture 显式提供该工作区完整 mount。"""
+    return None
+
+
+@pytest.fixture(scope="module")
 def integration_backend_process(
+    integration_startup_mount: MountedWorkspace | None,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     integration_backend_port: int,
@@ -135,6 +143,7 @@ def integration_backend_process(
         else None
     )
     handle = start_backend_process(
+        startup_mount=integration_startup_mount,
         workspace_root=integration_workspace_root_path,
         port=integration_backend_port,
         log_name="integration-backend",

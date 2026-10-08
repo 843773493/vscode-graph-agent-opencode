@@ -1,6 +1,6 @@
 """Gateway 自有路由注册顺序与 openapi 形态的回归判据。
 
-拆分 `app/gateway/main.py` 后，routes 序列与 openapi 文档必须与拆分前逐字一致。
+完整 Backend 组生命周期进入现有路由后，保持自有接口与通配代理的顺序和公开 schema。
 
 注意：`operationId` 由 FastAPI 的 `generate_unique_id` 取 `list(route.methods)[0]`
 生成，而两个通配代理路由声明了多方法集合，集合迭代顺序受字符串 hash 随机化
@@ -17,13 +17,13 @@ from pathlib import Path
 
 from app.gateway.main import app
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path.cwd()
 
 BASELINE_OPENAPI_SHA256 = (
-    "167ed8fa787b5c9dc73e5b21c980e7f454612ee9e6ca1f3e20053f9419b7644e"
+    "824d1844ead0d28ee2689e491ceb340b824c8b8ef3438f1e40c2e4f7ef424fb4"
 )
-BASELINE_ROUTE_COUNT = 96
-BASELINE_PATH_COUNT = 76
+BASELINE_ROUTE_COUNT = 98
+BASELINE_PATH_COUNT = 78
 BASELINE_DUPLICATE_OPERATION_IDS = (
     "Duplicate Operation ID proxy_auxiliary_http_api_gateway_workspaces__workspace_id___service_path___path__patch",
     "Duplicate Operation ID proxy_workspace_api_api_v1__path__patch",

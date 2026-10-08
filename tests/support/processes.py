@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.runtime.process import resolve_backend_workspace_id
 from configs.installer import install_user_configuration
 from tests.support.process_scope import (
@@ -200,6 +202,8 @@ def start_backend_process(
     debugpy_port: int | None = None,
     asgi_app: str = "app.main:app",
     env_overrides: dict[str, str] | None = None,
+    startup_mount: MountedWorkspace | None = None,
+    backend_generation: str | None = None,
     env_unset: Sequence[str] = (),
 ) -> BackendProcess:
     ensure_local_port_available(port, service_name="Workspace 后端")
@@ -221,7 +225,7 @@ def start_backend_process(
             f"启动测试后端前必须先复制工作区配置: {workspace_config_path}"
         )
     env = os.environ.copy()
-    env["WORKSPACE_ROOT"] = workspace_root
+    env.pop("WORKSPACE_ROOT", None)
     env["BOXTEAM_HOME"] = str(boxteam_home)
     env["PYTHONUNBUFFERED"] = "1"
     for name in env_unset:
@@ -232,15 +236,16 @@ def start_backend_process(
         project_root,
         Path(workspace_root),
     )
-    env["BOXTEAM_MOUNTED_WORKSPACES"] = json.dumps(
-        [
-            {
-                "workspace_id": backend_workspace_id,
-                "workspace_root": str(Path(workspace_root).resolve()),
-            }
-        ],
-        separators=(",", ":"),
+    mount = startup_mount or MountedWorkspace(
+        backend_workspace_id, Path(workspace_root).resolve(),
     )
+    if mount.workspace_id != backend_workspace_id or mount.workspace_root != Path(workspace_root).resolve():
+        raise ValueError("测试 Backend 的 startup mount 与指定工作区身份不一致")
+    env["BOXTEAM_MOUNTED_WORKSPACES"] = json.dumps(
+        [mount.to_payload()], separators=(",", ":"),
+    )
+    env["BOXTEAM_BACKEND_GENERATION"] = backend_generation or f"test_backend_{uuid4().hex}"
+
 
     cmd = [str(python_executable)]
     if debugpy_port is not None:

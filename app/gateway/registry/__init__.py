@@ -43,16 +43,6 @@ from app.gateway.workspace_ids import (
 )
 from app.gateway.workspace_ids import build_workspace_id as build_workspace_id
 from app.gateway.workspace_ids import is_legacy_workspace_id as is_legacy_workspace_id
-from app.schemas.gateway import (
-    GatewayConfigReloadStatusDTO as GatewayConfigReloadStatusDTO,
-)
-from app.schemas.gateway import GatewayConnectionKind as GatewayConnectionKind
-from app.schemas.gateway import (
-    GatewayRemoteConnectionSummaryDTO as GatewayRemoteConnectionSummaryDTO,
-)
-from app.schemas.gateway import GatewayServiceStatus as GatewayServiceStatus
-from app.schemas.gateway import GatewayServiceStatusDTO as GatewayServiceStatusDTO
-from app.schemas.gateway import GatewayWorkspaceDTO as GatewayWorkspaceDTO
 from app.services.infrastructure.config.state import (
     ConfigConflictError as ConfigConflictError,
 )

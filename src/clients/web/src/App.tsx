@@ -1,4 +1,5 @@
 import { requireGatewayWorkspaceRequestTarget } from "./api/workspaceIdentity";
+import { useManagedBackendConfirmation } from "./hooks/gatewayWorkspace/useManagedBackendConfirmation";
 import { useWorkspaceTerminalResources } from "./hooks/workspace/useWorkspaceTerminalResources";
 import { controlWorkspaceResource, getWorkspaceResource } from "./api/workspaceResources";
 import { getSessionMainThread } from "./api/session/sessions";
@@ -84,8 +85,10 @@ export default function AppShell() {
     activateGatewayWorkspace,
     refreshGatewayState,
     reconnectGatewayWorkspace,
-    startManagedGatewayWorkspaceBackend,
-    stopManagedGatewayWorkspaceBackend,
+    startManagedGatewayWorkspaceBackend: startBackend,
+    stopManagedGatewayWorkspaceBackend: stopBackend,
+    safeRestartManagedGatewayWorkspaceBackend: safeRestartBackend,
+    forceRestartManagedGatewayWorkspaceBackend: forceRestartBackend,
     addManagedGatewayWorkspace,
     addSshGatewayWorkspace,
     removeGatewayWorkspace,
@@ -250,6 +253,16 @@ export default function AppShell() {
     state.eventQueuesBySession,
   ]);
   const resolvedApiPort = state.apiPort ?? DEFAULT_BACKEND_PORT;
+  const {
+    start: startManagedGatewayWorkspaceBackend,
+    stop: stopManagedGatewayWorkspaceBackend,
+    safeRestart: safeRestartManagedGatewayWorkspaceBackend,
+    forceRestart: forceRestartManagedGatewayWorkspaceBackend,
+  } = useManagedBackendConfirmation({
+    apiPort: resolvedApiPort, onStart: startBackend, onStop: stopBackend,
+    onSafeRestart: safeRestartBackend, onForceRestart: forceRestartBackend,
+    onRefresh: refreshGatewayState,
+  });
   const generatorResources = useSessionGeneratorResources(
     resolvedApiPort,
     panelVisible && bottomPanelState.tab === "automation",
@@ -728,6 +741,10 @@ export default function AppShell() {
           onAddSsh={addSshGatewayWorkspace}
           onRefresh={refreshGatewayState}
           onReconnect={reconnectGatewayWorkspace}
+          onStart={startManagedGatewayWorkspaceBackend}
+          onStop={stopManagedGatewayWorkspaceBackend}
+          onSafeRestart={safeRestartManagedGatewayWorkspaceBackend}
+          onForceRestart={forceRestartManagedGatewayWorkspaceBackend}
           uiSettings={state.uiSettings}
           onUpdateUiSettings={updateUiSettings}
         />

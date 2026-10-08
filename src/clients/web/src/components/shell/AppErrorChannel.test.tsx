@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { GatewayRuntimeRestartResult } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
   AppContext,
@@ -29,6 +30,15 @@ import {
 
 const noop = () => {};
 const asyncNoop = async () => {};
+const restartResult = async (workspaceId: string): Promise<GatewayRuntimeRestartResult> => ({
+  workspace_id: workspaceId,
+  status: "restarted",
+  forced: false,
+  backend_generation: "fixture-generation",
+  affected_workspace_ids: [workspaceId],
+  blockers: [],
+  workspaces: { active_workspace_id: workspaceId, items: [] },
+});
 const noopActions = {
   createSession: asyncNoop,
   selectSession: noop,
@@ -49,6 +59,8 @@ const noopActions = {
   reconnectGatewayWorkspace: asyncNoop,
   startManagedGatewayWorkspaceBackend: asyncNoop,
   stopManagedGatewayWorkspaceBackend: asyncNoop,
+  safeRestartManagedGatewayWorkspaceBackend: restartResult,
+  forceRestartManagedGatewayWorkspaceBackend: restartResult,
   addManagedGatewayWorkspace: asyncNoop,
   addSshGatewayWorkspace: asyncNoop,
   removeGatewayWorkspace: asyncNoop,

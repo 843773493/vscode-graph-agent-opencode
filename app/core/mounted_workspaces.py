@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import ClassVar
+from urllib.parse import urlparse
 
 from app.core.workspace_identity import bind_workspace_id, validate_workspace_id
 
@@ -15,6 +17,40 @@ from app.core.workspace_identity import bind_workspace_id, validate_workspace_id
 class MountedWorkspace:
     workspace_id: str
     workspace_root: Path
+    terminal_backend_url: str | None = None
+    browser_backend_url: str | None = None
+    config_candidate_ref: str | None = None
+    config_generation: str | None = None
+    config_fencing_token: str | None = None
+
+    def __post_init__(self) -> None:
+        values = (self.config_candidate_ref, self.config_generation, self.config_fencing_token)
+        if any(value is not None for value in values) and not all(
+            isinstance(value, str) and value.strip() for value in values
+        ):
+            raise ValueError("mount 配置启动必须同时提供 candidate_ref、generation 和 fencing token")
+        for url in (self.terminal_backend_url, self.browser_backend_url):
+            if url is not None and (
+                not isinstance(url, str) or urlparse(url).scheme not in {"http", "https"}
+                or not urlparse(url).netloc
+            ):
+                raise ValueError(f"mount 辅助服务 URL 非法: {url!r}")
+
+    def to_payload(self) -> dict[str, object]:
+        return {**asdict(self), "workspace_root": str(self.workspace_root)}
+
+    def manifest_payload(self) -> dict[str, object]:
+        # candidate 由每工作区配置 owner 独占；组身份只验证 UUID、根与辅助服务绑定。
+        return {
+            "workspace_id": self.workspace_id, "workspace_root": str(self.workspace_root),
+            "terminal_backend_url": self.terminal_backend_url,
+            "browser_backend_url": self.browser_backend_url,
+        }
+
+
+def mounted_workspace_manifest_digest(mounts: tuple[MountedWorkspace, ...]) -> str:
+    payload = sorted((mount.manifest_payload() for mount in mounts), key=lambda item: str(item["workspace_id"]))
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 class MountedWorkspaceRegistry:
@@ -46,7 +82,10 @@ class MountedWorkspaceRegistry:
                     f"root={workspace_root}"
                 )
             bind_workspace_id(workspace_root, workspace_id)
-            normalized_mount = MountedWorkspace(workspace_id, workspace_root)
+            normalized_mount = MountedWorkspace(
+                workspace_id, workspace_root, mount.terminal_backend_url, mount.browser_backend_url,
+                mount.config_candidate_ref, mount.config_generation, mount.config_fencing_token,
+            )
             by_id[workspace_id] = normalized_mount
             roots[workspace_root] = workspace_id
             normalized.append(normalized_mount)
@@ -80,11 +119,11 @@ class MountedWorkspaceRegistry:
         for index, item in enumerate(payload):
             if not isinstance(item, dict) or set(item) != {
                 "workspace_id",
-                "workspace_root",
+                "workspace_root", "terminal_backend_url", "browser_backend_url",
+                "config_candidate_ref", "config_generation", "config_fencing_token",
             }:
                 raise ValueError(
-                    f"{cls.ENVIRONMENT_VARIABLE}[{index}] 必须只含 workspace_id 和 "
-                    "workspace_root"
+                    f"{cls.ENVIRONMENT_VARIABLE}[{index}] 必须是完整的 mount 启动合同"
                 )
             workspace_id = item["workspace_id"]
             workspace_root = item["workspace_root"]
@@ -99,8 +138,16 @@ class MountedWorkspaceRegistry:
                 raise ValueError(
                     f"{cls.ENVIRONMENT_VARIABLE}[{index}].workspace_root 必须是绝对路径"
                 )
-            mounts.append(MountedWorkspace(workspace_id, Path(workspace_root)))
+            mounts.append(MountedWorkspace(
+                workspace_id, Path(workspace_root),
+                item["terminal_backend_url"], item["browser_backend_url"],
+                item["config_candidate_ref"], item["config_generation"], item["config_fencing_token"],
+            ))
         return cls(mounts)
+
+    @property
+    def manifest_digest(self) -> str:
+        return mounted_workspace_manifest_digest(self._mounts)
 
     @property
     def workspace_ids(self) -> tuple[str, ...]:

@@ -7,7 +7,7 @@ from app.protocol.codecs.terminal import (
     terminal_session_to_proto,
 )
 from app.protocol.generated.boxteam.terminal.v1 import terminal_pb2
-from app.schemas.gateway import GatewayHealthDTO
+from app.schemas.gateway.diagnostics import GatewayHealthDTO
 
 
 def test_terminal_snapshot_round_trip_preserves_extended_json_fields() -> None:

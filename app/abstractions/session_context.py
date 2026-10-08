@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
     from app.domain.itemized.request_plan import ContextRequestPlan
 
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationSnapshotDTO,

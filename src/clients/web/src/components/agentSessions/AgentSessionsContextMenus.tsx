@@ -4,7 +4,6 @@ import {
   readTextFromClipboard,
 } from "../../utils/clipboard";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
-import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface SessionContextMenu {
@@ -85,7 +84,6 @@ export default function AgentSessionsContextMenus({
   startingWorkspaceIds,
   onStatusChange,
 }: AgentSessionsContextMenusProps) {
-  const confirm = useWarmConfirm();
 
   const handleCopySessionId = () => {
     if (!sessionMenu) {
@@ -181,16 +179,7 @@ export default function AgentSessionsContextMenus({
     }
     const target = workspaceMenu;
     onCloseWorkspaceMenu();
-    void confirm({
-      title: "关闭工作区",
-      message: `关闭工作区“${target.name || target.workspaceId}”的后端服务。该工作区中的会话将暂时离线，正在运行的任务和终端可能中断。稍后可以重新启动。`,
-      confirmText: "关闭",
-      danger: true,
-    }).then(async (confirmed) => {
-      if (confirmed) {
-        await onStopWorkspace(target.workspaceId);
-      }
-    }).catch((error: unknown) => {
+    void onStopWorkspace(target.workspaceId).catch((error: unknown) => {
       onStatusChange(
         `关闭工作区失败: ${errorMessage(error)}`,
       );

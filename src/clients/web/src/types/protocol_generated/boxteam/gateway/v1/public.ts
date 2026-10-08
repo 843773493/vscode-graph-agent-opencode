@@ -33,17 +33,6 @@ export interface AddRemoteGatewayRequest {
   remote_gateway_port?: number | undefined;
 }
 
-export interface AddSshWorkspaceRequest {
-  name?: string | undefined;
-  connection_workspace_id?: string | undefined;
-  ssh_config_host?: string | undefined;
-  host?: string | undefined;
-  port?: number | undefined;
-  username?: string | undefined;
-  private_key_path?: string | undefined;
-  remote_gateway_port?: number | undefined;
-}
-
 export interface ChangePortForwardLabelRequest {
   label?: string | undefined;
 }
@@ -103,6 +92,8 @@ export interface FederationWorkspaceDTO {
   connection_kind: string;
   services: string[];
   backend_workspace_id: string;
+  backend_generation?: string | undefined;
+  affected_workspace_ids: string[];
 }
 
 export interface FederationWorkspaceListDTO {
@@ -283,12 +274,23 @@ export interface GatewayResourceScopeErrorDTO {
   message: string;
 }
 
+export interface GatewayRuntimeDesiredWorkspaceSet {
+  workspace_ids: string[];
+}
+
+export interface GatewayRuntimeGroupRequest {
+  expected_backend_generation?: string | undefined;
+  expected_workspace_ids: string[];
+  desired_workspace_ids: GatewayRuntimeDesiredWorkspaceSet | undefined;
+}
+
 export interface GatewayRuntimeBlockerDTO {
   kind: string;
   resource_id: string;
   session_id: string;
   status: string;
   detail?: string | undefined;
+  workspace_id: string;
 }
 
 export interface GatewayRuntimeRestartResultDTO {
@@ -297,6 +299,8 @@ export interface GatewayRuntimeRestartResultDTO {
   forced: boolean;
   blockers: GatewayRuntimeBlockerDTO[];
   workspaces: GatewayWorkspaceListDTO | undefined;
+  backend_generation?: string | undefined;
+  affected_workspace_ids: string[];
 }
 
 export interface GatewayRuntimeStateResultDTO {
@@ -304,6 +308,8 @@ export interface GatewayRuntimeStateResultDTO {
   status: string;
   blockers: GatewayRuntimeBlockerDTO[];
   workspaces: GatewayWorkspaceListDTO | undefined;
+  backend_generation?: string | undefined;
+  affected_workspace_ids: string[];
 }
 
 export interface GatewayServiceStatusDTO {
@@ -448,6 +454,8 @@ export interface GatewayWorkspaceDTO {
   connection_error?: string | undefined;
   checked_at: string;
   backend_workspace_id?: string | undefined;
+  backend_generation?: string | undefined;
+  affected_workspace_ids: string[];
 }
 
 export interface GatewayWorkspaceListDTO {
@@ -979,83 +987,6 @@ export const AddRemoteGatewayRequest: MessageFns<AddRemoteGatewayRequest> = {
   },
 };
 
-function createBaseAddSshWorkspaceRequest(): AddSshWorkspaceRequest {
-  return {
-    name: undefined,
-    connection_workspace_id: undefined,
-    ssh_config_host: undefined,
-    host: undefined,
-    port: undefined,
-    username: undefined,
-    private_key_path: undefined,
-    remote_gateway_port: undefined,
-  };
-}
-
-export const AddSshWorkspaceRequest: MessageFns<AddSshWorkspaceRequest> = {
-  fromJSON(object: any): AddSshWorkspaceRequest {
-    return {
-      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
-      connection_workspace_id: isSet(object.connection_workspace_id)
-        ? globalThis.String(object.connection_workspace_id)
-        : undefined,
-      ssh_config_host: isSet(object.ssh_config_host) ? globalThis.String(object.ssh_config_host) : undefined,
-      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
-      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
-      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
-      private_key_path: isSet(object.private_key_path) ? globalThis.String(object.private_key_path) : undefined,
-      remote_gateway_port: isSet(object.remote_gateway_port)
-        ? globalThis.Number(object.remote_gateway_port)
-        : undefined,
-    };
-  },
-
-  toJSON(message: AddSshWorkspaceRequest): unknown {
-    const obj: any = {};
-    if (message.name !== undefined) {
-      obj.name = message.name;
-    }
-    if (message.connection_workspace_id !== undefined) {
-      obj.connection_workspace_id = message.connection_workspace_id;
-    }
-    if (message.ssh_config_host !== undefined) {
-      obj.ssh_config_host = message.ssh_config_host;
-    }
-    if (message.host !== undefined) {
-      obj.host = message.host;
-    }
-    if (message.port !== undefined) {
-      obj.port = Math.round(message.port);
-    }
-    if (message.username !== undefined) {
-      obj.username = message.username;
-    }
-    if (message.private_key_path !== undefined) {
-      obj.private_key_path = message.private_key_path;
-    }
-    if (message.remote_gateway_port !== undefined) {
-      obj.remote_gateway_port = Math.round(message.remote_gateway_port);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<AddSshWorkspaceRequest>, I>>(base?: I): AddSshWorkspaceRequest {
-    return AddSshWorkspaceRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<AddSshWorkspaceRequest>, I>>(object: I): AddSshWorkspaceRequest {
-    const message = createBaseAddSshWorkspaceRequest();
-    message.name = object.name ?? undefined;
-    message.connection_workspace_id = object.connection_workspace_id ?? undefined;
-    message.ssh_config_host = object.ssh_config_host ?? undefined;
-    message.host = object.host ?? undefined;
-    message.port = object.port ?? undefined;
-    message.username = object.username ?? undefined;
-    message.private_key_path = object.private_key_path ?? undefined;
-    message.remote_gateway_port = object.remote_gateway_port ?? undefined;
-    return message;
-  },
-};
-
 function createBaseChangePortForwardLabelRequest(): ChangePortForwardLabelRequest {
   return { label: undefined };
 }
@@ -1415,6 +1346,8 @@ function createBaseFederationWorkspaceDTO(): FederationWorkspaceDTO {
     connection_kind: "",
     services: [],
     backend_workspace_id: "",
+    backend_generation: undefined,
+    affected_workspace_ids: [],
   };
 }
 
@@ -1430,6 +1363,10 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
         ? object.services.map((e: any) => globalThis.String(e))
         : [],
       backend_workspace_id: isSet(object.backend_workspace_id) ? globalThis.String(object.backend_workspace_id) : "",
+      backend_generation: isSet(object.backend_generation) ? globalThis.String(object.backend_generation) : undefined,
+      affected_workspace_ids: globalThis.Array.isArray(object?.affected_workspace_ids)
+        ? object.affected_workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -1456,6 +1393,12 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     if (message.backend_workspace_id !== "") {
       obj.backend_workspace_id = message.backend_workspace_id;
     }
+    if (message.backend_generation !== undefined) {
+      obj.backend_generation = message.backend_generation;
+    }
+    if (message.affected_workspace_ids?.length) {
+      obj.affected_workspace_ids = message.affected_workspace_ids;
+    }
     return obj;
   },
 
@@ -1471,6 +1414,8 @@ export const FederationWorkspaceDTO: MessageFns<FederationWorkspaceDTO> = {
     message.connection_kind = object.connection_kind ?? "";
     message.services = object.services?.map((e) => e) || [];
     message.backend_workspace_id = object.backend_workspace_id ?? "";
+    message.backend_generation = object.backend_generation ?? undefined;
+    message.affected_workspace_ids = object.affected_workspace_ids?.map((e) => e) || [];
     return message;
   },
 };
@@ -2618,8 +2563,91 @@ export const GatewayResourceScopeErrorDTO: MessageFns<GatewayResourceScopeErrorD
   },
 };
 
+function createBaseGatewayRuntimeDesiredWorkspaceSet(): GatewayRuntimeDesiredWorkspaceSet {
+  return { workspace_ids: [] };
+}
+
+export const GatewayRuntimeDesiredWorkspaceSet: MessageFns<GatewayRuntimeDesiredWorkspaceSet> = {
+  fromJSON(object: any): GatewayRuntimeDesiredWorkspaceSet {
+    return {
+      workspace_ids: globalThis.Array.isArray(object?.workspace_ids)
+        ? object.workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+    };
+  },
+
+  toJSON(message: GatewayRuntimeDesiredWorkspaceSet): unknown {
+    const obj: any = {};
+    if (message.workspace_ids?.length) {
+      obj.workspace_ids = message.workspace_ids;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayRuntimeDesiredWorkspaceSet>, I>>(
+    base?: I,
+  ): GatewayRuntimeDesiredWorkspaceSet {
+    return GatewayRuntimeDesiredWorkspaceSet.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayRuntimeDesiredWorkspaceSet>, I>>(
+    object: I,
+  ): GatewayRuntimeDesiredWorkspaceSet {
+    const message = createBaseGatewayRuntimeDesiredWorkspaceSet();
+    message.workspace_ids = object.workspace_ids?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseGatewayRuntimeGroupRequest(): GatewayRuntimeGroupRequest {
+  return { expected_backend_generation: undefined, expected_workspace_ids: [], desired_workspace_ids: undefined };
+}
+
+export const GatewayRuntimeGroupRequest: MessageFns<GatewayRuntimeGroupRequest> = {
+  fromJSON(object: any): GatewayRuntimeGroupRequest {
+    return {
+      expected_backend_generation: isSet(object.expected_backend_generation)
+        ? globalThis.String(object.expected_backend_generation)
+        : undefined,
+      expected_workspace_ids: globalThis.Array.isArray(object?.expected_workspace_ids)
+        ? object.expected_workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
+      desired_workspace_ids: isSet(object.desired_workspace_ids)
+        ? GatewayRuntimeDesiredWorkspaceSet.fromJSON(object.desired_workspace_ids)
+        : undefined,
+    };
+  },
+
+  toJSON(message: GatewayRuntimeGroupRequest): unknown {
+    const obj: any = {};
+    if (message.expected_backend_generation !== undefined) {
+      obj.expected_backend_generation = message.expected_backend_generation;
+    }
+    if (message.expected_workspace_ids?.length) {
+      obj.expected_workspace_ids = message.expected_workspace_ids;
+    }
+    if (message.desired_workspace_ids !== undefined) {
+      obj.desired_workspace_ids = GatewayRuntimeDesiredWorkspaceSet.toJSON(message.desired_workspace_ids);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayRuntimeGroupRequest>, I>>(base?: I): GatewayRuntimeGroupRequest {
+    return GatewayRuntimeGroupRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayRuntimeGroupRequest>, I>>(object: I): GatewayRuntimeGroupRequest {
+    const message = createBaseGatewayRuntimeGroupRequest();
+    message.expected_backend_generation = object.expected_backend_generation ?? undefined;
+    message.expected_workspace_ids = object.expected_workspace_ids?.map((e) => e) || [];
+    message.desired_workspace_ids =
+      (object.desired_workspace_ids !== undefined && object.desired_workspace_ids !== null)
+        ? GatewayRuntimeDesiredWorkspaceSet.fromPartial(object.desired_workspace_ids)
+        : undefined;
+    return message;
+  },
+};
+
 function createBaseGatewayRuntimeBlockerDTO(): GatewayRuntimeBlockerDTO {
-  return { kind: "", resource_id: "", session_id: "", status: "", detail: undefined };
+  return { kind: "", resource_id: "", session_id: "", status: "", detail: undefined, workspace_id: "" };
 }
 
 export const GatewayRuntimeBlockerDTO: MessageFns<GatewayRuntimeBlockerDTO> = {
@@ -2630,6 +2658,7 @@ export const GatewayRuntimeBlockerDTO: MessageFns<GatewayRuntimeBlockerDTO> = {
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       detail: isSet(object.detail) ? globalThis.String(object.detail) : undefined,
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
     };
   },
 
@@ -2650,6 +2679,9 @@ export const GatewayRuntimeBlockerDTO: MessageFns<GatewayRuntimeBlockerDTO> = {
     if (message.detail !== undefined) {
       obj.detail = message.detail;
     }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
     return obj;
   },
 
@@ -2663,12 +2695,21 @@ export const GatewayRuntimeBlockerDTO: MessageFns<GatewayRuntimeBlockerDTO> = {
     message.session_id = object.session_id ?? "";
     message.status = object.status ?? "";
     message.detail = object.detail ?? undefined;
+    message.workspace_id = object.workspace_id ?? "";
     return message;
   },
 };
 
 function createBaseGatewayRuntimeRestartResultDTO(): GatewayRuntimeRestartResultDTO {
-  return { workspace_id: "", status: "", forced: false, blockers: [], workspaces: undefined };
+  return {
+    workspace_id: "",
+    status: "",
+    forced: false,
+    blockers: [],
+    workspaces: undefined,
+    backend_generation: undefined,
+    affected_workspace_ids: [],
+  };
 }
 
 export const GatewayRuntimeRestartResultDTO: MessageFns<GatewayRuntimeRestartResultDTO> = {
@@ -2681,6 +2722,10 @@ export const GatewayRuntimeRestartResultDTO: MessageFns<GatewayRuntimeRestartRes
         ? object.blockers.map((e: any) => GatewayRuntimeBlockerDTO.fromJSON(e))
         : [],
       workspaces: isSet(object.workspaces) ? GatewayWorkspaceListDTO.fromJSON(object.workspaces) : undefined,
+      backend_generation: isSet(object.backend_generation) ? globalThis.String(object.backend_generation) : undefined,
+      affected_workspace_ids: globalThis.Array.isArray(object?.affected_workspace_ids)
+        ? object.affected_workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -2701,6 +2746,12 @@ export const GatewayRuntimeRestartResultDTO: MessageFns<GatewayRuntimeRestartRes
     if (message.workspaces !== undefined) {
       obj.workspaces = GatewayWorkspaceListDTO.toJSON(message.workspaces);
     }
+    if (message.backend_generation !== undefined) {
+      obj.backend_generation = message.backend_generation;
+    }
+    if (message.affected_workspace_ids?.length) {
+      obj.affected_workspace_ids = message.affected_workspace_ids;
+    }
     return obj;
   },
 
@@ -2718,12 +2769,21 @@ export const GatewayRuntimeRestartResultDTO: MessageFns<GatewayRuntimeRestartRes
     message.workspaces = (object.workspaces !== undefined && object.workspaces !== null)
       ? GatewayWorkspaceListDTO.fromPartial(object.workspaces)
       : undefined;
+    message.backend_generation = object.backend_generation ?? undefined;
+    message.affected_workspace_ids = object.affected_workspace_ids?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBaseGatewayRuntimeStateResultDTO(): GatewayRuntimeStateResultDTO {
-  return { workspace_id: "", status: "", blockers: [], workspaces: undefined };
+  return {
+    workspace_id: "",
+    status: "",
+    blockers: [],
+    workspaces: undefined,
+    backend_generation: undefined,
+    affected_workspace_ids: [],
+  };
 }
 
 export const GatewayRuntimeStateResultDTO: MessageFns<GatewayRuntimeStateResultDTO> = {
@@ -2735,6 +2795,10 @@ export const GatewayRuntimeStateResultDTO: MessageFns<GatewayRuntimeStateResultD
         ? object.blockers.map((e: any) => GatewayRuntimeBlockerDTO.fromJSON(e))
         : [],
       workspaces: isSet(object.workspaces) ? GatewayWorkspaceListDTO.fromJSON(object.workspaces) : undefined,
+      backend_generation: isSet(object.backend_generation) ? globalThis.String(object.backend_generation) : undefined,
+      affected_workspace_ids: globalThis.Array.isArray(object?.affected_workspace_ids)
+        ? object.affected_workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -2752,6 +2816,12 @@ export const GatewayRuntimeStateResultDTO: MessageFns<GatewayRuntimeStateResultD
     if (message.workspaces !== undefined) {
       obj.workspaces = GatewayWorkspaceListDTO.toJSON(message.workspaces);
     }
+    if (message.backend_generation !== undefined) {
+      obj.backend_generation = message.backend_generation;
+    }
+    if (message.affected_workspace_ids?.length) {
+      obj.affected_workspace_ids = message.affected_workspace_ids;
+    }
     return obj;
   },
 
@@ -2766,6 +2836,8 @@ export const GatewayRuntimeStateResultDTO: MessageFns<GatewayRuntimeStateResultD
     message.workspaces = (object.workspaces !== undefined && object.workspaces !== null)
       ? GatewayWorkspaceListDTO.fromPartial(object.workspaces)
       : undefined;
+    message.backend_generation = object.backend_generation ?? undefined;
+    message.affected_workspace_ids = object.affected_workspace_ids?.map((e) => e) || [];
     return message;
   },
 };
@@ -3627,6 +3699,8 @@ function createBaseGatewayWorkspaceDTO(): GatewayWorkspaceDTO {
     connection_error: undefined,
     checked_at: "",
     backend_workspace_id: undefined,
+    backend_generation: undefined,
+    affected_workspace_ids: [],
   };
 }
 
@@ -3657,6 +3731,10 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
       backend_workspace_id: isSet(object.backend_workspace_id)
         ? globalThis.String(object.backend_workspace_id)
         : undefined,
+      backend_generation: isSet(object.backend_generation) ? globalThis.String(object.backend_generation) : undefined,
+      affected_workspace_ids: globalThis.Array.isArray(object?.affected_workspace_ids)
+        ? object.affected_workspace_ids.map((e: any) => globalThis.String(e))
+        : [],
     };
   },
 
@@ -3716,6 +3794,12 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     if (message.backend_workspace_id !== undefined) {
       obj.backend_workspace_id = message.backend_workspace_id;
     }
+    if (message.backend_generation !== undefined) {
+      obj.backend_generation = message.backend_generation;
+    }
+    if (message.affected_workspace_ids?.length) {
+      obj.affected_workspace_ids = message.affected_workspace_ids;
+    }
     return obj;
   },
 
@@ -3746,6 +3830,8 @@ export const GatewayWorkspaceDTO: MessageFns<GatewayWorkspaceDTO> = {
     message.connection_error = object.connection_error ?? undefined;
     message.checked_at = object.checked_at ?? "";
     message.backend_workspace_id = object.backend_workspace_id ?? undefined;
+    message.backend_generation = object.backend_generation ?? undefined;
+    message.affected_workspace_ids = object.affected_workspace_ids?.map((e) => e) || [];
     return message;
   },
 };

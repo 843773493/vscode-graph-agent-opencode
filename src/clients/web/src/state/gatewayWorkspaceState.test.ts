@@ -14,6 +14,7 @@ function workspace(workspaceId: string, active: boolean): GatewayWorkspace {
     status: "ready",
     active,
     managed: false,
+    affected_workspace_ids: [],
     removable: true,
     system_default: false,
     runtime_action: "probe_external_backend",

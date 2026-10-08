@@ -9,14 +9,15 @@
 
 from __future__ import annotations
 
-import os
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import (
     get_user_workspace_config_path,
 )
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigDTO
 from app.services.infrastructure.config import (
     ConfigFileWatcher,
@@ -73,9 +74,6 @@ class ConfigService(ConfigSourceLayersMixin,
 ):
     _RUNTIME_OVERRIDE_CONFIG_KEY = "workspace_runtime_override"
     _CONFIG_DOMAIN = "workspace"
-    _CANDIDATE_REF_ENV = "BOXTEAM_CONFIG_CANDIDATE_REF"
-    _GENERATION_ENV = "BOXTEAM_CONFIG_GENERATION"
-    _FENCING_TOKEN_ENV = "BOXTEAM_CONFIG_FENCING_TOKEN"
 
     def __init__(
         self,
@@ -88,6 +86,7 @@ class ConfigService(ConfigSourceLayersMixin,
         source_owner: WorkspaceSourceOwner | None = None,
         source_owner_workspace_id: str | None = None,
         event_channel_service: EventChannelService | None = None,
+        startup_mount: MountedWorkspace | None = None,
     ) -> None:
         resolved_config_dir = (
             Path(config_dir).expanduser().resolve()
@@ -109,6 +108,12 @@ class ConfigService(ConfigSourceLayersMixin,
         self._workspace_root = (
             Path(workspace_root).expanduser().resolve() if workspace_root else None
         )
+        self._startup_mount = startup_mount
+        if startup_mount is not None and (
+            self._workspace_root != startup_mount.workspace_root
+            or (self._workspace_root is not None and load_or_create_workspace_id(self._workspace_root) != startup_mount.workspace_id)
+        ):
+            raise ValueError("ConfigService 启动 mount 与其 workspace owner 不匹配")
         self._workspace_state_store = workspace_state_store
         if (source_owner is None) != (source_owner_workspace_id is None):
             raise ValueError(
@@ -149,8 +154,9 @@ class ConfigService(ConfigSourceLayersMixin,
         )
         self._loaded_source: str | None = None
         self._runtime_generation = (
-            os.environ.get("BOXTEAM_CONFIG_GENERATION", "").strip()
-            or new_config_id("workspace_generation")
+            startup_mount.config_generation
+            if startup_mount is not None and startup_mount.config_generation is not None
+            else new_config_id("workspace_generation")
         )
         self._reload_status = ReloadStatusCoordinator(
             store=self._workspace_state_store,

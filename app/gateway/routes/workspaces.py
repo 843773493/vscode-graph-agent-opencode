@@ -16,7 +16,7 @@ from app.gateway.routes._shared import (
     _wait_for_managed_runtime_restore_tasks,
     get_registry,
 )
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter()

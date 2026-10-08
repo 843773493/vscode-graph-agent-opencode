@@ -9,7 +9,7 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextTransportProtocol,
 )
 from app.core.trace_middleware import require_current_gateway_id
-from app.schemas.gateway import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
     SessionContextPartialErrorDTO,

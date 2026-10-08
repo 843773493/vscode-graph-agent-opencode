@@ -29,6 +29,10 @@ import {
   refreshWorkspaceSessionList,
 } from "./sessionRefresh";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import {
+  registerWorkspaceObservation,
+  useWorkspaceObservationState,
+} from "../workspace/workspaceObservationLifecycle";
 import { errorMessage } from "../../utils/errorMessage";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
@@ -57,6 +61,7 @@ export function useSessionEventStream({
   loadTerminalTurn: (turnId: string) => Promise<void>;
   setState: SetAppState;
 }) {
+  const observationState = useWorkspaceObservationState(workspaceId);
   const streamAbortRef = useRef<AbortController | null>(null);
   const lastEventCursorRef = useRef<string | null>(null);
   const lastBusinessEventAtRef = useRef<number>(Date.now());
@@ -79,13 +84,14 @@ export function useSessionEventStream({
   }, []);
 
   useEffect(() => {
-    if (!apiPort || !sessionId || !timelineReady) {
+    if (!apiPort || !sessionId || !timelineReady || observationState.paused) {
       abortCurrentStream();
       return;
     }
 
     abortCurrentStream();
     const controller = new AbortController();
+    const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     streamAbortRef.current = controller;
     const targetWorkspaceId = workspaceId;
     const targetSessionCacheKey = sessionCacheKey ?? sessionId;
@@ -280,6 +286,7 @@ export function useSessionEventStream({
     }, 120);
 
     return () => {
+      unregisterObservation();
       window.clearTimeout(connectTimerId);
       window.clearInterval(sessionListRefreshIntervalId);
       document.removeEventListener(
@@ -303,6 +310,7 @@ export function useSessionEventStream({
     sessionId,
     setState,
     timelineReady,
+    observationState,
     workspaceId,
     workspaceRequestTarget,
   ]);
@@ -313,6 +321,7 @@ export function useSessionEventStream({
       || !sessionId
       || !sessionCacheKey
       || !activeJobId
+      || observationState.paused
     ) {
       return;
     }
@@ -381,6 +390,7 @@ export function useSessionEventStream({
     };
   }, [
     activeJobId,
+    observationState,
     apiPort,
     sessionCacheKey,
     sessionId,

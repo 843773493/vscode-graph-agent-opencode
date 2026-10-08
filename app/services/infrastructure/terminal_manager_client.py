@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -24,9 +23,7 @@ class TerminalManagerClient:
         workspace_id: str,
         config_service: ConfigService | None = None,
     ) -> None:
-        configured_backend_url = backend_url or os.environ.get(
-            "BOXTEAM_TERMINAL_BACKEND_URL"
-        )
+        configured_backend_url = backend_url
         self._config_service = (
             config_service if configured_backend_url is None else None
         )

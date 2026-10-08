@@ -217,6 +217,13 @@ class SessionControlStore(
                     "session control 写事务回滚失败；原始事务异常仍优先保留: "
                     f"{rollback_error!r}"
                 )
+                try:
+                    self.close()
+                except BaseException as close_error:  # noqa: BLE001 - 关闭失败也只作为诊断附加
+                    error.add_note(
+                        "session control 关闭失败；原始事务异常仍优先保留: "
+                        f"{close_error!r}"
+                    )
             raise
 
     def _connect(self) -> sqlite3.Connection:

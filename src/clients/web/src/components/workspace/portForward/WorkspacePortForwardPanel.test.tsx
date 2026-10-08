@@ -33,6 +33,7 @@ const remoteWorkspace: GatewayWorkspace = {
   status: "ready",
   active: true,
   managed: true,
+  affected_workspace_ids: [],
   removable: true,
   system_default: false,
   remote: {

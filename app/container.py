@@ -24,7 +24,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
-from app.core.mounted_workspaces import MountedWorkspaceRegistry
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
 from app.core.path_utils import (
     SessionCatalogComponents,
     build_session_catalog_components,
@@ -431,6 +431,7 @@ class WorkspaceContainerRegistry:
                         container = build_app_container(
                             project_root=self._project_root,
                             workspace_root=mount.workspace_root,
+                            startup_mount=mount,
                         )
                     components = self.get_catalog_components(
                         mount.workspace_root / ".boxteam" / "sessions", mount.workspace_id
@@ -502,6 +503,7 @@ def _build_app_container(
     *,
     project_root: str | Path | None = None,
     workspace_root: str | Path | None = None,
+    startup_mount: MountedWorkspace | None = None,
 ) -> AppContainer:
     resolved_project_root = get_project_root(project_root)
     if workspace_root is None:
@@ -552,6 +554,7 @@ def _build_app_container(
         source_owner=workspace_source_owner,
         source_owner_workspace_id=workspace_id,
         event_channel_service=job_event_bus.event_channel_service,
+        startup_mount=startup_mount,
     )
     workspace_service = WorkspaceService(
         config_service=config_service,
@@ -560,8 +563,10 @@ def _build_app_container(
     terminal_manager_client = TerminalManagerClient(
         config_service=config_service,
         workspace_id=workspace_id,
+        backend_url=startup_mount.terminal_backend_url if startup_mount is not None else None,
     )
-    browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service)
+    browser_manager_client = BrowserManagerClient(workspace_id=workspace_id, config_service=config_service,
+        backend_url=startup_mount.browser_backend_url if startup_mount is not None else None)
     workspace_session_context_transport = GatewaySessionContextClient(
         config_service=config_service,
         local_token_supplier=get_gateway_local_token,
@@ -1006,6 +1011,7 @@ def build_app_container(
     *,
     project_root: str | Path | None = None,
     workspace_root: str | Path,
+    startup_mount: MountedWorkspace | None = None,
 ) -> AppContainer:
     """在显式工作区上下文中装配唯一完整服务图。"""
 
@@ -1015,4 +1021,5 @@ def build_app_container(
         return _build_app_container(
             project_root=project_root,
             workspace_root=resolved_root,
+            startup_mount=startup_mount,
         )

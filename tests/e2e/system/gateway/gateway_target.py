@@ -176,8 +176,7 @@ def start_remote_backend_via_ssh(
         [
             {
                 "workspace_id": backend_workspace_id,
-                "workspace_root": remote_workspace_path,
-            }
+                "workspace_root": remote_workspace_path, "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
         ],
         separators=(",", ":"),
     )

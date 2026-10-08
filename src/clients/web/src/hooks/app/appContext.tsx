@@ -4,6 +4,7 @@ import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
   GatewayRuntimeRestartResult,
+  GatewayRuntimeGroupRequest,
   AttachmentRef,
   MessageReplayRequest,
   DeliveryPolicy,
@@ -155,12 +156,14 @@ export interface AppContextType {
   reconnectGatewayWorkspace: (workspaceId: string) => Promise<void>;
   safeRestartManagedGatewayWorkspaceBackend: (
     workspaceId: string,
+    groupRequest?: GatewayRuntimeGroupRequest,
   ) => Promise<GatewayRuntimeRestartResult>;
   forceRestartManagedGatewayWorkspaceBackend: (
     workspaceId: string,
+    groupRequest?: GatewayRuntimeGroupRequest,
   ) => Promise<GatewayRuntimeRestartResult>;
-  startManagedGatewayWorkspaceBackend: (workspaceId: string) => Promise<void>;
-  stopManagedGatewayWorkspaceBackend: (workspaceId: string) => Promise<void>;
+  startManagedGatewayWorkspaceBackend: (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest) => Promise<void>;
+  stopManagedGatewayWorkspaceBackend: (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest) => Promise<void>;
   probeExternalGatewayWorkspace: (workspaceId: string) => Promise<void>;
   addManagedGatewayWorkspace: (
     payload: AddManagedGatewayWorkspaceRequest,
@@ -168,7 +171,7 @@ export interface AppContextType {
   addSshGatewayWorkspace: (
     payload: AddSshGatewayWorkspaceRequest,
   ) => Promise<void>;
-  removeGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  removeGatewayWorkspace: (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest, force?: boolean) => Promise<void>;
   renameGatewayWorkspace: (workspaceId: string, name: string) => Promise<string>;
   setGatewayWorkspaceParent: (
     workspaceId: string,

@@ -142,6 +142,15 @@ class RegistryRoutesMixin:
         runtime = self._runtimes.get(target.workspace_id)
         if runtime is None:
             raise LookupError(f"工作区运行时尚未连接: {workspace_id}")
+        if target.managed:
+            owner = runtime.backend_owner
+            if owner is None or self.backend_owner(workspace_id) is not owner:
+                raise RuntimeError("managed target 缺少唯一完整 Backend owner")
+            if owner.lock.locked():
+                raise LookupError(f"Backend 完整组正在切换路由: workspace_id={workspace_id}")
+            owner.assert_healthy()
+            if service == "workspace_api":
+                return owner.contract.backend_url
         service_url = runtime.service_urls.get(service)
         if service_url is None:
             raise LookupError(
@@ -154,8 +163,12 @@ class RegistryRoutesMixin:
         return workspace_id in self._targets
     def mark_connection_error(self, workspace_id: str, error: str) -> None:
         target = self.resolve(workspace_id)
-        target.connection_error = error
-        self._save(owner=target.owner)
+        backend_owner = self.backend_owner(workspace_id)
+        if backend_owner is not None:
+            self.mark_backend_error(backend_owner, error)
+        else:
+            target.connection_error = error
+            self._save(owner=target.owner)
     @staticmethod
     def _target_headers(target: WorkspaceTarget) -> dict[str, str]:
         if target.connection_kind != "remote_gateway":

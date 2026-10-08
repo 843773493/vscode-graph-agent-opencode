@@ -5,7 +5,9 @@ import {
 import { fetchSessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
 import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
-import type { GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
+import { listGatewayWorkspaces } from "../../gatewayApi";
+import { HttpRequestError } from "../../api/http";
+import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
 import type { SessionCatalogOutboxRuntime } from "../session/sessionCatalogOutboxRuntime";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 
@@ -40,7 +42,7 @@ interface SessionCatalogActionsInput {
     folderId?: string | null,
   ) => Promise<Session>;
   openWorkspaceSession: (workspaceId: string, sessionId: string) => Promise<void>;
-  removeGatewayWorkspace: (workspaceId: string) => Promise<void>;
+  removeGatewayWorkspace: (workspaceId: string, groupRequest?: GatewayRuntimeGroupRequest, force?: boolean) => Promise<void>;
   deleteSession: (sessionId: string, workspaceId?: string | null) => Promise<void>;
   renameSession: (
     sessionId: string,
@@ -201,17 +203,69 @@ export function useSessionCatalogActions({
     await openWorkspaceSession(workspaceId, sessionId);
   };
   const removeWorkspace = (workspaceId: string, workspaceName: string) => {
-    const label = workspaceName || workspaceId;
-    void confirm({
-      title: "删除工作区",
-      message: `从 Web Gateway 列表移除工作区“${label}”。会话文件不会被删除。`,
-      confirmText: "删除",
-      danger: true,
-    }).then(async (confirmed) => {
-      if (confirmed) {
-        await removeGatewayWorkspace(workspaceId);
+    void (async () => {
+      let groupRequest: GatewayRuntimeGroupRequest | undefined;
+      let impact = "";
+      const displayed = gatewayWorkspaces.find((item) => item.workspace_id === workspaceId);
+      if (displayed?.managed && displayed.connection_kind === "local") {
+        const snapshot = await listGatewayWorkspaces(apiPort);
+        const target = snapshot.items.find((item) => item.workspace_id === workspaceId);
+        if (!target?.managed) throw new Error("工作区已变化，请刷新后重新删除");
+        if (target.backend_generation) {
+          const members = target.affected_workspace_ids;
+          if (!members.length || !members.includes(workspaceId)) throw new Error("Backend 完整成员合同缺失");
+          groupRequest = {
+            expected_backend_generation: target.backend_generation,
+            expected_workspace_ids: members,
+            desired_workspace_ids: members.filter((id) => id !== workspaceId),
+          };
+          const names = members.map((id) => {
+            const member = snapshot.items.find((item) => item.workspace_id === id);
+            if (!member) throw new Error(`Backend 成员未登记：${id}`);
+            return `• ${member.name}（${id}）`;
+          });
+          impact = `\n\n以下完整组将先排空：\n${names.join("\n")}\n${members.length === 1
+            ? "最后成员退出后将关闭 Backend。"
+            : "其余成员将一起重启，删除目标会退出 Backend。"}`;
+        }
       }
-    }).catch((error: unknown) => {
+      const confirmed = await confirm({
+        title: "删除工作区",
+        message: `从 Web Gateway 列表移除工作区“${workspaceName || workspaceId}”。会话文件不会被删除。${impact}`,
+        confirmText: "删除",
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        await removeGatewayWorkspace(workspaceId, groupRequest);
+      } catch (error) {
+        if (!(error instanceof HttpRequestError) || error.status !== 409 || !groupRequest
+          || typeof error.detail !== "object" || error.detail === null
+          || !("status" in error.detail) || error.detail.status !== "blocked"
+          || !("blockers" in error.detail) || !Array.isArray(error.detail.blockers)) throw error;
+        if (!("workspace_id" in error.detail) || error.detail.workspace_id !== workspaceId
+          || !("backend_generation" in error.detail) || error.detail.backend_generation !== groupRequest.expected_backend_generation
+          || !("affected_workspace_ids" in error.detail) || !Array.isArray(error.detail.affected_workspace_ids)
+          || error.detail.affected_workspace_ids.length !== groupRequest.expected_workspace_ids.length
+          || error.detail.affected_workspace_ids.some((id: unknown) => typeof id !== "string" || !groupRequest.expected_workspace_ids.includes(id))) {
+          throw new Error("删除阻塞回执与已确认的 Backend 完整合同不匹配");
+        }
+        const blockers = error.detail.blockers.map((blocker: unknown) => {
+          if (typeof blocker !== "object" || blocker === null
+            || !("workspace_id" in blocker) || typeof blocker.workspace_id !== "string"
+            || !("resource_id" in blocker) || typeof blocker.resource_id !== "string"
+            || !("detail" in blocker)) throw new Error("删除阻塞回执缺少完整 blocker 身份");
+          return `${blocker.workspace_id}：${typeof blocker.detail === "string" ? blocker.detail : blocker.resource_id}`;
+        });
+        const forceConfirmed = await confirm({
+          title: "强制删除工作区",
+          message: `当前删除被阻塞：\n${blockers.join("\n")}\n\n确认后，原完整组内的活动任务将先记录为 interrupted，再关闭或重启 Backend 并删除目标。${impact}`,
+          confirmText: "中断任务并删除",
+          danger: true,
+        });
+        if (forceConfirmed) await removeGatewayWorkspace(workspaceId, groupRequest, true);
+      }
+    })().catch((error: unknown) => {
       setStatus(`删除工作区失败: ${errorMessage(error)}`);
     });
   };

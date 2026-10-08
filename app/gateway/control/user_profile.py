@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.gateway.config import ConfiguredTheme, GatewayConfig
 from app.gateway.control.user_access import USER_ID_PATTERN
-from app.schemas.gateway import WebUISettingsDTO
+from app.schemas.gateway.ui_settings import WebUISettingsDTO
 
 _PROFILE_VERSION = 1
 _PROFILE_GITIGNORE = """# 由 BoxTeam 管理；个人主题和 profile.jsonc 可以提交到用户自己的 Git 仓库。

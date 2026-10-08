@@ -1,12 +1,224 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
+from uuid import uuid4
 
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendOwner,
+)
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
 
 class RegistryRuntimeMixin:
+    def backend_owner(self, workspace_id: str) -> ManagedBackendOwner | None:
+        self.resolve(workspace_id)
+        return next((owner for owner in self._backend_owners.values() if workspace_id in owner.contract.workspace_ids), None)
+
+    def backend_owners(self) -> tuple[ManagedBackendOwner, ...]:
+        return tuple(self._backend_owners.values())
+
+    def register_backend_owner(self, owner: ManagedBackendOwner) -> None:
+        """在启动任何进程前登记显式完整合同，失败句柄仍有唯一回收入口。"""
+        if owner.contract.owner_id in self._backend_owners:
+            raise ValueError("Backend owner 已登记")
+        for member in owner.contract.members:
+            target = self.resolve(member.workspace_id)
+            if self.backend_owner(member.workspace_id) is not None:
+                raise ValueError("Backend 成员已属于其它 owner")
+            if target.connection_kind != "local" or not target.managed or target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
+                raise ValueError("Backend 完整合同与已登记 target 不匹配")
+        previous_commit = getattr(self, "_last_committed_snapshot", None)
+        self._backend_owners[owner.contract.owner_id] = owner
+        try:
+            self._save(owner="system")
+        except BaseException:
+            if getattr(self, "_last_committed_snapshot", None) is previous_commit:
+                self._backend_owners.pop(owner.contract.owner_id, None)
+            raise
+
+    def discard_stopped_backend_owner(self, owner: ManagedBackendOwner) -> None:
+        if owner.lock.locked() or self.backend_topology_lock.locked():
+            raise RuntimeError("Backend 完整组生命周期操作进行中")
+        if len(owner.contract.members) != 1 or owner.process is not None or owner.unpublished_runtimes or any(member_id in self._runtimes for member_id in owner.contract.workspace_ids):
+            raise ValueError("只能释放没有运行时的显式 singleton owner")
+        self._backend_owners.pop(owner.contract.owner_id)
+        previous_commit = getattr(self, "_last_committed_snapshot", None)
+        try:
+            self._save(owner="system")
+        except BaseException:
+            if getattr(self, "_last_committed_snapshot", None) is previous_commit:
+                self._backend_owners[owner.contract.owner_id] = owner
+            raise
+
+    def publish_backend_runtime(
+        self, owner: ManagedBackendOwner, contract: ManagedBackendContract | None,
+        runtimes: dict[str, WorkspaceRuntime] | None,
+        *, removed_target_id: str | None = None,
+    ) -> None:
+        """原子公布在线 runtime、停机恢复合同（runtimes=None）或完整退出。"""
+        stopped = runtimes is None
+        published_runtimes = runtimes or {}
+        desired_ids = contract.workspace_ids if contract is not None else ()
+        if (stopped or contract is None) and (
+            owner.process is not None or owner.unpublished_runtimes
+            or not owner.lock.locked() or not self.backend_topology_lock.locked()
+        ):
+            raise RuntimeError("停机或空目标只能由拓扑及 owner 锁内受控关闭完成后提交")
+        if not stopped and set(published_runtimes) != set(desired_ids):
+            raise ValueError("公布 Backend 必须包含完整成员 runtime")
+        if contract is not None and contract.owner_id != owner.contract.owner_id:
+            raise ValueError("公布合同不能改变唯一 Backend owner ID")
+        registered = self._backend_owners.get(owner.contract.owner_id)
+        if registered is not None and registered is not owner:
+            raise ValueError("Backend owner ID 已由另一个唯一对象持有")
+        previous_contract = owner.contract
+        if removed_target_id is not None:
+            self.validate_target_removal(removed_target_id, owner="manual_crud")
+            if removed_target_id not in previous_contract.workspace_ids or removed_target_id in desired_ids:
+                raise ValueError("受控删除只能移除本 owner 中已退出的路由目标")
+        previous_commit = getattr(self, "_last_committed_snapshot", None)
+        affected = set(previous_contract.workspace_ids) | set(desired_ids)
+        staged_targets = dict(self._targets)
+        staged_runtimes = dict(self._runtimes)
+        staged_owners = dict(self._backend_owners)
+        runtime_urls = {}
+        for member in contract.members if contract is not None else ():
+            target = self.resolve(member.workspace_id)
+            if target.connection_kind != "local" or not target.managed:
+                raise ValueError("Backend 成员必须是已登记 local managed target")
+            if target.backend_workspace_id != member.mount.workspace_id or target.root_path != str(member.mount.workspace_root):
+                raise RuntimeError("Backend 成员合同与 target UUID/根不匹配")
+            other = self.backend_owner(member.workspace_id)
+            if other is not None and other is not owner:
+                if other.process is not None or other.unpublished_runtimes:
+                    raise ValueError("不能合并另一个活动 Backend owner")
+                if set(other.contract.workspace_ids) - set(contract.workspace_ids):
+                    raise ValueError("加入成员仍属于另一完整组；先显式移出原组")
+                staged_owners.pop(other.contract.owner_id, None)
+            if not stopped:
+                runtime = published_runtimes[member.workspace_id]
+                if runtime.service_urls.get("terminal_manager") != member.mount.terminal_backend_url or runtime.service_urls.get("browser_manager") != member.mount.browser_backend_url:
+                    raise RuntimeError("Backend mount 服务地址与完整 runtime 不匹配")
+                runtime_urls[member.workspace_id] = {**runtime.service_urls, "workspace_api": contract.backend_url}
+                staged_runtimes[member.workspace_id] = runtime
+            staged_targets[member.workspace_id] = replace(
+                target, backend_url=contract.backend_url,
+                local_service_urls={name: url for name, url in (
+                    ("terminal_manager", member.mount.terminal_backend_url),
+                    ("browser_manager", member.mount.browser_backend_url),
+                ) if url is not None},
+                desired_running=not stopped, connection_error=None,
+                target_generation=f"target_generation_{uuid4().hex}",
+                runtime_lease_id=None if stopped else f"runtime_lease_{uuid4().hex}",
+            )
+        for workspace_id in affected:
+            self._assert_route_references_drained(workspace_id)
+        # 停机合同清理全部残余辅助服务；失败引用与旧权威合同保留供重试。
+        closing_ids = affected if stopped else set(previous_contract.workspace_ids) - set(desired_ids)
+        for workspace_id in closing_ids:
+            runtime = self._runtimes.get(workspace_id)
+            if runtime is not None:
+                runtime.close()
+            staged_runtimes.pop(workspace_id, None)
+            if workspace_id not in desired_ids:
+                staged_targets[workspace_id] = replace(
+                    self.resolve(workspace_id), backend_url="", local_service_urls={},
+                    desired_running=False, connection_error=None, runtime_lease_id=None,
+                    target_generation=f"target_generation_{uuid4().hex}",
+                )
+        if removed_target_id is not None:
+            staged_targets.pop(removed_target_id)
+            for workspace_id, target in tuple(staged_targets.items()):
+                if target.parent_workspace_id == removed_target_id:
+                    staged_targets[workspace_id] = replace(target, parent_workspace_id=None)
+        if contract is None:
+            staged_owners.pop(previous_contract.owner_id)
+        else:
+            staged_owners[contract.owner_id] = owner
+
+        def publish() -> None:
+            if contract is not None:
+                owner.contract = contract
+                if stopped:
+                    owner.error = None
+            self._targets = staged_targets
+            self._runtimes = staged_runtimes
+            self._backend_owners = staged_owners
+            for workspace_id, runtime in published_runtimes.items():
+                runtime.backend_owner = owner
+                runtime.service_urls = runtime_urls[workspace_id]
+            self._route_signatures = {
+                workspace_id: self._route_signature(target) for workspace_id, target in staged_targets.items()
+            }
+
+        try:
+            self._save(
+                owner="registry" if removed_target_id is not None else "system", targets=staged_targets,
+                backend_contracts=tuple(
+                    contract if candidate_owner is owner else candidate_owner.contract
+                    for candidate_owner in staged_owners.values()
+                ),
+                publish=publish,
+            )
+        except BaseException as error:
+            if getattr(self, "_last_committed_snapshot", None) is not previous_commit:
+                error.add_note("Backend 完整合同已提交；提交观察者失败，不能回滚为旧合同")
+            raise
+        finally:
+            if getattr(self, "_last_committed_snapshot", None) is not previous_commit:
+                for workspace_id, runtime in published_runtimes.items():
+                    if owner.unpublished_runtimes.get(workspace_id) is runtime:
+                        owner.unpublished_runtimes.pop(workspace_id)
+                for workspace_id in affected:
+                    self.invalidate_route(workspace_id)
+
+    def mark_backend_error(self, owner: ManagedBackendOwner, error: str) -> None:
+        staged_targets = dict(self._targets)
+        for workspace_id in owner.contract.workspace_ids:
+            staged_targets[workspace_id] = replace(self.resolve(workspace_id), connection_error=error)
+
+        def publish() -> None:
+            owner.error = error
+            for workspace_id in owner.contract.workspace_ids:
+                self.resolve(workspace_id).connection_error = error
+                self.invalidate_route(workspace_id)
+
+        self._save(owner="system", targets=staged_targets, publish=publish)
+
+    def stop_backend_owner(self, owner: ManagedBackendOwner) -> None:
+        for workspace_id in owner.contract.workspace_ids:
+            target = self.resolve(workspace_id)
+            if target.system_default or not target.removable:
+                raise PermissionError(f"默认工作区不能关闭: {target.name}")
+            self._assert_route_references_drained(workspace_id)
+        owner.close()
+        errors = []
+        for workspace_id in owner.contract.workspace_ids:
+            runtime = self._runtimes.get(workspace_id)
+            if runtime is not None:
+                try:
+                    runtime.close()
+                except Exception as error:  # noqa: BLE001 — 尝试全部成员，失败 runtime 留待整组 start 或关闭重试。
+                    errors.append(f"{workspace_id}: {error}")
+                else:
+                    self._runtimes.pop(workspace_id)
+            self.invalidate_route(workspace_id)
+            target = self.resolve(workspace_id)
+            target.desired_running = False
+            target.connection_error = None
+        if self._active_workspace_id in owner.contract.workspace_ids:
+            self._active_workspace_id = self._default_workspace_id()
+        if errors:
+            owner.error = "完整 Backend 已停止，成员辅助服务关闭失败: " + "; ".join(errors)
+            for workspace_id in owner.contract.workspace_ids:
+                self.resolve(workspace_id).connection_error = owner.error
+        self._save(owner="system")
+        if errors:
+            raise RuntimeError(owner.error)
+
     def managed_runtime(self, workspace_id: str) -> WorkspaceRuntime:
         target = self.resolve(workspace_id)
         if not target.managed:
@@ -86,20 +298,22 @@ class RegistryRuntimeMixin:
                 "runtime_generation": self._runtime_generation,
             }
         elif consumer_id == "workspace-process":
-            runtimes = 0
-            for workspace_id, runtime in self._runtimes.items():
-                target = self.resolve(workspace_id)
-                if target.connection_kind != "local":
+            contracts = []
+            for owner in self._backend_owners.values():
+                if owner.process is None:
                     continue
-                runtime.assert_healthy()
-                if runtime.gateway_generation not in {None, generation}:
-                    raise RuntimeError(
-                        "Gateway Workspace runtime generation 不匹配: "
-                        f"workspace_id={workspace_id}, "
-                        f"expected={generation}, actual={runtime.gateway_generation}"
-                    )
-                runtimes += 1
-            details = {"local_runtime_count": runtimes}
+                owner.assert_healthy()
+                if owner.gateway_generation not in {None, generation}:
+                    raise RuntimeError("Backend owner Gateway generation 不匹配")
+                if any(self._runtimes.get(member.workspace_id) is None for member in owner.contract.members):
+                    raise RuntimeError("Backend owner 缺少完整成员 runtime")
+                contracts.append({
+                    "owner_id": owner.contract.owner_id, "backend_generation": owner.contract.generation,
+                    "affected_workspace_ids": list(owner.contract.workspace_ids),
+                    "mount_manifest_digest": owner.contract.manifest_digest,
+                })
+            details = {"managed_backend_count": len(contracts), "backends": contracts}
+
         else:
             remote_targets = 0
             remote_runtimes = 0
@@ -182,60 +396,34 @@ class RegistryRuntimeMixin:
             )
         self._runtime_generation = previous_generation
         self._save(owner="system")
-    def prepare_workspace_process_generation(
-        self,
-        generation: str,
-    ) -> dict[str, str | None]:
+    def prepare_workspace_process_generation(self, generation: str) -> dict[str, str | None]:
         if not generation.strip():
             raise ValueError("Workspace process generation 不能为空")
         previous: dict[str, str | None] = {}
-        for workspace_id, runtime in self._runtimes.items():
-            target = self.resolve(workspace_id)
-            if target.connection_kind != "local":
-                continue
-            runtime.assert_healthy()
-            previous[workspace_id] = runtime.gateway_generation
+        for owner in self._backend_owners.values():
+            if owner.process is not None:
+                owner.assert_healthy()
+                previous[owner.contract.owner_id] = owner.gateway_generation
         return previous
-    def apply_workspace_process_generation(
-        self,
-        generation: str,
-    ) -> dict[str, str | None]:
+
+    def apply_workspace_process_generation(self, generation: str) -> dict[str, str | None]:
         previous = self.prepare_workspace_process_generation(generation)
-        for workspace_id in previous:
-            self._runtimes[workspace_id].gateway_generation = generation
+        for owner_id in previous:
+            self._backend_owners[owner_id].gateway_generation = generation
         return previous
+
     def promote_workspace_process_generation(self, generation: str) -> None:
-        for workspace_id, runtime in self._runtimes.items():
-            target = self.resolve(workspace_id)
-            if (
-                target.connection_kind == "local"
-                and runtime.gateway_generation != generation
-            ):
-                raise RuntimeError(
-                    "Workspace process generation promotion 不匹配: "
-                    f"workspace_id={workspace_id}, expected={generation}, "
-                    f"actual={runtime.gateway_generation}"
-                )
-    def rollback_workspace_process_generation(
-        self,
-        generation: str,
-        previous: dict[str, str | None],
-    ) -> None:
-        for workspace_id, previous_generation in previous.items():
-            runtime = self._runtimes.get(workspace_id)
-            if runtime is None:
-                raise RuntimeError(
-                    "Workspace process generation 回退发现 runtime 已被替换: "
-                    f"workspace_id={workspace_id}"
-                )
-            if runtime.gateway_generation == previous_generation:
-                continue
-            if runtime.gateway_generation != generation:
-                raise RuntimeError(
-                    "Workspace process generation 回退发现 runtime 已被替换: "
-                    f"workspace_id={workspace_id}"
-                )
-            runtime.gateway_generation = previous_generation
+        for owner in self._backend_owners.values():
+            if owner.process is not None and owner.gateway_generation != generation:
+                raise RuntimeError("Backend owner Gateway generation promotion 不匹配")
+
+    def rollback_workspace_process_generation(self, generation: str, previous: dict[str, str | None]) -> None:
+        for owner_id, previous_generation in previous.items():
+            owner = self._backend_owners.get(owner_id)
+            if owner is None or owner.gateway_generation not in {generation, previous_generation}:
+                raise RuntimeError("Backend owner Gateway generation 回退发现 owner 已替换")
+            owner.gateway_generation = previous_generation
+
     def prepare_remote_projection_generation(
         self,
         generation: str,
@@ -283,24 +471,6 @@ class RegistryRuntimeMixin:
                     f"connection_id={connection_id}"
                 )
             runtime.gateway_generation = previous_generation
-    def stop_managed_runtime(self, workspace_id: str) -> None:
-        target = self.resolve(workspace_id)
-        if target.connection_kind != "local" or not target.managed:
-            raise ValueError(f"工作区不属于当前 Gateway 的本地托管目标: {workspace_id}")
-        if target.system_default or not target.removable:
-            raise PermissionError(f"默认工作区不能关闭: {target.name}")
-        self._assert_route_references_drained(workspace_id)
-        runtime = self._runtimes.get(workspace_id)
-        if runtime is None:
-            raise ValueError(f"工作区后端尚未启动: {target.name}")
-        self.invalidate_route(workspace_id)
-        runtime.close()
-        self._runtimes.pop(workspace_id)
-        target.desired_running = False
-        target.connection_error = None
-        if self._active_workspace_id == workspace_id:
-            self._active_workspace_id = self._default_workspace_id()
-        self._save(owner=target.owner)
     def close(
         self,
         *,
@@ -313,7 +483,23 @@ class RegistryRuntimeMixin:
         for workspace_id in tuple(self._targets):
             self.invalidate_route(workspace_id)
 
-        local_runtimes = list(self._runtimes.items())
+        failed_backend_members: set[str] = set()
+        for backend_owner in self._backend_owners.values():
+            try:
+                # 未发布候选不属于可移交合同，必须先关闭 Backend，再回收其辅助服务。
+                if not backend_owner.unpublished_runtimes and (
+                    preserve_workspace_backends or (detach_adopted_managed_processes and backend_owner.adopted)
+                ):
+                    backend_owner.detach()
+                else:
+                    backend_owner.close()
+            except Exception as error:  # noqa: BLE001 — 完整回收后汇总，各失败 owner 保留依赖供重试。
+                failed_backend_members.update(backend_owner.contract.workspace_ids)
+                errors.append(f"{backend_owner.contract.owner_id}: {error}")
+        local_runtimes = [
+            (workspace_id, runtime) for workspace_id, runtime in self._runtimes.items()
+            if workspace_id not in failed_backend_members
+        ]
         remote_runtimes = list(self._remote_gateway_runtimes.items())
         retired_remote_runtimes = [
             (connection_id, runtime)
@@ -329,11 +515,6 @@ class RegistryRuntimeMixin:
         if preserve_terminal_managers:
             for _, runtime in local_runtimes:
                 runtime.detach_process("terminal_manager")
-        if preserve_workspace_backends:
-            for workspace_id, runtime in local_runtimes:
-                target = self._targets.get(workspace_id)
-                if target is not None and target.managed:
-                    runtime.detach_process("workspace_api")
 
         for runtime_id, runtime in (
             *local_runtimes,

@@ -33,17 +33,6 @@ message AddRemoteGatewayRequest {
   optional int64 remote_gateway_port = 8;
 }
 
-message AddSshWorkspaceRequest {
-  optional string name = 1;
-  optional string connection_workspace_id = 2;
-  optional string ssh_config_host = 3;
-  optional string host = 4;
-  optional int64 port = 5;
-  optional string username = 6;
-  optional string private_key_path = 7;
-  optional int64 remote_gateway_port = 8;
-}
-
 message ChangePortForwardLabelRequest {
   optional string label = 1;
 }
@@ -103,6 +92,8 @@ message FederationWorkspaceDTO {
   string connection_kind = 5;
   repeated string services = 6;
   string backend_workspace_id = 7;
+  optional string backend_generation = 8;
+  repeated string affected_workspace_ids = 9;
 }
 
 message FederationWorkspaceListDTO {
@@ -285,12 +276,24 @@ message GatewayResourceScopeErrorDTO {
   string message = 3;
 }
 
+message GatewayRuntimeDesiredWorkspaceSet {
+  repeated string workspace_ids = 1;
+}
+
+message GatewayRuntimeGroupRequest {
+  optional string expected_backend_generation = 1;
+  repeated string expected_workspace_ids = 2;
+  reserved 3;
+  GatewayRuntimeDesiredWorkspaceSet desired_workspace_ids = 4;
+}
+
 message GatewayRuntimeBlockerDTO {
   string kind = 1;
   string resource_id = 2;
   string session_id = 3;
   string status = 4;
   optional string detail = 5;
+  string workspace_id = 6;
 }
 
 message GatewayRuntimeRestartResultDTO {
@@ -299,6 +302,8 @@ message GatewayRuntimeRestartResultDTO {
   bool forced = 3;
   repeated GatewayRuntimeBlockerDTO blockers = 4;
   GatewayWorkspaceListDTO workspaces = 5;
+  optional string backend_generation = 6;
+  repeated string affected_workspace_ids = 7;
 }
 
 message GatewayRuntimeStateResultDTO {
@@ -306,6 +311,8 @@ message GatewayRuntimeStateResultDTO {
   string status = 2;
   repeated GatewayRuntimeBlockerDTO blockers = 3;
   GatewayWorkspaceListDTO workspaces = 4;
+  optional string backend_generation = 5;
+  repeated string affected_workspace_ids = 6;
 }
 
 message GatewayServiceStatusDTO {
@@ -450,6 +457,8 @@ message GatewayWorkspaceDTO {
   optional string connection_error = 16;
   string checked_at = 17;
   optional string backend_workspace_id = 18;
+  optional string backend_generation = 19;
+  repeated string affected_workspace_ids = 20;
 }
 
 message GatewayWorkspaceListDTO {

@@ -2,13 +2,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.gateway.config import ConfiguredTheme, GatewayConfig
-from app.schemas.gateway import (
-    GatewayThemeBackgroundDTO,
-    GatewayThemeCatalogDTO,
-    GatewayThemeOptionDTO,
-    ResolvedGatewayThemeDTO,
-    WebUISettingsDTO,
-)
 from app.gateway.theme.assets import import_ui_asset_file, resolve_ui_asset
 from app.gateway.theme.builtins import VARIANTS, WARM_TOKENS
 from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
@@ -17,6 +10,13 @@ from app.gateway.theme.models import ThemeDefinition
 from app.gateway.theme.validation import (
     validate_background_display_tokens,
     validate_token,
+)
+from app.schemas.gateway.ui_settings import (
+    GatewayThemeBackgroundDTO,
+    GatewayThemeCatalogDTO,
+    GatewayThemeOptionDTO,
+    ResolvedGatewayThemeDTO,
+    WebUISettingsDTO,
 )
 
 

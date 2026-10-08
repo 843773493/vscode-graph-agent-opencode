@@ -13,6 +13,7 @@ import httpx
 import pytest
 import websockets
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     seed_historical_terminal_checkpoint,
@@ -47,7 +48,6 @@ def terminal_manager_env(
     updates = {
         "WORKSPACE_ROOT": workspace_root,
         "BOXTEAM_WORKSPACE_ID": load_or_create_workspace_id(Path(workspace_root)),
-        "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{backend_port}",
         "BOXTEAM_TERMINAL_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
     }
     previous = {key: os.environ.get(key) for key in updates}
@@ -60,6 +60,17 @@ def terminal_manager_env(
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+@pytest.fixture(scope="module")
+def e2e_startup_mount(
+    terminal_manager_processes: tuple[int, int], e2e_workspace_root_path: str,
+) -> MountedWorkspace:
+    root = Path(e2e_workspace_root_path).resolve()
+    return MountedWorkspace(
+        load_or_create_workspace_id(root), root,
+        terminal_backend_url=f"http://127.0.0.1:{terminal_manager_processes[0]}",
+    )
 
 
 @pytest.fixture(scope="module")

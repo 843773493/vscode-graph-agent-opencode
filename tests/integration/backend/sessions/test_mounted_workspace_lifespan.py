@@ -2,20 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
+import litellm
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
 
 from app import container as container_module
 from app import main
 from app.agents import agent_factory
 from app.container import AppContainer
+from app.core.job_event_bus import EventType
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import (
     get_workspace_id,
     get_workspace_root,
@@ -26,7 +29,11 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.goal import GoalStatus
 from app.services.business.job.service import JobState
+from app.services.infrastructure.config import ConfigRestartRequiredError
+from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.message_stream_store import MessageStreamNotFoundError
 from app.services.infrastructure.resource_platform.bootstrap import ResourcePlatform
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.test_runner_cancellation import (
     RunnerCase,
@@ -36,9 +43,34 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
 from tests.support.workspaces import prepare_default_test_workspace
 
 
-class _WorkspaceModel(FakeMessagesListChatModel):
-    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
-        return self
+class _ModelProtocolStream:
+    received_finish_reason = False
+
+    def __init__(self, text: str, request: dict[str, object]) -> None:
+        self.text = text
+        self.logging_obj = SimpleNamespace(model_call_details={
+            "call_type": "acompletion", "custom_llm_provider": request["custom_llm_provider"],
+            "model": request["model"],
+            "additional_args": {
+                "api_base": request.get("api_base"), "complete_input_dict": request,
+            },
+        })
+
+    async def __aiter__(self):
+        yield {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+        yield {"choices": [{"index": 0, "delta": {"content": self.text}, "finish_reason": None}]}
+        self.received_finish_reason = True
+        yield {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _ModelProtocol:
+    async def completion(self, *_args, **kwargs):
+        assert kwargs["stream"] is True
+        assert isinstance(kwargs["messages"], list) and kwargs["messages"]
+        return _ModelProtocolStream(f"工作区 {get_workspace_id()} 的真实编译图", kwargs)
 
 
 @dataclass
@@ -60,7 +92,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
         roots[load_or_create_workspace_id(root)] = root
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
-    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{"workspace_id": identity, "workspace_root": str(root)} for identity, root in roots.items()]))
+    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{"workspace_id": identity, "workspace_root": str(root), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None} for identity, root in roots.items()]))
     monkeypatch.setattr(main, "_model_stream_controller", None)
     case = MountedCase(roots)
     factory = container_module.build_app_container
@@ -100,15 +132,25 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(container_module, "build_app_container", build)
 
-    def model_runtime(**kwargs):
+    model_builder = agent_factory.build_model_from_provider
+    protocol = _ModelProtocol()
+
+    async def completion_stub(*args, **kwargs):
+        return await protocol.completion(*args, **kwargs)
+
+    monkeypatch.setattr(litellm, "acompletion", completion_stub)
+    monkeypatch.setattr(litellm, "aresponses", completion_stub)
+
+    def model_runtime(*args, **kwargs):
         owner = current_session_thread_owner()
         assert owner is not None
         identity, root = get_workspace_id(), get_workspace_root()
         assert roots[identity] == root
         case.compiled.append((identity, root, owner.session_id, owner.thread_id))
-        return {"model": _WorkspaceModel(name="BoxteamLiteLLMChatModel", responses=[AIMessage(content=f"工作区 {identity} 的真实编译图")]), "system_prompt": "返回固定回复", "model_routing": None}
+        return model_builder(*args, **kwargs)
 
-    monkeypatch.setattr(agent_factory, "build_runtime_for_agent", model_runtime)
+    # 只在外部模型传输边界返回协议桩；真实 model binding、说明来源和 sealed dispatch 保留。
+    monkeypatch.setattr(agent_factory, "build_model_from_provider", model_runtime)
     yield case
 
 
@@ -208,7 +250,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
         await model_release.wait()
         raise RuntimeError("受控模型失败")
 
-    monkeypatch.setattr(_WorkspaceModel, "_agenerate", blocked_model)
+    monkeypatch.setattr(_ModelProtocol, "completion", blocked_model)
 
     async def run_lifespan() -> None:
         async with main.lifespan(main.app):
@@ -351,4 +393,197 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
             await asyncio.wait_for(task, 8)
     assert not containers[0].job_service._finalization_tasks
     assert not containers[0].goal_runtime_service._tasks
+    assert_closed(mounted_case)
+
+
+@pytest.mark.asyncio
+async def test_double_mount_event_trace_message_background_and_catalog_isolation(
+    mounted_case: MountedCase,
+) -> None:
+    async with main.lifespan(main.app):
+        a, b = mounted_case.containers
+        sessions = []
+        for container in (a, b):
+            with workspace_context(
+                container.workspace_id, container.workspace_root,
+                session_catalog=container.session_catalog,
+            ):
+                sessions.append((await _session(RunnerCase(container, container.workspace_root)))[0])
+        session_a, session_b = sessions
+        job_id = "job_same_id_on_both_mounts"
+        subscriptions = [
+            await container.job_event_bus.subscribe(job_id, subscriber_kind="double-mount-integration")
+            for container in (a, b)
+        ]
+        writers = []
+        message_subscriptions = []
+        try:
+            event_a = await a.job_event_bus.publish(job_id, EventType.JOB_CREATED, {
+                "session_id": session_a, "message": "仅 A 的事件", "agent_id": "default",
+            })
+            assert (await asyncio.wait_for(subscriptions[0].get(), 2)).event_id == event_a.event_id
+            assert subscriptions[1].empty()
+            event_b = await b.job_event_bus.publish(job_id, EventType.JOB_CREATED, {
+                "session_id": session_b, "message": "仅 B 的事件", "agent_id": "default",
+            })
+            assert (await asyncio.wait_for(subscriptions[1].get(), 2)).event_id == event_b.event_id
+            assert subscriptions[0].empty()
+            assert [event.event_id for event in a.trace_event_store.read_events(session_a)] == [event_a.event_id]
+            assert [event.event_id for event in b.trace_event_store.read_events(session_b)] == [event_b.event_id]
+            nodes = [
+                container.session_catalog.resolver.resolve_session_node_for_runtime(session_id)
+                for container, session_id in zip((a, b), sessions, strict=True)
+            ]
+            for container, node in zip((a, b), nodes, strict=True):
+                assert node.is_relative_to(container.workspace_root / ".boxteam/sessions")
+                assert (node / "logs/traces/events.jsonl").is_file()
+            for container, session_id in zip((a, b), sessions, strict=True):
+                writer = await container.message_stream_store.open(
+                    session_id=session_id, turn_id=job_id, job_id=job_id,
+                )
+                writers.append(writer)
+                message_subscriptions.append(await container.message_stream_store.subscribe(writer.turn_stream_id))
+            await writers[0].commit("block.started", {
+                "block_id": "same-block", "block_index": 0, "carrier_type": "text",
+            }, block_id="same-block")
+            assert (await asyncio.wait_for(message_subscriptions[0].get(), 2)).event["type"] == "block.started"
+            assert message_subscriptions[1].queue.empty()
+            await writers[0].commit("block.delta", {
+                "block_id": "same-block", "carrier_type": "text", "operation": "append", "text": "仅 A",
+            }, block_id="same-block")
+            await writers[1].commit("block.started", {
+                "block_id": "same-block", "block_index": 0, "carrier_type": "text",
+            }, block_id="same-block")
+            assert (await asyncio.wait_for(message_subscriptions[1].get(), 2)).event["type"] == "block.started"
+            await writers[1].commit("block.delta", {
+                "block_id": "same-block", "carrier_type": "text", "operation": "append", "text": "仅 B",
+            }, block_id="same-block")
+            for index, (container, other, session_id, node) in enumerate(zip(
+                (a, b), (b, a), sessions, nodes, strict=True,
+            )):
+                await writers[index].close_completed()
+                state = await container.message_stream_store.get_state(writers[index].turn_stream_id)
+                assert state["blocks"][0]["text"] == ("仅 A" if index == 0 else "仅 B")
+                events = await container.message_stream_store.list_events(
+                    session_id=session_id, turn_stream_id=writers[index].turn_stream_id,
+                )
+                assert events[-1]["type"] == "stream.completed"
+                assert (node / f"message_streams/{writers[index].turn_stream_id}.jsonl").is_file()
+                with pytest.raises(MessageStreamNotFoundError):
+                    await other.message_stream_store.get_state(writers[index].turn_stream_id)
+
+            started_a, started_b, finish_b = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+            async def background_a():
+                started_a.set()
+                await asyncio.Event().wait()
+
+            async def background_b():
+                started_b.set()
+                await finish_b.wait()
+                return "B 完成"
+
+            handle_a = a.background_task_registry.spawn(session_a, "shared-name", background_a)
+            handle_b = b.background_task_registry.spawn(session_b, "shared-name", background_b)
+            await asyncio.wait_for(asyncio.gather(started_a.wait(), started_b.wait()), 2)
+            await a.background_task_registry.cancel(session_a, handle_a.task_id)
+            task_b = b.background_task_registry.get_task(session_b, handle_b.task_id)
+            assert task_b is not None and not task_b.done()
+            assert handle_b.status == "running"
+            finish_b.set()
+            await asyncio.wait_for(task_b, 2)
+            assert [(handle.task_id, handle.status) for handle in a.background_task_registry.list_closed_handles(session_a)] == [(handle_a.task_id, "cancelled")]
+            assert [(handle.task_id, handle.status) for handle in b.background_task_registry.list_closed_handles(session_b)] == [(handle_b.task_id, "completed")]
+            assert [record["task_id"] for record in json.loads((nodes[0] / "resources/background_tasks.json").read_text())] == [handle_a.task_id]
+            assert [record["task_id"] for record in json.loads((nodes[1] / "resources/background_tasks.json").read_text())] == [handle_b.task_id]
+
+            store_a, store_b = (container.session_catalog.resolver.catalog_store for container in (a, b))
+            before_a, before_b = store_a.current_generation(), store_b.current_generation()
+            locked, reader_started, release = threading.Event(), threading.Event(), threading.Event()
+
+            def hold_a():
+                with store_a.write_transaction() as connection:
+                    connection.execute("SELECT COUNT(*) FROM nodes")
+                    locked.set()
+                    assert release.wait(5), "A 事务未收到释放信号"
+
+            def read_a():
+                reader_started.set()
+                return store_a.current_generation()
+
+            def write_b():
+                with store_b.write_transaction() as connection:
+                    connection.execute("SELECT COUNT(*) FROM nodes")
+                return store_b.current_generation()
+
+            holding = asyncio.create_task(asyncio.to_thread(hold_a))
+            await asyncio.wait_for(asyncio.to_thread(locked.wait), 2)
+            reading = asyncio.create_task(asyncio.to_thread(read_a))
+            try:
+                await asyncio.wait_for(asyncio.to_thread(reader_started.wait), 2)
+                assert await asyncio.wait_for(asyncio.to_thread(write_b), 2) == before_b + 1
+                assert not reading.done(), "A 读绕过了同一 catalog 真实事务锁"
+            finally:
+                release.set()
+                await asyncio.wait_for(holding, 2)
+            assert await asyncio.wait_for(reading, 2) == before_a + 1
+        finally:
+            for container, subscription in zip((a, b), subscriptions, strict=True):
+                await container.job_event_bus.unsubscribe(job_id, subscription, reason="double-mount-test-completed")
+            for container, subscription in zip((a, b), message_subscriptions, strict=False):
+                await container.message_stream_store.unsubscribe(subscription)
+    assert_closed(mounted_case)
+
+
+@pytest.mark.asyncio
+async def test_double_mount_consumes_each_explicit_candidate_and_ignores_process_candidate(
+    mounted_case: MountedCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mounts = []
+    expected = []
+
+    async def require_restart(*_args):
+        raise ConfigRestartRequiredError("隔离工作区配置需要重启", changed_sections=("logger",))
+
+    for identity, root in mounted_case.roots.items():
+        with WorkspaceStateStore(workspace_root=root) as store:
+            config = ConfigService(workspace_root=root, workspace_state_store=store)
+            config.validate_workspace_config()
+            agent_id = config.get_snapshot().to_dict()["default_agent"]
+            prompt = f"仅挂载工作区 {identity} 的候选说明"
+            # 日志属于同一进程，两个 mount 保持同一值；工作区说明各自独立。
+            (root / ".boxteam/workspace.jsonc").write_text(json.dumps({
+                "logger": {"level": "debug"},
+                "agents": {agent_id: {"instructions": {"system_prompt": prompt}}},
+            }))
+            with pytest.raises(ConfigRestartRequiredError):
+                await config.reload(candidate_applier=require_restart)
+            pending = store.get_pending_config_candidate(config_domain="workspace")
+            assert pending is not None
+            assert pending.candidate_ref and pending.target_generation and pending.fencing_token
+            mounts.append(MountedWorkspace(
+                identity, root.resolve(), config_candidate_ref=pending.candidate_ref,
+                config_generation=pending.target_generation, config_fencing_token=pending.fencing_token,
+            ))
+            expected.append((agent_id, prompt, pending))
+    assert expected[0][2].effective_digest != expected[1][2].effective_digest
+    assert mounts[0].config_candidate_ref != mounts[1].config_candidate_ref
+    assert mounts[0].config_generation != mounts[1].config_generation
+    assert mounts[0].config_fencing_token != mounts[1].config_fencing_token
+    monkeypatch.setenv("BOXTEAM_CONFIG_CANDIDATE_REF", mounts[0].config_candidate_ref)
+    monkeypatch.setenv("BOXTEAM_CONFIG_GENERATION", mounts[0].config_generation)
+    monkeypatch.setenv("BOXTEAM_CONFIG_FENCING_TOKEN", mounts[0].config_fencing_token)
+    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount.to_payload() for mount in mounts]))
+    async with main.lifespan(main.app):
+        for container, (agent_id, prompt, pending) in zip(mounted_case.containers, expected, strict=True):
+            proof = container.config_service.get_loaded_config_proof()
+            snapshot = container.config_service.get_snapshot().to_dict()
+            assert snapshot["logger"]["level"] == "debug"
+            assert snapshot["agents"][agent_id]["instructions"]["system_prompt"] == prompt
+            assert proof["loaded_source"] == "pending"
+            assert proof["candidate_id"] == pending.candidate_id
+            assert proof["candidate_digest"] == pending.candidate_digest
+            assert proof["effective_digest"] == pending.effective_digest
+            assert proof["generation_id"] == pending.target_generation
+            assert proof["fencing_token_digest"] == hashlib.sha256(pending.fencing_token.encode()).hexdigest()
     assert_closed(mounted_case)

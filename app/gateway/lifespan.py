@@ -81,7 +81,7 @@ from app.gateway.server.bootstrap import (
     _restore_managed_local_runtimes,
     create_registry,
 )
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)

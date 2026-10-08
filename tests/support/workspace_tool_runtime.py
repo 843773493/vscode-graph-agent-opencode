@@ -36,12 +36,13 @@ async def workspace_tool_runtime(
     workspace_root: Path,
     *,
     application: FastAPI | None = None,
+    startup_mount: MountedWorkspace | None = None,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     workspace_id = load_or_create_workspace_id(workspace_root)
     with (
         WorkspaceContainerRegistry(
             mounted_workspaces=MountedWorkspaceRegistry(
-                [MountedWorkspace(workspace_id, workspace_root)]
+                [startup_mount or MountedWorkspace(workspace_id, workspace_root)]
             ),
             project_root=Path.cwd(),
         ) as registry,

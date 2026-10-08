@@ -40,6 +40,8 @@ _GATEWAY_STARTUP_ENVIRONMENT_KEYS = (
     "BOXTEAM_CONFIG_FENCING_TOKEN",
 )
 
+from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
+
 logger = logging.getLogger(__name__)
 
 
@@ -465,8 +467,8 @@ async def wait_for_http_ok(
 def start_local_backend_process(
     *,
     project_root: Path,
-    workspace_root: Path,
-    backend_workspace_id: str,
+    mounts: tuple[MountedWorkspace, ...],
+    backend_generation: str,
     port: int,
     log_dir: Path,
     extra_env: dict[str, str] | None = None,
@@ -475,32 +477,15 @@ def start_local_backend_process(
         WORKSPACE_BACKEND_CONNECTION_DRAIN_TIMEOUT_SECONDS
     ),
 ) -> ManagedProcess:
-    try:
-        parsed_workspace_id = UUID(backend_workspace_id)
-    except ValueError as error:
-        raise ValueError(
-            f"启动 Workspace 后端必须提供 backend UUID: {backend_workspace_id!r}"
-        ) from error
-    if str(parsed_workspace_id) != backend_workspace_id:
-        raise ValueError(
-            "启动 Workspace 后端必须提供标准 backend UUID 文本: "
-            f"{backend_workspace_id!r}"
-        )
-    resolved_workspace_root = workspace_root.expanduser().resolve(strict=True)
-    if not resolved_workspace_root.is_dir():
-        raise NotADirectoryError(f"工作区根不是目录: {resolved_workspace_root}")
+    mounted = MountedWorkspaceRegistry(list(mounts))
+    if not backend_generation.strip():
+        raise ValueError("启动 Backend 必须提供 generation")
     python_executable = resolve_python_executable(project_root)
     env = _local_child_environment()
-    env["WORKSPACE_ROOT"] = str(resolved_workspace_root)
     env["BOXTEAM_PROJECT_ROOT"] = str(project_root)
+    env["BOXTEAM_BACKEND_GENERATION"] = backend_generation
     env["BOXTEAM_MOUNTED_WORKSPACES"] = json.dumps(
-        [
-            {
-                "workspace_id": backend_workspace_id,
-                "workspace_root": str(resolved_workspace_root),
-            }
-        ],
-        separators=(",", ":"),
+        [mount.to_payload() for mount in mounted.mounts], separators=(",", ":"),
     )
     env["PYTHONUNBUFFERED"] = "1"
     if extra_env:
@@ -543,7 +528,7 @@ def start_local_backend_process(
         "启动工作区后端: pid=%s port=%s workspace=%s log=%s",
         process.pid,
         port,
-        workspace_root,
+        ",".join(mounted.workspace_ids),
         log_path,
     )
     return ManagedProcess(process=process, log_file=log_file)

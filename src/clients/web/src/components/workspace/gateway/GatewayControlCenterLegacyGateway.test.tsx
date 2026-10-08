@@ -6,6 +6,7 @@ import { createDefaultWebUiSettings } from "../../../state/uiSettings/preference
 
 const legacyWorkspace: GatewayWorkspace = {
   workspace_id: "gw_legacy",
+  affected_workspace_ids: ["gw_legacy"],
   name: "旧版 Gateway 工作区",
   root_path: "/workspace/legacy",
   backend_url: "http://127.0.0.1:8010",
@@ -30,6 +31,10 @@ const html = renderToString(
       onAddSsh={noop}
       onRefresh={noop}
       onReconnect={noop}
+      onStart={noop}
+      onStop={noop}
+      onSafeRestart={noop}
+      onForceRestart={noop}
       uiSettings={createDefaultWebUiSettings()}
       onUpdateUiSettings={noop}
     />

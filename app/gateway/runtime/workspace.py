@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.process import ManagedProcessHandle
 from app.gateway.service_types import GatewayServiceName
 
@@ -11,9 +12,13 @@ class WorkspaceRuntime:
     service_urls: dict[GatewayServiceName, str]
     processes: dict[str, ManagedProcessHandle] = field(default_factory=dict)
     adopted_process_names: set[str] = field(default_factory=set)
-    backend_debug_port: int | None = None
+    backend_owner: ManagedBackendOwner | None = None
     gateway_generation: str | None = None
     backend_workspace_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if "workspace_api" in self.processes or "workspace_api" in self.adopted_process_names:
+            raise ValueError("managed Backend handle 只能由 Backend owner 持有")
 
     def set_process(
         self,
@@ -22,6 +27,8 @@ class WorkspaceRuntime:
         *,
         adopted: bool = False,
     ) -> None:
+        if name == 'workspace_api':
+            raise ValueError('managed Backend handle 只能由 Backend owner 持有')
         if name in self.processes:
             raise ValueError(f"工作区运行时服务已存在: {name}")
         self.processes[name] = process
@@ -35,6 +42,8 @@ class WorkspaceRuntime:
         *,
         adopted: bool = False,
     ) -> None:
+        if name == 'workspace_api':
+            raise ValueError('managed Backend handle 只能由 Backend owner 持有')
         self.processes[name] = process
         self.adopted_process_names.discard(name)
         if adopted:
@@ -47,6 +56,8 @@ class WorkspaceRuntime:
     def assert_healthy(self) -> None:
         """确认运行时服务地址和 Gateway 所有的进程仍可服务。"""
 
+        if self.backend_owner is not None:
+            self.backend_owner.assert_healthy()
         for service, url in self.service_urls.items():
             if not isinstance(url, str) or not url.strip():
                 raise RuntimeError(f"运行时服务地址为空: service={service}")
@@ -86,9 +97,8 @@ class WorkspaceRuntime:
 
     def request_terminate(self) -> None:
         errors: list[str] = []
-        # 后端 unload 仍依赖辅助服务；先只通知后端，等其关闭后再终止依赖。
-        names = ("workspace_api",) if "workspace_api" in self.processes else tuple(reversed(self.processes))
-        for name in names:
+        # Backend 由 registry 先关闭唯一 owner；这里只处理成员的辅助服务。
+        for name in reversed(tuple(self.processes)):
             try:
                 self.processes[name].request_terminate()
             except Exception as error:  # noqa: BLE001 - 排空所有 owned handle 后聚合并抛出错误
@@ -97,8 +107,6 @@ class WorkspaceRuntime:
             raise RuntimeError("关闭工作区运行时失败: " + "; ".join(errors))
 
     def wait_closed(self) -> None:
-        # 后端失败时保留其句柄与全部依赖，重试仍从同一关闭边界开始。
-        self.close_process("workspace_api")
         errors: list[str] = []
         for name in reversed(tuple(self.processes)):
             try:

@@ -388,9 +388,10 @@ export type WorkspaceNavigationPlacementRequest =
 
 export type GatewayWorkspace = Omit<
   Required<GatewayWorkspaceDTO>,
-  "backend_workspace_id" | "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
+  "backend_workspace_id" | "backend_generation" | "parent_workspace_id" | "runtime_action" | "config_reload" | "connection_error" | "remote"
 > & {
   backend_workspace_id?: string | null;
+  backend_generation?: string | null;
   parent_workspace_id?: string | null;
   runtime_action?: GatewayWorkspaceDTO["runtime_action"];
   config_reload?: GatewayConfigReloadStatus;
@@ -503,6 +504,12 @@ export interface GatewayDeviceConnectionInfo {
 export interface CreatedGatewayDeviceConnection {
   connection: GatewayDeviceConnection;
   connection_info: GatewayDeviceConnectionInfo;
+}
+
+export interface GatewayRuntimeGroupRequest {
+  expected_backend_generation: string;
+  expected_workspace_ids: string[];
+  desired_workspace_ids?: string[];
 }
 
 export type GatewayRuntimeBlocker = Required<GatewayRuntimeBlockerDTO>;

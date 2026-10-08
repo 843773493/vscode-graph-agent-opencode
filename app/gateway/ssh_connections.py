@@ -4,15 +4,12 @@ from dataclasses import dataclass
 
 from app.gateway.config import load_gateway_config
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.schemas.gateway import (
-    AddSshWorkspaceRequest,
-    SshConnectionOptionDTO,
-)
 from app.gateway.ssh_config import (
     UserSshHost,
     list_user_ssh_hosts,
     resolve_user_ssh_host,
 )
+from app.schemas.gateway.ssh import AddRemoteGatewayRequest, SshConnectionOptionDTO
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +90,7 @@ def list_ssh_connection_options(
 
 
 def resolve_ssh_connection_request(
-    payload: AddSshWorkspaceRequest,
+    payload: AddRemoteGatewayRequest,
     registry: GatewayWorkspaceRegistry,
 ) -> ResolvedSshConnection:
     if payload.connection_workspace_id:
@@ -135,4 +132,4 @@ def resolve_ssh_connection_request(
             ssh_config_host=None,
             remote_gateway_port=payload.remote_gateway_port,
         )
-    raise RuntimeError("AddSshWorkspaceRequest 连接来源未通过校验")
+    raise RuntimeError("AddRemoteGatewayRequest 连接来源未通过校验")

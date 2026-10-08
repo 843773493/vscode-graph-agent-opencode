@@ -133,15 +133,15 @@ async def source_case(
     workspace_id = load_or_create_workspace_id(workspace)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home_for_node(request.node.nodeid)))
-    monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([{
-        "workspace_id": workspace_id, "workspace_root": str(workspace),
-    }]))
+    mount_payload = {
+        "workspace_id": workspace_id, "workspace_root": str(workspace), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}
     with ExitStack() as services, openai_chat_stub(port) as model:
         if options.get("terminal"):
             terminal_port = integration_port_block_for_file(Path(request.node.path)).port(40)
-            monkeypatch.setenv("BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{terminal_port}")
+            mount_payload["terminal_backend_url"] = f"http://127.0.0.1:{terminal_port}"
             process = start_terminal_backend(backend_port=terminal_port, workspace_root=str(workspace))
             services.callback(terminate_process, process)
+        monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount_payload]))
         async with main.lifespan(main.app):
             registry = main.app.state.workspace_container_registry
             container = registry.get(workspace_id)

@@ -55,8 +55,10 @@ def test_body_failure_rolls_back_before_next_transaction(store: SessionControlSt
     ).fetchone()[0] == "committed"
 
 
-def test_rollback_failure_does_not_replace_original_exception(
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_rollback_failure_closes_store_without_replacing_original_exception(
     store: SessionControlStore,
+    close_fails: bool,
 ) -> None:
     connection = store._connection
 
@@ -70,12 +72,41 @@ def test_rollback_failure_does_not_replace_original_exception(
                 raise OSError("rollback unavailable")
             return connection.execute(statement)
 
+        def close(self) -> None:
+            if close_fails:
+                raise OSError("close unavailable")
+            connection.close()
+
+    failure = ValueError("original failure")
     try:
         store._connection = RollbackFailure()  # type: ignore[assignment]
-        with pytest.raises(ValueError, match="original failure") as caught, store._write_transaction():
-            raise ValueError("original failure")
+        with pytest.raises(ValueError, match="original failure") as caught, store._write_transaction() as transaction:
+            transaction.execute("CREATE TABLE rollback_failure_probe (id INTEGER)")
+            raise failure
+        assert caught.value is failure
         assert any("rollback unavailable" in note for note in caught.value.__notes__)
+        if close_fails:
+            assert any("close unavailable" in note for note in caught.value.__notes__)
+            assert connection.in_transaction
+        else:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+
+        with pytest.raises(RuntimeError, match="已关闭"):
+            _ = store.connection
+        with pytest.raises(RuntimeError, match="已关闭"):
+            store.get_collaboration_ledger_revision()
+        with pytest.raises(RuntimeError, match="已关闭"):
+            store.register_collaboration_member(
+                delegation_id="del-after-rollback-failure",
+                coordinator_session_id="ses-after-rollback-failure",
+                coordinator_thread_id="thr-after-rollback-failure",
+                role="delegated_subagent",
+                subagent_type="general-purpose",
+                title="回滚失败后写入",
+                task_seed="{}",
+            )
     finally:
         store._connection = connection
-        if connection.in_transaction:
-            connection.execute("ROLLBACK")
+        if close_fails:
+            connection.close()

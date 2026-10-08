@@ -34,7 +34,7 @@ from app.gateway.routes._shared import (
     get_user_access_service,
     get_user_profile_store,
 )
-from app.schemas.gateway import (
+from app.schemas.gateway.users import (
     AcquireGatewayUserRequest,
     CreateGatewayGuestRequest,
     CreateGatewayUserRequest,

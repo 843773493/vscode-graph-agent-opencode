@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -13,6 +14,7 @@ from app.gateway.routes._shared import get_registry
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server import bootstrap
 from app.gateway.workspace_ids import build_managed_local_workspace_id
+from tests.support.gateway_managed_backends import ProcessProbe
 
 
 @pytest.fixture(autouse=True)
@@ -218,21 +220,27 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     monkeypatch.setattr(bootstrap, "_default_workspace_root", lambda: default_root)
     monkeypatch.setattr(bootstrap, "load_gateway_config", lambda: GatewayConfig())
 
-    async def start_default_runtime(**_: object) -> WorkspaceRuntime:
-        return WorkspaceRuntime(
+    async def start_default_runtime(*, owner, **_: object):
+        owner.set_process(ProcessProbe("default"))
+        runtime = WorkspaceRuntime(
             service_urls={
                 "workspace_api": backend_url,
                 "terminal_manager": "http://127.0.0.1:18012",
                 "browser_manager": "http://127.0.0.1:18015",
             },
             backend_workspace_id="00000000-0000-4000-8000-000000000001",
+            backend_owner=owner,
         )
+        contract = replace(owner.contract, backend_url=backend_url, members=(replace(
+            owner.contract.members[0], mount=replace(owner.contract.members[0].mount,
+                terminal_backend_url=runtime.service_urls["terminal_manager"],
+                browser_backend_url=runtime.service_urls["browser_manager"],
+            ),
+        ),))
+        owner.unpublished_runtimes[owner.contract.workspace_ids[0]] = runtime
+        return contract, {owner.contract.workspace_ids[0]: runtime}
 
-    monkeypatch.setattr(
-        bootstrap,
-        "start_managed_local_workspace_runtime",
-        start_default_runtime,
-    )
+    monkeypatch.setattr(bootstrap, "start_managed_backend_runtime", start_default_runtime)
 
     initial = await bootstrap.create_registry()
     assert initial.active_workspace_id == default_workspace_id

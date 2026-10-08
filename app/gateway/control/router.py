@@ -16,6 +16,11 @@ from app.gateway.control.coordinator import (
 from app.gateway.control.generators import SessionGeneratorStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
+from app.gateway.credentials import FederationCredentialStore
+from app.gateway.diagnostics import collect_gateway_diagnostics
+from app.gateway.federation import request_remote_gateway_management
+from app.gateway.registry import GatewayWorkspaceRegistry
+from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
 from app.schemas.gateway_control import (
     GatewayResourceListDTO,
     GatewaySessionSearchResultsDTO,
@@ -35,11 +40,6 @@ from app.schemas.gateway_control import (
     WorkspaceNavigationReorderRequest,
     WorkspaceNavigationTreeDTO,
 )
-from app.gateway.credentials import FederationCredentialStore
-from app.gateway.diagnostics import collect_gateway_diagnostics
-from app.gateway.federation import request_remote_gateway_management
-from app.gateway.registry import GatewayWorkspaceRegistry
-from app.schemas.gateway import GatewayDiagnosticsDTO
 from app.schemas.internal_v2.common import APIResponse
 
 router = APIRouter(prefix="/api/gateway", tags=["gateway-control"])

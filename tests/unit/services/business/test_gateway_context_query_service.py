@@ -10,7 +10,7 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextAccessError,
 )
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
-from app.schemas.gateway import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,

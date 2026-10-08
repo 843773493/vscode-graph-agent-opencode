@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import {
+  registerWorkspaceObservation,
+  useWorkspaceObservationState,
+} from "./workspaceObservationLifecycle";
+import {
   listSessionActivity,
   SessionActivityCursorGoneError,
   streamSessionActivity,
@@ -49,13 +53,15 @@ export function useWorkspaceSessionActivity({
   currentSessionCacheKey: string | null;
   setState: SetAppState;
 }): void {
+  const observationState = useWorkspaceObservationState(workspaceTarget?.workspace_id ?? null);
   const currentSessionCacheKeyRef = useRef(currentSessionCacheKey);
   currentSessionCacheKeyRef.current = currentSessionCacheKey;
 
   useEffect(() => {
-    if (!apiPort || !workspaceTarget) return;
+    if (!apiPort || !workspaceTarget || observationState.paused) return;
     const workspaceId = workspaceTarget.workspace_id;
     const controller = new AbortController();
+    const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     let cursor = 0;
     let reconnectAttempt = 0;
     let refreshPending = false;
@@ -102,6 +108,7 @@ export function useWorkspaceSessionActivity({
         const initial = await listSessionActivity(apiPort, workspaceTarget, {
           limit: 1000,
         });
+        if (controller.signal.aborted) return;
         const lastInitialEvent = initial.items[initial.items.length - 1];
         cursor = Number(initial.next_cursor ?? lastInitialEvent?.event_seq ?? 0);
         await streamSessionActivity(apiPort, workspaceTarget, {
@@ -160,8 +167,9 @@ export function useWorkspaceSessionActivity({
 
     void connect();
     return () => {
+      unregisterObservation();
       controller.abort();
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     };
-  }, [apiPort, workspaceTarget, setState]);
+  }, [apiPort, workspaceTarget, observationState, setState]);
 }

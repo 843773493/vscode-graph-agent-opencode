@@ -11,6 +11,8 @@ import type {
   WebUiSettingsUpdate,
 } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
+import { HttpRequestError } from "../../api/http";
+import { registerWorkspaceObservation } from "../workspace/workspaceObservationLifecycle";
 import { useGatewayWorkspaceMutations } from "./useGatewayWorkspaceMutations";
 
 const API_PORT = 49_611;
@@ -42,6 +44,7 @@ function gatewayWorkspace(
     status: "ready",
     active: false,
     managed: true,
+    affected_workspace_ids: [],
     removable: true,
     system_default: false,
     runtime_action: "safe_restart_managed_backend",
@@ -659,4 +662,31 @@ test("apiPort 为空时使用默认工作区后端端口", async () => {
   await hook!.reorderGatewayWorkspaces(["ws-active"]);
 
   expect(reorder).toHaveBeenCalledWith(DEFAULT_BACKEND_PORT, { workspace_ids: ["ws-active"] });
+});
+
+
+test("受控删除对整个已确认组暂停观察，409后完整对账并释放暂停", async () => {
+  const failure = new HttpRequestError(409, "Job 阻塞", { status: "blocked", blockers: [] }, "/api/gateway/workspaces/ws-other");
+  const group = { expected_backend_generation: "generation-1", expected_workspace_ids: ["ws-other", "ws-sibling"], desired_workspace_ids: ["ws-sibling"] };
+  const controllers = [new AbortController(), new AbortController()];
+  const releases = controllers.map((controller, index) => registerWorkspaceObservation(group.expected_workspace_ids[index]!, controller));
+  const remove = spyOnGatewayApi("removeGatewayWorkspace").mockImplementation(async () => {
+    expect(controllers.every((controller) => controller.signal.aborted)).toBe(true);
+    throw failure;
+  });
+  spyOnGatewayApi("listGatewayWorkspaces").mockResolvedValue(workspaceList("ws-active", [
+    gatewayWorkspace({ workspace_id: "ws-other", backend_generation: "generation-1" }),
+    gatewayWorkspace({ workspace_id: "ws-sibling", backend_generation: "generation-1" }),
+  ]));
+  const { hook, state } = await mountHook(appState());
+  await expect(hook.removeGatewayWorkspace("ws-other", group, true)).rejects.toBe(failure);
+  expect(remove).toHaveBeenCalledWith(API_PORT, "ws-other", group, true);
+  expect(state().gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-other", "ws-sibling"]);
+  for (const identity of group.expected_workspace_ids) {
+    const next = new AbortController();
+    const release = registerWorkspaceObservation(identity, next);
+    expect(next.signal.aborted).toBe(false);
+    release();
+  }
+  for (const release of releases) release();
 });

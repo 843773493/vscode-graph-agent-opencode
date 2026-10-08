@@ -18,7 +18,7 @@ from app.gateway.runtime.process import (
     is_local_port_available,
     start_workspace_ssh_port_forward_process,
 )
-from app.schemas.gateway import (
+from app.schemas.gateway.port_forwarding import (
     CreatePortForwardRequest,
     PortForwardDTO,
     PortForwardProtocol,

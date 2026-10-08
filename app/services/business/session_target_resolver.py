@@ -10,7 +10,7 @@ from app.abstractions.session_target import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.trace_middleware import require_current_gateway_id
-from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import SessionContextSearchRequest
 from app.services.business.session_context_resource import (
     gateway_session_inventory_identity,

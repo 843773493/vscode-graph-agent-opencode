@@ -4,6 +4,28 @@
 
 按切片检索相关关键词即可：wire/参数/认证、CSM/cutoff/fork、生命周期/关闭、路径/index、协议/重启。只将适用且能改变本轮决策的规则带入派单，不将所有历史约束叠加成新前置。
 
+A05-L2/L3固定tree `785919ada5a83f65cdbd565218424ecd87966dad` 增审各发现一项P2：停机owner对非空desired一律拒绝，合法删除非末成员必须先启动旧组；非managed删除先删registry，再执行可失败的SSH转发清理，502时target已丢而转发残留。前者仍由同Sol修唯一owner的完整离线退出/恢复合同；后者由Luna在独立数据盘代码worktree只修路由非managed片段及独立故障测试。在线成功与最后成员退出不能替代停机非末成员/外部清理失败的验收；按真实状态和副作用顺序补受影响差异，不重跑无关历史。L3两文件窄修及独审已通过；L2四文件35核心/21相关边界/1真实Gateway及固定增审通过，仅说明对应缺口关闭，不推算模型倍率。
+
+L3两文件核心已绿后，作者继续重建手工patch且压缩后重复恢复产物；该patch还停留在前一版路由，新增测试不在普通git diff中。已纠正为停写文件/SHA/raw最少交接，由主一次固定树导出与严格重建；禁Git写的作者不承担patch生成。主本轮一次read_thread把完整turn输出带回造成额外恢复开销，后续用compact wait，只有具体异常才过滤取相关工具项。两类尾部开销分别记账，不据此推算模型速度倍率。
+
+L2真实Gateway停机DELETE发现publication持久遗漏：内存target已删且剩余owner已保存，SQLite仍保manual target；原publisher `_save(owner="system")` 让store按owner合并时保留了缺席manual行，JSON夹具没有暴露。修同一publisher受控DELETE的完整snapshot/CAS范围，并在真实GatewayStateStore重开核删除与其它owner/sibling保留；不另加SQL删除writer，不把内存列表成功当持久成功。同Sol修同一publisher后真实SQLite重开、CAS旧引用与真实Gateway验证通过，固定增审无finding；失败raw保留，不把成功外推为所有存储owner保证。
+
+A05停写后，作者活树`git diff <基线> -- <路径>`报告check0，却漏掉24个尚未入观察index的新增文件；主固定162源码＋4文档后发现其中两文件EOF空行。原对象和诊断保留，作者仅删2字节、AST一致、Ruff通过，未重复动态测试/build；最终固定树check与重建由主补验。活树diff0不能证明完整候选，格式小修也不应触发整批重测。独审的show/grep为固定读取示例，固定preimage→tree的精确diff同样合规；不要把示例变成多余审批门。
+
+A05-L1固定独审发现最后成员退出合同未闭合：schema拒绝空desired，组操作强制保留发起成员；旧DELETE/registry.remove却仍直接close，绕过已实现的drain和force interrupted持久化。重启/组切换绿灯不证明全部关闭入口迁齐；同一生命周期闭包须核CRUD删除、最后成员、runtime替换和恢复caller，并用合法输入验证，不能只检查新controller方法。由同Sol修核心，Luna不插手大改；效果以最终固定增审和真实入口收据为准。
+
+A05-C1补核回滚失败测试后撤回存储主题早期无finding：保primary异常和cleanup note不等于连接可继续使用；测试手工rollback解毒掩盖了store仍对业务开放的坏态。窄修由Luna独占两文件隔离失效store，不加自动重连；主独审并给Sol固定补丁后再跑最终核心。正常rollback成功应仍可继续事务，清理失败则明确拒绝后续访问，两者分别验收；尚未交付前不记修复有效。
+
+C1两文件固定tree `f136a8665abd92cc0542f02610872db43305088f` 已主独审/严格重建、作者额外源码0、合ROOT供Sol最终组合。作者selector `write_transaction or read_transaction` 为10pass却漏新 `test_transaction_closes_store_when_rollback_fails` 的4参数例；主只补精确node，4pass/0.80s、raw/SHA保留，Ruff0，合14相关用例，覆盖声明已要求更正。read/write统一清理且仅3方法AST变化，不把这次窄修外推为全库所有失败路径保证或整个A05完成。
+
+A05-L1修订首验run002为95pass/3fail：两例真实恢复时重分配辅助端口、改变同一旧generation完整manifest；一例fixture漏service_urls。原raw/SHA已主核，失败保留；同Sol修原地址恢复与真实身份/健康proof，不放宽断言，最终结果仍待停写。
+
+A05-C2按已证明的同类边界窄查：固定f136的SessionControl rollback失败后公共connection仍暴露未提交数据，原测试手工rollback掩盖。固定方法AST内存探针actual0、raw SHA7983f9e91bcd180fc275d89ca1edf9390ec31b41f42a4c24471bf3ede35e956c已主核；同Luna只在已有代码worktree改两文件，不影响Sol核心/ROOT动态验证。它证明连接隔离缺口，未证明生产数据事故；指定完整文件4pass/0.79s、targetRuff0，主独审与固定tree d825严格重建/作者额外源码0已接受；保body/真实COMMIT后续写、close成功/失败的原异常身份和公开read/write拒绝。目录Ruff未改I001保留，ROOT合成待Sol停写，不外推全库保证。
+
+A05-L1修订并发验证沿旧helper读改写同一attempt列表，主观察条目7→6，原唯一命名raw仍保留。作者按实际工具退出/各raw机械补独立收据，后续串行；避免以清单覆盖重跑已绿测试。每次收据独立写后再汇总，不把台账序号当运行身份。真实组合原3核通过，新2例因历史追加日志累计数和离线target投影预期失败；只在生产依赖未变时复用3核、定向重验新2例，最终结果仍待停写。
+
+A05-L1真实Web016在reload后仍寻找Gateway控制面locator，实际已回会话工作台；actual1/224.16s，旧cancel/join/blocked/force/stale/remove phase完成，errors与route_stubs均空（作者JSON）。driver显式重入控制台，不改产品或删旧判据；现正式单例没有独立剩余入口，沿最少既有用例重验，不临时重构测试框架。Web017补验actual0/232.06s、1pass，原全部phase及新empty/DELETE判据保留；导航修正已验证。继承SHA比较以d0 fixed tree及已授权EOF correction为准，不能用更早162manifest把已删LF误报新语义漂移。
+
 ## A01：真实激活、单正文 detail 与 Skill 恢复
 
 本节只在相关闭包使用；默认正文加密已由用户取消，历史密文/AAD规则不再约束本地detail。完整原始事故可查实时台账列出的外部历史快照，不恢复为实施前置。
@@ -40,7 +62,19 @@ A05 新真实进程用例的 attempt004 漏配置必填 `supports_reasoning`，�
 
 A05 attempt007 的真实 SIGKILL 恢复：新进程已按旧完整成员/generation 启动，但 controller 无条件取消旧 drain；目标已 ready，返回 409 后整组被误标 offline。由同 Sol 修唯一取消链，消费真实 lifecycle：draining 才 cancel，ready 与 accepting_jobs 同时成立则已恢复，其余状态显式失败。008 actual0、1 passed/2 deselected（88.64s），保 502、双成员健康、同恢复 PID 和旧 generation 的正式收据，raw/SHA 已核。这只证明该修正的真实恢复效果；随后同 owner 候选句柄/CAS/aux 清理闭包还在改变，相关核心须在最终生产组合重验。
 
+A05 attempt016 actual1（608 passed/10 failed，229.89s）的新 CAS 用例暴露真实 publisher 原位污染：提交前改了已公布 target 与 `runtime.service_urls`，失败虽替换 registry 指针，外部持有的旧对象仍含候选 URL/generation/lease。主从 raw 指出旧引用差异，Sol 确认生产原因并保原断言，采用独立 staged target/dict 与整体映射替换、失败恢复原对象，完整迁 caller；不把 expected 改深拷贝掩盖问题。提交后观察者异常另保真实已提交事实，不能拿旧 URL 对新组 cancel。018 actual0、8 passed/76 deselected（pytest 1.90s），raw/SHA 已核；真实 SQLite CAS 保留直接旧对象/映射引用和持久化无污染断言，亦含提交后观察者与未发布候选清理边界。只验证这八项；bootstrap 后续两入口和最终真实组合仍待验，不将早期三条核心扩大为最终 CAS 验收。
+
 退役目录审计首报将 `out/tests/unit/gateway/runtime/` 测试镜像父目录误列为运行数据叶，还把本轮未执行的 `/proc` 未发现结论归给主线程。主检查子项为 `test_process_*` 等，拒绝删除此项；真实 `/proc` 又发现 3 个旧 E2E aux/backend 孤儿进程仍打开已删除日志/SQLite，按 uid、cwd、argv hash、start ticks 和单成员进程组核归属后，pidfd SIGTERM 均观测退出。报告要求撤回错误事实、保原版本并只列真实 run-* 叶；源代码、正式 artifacts 和独有补丁保留。清理效果以主 `retired-directory-cleanup/` 收据为准；不存在的观察不得写成已做，basename 和整树大小不能代替可删目录的内容证明。
+
+后续 Wire 审计正确列出四个正式镜像 workspace 叶并披露未核进程条件，主独核 fixture/源码、保留边界及进程后删除，约 269.9MiB。但主派“十树中最多四项”仍诱导全目录遍历，作者又宽搜旧 tests，输出截断后才收窄，任务约 551s；不能据四叶判定准确便宣称审计流程高效。后续主直接给已知候选或从 tests 路径映射，先交行动结论；搜索范围规则效果尚待实际派单，当前不另造全树清理任务。
+
+A05 截至 write-web-build-269 的实际命令收据有 38 次完整 Web build（其中 21 次对应 `.test.` 文件），另 7 条 `bun build` 是单文件语法检查，不能混算。38 份 raw/SHA 已核，Vite 自报构建阶段合计 724.58s；不是完整命令耗时，也未证明每次生产依赖完全相同。原因是用户已要求整批迁移，派单却未明确把逐文件 build 收口到批末，作者仍机械遵循旧逐次检查习惯。主已明确同闭包批末统一 build，编辑保快速静态；后续完整交付效果待验，不能先报提速倍率。
+
+A05 021 Gateway 621pass、022 受影响 Web 123pass（均 actual0、raw/SHA 已核）之后，024 真实浏览器仍 actual1，成员合并未成功。主已核真实响应 join 200/blocked、两条 proxy_stream，以及“完整组正在切换路由”被记成已公布组的 connection_error/offline；原 JSON/SHA 保存在 `real-browser-attempt024/`。作者最初归因 workspace_proxy，进一步追到真正 writer 是 `RegistryDtosMixin.list_dtos`：锁内构造生命周期结果时，健康探针经业务 resolve 被暂拒，再汇总 offline 并 mark_backend_error 污染已公布 owner；撤回代理持久化归因。具体调用因果与修正效果待固定候选独审及真实复验。由同 Sol 一次闭合已公布合同的健康探针与页面观察流释放/恢复，保唯一 owner 的 generation/digest proof、all-proxy 引用约束和原组成功断言，不让 Luna 插手核心或将 expected 改 blocked 求绿。
+
+上述修正后 025 批末 Web build、026 DTO 39pass、027 观察流/重连 34pass、028 真实 Terminal 1pass、029 真实 Web 1pass 均 actual0，raw/SHA 已核。浏览器 join/force/removal 成功，独立 secondary SSE 仍阻挡 safe，force 关闭旧流、陈旧 generation 409、pageerrors=[] 均保留；只能证明这些范围，完整候选独审尚未完成。新闭包统一一次 build 的执行已观察到，完整交付速度倍率仍无可比依据。
+
+A05 030 actual1、4pass/6fail（83.88s）：旧真实编译夹具整段替换 `build_runtime_for_agent`，只返回 model/system_prompt/model_routing，漏现行 instruction_producers；首个 Job 失败后四个 Goal shutdown 用例又分别超时。新显式候选把同进程日志设成 DEBUG/WARNING，触发已有正确拒绝。作者先下沉到模型构造仍不完整：033 因 binding 缺 kwargs 失败，035 完善 binding 后又超时；不能继续逐字段搭 fake ChatModel。最终只替换 LiteLLM 外部 acompletion/aresponses 传输，返回完整流与请求 metadata，真实 runtime builder、模型构造/binding、sealed dispatch 与说明来源全部运行；036 actual0、1pass（26.80s），四 Goal 未再次展开同一红前置。随后 037 整文件 actual0、10pass（88.06s），raw/SHA 已核；作者报告涵盖真实 Event/Trace/MessageStream/background/catalog 锁、四个 Goal shutdown 和各 mount 独立 Agent 说明候选 proof，固定候选独审仍待。未弱化进程日志 gate；动态窄门与整组迁移效果已有具名证据，不外推所有 Integration 或整个 change。
 
 冻结参数须核真实绑定和发送结果：框架会按 structured-output strategy 改写或省略 `tool_choice`，adapter 还会强制 `stream/include/store`。直接抄 `ModelRequest` 字段曾在固定增量早审中漏掉这些事实；先修提取再接封存，不等完整 HTTP 验收才查。 Auto策略fixture还须核框架模型名兜底，profile=False未必选工具策略；按实际策略提供HTTP输出，不将错配fixture归生产回归。
 

@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import {
+  registerWorkspaceObservation,
+  useWorkspaceObservationState,
+} from "../workspace/workspaceObservationLifecycle";
+import {
   getSessionMessageStreamSnapshot,
   MessageStreamConnectionError,
   MessageStreamCursorGoneError,
@@ -40,14 +44,16 @@ export function useSessionMessageStream({
   sessionCacheKey: string | null;
   setState: SetAppState;
 }) {
+  const observationState = useWorkspaceObservationState(workspaceId);
   const streamAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
-    if (!apiPort || !sessionId || !turnId || !sessionCacheKey) return;
+    if (!apiPort || !sessionId || !turnId || !sessionCacheKey || observationState.paused) return;
 
     const controller = new AbortController();
+    const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     streamAbortRef.current = controller;
     const targetSessionId = sessionId;
     const targetTurnId = turnId;
@@ -318,11 +324,12 @@ export function useSessionMessageStream({
     }, 120);
 
     return () => {
+      unregisterObservation();
       window.clearTimeout(connectTimerId);
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };
-  }, [apiPort, sessionId, turnId, workspaceId, sessionCacheKey, setState]);
+  }, [apiPort, sessionId, turnId, workspaceId, sessionCacheKey, observationState, setState]);
 }
 
 type TerminalStreamStatus = Extract<

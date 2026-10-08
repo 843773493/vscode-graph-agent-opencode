@@ -4,8 +4,10 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from app.core.env import get_project_root
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_gateway_root, get_user_workspace_root
 from app.gateway.config import GatewayConfig, load_gateway_config
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -16,8 +18,13 @@ from app.gateway.remote_gateway import (
     reconnect_remote_gateway,
 )
 from app.gateway.runtime.local_workspace import (
-    start_managed_local_workspace_runtime,
+    start_managed_backend_runtime,
     wait_for_workspace_health,
+)
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
 )
 from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.workspace_ids import (
@@ -74,121 +81,56 @@ def _default_workspace_root() -> Path:
 
 
 async def _restore_managed_local_runtimes(
-    *,
-    registry: GatewayWorkspaceRegistry,
-    default_workspace_id: str,
-    gateway_root: Path,
-    gateway_config: GatewayConfig | None = None,
-    only_workspace_ids: set[str] | None = None,
-    exclude_workspace_ids: set[str] | None = None,
-    preserve_existing_managed_runtimes: bool = False,
+    *, registry: GatewayWorkspaceRegistry, default_workspace_id: str, gateway_root: Path,
+    gateway_config: GatewayConfig | None = None, only_workspace_ids: set[str] | None = None,
+    exclude_workspace_ids: set[str] | None = None, preserve_existing_managed_runtimes: bool = False,
 ) -> None:
-    resolved_gateway_config = gateway_config or load_gateway_config()
-    for persisted_target in registry.targets():
-        if (
-            (
-                only_workspace_ids is not None
-                and persisted_target.workspace_id not in only_workspace_ids
-            )
-            or (
-                exclude_workspace_ids is not None
-                and persisted_target.workspace_id in exclude_workspace_ids
-            )
-            or persisted_target.workspace_id == default_workspace_id
-            or persisted_target.connection_kind != "local"
-            or not persisted_target.managed
-            or not persisted_target.desired_running
-        ):
+    resolved = gateway_config or load_gateway_config()
+    for target in registry.targets():
+        workspace_id = target.workspace_id
+        if target.connection_kind != "local" or not target.managed or not target.desired_running or workspace_id == default_workspace_id:
             continue
-        target = registry.resolve(persisted_target.workspace_id)
-        logger.info(
-            "Gateway 恢复托管 Workspace: workspace_id=%s, desired_running=%s, "
-            "backend_url=%s",
-            target.workspace_id,
-            target.desired_running,
-            target.backend_url,
-        )
-        try:
-            # 没有运行时的目标不会通过 resolve_service_url 转发；保留地址用于
-            # 校验 Gateway 重启后仍存活的旧后端，并在瞬时失败时继续重试接管。
-            reusable_backend_url = target.backend_url or None
-            target.connection_error = "Gateway 正在恢复工作区运行时"
-            registry.upsert(target, activate=False, mutation_owner="system")
-            workspace_root = Path(target.root_path).expanduser().resolve()
-            if not workspace_root.is_dir():
-                raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
-            runtime = await start_managed_local_workspace_runtime(
-                project_root=get_project_root(),
-                workspace_root=workspace_root,
-                expected_backend_workspace_id=target.backend_workspace_id,
-                log_dir=gateway_root / "logs",
-                reusable_backend_url=reusable_backend_url,
-                adopt_existing_backend=preserve_existing_managed_runtimes,
-                reusable_service_urls=target.local_service_urls,
-                health_request_timeout_seconds=(
-                    resolved_gateway_config.gateway_process_health_request_timeout_seconds
-                ),
-                health_poll_interval_seconds=(
-                    resolved_gateway_config.gateway_process_health_poll_interval_seconds
-                ),
-                connection_drain_timeout_seconds=(
-                    resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
-                ),
-                default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
-                preserve_adopted_processes_on_failure=(
-                    preserve_existing_managed_runtimes
-                ),
-            )
-            target.backend_url = runtime.service_urls["workspace_api"]
-            target.backend_workspace_id = runtime.backend_workspace_id
-            target.local_service_urls = {
-                "terminal_manager": runtime.service_urls["terminal_manager"],
-                "browser_manager": runtime.service_urls["browser_manager"],
-            }
-            target.connection_error = None
-            registry.upsert(
-                target,
-                runtime=runtime,
-                activate=False,
-                mutation_owner="system",
-            )
-            logger.info(
-                "Gateway 托管 Workspace 恢复完成: workspace_id=%s, backend_url=%s",
-                target.workspace_id,
-                target.backend_url,
-            )
-        except Exception as error:
-            target.connection_error = (
-                "Gateway 启动时恢复托管工作区失败: "
-                f"workspace_id={target.workspace_id}: {error}"
-            )
-            registry.mark_connection_error(
-                target.workspace_id,
-                target.connection_error,
-            )
-            logger.exception(target.connection_error)
-            if (
-                registry.active_workspace_id == target.workspace_id
-                and target.workspace_id != default_workspace_id
-                and registry.has_target(default_workspace_id)
-            ):
-                # 上次激活的工作区可能已经被删除、迁移或因配置错误无法启动。
-                # Gateway 控制面仍然可用时，必须把代理路由切到可用的默认工作区，
-                # 否则前端会把一个可诊断的工作区故障误判为 Gateway 不可访问。
+        if (only_workspace_ids is not None and workspace_id not in only_workspace_ids) or (exclude_workspace_ids is not None and workspace_id in exclude_workspace_ids):
+            continue
+        if registry.backend_owner(workspace_id) is None:
+            message = f"期望运行的 managed target 缺少显式 Backend owner 完整合同: workspace_id={workspace_id}"
+            registry.mark_connection_error(workspace_id, message)
+            logger.error(message)
+            if registry.active_workspace_id == workspace_id and registry.has_target(default_workspace_id):
                 registry.activate(default_workspace_id)
-                logger.warning(
-                    "Gateway 恢复活动工作区失败，已回退到默认工作区: "
-                    "failed_workspace_id=%s, fallback_workspace_id=%s",
-                    target.workspace_id,
-                    default_workspace_id,
-                )
+                logger.warning("Gateway 恢复失败，已回退到默认工作区: requested_workspace_id=%s", workspace_id)
+    for owner in registry.backend_owners():
+        ids = set(owner.contract.workspace_ids)
+        if (only_workspace_ids is not None and not ids.intersection(only_workspace_ids)) or (
+            exclude_workspace_ids is not None and ids.intersection(exclude_workspace_ids)
+        ) or default_workspace_id in ids or not all(registry.resolve(member_id).desired_running for member_id in ids):
             continue
-        except BaseException:
-            logger.exception(
-                "Gateway 托管 Workspace 恢复任务异常结束: workspace_id=%s",
-                target.workspace_id,
-            )
-            raise
+        async with registry.backend_topology_lock, owner.lock:
+            if owner.process is not None and owner.process.is_alive() and owner.error is None:
+                continue
+            contract: ManagedBackendContract | None = None
+            try:
+                owner.close(timeout_seconds=resolved.gateway_process_connection_drain_timeout_seconds)
+                reusable = {member_id: registry.managed_runtime(member_id) for member_id in ids if registry.has_runtime(member_id)}
+                contract, runtimes = await start_managed_backend_runtime(
+                    owner=owner, project_root=get_project_root(), log_dir=gateway_root / "logs",
+                    reusable_runtimes=reusable,
+                    adopt_existing_backend=preserve_existing_managed_runtimes,
+                    health_request_timeout_seconds=resolved.gateway_process_health_request_timeout_seconds,
+                    health_poll_interval_seconds=resolved.gateway_process_health_poll_interval_seconds,
+                    connection_drain_timeout_seconds=resolved.gateway_process_connection_drain_timeout_seconds,
+                    default_skill_groups=resolved.default_workspace_skill_groups,
+                    preserve_adopted_processes_on_failure=preserve_existing_managed_runtimes,
+                )
+                registry.publish_backend_runtime(owner, contract, runtimes)
+            except Exception as error:
+                if contract is not None and owner.contract is contract:
+                    raise
+                registry.mark_backend_error(owner, f"Gateway 启动恢复完整 Backend 失败: {error}")
+                logger.exception("Gateway 完整 Backend 恢复失败: owner=%s", owner.contract.owner_id)
+                if registry.active_workspace_id in ids and registry.has_target(default_workspace_id):
+                    registry.activate(default_workspace_id)
+                    logger.warning("Gateway 完整组恢复失败，已回退到默认工作区: owner=%s", owner.contract.owner_id)
 
 
 async def create_registry(
@@ -230,14 +172,6 @@ async def create_registry(
                 f"workspace_id={target.workspace_id}, "
                 f"expected={target.backend_workspace_id}, "
                 f"actual={actual_backend_workspace_id}, root={workspace_root}"
-            )
-        if target.backend_workspace_id is None:
-            # TODO: 旧 registry schema 缺少 backend_workspace_id 的目标完成一次性修复后，删除该回填分支。
-            target.backend_workspace_id = actual_backend_workspace_id
-            registry.upsert(
-                target,
-                activate=False,
-                mutation_owner=target.owner,
             )
     persisted_default = persisted_targets_by_id.get(default_workspace_id)
     if persisted_default is None:
@@ -289,127 +223,71 @@ async def _complete_registry_startup(
     preserve_existing_managed_runtimes: bool,
 ) -> GatewayWorkspaceRegistry:
     external_backend_url = _external_default_backend_url()
-    default_runtime = None
-
-    def close_unregistered_default_runtime(startup_error: BaseException) -> None:
-        if default_runtime is None or (
-            registry.has_target(default_workspace_id)
-            and registry.has_runtime(default_workspace_id)
-        ):
-            return
-        try:
-            if preserve_existing_managed_runtimes:
-                default_runtime.detach_adopted_processes()
-            default_runtime.close()
-        except BaseException as cleanup_error:  # noqa: BLE001 - 取消与清理错误必须完整保留
-            raise BaseExceptionGroup(
-                "Gateway 默认运行时注册失败且清理失败",
-                [startup_error, cleanup_error],
-            ) from None
-
-    backend_workspace_id = await asyncio.to_thread(
-        resolve_backend_workspace_id,
-        get_project_root(),
-        default_root_path,
+    backend_workspace_id = await asyncio.to_thread(resolve_backend_workspace_id, get_project_root(), default_root_path)
+    if persisted_default is not None and persisted_default.backend_workspace_id != backend_workspace_id:
+        raise RuntimeError("默认工作区 Backend UUID 与 registry 不匹配")
+    owner = registry.backend_owner(default_workspace_id) if registry.has_target(default_workspace_id) else None
+    if external_backend_url is not None and owner is not None:
+        if len(owner.contract.members) != 1:
+            raise ValueError("外部默认后端不能替换共享 managed Backend 组")
+        registry.discard_stopped_backend_owner(owner)
+        owner = None
+    registry.upsert(
+        WorkspaceTarget(
+            workspace_id=default_workspace_id,
+            name=persisted_default.name if persisted_default is not None and persisted_default.name_customized else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home",
+            name_customized=persisted_default.name_customized if persisted_default is not None else False,
+            root_path=root_path, backend_url=external_backend_url or (owner.contract.backend_url if owner is not None else ""),
+            backend_workspace_id=backend_workspace_id, connection_kind="local", owner="system",
+            managed=external_backend_url is None, removable=False, system_default=True,
+            desired_running=external_backend_url is None,
+            local_service_urls=persisted_default.local_service_urls if persisted_default is not None else {},
+        ), activate=persisted_active_workspace_id is None,
     )
-    if (
-        persisted_default is not None
-        and persisted_default.backend_workspace_id is not None
-        and persisted_default.backend_workspace_id != backend_workspace_id
-    ):
-        raise RuntimeError(
-            "默认工作区 backend UUID 与 Gateway registry 不一致: "
-            f"expected={persisted_default.backend_workspace_id}, "
-            f"actual={backend_workspace_id}, workspace_root={default_root_path}"
-        )
     if external_backend_url is None:
-        default_runtime = await start_managed_local_workspace_runtime(
-            project_root=get_project_root(),
-            workspace_root=default_root_path,
-            expected_backend_workspace_id=backend_workspace_id,
-            log_dir=gateway_root / "logs",
-            backend_debug_port=_default_backend_debug_port(),
-            preferred_backend_port=_default_backend_port(),
-            reusable_backend_url=(
-                persisted_default.backend_url
-                if persisted_default is not None and persisted_default.backend_url
-                else None
-            ),
-            adopt_existing_backend=preserve_existing_managed_runtimes,
-            reusable_service_urls=(
-                persisted_default.local_service_urls
-                if persisted_default is not None
-                else None
-            ),
-            health_request_timeout_seconds=(
-                resolved_gateway_config.gateway_process_health_request_timeout_seconds
-            ),
-            health_poll_interval_seconds=(
-                resolved_gateway_config.gateway_process_health_poll_interval_seconds
-            ),
-            connection_drain_timeout_seconds=(
-                resolved_gateway_config.gateway_process_connection_drain_timeout_seconds
-            ),
+        if owner is None:
+            owner = ManagedBackendOwner(ManagedBackendContract(
+                f"backend_owner_{uuid4().hex}", f"backend_generation_{uuid4().hex}",
+                (ManagedBackendMember(default_workspace_id, MountedWorkspace(
+                    backend_workspace_id, default_root_path,
+                    persisted_default.local_service_urls.get("terminal_manager") if persisted_default is not None else None,
+                    persisted_default.local_service_urls.get("browser_manager") if persisted_default is not None else None,
+                )),), persisted_default.backend_url if persisted_default is not None else "",
+                _default_backend_debug_port(),
+            ))
+            registry.register_backend_owner(owner)
+        contract, runtimes = await start_managed_backend_runtime(
+            owner=owner, project_root=get_project_root(), log_dir=gateway_root / "logs",
+            preferred_backend_port=_default_backend_port(), adopt_existing_backend=preserve_existing_managed_runtimes,
+            health_request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
+            health_poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
+            connection_drain_timeout_seconds=resolved_gateway_config.gateway_process_connection_drain_timeout_seconds,
             default_skill_groups=resolved_gateway_config.default_workspace_skill_groups,
-            preserve_adopted_processes_on_failure=(preserve_existing_managed_runtimes),
+            preserve_adopted_processes_on_failure=preserve_existing_managed_runtimes,
         )
         try:
-            backend_url = default_runtime.service_urls["workspace_api"]
-            backend_workspace_id = default_runtime.backend_workspace_id
-            local_service_urls = {
-                "terminal_manager": default_runtime.service_urls["terminal_manager"],
-                "browser_manager": default_runtime.service_urls["browser_manager"],
-            }
-        except BaseException as startup_error:
-            close_unregistered_default_runtime(startup_error)
+            registry.publish_backend_runtime(owner, contract, runtimes)
+        except BaseException as error:
+            if owner.contract is contract:
+                raise
+            try:
+                if preserve_existing_managed_runtimes and owner.adopted:
+                    owner.detach()
+                    for runtime in runtimes.values():
+                        runtime.detach_adopted_processes()
+                else:
+                    owner.close()
+                for runtime in runtimes.values():
+                    runtime.close()
+            except BaseException as cleanup_error:  # noqa: BLE001 — 保留原注册失败并暴露清理失败。
+                error.add_note(str(cleanup_error))
             raise
-        managed = True
     else:
-        # 测试和外部开发编排可以显式提供已运行的工作区后端；Gateway 不应再为
-        # 同一工作区启动第二个进程，否则会与工作区 SQLite 所有权锁冲突。
-        backend_url = external_backend_url
         await wait_for_workspace_health(
-            f"{backend_url}/api/v1/health",
-            backend_workspace_id,
-            request_timeout_seconds=(
-                resolved_gateway_config.gateway_process_health_request_timeout_seconds
-            ),
-            poll_interval_seconds=(
-                resolved_gateway_config.gateway_process_health_poll_interval_seconds
-            ),
+            f"{external_backend_url}/api/v1/health", backend_workspace_id,
+            request_timeout_seconds=resolved_gateway_config.gateway_process_health_request_timeout_seconds,
+            poll_interval_seconds=resolved_gateway_config.gateway_process_health_poll_interval_seconds,
         )
-        local_service_urls = {}
-        managed = False
-    try:
-        registry.upsert(
-            WorkspaceTarget(
-                workspace_id=default_workspace_id,
-                name=(
-                    persisted_default.name
-                    if (persisted_default is not None and persisted_default.name_customized)
-                    else os.environ.get("BOXTEAM_DEFAULT_WORKSPACE_NAME") or "home"
-                ),
-                name_customized=(
-                    persisted_default.name_customized
-                    if persisted_default is not None
-                    else False
-                ),
-                root_path=root_path,
-                backend_url=backend_url,
-                backend_workspace_id=backend_workspace_id,
-                connection_kind="local",
-                owner="system",
-                managed=managed,
-                removable=False,
-                system_default=True,
-                local_service_urls=local_service_urls,
-            ),
-            runtime=default_runtime,
-            activate=persisted_active_workspace_id is None,
-        )
-    except BaseException as startup_error:
-        close_unregistered_default_runtime(startup_error)
-        raise
     registry.remove_system_default_aliases(
         keep_workspace_id=default_workspace_id,
     )

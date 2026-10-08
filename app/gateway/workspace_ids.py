@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from app.schemas.gateway import GatewayConnectionKind
-
+from app.schemas.gateway.workspaces import GatewayConnectionKind
 
 _LEGACY_WORKSPACE_ID_PATTERN = re.compile(r"^gw_[0-9a-f]{12}$")
 _WORKSPACE_ID_HEX_LENGTH = 32
@@ -16,14 +15,14 @@ def build_workspace_id(
     backend_url: str,
 ) -> str:
     digest = hashlib.sha256(
-        f"{kind}\n{root_path}\n{backend_url}".encode("utf-8")
+        f"{kind}\n{root_path}\n{backend_url}".encode()
     ).hexdigest()
     return f"gw_{digest[:_WORKSPACE_ID_HEX_LENGTH]}"
 
 
 def build_managed_local_workspace_id(root_path: str) -> str:
     digest = hashlib.sha256(
-        f"local-managed\n{root_path}".encode("utf-8")
+        f"local-managed\n{root_path}".encode()
     ).hexdigest()
     return f"gw_{digest[:_WORKSPACE_ID_HEX_LENGTH]}"
 

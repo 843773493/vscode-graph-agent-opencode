@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.gateway.ui_settings import merge_web_ui_settings_values
-from app.schemas.gateway import (
+from app.schemas.gateway.ui_settings import (
     WebUILayoutSettingsDTO,
     WebUISessionSidebarSettingsDTO,
     WebUISettingsDTO,

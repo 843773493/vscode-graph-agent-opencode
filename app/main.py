@@ -384,6 +384,8 @@ async def health(request: Request):
         "status": "degraded" if errors else "ok",
         "process_id": os.getpid(),
         "workspace_id": container.workspace_id,
+        "backend_generation": os.environ.get("BOXTEAM_BACKEND_GENERATION"),
+        "mount_manifest_digest": request.app.state.workspace_container_registry.mounted_workspaces.manifest_digest,
         "config_proof": container.config_service.get_loaded_config_proof(),
         "startup_reconciliation": {"errors": errors},
     }

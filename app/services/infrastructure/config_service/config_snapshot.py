@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -73,7 +72,9 @@ class ConfigSnapshotMixin:
         if pinned is not None:
             return pinned
         if not self._snapshot_store.has_snapshot():
-            candidate_ref = os.environ.get(self._CANDIDATE_REF_ENV, "").strip()
+            candidate_ref = (
+                self._startup_mount.config_candidate_ref if self._startup_mount is not None else None
+            )
             if candidate_ref:
                 self._snapshot_store.initialize(
                     self._build_startup_pending_snapshot(candidate_ref),
@@ -121,8 +122,8 @@ class ConfigSnapshotMixin:
         pending = self._workspace_state_store.load_pending_config_candidate(
             candidate_ref=candidate_ref
         )
-        generation = os.environ.get(self._GENERATION_ENV, "").strip()
-        fencing_token = os.environ.get(self._FENCING_TOKEN_ENV, "").strip()
+        generation = self._startup_mount.config_generation
+        fencing_token = self._startup_mount.config_fencing_token
         if not generation or not fencing_token:
             raise ConfigConflictError(
                 "Workspace pending 启动缺少 generation 或 fencing token"

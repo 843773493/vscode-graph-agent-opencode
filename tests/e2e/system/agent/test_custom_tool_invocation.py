@@ -19,7 +19,9 @@ from app.agents.tools.testing import (
     LARGE_TEST_TARGET_VALUE,
 )
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -92,11 +94,12 @@ def e2e_backend_process(
     debugpy_port = (
         int(os.getenv("BOXTEAM_E2E_BACKEND_DEBUGPY_PORT")) if is_debug else None
     )
-    env_overrides = {
-        "BOXTEAM_TERMINAL_BACKEND_URL": (
-            f"http://127.0.0.1:{terminal_ports(e2e_backend_port)[0]}"
-        ),
-    }
+    env_overrides = {}
+    workspace_root = Path(e2e_workspace_root_path).resolve()
+    startup_mount = MountedWorkspace(
+        load_or_create_workspace_id(workspace_root), workspace_root,
+        terminal_backend_url=f"http://127.0.0.1:{terminal_ports(e2e_backend_port)[0]}",
+    )
     if e2e_model_stream_runtime_config_path is not None:
         env_overrides["BOXTEAM_TEST_MODEL_STREAM_CONFIG"] = (
             e2e_model_stream_runtime_config_path
@@ -107,6 +110,7 @@ def e2e_backend_process(
         log_name="e2e-backend",
         debugpy_port=debugpy_port,
         env_overrides=env_overrides,
+        startup_mount=startup_mount,
         env_unset=("BOXTEAM_TEST_MODEL_STREAM_CONFIG",),
     )
     try:

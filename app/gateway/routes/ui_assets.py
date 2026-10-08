@@ -42,7 +42,7 @@ from app.gateway.theme import (
     theme_catalog,
 )
 from app.gateway.ui_settings import merge_web_ui_settings_values
-from app.schemas.gateway import (
+from app.schemas.gateway.ui_settings import (
     GatewayThemeCatalogDTO,
     GatewayUIAssetDTO,
     GatewayUIAssetListDTO,

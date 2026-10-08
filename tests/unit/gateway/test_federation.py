@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Self, cast
 
 import httpx
 import pytest
@@ -29,11 +29,13 @@ from app.gateway.federation import (
 )
 from app.gateway.federation.errors import FederationError
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry.core import _REGISTRY_SCHEMA_VERSION
 from app.gateway.remote_gateway import reconcile_configured_remote_gateways
 from app.gateway.routes.workspaces_managed import _inbound_gateway_access_list
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import _proxy_headers
+from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
 from app.services.infrastructure.config.state import ConfigConflictError
 
 
@@ -1005,7 +1007,8 @@ def test_legacy_ssh_registry_has_explicit_migration_error(tmp_path: Path) -> Non
     storage_path.write_text(
         json.dumps(
             {
-                "schema_version": 6,
+                "schema_version": _REGISTRY_SCHEMA_VERSION,
+                "managed_backends": [],
                 "targets": [
                     {
                         "workspace_id": "legacy",
@@ -1048,7 +1051,8 @@ def test_registry_rejects_legacy_source_owner(tmp_path: Path) -> None:
         storage_path.write_text(
             json.dumps(
                 {
-                    "schema_version": 10,
+                    "schema_version": _REGISTRY_SCHEMA_VERSION,
+                    "managed_backends": [],
                     "remote_gateway_connections": [connection],
                     "targets": [],
                 }
@@ -1117,107 +1121,124 @@ async def test_remote_gateway_uses_one_ssh_forward(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["restarted", "blocked"])
 async def test_remote_restart_is_delegated_with_request_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    status: str,
 ) -> None:
     gateway_root = tmp_path / "gateway"
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(gateway_root))
     credential = FederationCredentialStore(
         storage_path=gateway_root / "credentials" / "federation.json"
-    ).issue(
-        connection_id="rgw_test",
-        peer_gateway_id="gateway_local",
-    )
+    ).issue(connection_id="rgw_test", peer_gateway_id="gateway_local")
     registry = GatewayWorkspaceRegistry(storage_path=gateway_root / "workspaces.json")
     registry.upsert_remote_gateway(
         RemoteGatewayConnection(
-            connection_id="rgw_test",
-            name="Remote",
-            host="remote.example.com",
-            port=22,
-            username="developer",
-            private_key_path=None,
-            ssh_config_host="remote",
-            remote_gateway_port=8014,
-            remote_gateway_id="gateway_remote",
-            protocol_version=FEDERATION_PROTOCOL_VERSION,
-            source_owner="manual",
+            connection_id="rgw_test", name="Remote", host="remote.example.com",
+            port=22, username="developer", private_key_path=None, ssh_config_host="remote",
+            remote_gateway_port=8014, remote_gateway_id="gateway_remote",
+            protocol_version=FEDERATION_PROTOCOL_VERSION, source_owner="manual",
         ),
-        runtime=WorkspaceRuntime(
-            service_urls={"workspace_api": "http://127.0.0.1:41000"}
-        ),
+        runtime=WorkspaceRuntime(service_urls={"workspace_api": "http://127.0.0.1:41000"}),
     )
-    target = WorkspaceTarget(
-        workspace_id="projected",
-        name="Remote workspace",
-        root_path="/remote",
-        backend_url="http://127.0.0.1:41000",
-        connection_kind="remote_gateway",
-        backend_workspace_id="00000000-0000-4000-8000-000000000002",
-        managed=True,
-        remote_gateway_connection_id="rgw_test",
-        remote_workspace_id="remote_ws",
-    )
-    registry.upsert(target)
+    remote_ids = ["remote_ws", "remote_sibling"]
+    local_ids = [build_projected_workspace_id("rgw_test", member_id) for member_id in remote_ids]
+    generation = "remote-generation-2" if status == "restarted" else "remote-generation-1"
+    remote_workspaces = []
+    for index, (remote_id, local_id) in enumerate(zip(remote_ids, local_ids, strict=True)):
+        backend_id = f"00000000-0000-4000-8000-{index + 2:012d}"
+        registry.upsert(WorkspaceTarget(
+            workspace_id=local_id, name=f"Remote {index}", root_path=f"/remote-{index}",
+            backend_url="http://127.0.0.1:41000", connection_kind="remote_gateway",
+            owner="remote_projection", connection_id="rgw_test",
+            backend_workspace_id=backend_id, managed=True,
+            remote_gateway_connection_id="rgw_test", remote_workspace_id=remote_id,
+            remote_backend_generation="remote-generation-1",
+            remote_affected_workspace_ids=tuple(local_ids),
+        ), activate=index == 0)
+        remote_workspaces.append({
+            "workspace_id": remote_id, "backend_workspace_id": backend_id,
+            "name": f"Remote {index}", "root_path": f"/remote-{index}", "managed": True,
+            "backend_generation": generation, "affected_workspace_ids": remote_ids,
+            "services": ["workspace_api"],
+        })
     captured: dict[str, object] = {}
-
     class _Client:
         def __init__(self, *, timeout: int) -> None:
-            assert timeout == 40
+            assert timeout in {2, 40}
 
-        async def __aenter__(self) -> _Client:
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, *_: object) -> None:
             return None
 
         async def post(
-            self,
-            url: str,
-            *,
-            headers: dict[str, str],
+            self, url: str, *, headers: dict[str, str], json: dict[str, object],
         ) -> httpx.Response:
-            captured["url"] = url
-            captured["headers"] = headers
+            captured.update(url=url, headers=headers, body=json)
             return httpx.Response(
                 200,
-                json={
-                    "data": {
-                        "status": "restarted",
-                        "blockers": [],
-                    }
-                },
+                json={"data": {
+                    "status": status, "backend_generation": generation,
+                    "affected_workspace_ids": remote_ids,
+                    "blockers": [{
+                        "workspace_id": remote_ids[1], "kind": "proxy_stream",
+                        "resource_id": "remote-stream", "session_id": "gateway-proxy",
+                        "status": "active", "detail": "另一成员仍有 SSE",
+                    }] if status == "blocked" else [],
+                }},
                 request=httpx.Request("POST", url),
             )
 
-    async def empty_dtos(_: GatewayWorkspaceRegistry) -> list[object]:
-        return []
+    async def discover_after_action(**kwargs):
+        assert captured["url"]
+        captured["refresh"] = kwargs
+        return {
+            "protocol_version": FEDERATION_PROTOCOL_VERSION,
+            "config_event_cursor": 5,
+        }, remote_workspaces
 
-    monkeypatch.setattr(
-        "app.gateway.runtime.controller.httpx.AsyncClient",
-        _Client,
-    )
-    monkeypatch.setattr(GatewayWorkspaceRegistry, "list_dtos", empty_dtos)
+    original_list = GatewayWorkspaceRegistry.list_dtos
+    async def unchecked_dtos(registry: GatewayWorkspaceRegistry):
+        return await original_list(registry, check_health=False)
+
+    monkeypatch.setattr("app.gateway.runtime.controller.httpx.AsyncClient", _Client)
+    monkeypatch.setattr(remote_gateway_module, "discover_remote_gateway", discover_after_action)
+    monkeypatch.setattr(GatewayWorkspaceRegistry, "list_dtos", unchecked_dtos)
     controller = GatewayWorkspaceRuntimeController(
-        registry=registry,
-        project_root=tmp_path,
-        log_dir=tmp_path / "logs",
+        registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs",
     )
-
-    result = await controller.safe_restart_managed_backend(
-        "projected",
-        request_id="req_federation",
-    )
-
-    assert result.status == "restarted"
-    assert captured["url"] == (
-        "http://127.0.0.1:41000/api/gateway/workspaces/remote_ws/runtime/restart-safe"
-    )
-    assert captured["headers"] == {
-        "X-BoxTeam-Federation-Token": credential.token,
-        "X-Request-ID": "req_federation",
-    }
+    try:
+        result = await controller.safe_restart_managed_backend(
+            local_ids[0], request_id="req_federation",
+            group_request=GatewayRuntimeGroupRequest(
+                expected_backend_generation="remote-generation-1",
+                expected_workspace_ids=local_ids, desired_workspace_ids=local_ids,
+            ),
+        )
+        assert result.status == status
+        assert result.backend_generation == generation
+        assert result.affected_workspace_ids == local_ids
+        assert captured["url"] == (
+            "http://127.0.0.1:41000/api/gateway/workspaces/remote_ws/runtime/restart-safe"
+        )
+        assert captured["headers"] == {
+            "X-BoxTeam-Federation-Token": credential.token,
+            "X-Request-ID": "req_federation",
+        }
+        assert captured["body"] == {
+            "expected_backend_generation": "remote-generation-1",
+            "expected_workspace_ids": remote_ids, "desired_workspace_ids": remote_ids,
+        }
+        assert captured["refresh"]["expected_remote_gateway_id"] == "gateway_remote"
+        assert all(item.remote_backend_generation == generation for item in registry.targets())
+        assert all(item.remote_affected_workspace_ids == tuple(local_ids) for item in registry.targets())
+        assert all(item.backend_generation == generation for item in result.workspaces.items)
+        assert {item.workspace_id for item in result.blockers} == ({local_ids[1]} if status == "blocked" else set())
+    finally:
+        registry.close()
 
 
 def test_pairing_ssh_has_bounded_timeout_and_stable_error_code(

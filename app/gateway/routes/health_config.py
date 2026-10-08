@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import (
+    UTC,
     datetime,
-    timezone,
 )
 from uuid import uuid4
 
@@ -44,8 +44,7 @@ from app.gateway.runtime.development_restart import (
     resolve_development_restart_command,
     start_development_restart,
 )
-from app.schemas.gateway import (
-    DevelopmentRuntimeRestartDTO,
+from app.schemas.gateway.config import (
     GatewayConfigEventDTO,
     GatewayConfigEventsDTO,
     GatewayConfigPendingDiscardRequest,
@@ -53,6 +52,9 @@ from app.schemas.gateway import (
     GatewayConfigReloadStatusDTO,
     GatewayConfigSourceDTO,
     GatewayConfigSourcesDTO,
+)
+from app.schemas.gateway.diagnostics import (
+    DevelopmentRuntimeRestartDTO,
     GatewayHealthDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -145,7 +147,7 @@ async def restart_development_runtime(
                     status_code=409,
                     detail="Gateway pending restart intent 已不可恢复",
                 )
-            if intent.expires_at is None or intent.expires_at <= datetime.now(timezone.utc):
+            if intent.expires_at is None or intent.expires_at <= datetime.now(UTC):
                 raise HTTPException(
                     status_code=409,
                     detail="Gateway pending restart intent 已过期，请先显式 retry",

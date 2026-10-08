@@ -32,6 +32,7 @@ from app.agents.tools.browser import (
     create_screenshot_page_tool,
     create_type_in_page_tool,
 )
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.main import workspace_api
@@ -184,10 +185,8 @@ def browser_manager_env(
     workspace_root = str(Path(integration_workspace_root_path).resolve())
     updates = {
         "WORKSPACE_ROOT": workspace_root,
-        "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{backend_port}",
         "BOXTEAM_BROWSER_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
         "BOXTEAM_BROWSER_WORKSPACE_ROOT": workspace_root,
-        "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{backend_port + 2}",
     }
     previous = {key: os.environ.get(key) for key in updates}
     os.environ.update(updates)
@@ -199,6 +198,18 @@ def browser_manager_env(
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+@pytest.fixture(scope="module")
+def integration_startup_mount(
+    browser_manager_processes: tuple[int, int], integration_workspace_root_path: str,
+) -> MountedWorkspace:
+    root = Path(integration_workspace_root_path).resolve()
+    return MountedWorkspace(
+        load_or_create_workspace_id(root), root,
+        browser_backend_url=f"http://127.0.0.1:{browser_manager_processes[0]}",
+        terminal_backend_url=f"http://127.0.0.1:{browser_manager_processes[0] + 2}",
+    )
 
 
 @pytest.fixture(scope="module")

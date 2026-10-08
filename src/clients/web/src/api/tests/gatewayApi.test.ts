@@ -8,6 +8,7 @@ import {
   getGatewayDiagnostics,
   listGatewayUiAssets,
   listGatewayWorkspaces,
+  removeGatewayWorkspace,
   runSessionGenerator,
   searchGatewaySessionCatalog,
   uploadGatewayUiAsset,
@@ -907,4 +908,26 @@ describe("Gateway 背景图上传的前置校验", () => {
       .toMatchObject({ asset_id: "asset_1" });
     expect(fetchStub.businessRequests()).toBe(1);
   });
+});
+
+
+test("受控 DELETE 原样传入完整成员与空目标，force 通过 query 显式传递", async () => {
+  const request = { expected_backend_generation: "generation-1", expected_workspace_ids: ["gw/test"], desired_workspace_ids: [] };
+  const captured: Array<{ method: string | undefined; url: string; body: unknown }> = [];
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args;
+    const url = String(input);
+    if (new URL(url).pathname === "/api/gateway/auth/local-credential") {
+      return Response.json({ data: { token: "delete-test-token" } });
+    }
+    captured.push({ method: init?.method, url, body: JSON.parse(String(init?.body)) });
+    return Response.json({ code: 0, message: "ok", request_id: "delete-test", data: { active_workspace_id: null, items: [] } });
+  }, { preconnect: originalFetch.preconnect });
+  const result = await removeGatewayWorkspace(49_924, "gw/test", request, true);
+  expect(result).toEqual({ active_workspace_id: null, items: [] });
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.method).toBe("DELETE");
+  expect(new URL(captured[0]!.url).pathname).toBe("/api/gateway/workspaces/gw%2Ftest");
+  expect(new URL(captured[0]!.url).searchParams.get("force")).toBe("true");
+  expect(captured[0]?.body).toEqual(request);
 });

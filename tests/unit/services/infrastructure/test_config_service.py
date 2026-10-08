@@ -10,6 +10,8 @@ from watchfiles import Change
 
 import app.services.infrastructure.config_service.config_source_layers as config_source_layers_module
 from app.agents.policy import ToolMetadata
+from app.core.mounted_workspaces import MountedWorkspace
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigUpdateRequest
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config.state import (
@@ -2397,9 +2399,11 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
     finally:
         store.close()
 
-    monkeypatch.setenv("BOXTEAM_CONFIG_CANDIDATE_REF", candidate_ref)
-    monkeypatch.setenv("BOXTEAM_CONFIG_GENERATION", generation)
-    monkeypatch.setenv("BOXTEAM_CONFIG_FENCING_TOKEN", fencing_token)
+    startup_mount = MountedWorkspace(
+        load_or_create_workspace_id(workspace_root), workspace_root.resolve(),
+        config_candidate_ref=candidate_ref, config_generation=generation,
+        config_fencing_token=fencing_token,
+    )
     restored_store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         restored = ConfigService(
@@ -2407,6 +2411,7 @@ async def test_workspace_pending_candidate_loader_requires_exact_startup_contrac
             config_path=config_path,
             workspace_root=workspace_root,
             workspace_state_store=restored_store,
+            startup_mount=startup_mount,
         )
         assert restored.get_snapshot().to_dict()["logger"]["level"] == "debug"
         proof = restored.get_loaded_config_proof()
@@ -2452,9 +2457,11 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
     finally:
         store.close()
 
-    monkeypatch.setenv("BOXTEAM_CONFIG_CANDIDATE_REF", candidate_ref)
-    monkeypatch.setenv("BOXTEAM_CONFIG_GENERATION", "generation-2")
-    monkeypatch.setenv("BOXTEAM_CONFIG_FENCING_TOKEN", "fence-1")
+    startup_mount = MountedWorkspace(
+        load_or_create_workspace_id(workspace_root), workspace_root.resolve(),
+        config_candidate_ref=candidate_ref, config_generation="generation-2",
+        config_fencing_token="fence-1",
+    )
     restored_store = WorkspaceStateStore(workspace_root=workspace_root)
     try:
         with pytest.raises(ConfigConflictError, match="target generation"):
@@ -2463,6 +2470,7 @@ def test_workspace_pending_candidate_loader_rejects_wrong_generation_or_token(
                 config_path=config_path,
                 workspace_root=workspace_root,
                 workspace_state_store=restored_store,
+                startup_mount=startup_mount,
             ).get_snapshot()
     finally:
         restored_store.close()

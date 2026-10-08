@@ -3,12 +3,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id,
-    build_workspace_id,
-    is_legacy_workspace_id,
-)
-from app.schemas.gateway import GatewayConnectionKind
 
 from .core import _UNSET, WorkspaceTarget
 
@@ -33,6 +27,17 @@ class RegistryCrudMixin:
         }:
             raise ValueError(f"Gateway registry mutation owner 非法: {mutation_owner}")
         existing = self._targets.get(target.workspace_id)
+        backend_owner = self.backend_owner(target.workspace_id) if existing is not None else None
+        if backend_owner is not None:
+            if backend_owner.lock.locked() or self.backend_topology_lock.locked():
+                raise RuntimeError("Backend 完整组生命周期操作进行中，不能单独 upsert 成员")
+            member = next(member for member in backend_owner.contract.members if member.workspace_id == target.workspace_id)
+            if target.root_path != str(member.mount.workspace_root) or target.backend_workspace_id != member.mount.workspace_id:
+                raise ValueError("Backend 成员身份变更必须经完整组切换")
+            if target.connection_kind != "local" or not target.managed or target.backend_url != backend_owner.contract.backend_url or target.desired_running != existing.desired_running or target.local_service_urls != existing.local_service_urls:
+                raise ValueError("Backend 成员路由和启动意图只能由完整组操作提交")
+            if runtime is not None:
+                raise ValueError("managed Backend runtime 替换必须按完整组提交")
         preserve_generation = False
         self._validate_target_identity(target)
         if existing is not None:
@@ -72,26 +77,20 @@ class RegistryCrudMixin:
             target.target_generation = f"target_generation_{uuid4().hex}"
         if runtime is not None:
             target.runtime_lease_id = f"runtime_lease_{uuid4().hex}"
+        if runtime is not None and target.connection_kind == "local" and target.managed and runtime.backend_owner is None:
+            raise ValueError("managed runtime 必须引用唯一 Backend owner")
         self._targets[target.workspace_id] = target
         if runtime is not None:
             if target.connection_kind == "local" and target.managed:
-                target.desired_running = True
+                if runtime.backend_owner is None:
+                    raise ValueError("managed runtime 必须引用唯一 Backend owner")
+                self.publish_backend_runtime(runtime.backend_owner, runtime.backend_owner.contract, {target.workspace_id: runtime})
+                if activate or self._active_workspace_id is None:
+                    self._active_workspace_id = target.workspace_id
+                    self._save(owner=mutation_owner or target.owner)
+                return self.resolve(target.workspace_id)
             previous = self._runtimes.get(target.workspace_id)
-            if previous is not None:
-                previous_browser_url = previous.service_urls.get("browser_manager")
-                replacement_browser_url = runtime.service_urls.get("browser_manager")
-                if (
-                    previous_browser_url is not None
-                    and previous_browser_url == replacement_browser_url
-                ):
-                    previous.detach_process("browser_manager")
-                previous_terminal_url = previous.service_urls.get("terminal_manager")
-                replacement_terminal_url = runtime.service_urls.get("terminal_manager")
-                if (
-                    previous_terminal_url is not None
-                    and previous_terminal_url == replacement_terminal_url
-                ):
-                    previous.detach_process("terminal_manager")
+            if previous is not None and previous is not runtime:
                 previous.close()
             self._runtimes[target.workspace_id] = runtime
         self._route_signatures[target.workspace_id] = route_signature
@@ -142,7 +141,7 @@ class RegistryCrudMixin:
         if target.active_request_count < 0 or target.active_stream_count < 0:
             raise ValueError("Gateway registry 活动引用计数不能为负数")
 
-    def remove(self, workspace_id: str, *, owner: str | None = None) -> None:
+    def validate_target_removal(self, workspace_id: str, *, owner: str | None = None) -> WorkspaceTarget:
         target = self._targets.get(workspace_id)
         if target is None:
             raise KeyError(f"未知 Gateway 工作区: {workspace_id}")
@@ -156,13 +155,23 @@ class RegistryCrudMixin:
                 f"workspace_id={workspace_id}, current={target.owner}, "
                 f"requested={scope_owner}"
             )
+        return target
+
+    def remove(self, workspace_id: str, *, owner: str | None = None) -> None:
+        target = self.validate_target_removal(workspace_id, owner=owner)
+        mutation_owner = owner or target.owner
+        scope_owner = self._owner_scope(mutation_owner)
         if target.connection_kind == "local":
             self._assert_route_references_drained(workspace_id)
-        self.invalidate_route(workspace_id)
+        if self.backend_owner(workspace_id) is not None:
+            raise ValueError("managed Backend 成员删除必须先完成 owner 完整组受控退出")
         runtime = self._runtimes.get(workspace_id)
         if runtime is not None:
+            if target.connection_kind == "local" and target.managed:
+                raise RuntimeError("managed 成员仍有运行时，不能绕过完整组清理")
             runtime.close()
             self._runtimes.pop(workspace_id)
+        self.invalidate_route(workspace_id)
         for child in self._targets.values():
             if child.parent_workspace_id == workspace_id:
                 child.parent_workspace_id = None
@@ -191,6 +200,9 @@ class RegistryCrudMixin:
         for workspace_id, target in list(self._targets.items()):
             if workspace_id == keep_workspace_id or not target.system_default:
                 continue
+            backend_owner = self.backend_owner(workspace_id)
+            if backend_owner is not None:
+                self.discard_stopped_backend_owner(backend_owner)
             runtime = self._runtimes.get(workspace_id)
             if runtime is not None:
                 runtime.close()
@@ -346,31 +358,6 @@ class RegistryCrudMixin:
             if target.system_default:
                 return target.workspace_id
         return next(iter(self._targets), None)
-
-    @staticmethod
-    def _migrate_legacy_workspace_id(
-        *,
-        workspace_id: str,
-        root_path: str,
-        backend_url: str,
-        connection_kind: GatewayConnectionKind,
-        managed: bool,
-        system_default: bool,
-        schema_version: int,
-    ) -> str:
-        if (
-            schema_version < 6
-            and connection_kind == "local"
-            and (managed or system_default)
-        ):
-            return build_managed_local_workspace_id(root_path)
-        if not is_legacy_workspace_id(workspace_id):
-            return workspace_id
-        return build_workspace_id(
-            connection_kind,
-            root_path,
-            backend_url,
-        )
 
     def _validate_parent_graph(self) -> None:
         for workspace_id in self._targets:

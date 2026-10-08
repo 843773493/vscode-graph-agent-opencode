@@ -5,12 +5,19 @@ import hashlib
 import json
 import os
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
+from app.core.mounted_workspaces import MountedWorkspace
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
+)
 from app.gateway.runtime.process import (
     GATEWAY_PROCESS_READY_TIMEOUT_SECONDS,
     AdoptedManagedProcess,
@@ -19,7 +26,6 @@ from app.gateway.runtime.process import (
     resolve_backend_workspace_id,
     start_local_backend_process,
     start_local_node_service_process,
-    wait_for_http_ok,
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
 
@@ -256,431 +262,254 @@ async def _adopt_local_node_service(
     return AdoptedManagedProcess(pid=process_id)
 
 
-async def _adopt_browser_manager(
-    *,
-    service_url: str,
-    backend_workspace_id: str,
-) -> AdoptedManagedProcess | None:
-    return await _adopt_local_node_service(
-        service_url=service_url,
-        service_name="Browser Manager",
-        backend_workspace_id=backend_workspace_id,
-    )
+def _validate_group_health(
+    payload: dict[str, object], contract: ManagedBackendContract, mount: MountedWorkspace,
+    *, process_id: int | None = None, startup_contract: dict[str, object] | None = None,
+) -> int:
+    expected = {
+        "workspace_id": mount.workspace_id, "backend_generation": contract.generation,
+        "mount_manifest_digest": contract.manifest_digest, "status": "ok",
+    }
+    mismatches = {key: (value, payload.get(key)) for key, value in expected.items() if payload.get(key) != value}
+    if mismatches:
+        raise RuntimeError(f"Backend 完整组健康证明不匹配: {mismatches}")
+    actual_pid = payload.get("process_id")
+    if isinstance(actual_pid, bool) or not isinstance(actual_pid, int) or actual_pid <= 0:
+        raise TypeError("Backend 健康证明缺少合法 process_id")
+    if process_id is not None and actual_pid != process_id:
+        raise RuntimeError("Backend 完整组响应来自不同进程")
+    if startup_contract is not None:
+        proof = payload.get("config_proof")
+        if not isinstance(proof, dict):
+            raise TypeError("Workspace 健康响应缺少 config_proof")
+        expected_proof = workspace_config_proof_expectation(startup_contract)
+        mismatch = {key: (value, proof.get(key)) for key, value in expected_proof.items() if proof.get(key) != value}
+        if mismatch:
+            raise RuntimeError(f"Workspace config proof 不匹配: {mismatch}")
+    return actual_pid
 
 
-async def _adopt_terminal_manager(
-    *,
-    service_url: str,
-    backend_workspace_id: str,
-) -> AdoptedManagedProcess | None:
-    return await _adopt_local_node_service(
-        service_url=service_url,
-        service_name="Terminal Manager",
-        backend_workspace_id=backend_workspace_id,
-    )
+async def verify_managed_backend_group(
+    contract: ManagedBackendContract, *, process: object | None = None,
+    startup_contracts: dict[str, dict[str, object]] | None = None,
+    request_timeout_seconds: float = 2, poll_interval_seconds: float = 0.5,
+) -> int:
+    """只在完整集合的 UUID、根摘要、generation、健康与候选 proof 全部通过后返回。"""
+    process_id = None
+    for member in contract.members:
+        payload = await wait_for_workspace_health(
+            f"{contract.backend_url.rstrip('/')}/api/v1/health", member.mount.workspace_id,
+            process, request_timeout_seconds=request_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        process_id = _validate_group_health(
+            payload, contract, member.mount, process_id=process_id,
+            startup_contract=(startup_contracts or {}).get(member.workspace_id),
+        )
+    if process_id is None:
+        raise RuntimeError("managed Backend 完整组没有成员")
+    return process_id
 
 
 async def _adopt_workspace_backend(
-    *,
-    service_url: str,
-    backend_workspace_id: str,
+    *, contract: ManagedBackendContract,
 ) -> AdoptedManagedProcess | None:
-    parsed = urlparse(service_url)
-    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
-        raise ValueError(
-            f"持久化 Workspace API URL 必须是本机 HTTP 地址: {service_url}"
-        )
-    if parsed.port is None:
-        raise ValueError(f"持久化 Workspace API URL 缺少端口: {service_url}")
-    try:
-        async with httpx.AsyncClient(timeout=2) as client:
-            response = await client.get(
-                f"{service_url.rstrip('/')}/api/v1/health",
-                headers=_workspace_backend_headers(backend_workspace_id),
-            )
-    except httpx.HTTPError:
-        return None
-    if response.status_code != 200:
-        raise RuntimeError(
-            "持久化 Workspace API 健康检查失败: "
-            f"url={service_url}, status={response.status_code}, "
-            f"body={response.text[:300]}"
-        )
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise TypeError("持久化 Workspace API 健康响应必须是 JSON 对象")
-    if payload.get("workspace_id") != backend_workspace_id:
-        raise RuntimeError(
-            "持久化 Workspace API backend UUID 不匹配: "
-            f"url={service_url}, expected={backend_workspace_id}, "
-            f"actual={payload.get('workspace_id')!r}"
-        )
-    process_id = payload.get("process_id")
-    if isinstance(process_id, bool) or not isinstance(process_id, int):
-        raise TypeError(
-            "持久化 Workspace API 健康响应缺少 process_id: "
-            f"url={service_url}, payload={payload!r}"
-        )
+    parsed = urlparse(contract.backend_url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
+        raise ValueError(f"持久化 Workspace API URL 必须是本机 HTTP 地址: {contract.backend_url}")
+    process_id = None
+    async with httpx.AsyncClient(timeout=2) as client:
+        for member in contract.members:
+            try:
+                response = await client.get(
+                    f"{contract.backend_url.rstrip('/')}/api/v1/health",
+                    headers=_workspace_backend_headers(member.mount.workspace_id),
+                )
+            except httpx.HTTPError:
+                return None
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise TypeError("Backend 健康响应必须是 JSON 对象")
+            process_id = _validate_group_health(payload, contract, member.mount, process_id=process_id)
+    if process_id is None:
+        raise RuntimeError("Backend 接管合同没有成员")
     return AdoptedManagedProcess(pid=process_id)
 
 
-async def start_managed_local_workspace_runtime(
-    *,
-    project_root: Path,
-    workspace_root: Path,
-    expected_backend_workspace_id: str | None = None,
-    log_dir: Path,
-    backend_debug_port: int | None = None,
-    preferred_backend_port: int | None = None,
-    reusable_backend_url: str | None = None,
-    adopt_existing_backend: bool = True,
-    reusable_service_urls: dict[str, str] | None = None,
-    health_request_timeout_seconds: float = 2,
-    health_poll_interval_seconds: float = 0.5,
-    connection_drain_timeout_seconds: float = 2,
-    default_skill_groups: Sequence[str] = (),
-    config_candidate_ref: str | None = None,
-    config_generation: str | None = None,
-    config_fencing_token: str | None = None,
+async def _start_member_auxiliary_services(
+    member: ManagedBackendMember, *, project_root: Path, log_dir: Path,
+    request_timeout_seconds: float, poll_interval_seconds: float,
+    runtime: WorkspaceRuntime | None = None,
     preserve_adopted_processes_on_failure: bool = False,
+    preserve_mount_urls: bool = False,
 ) -> WorkspaceRuntime:
-    validate_workspace_root_access(workspace_root)
-    backend_workspace_id = await asyncio.to_thread(
-        resolve_backend_workspace_id,
-        project_root,
-        workspace_root,
-    )
-    if (
-        expected_backend_workspace_id is not None
-        and expected_backend_workspace_id != backend_workspace_id
-    ):
-        raise RuntimeError(
-            "托管 Workspace backend UUID 与 Gateway registry 不一致: "
-            f"expected={expected_backend_workspace_id}, actual={backend_workspace_id}, "
-            f"workspace_root={workspace_root}"
-        )
-    if preferred_backend_port is not None and not 1 <= preferred_backend_port <= 65535:
-        raise ValueError(
-            f"preferred_backend_port 必须是 1-65535 的端口号: {preferred_backend_port}"
-        )
-    allocated_ports: set[int] = set()
-
-    def next_port() -> int:
-        port = allocate_local_port()
-        while port in allocated_ports:
-            port = allocate_local_port()
-        allocated_ports.add(port)
-        return port
-
-    adopted_backend = None
-    if reusable_backend_url:
-        candidate_backend = await _adopt_workspace_backend(
-            service_url=reusable_backend_url,
-            backend_workspace_id=backend_workspace_id,
-        )
-        reusable_backend_port = urlparse(reusable_backend_url).port
-        if reusable_backend_port is None:
-            raise RuntimeError(
-                f"持久化 Workspace API URL 缺少端口: {reusable_backend_url}"
-            )
-        if (
-            preferred_backend_port is not None
-            and candidate_backend is not None
-            and reusable_backend_port != preferred_backend_port
+    mount = member.mount
+    validate_workspace_root_access(mount.workspace_root)
+    actual_id = await asyncio.to_thread(resolve_backend_workspace_id, project_root, mount.workspace_root)
+    if actual_id != mount.workspace_id:
+        raise RuntimeError(f"mount 根的 Backend UUID 不匹配: expected={mount.workspace_id}, actual={actual_id}")
+    runtime = runtime or WorkspaceRuntime(service_urls={}, backend_workspace_id=mount.workspace_id)
+    started: list[str] = []
+    try:
+        for service, url, node_service in (
+            ("terminal_manager", mount.terminal_backend_url, "terminal"),
+            ("browser_manager", mount.browser_backend_url, "browser"),
         ):
-            # 默认 Home 的端口是发布版稳定契约；旧版本留下的动态后端不能
-            # 继续被接管，否则 workspaces.json 会一直保留错误端口。
-            if adopt_existing_backend:
-                raise RuntimeError(
-                    "持久化 Workspace API 端口与首选端口不匹配: "
-                    f"actual={reusable_backend_port}, "
-                    f"preferred={preferred_backend_port}"
+            existing = runtime.processes.get(service)
+            if existing is not None and not existing.is_alive():
+                runtime.close_process(service)
+                existing = None
+            if existing is None:
+                adopted = await _adopt_local_node_service(
+                    service_url=url, service_name=service, backend_workspace_id=mount.workspace_id,
+                ) if url else None
+                # 同一 generation 的恢复必须保持原完整 manifest 的辅助服务地址。
+                port = urlparse(url).port if url and (adopted is not None or preserve_mount_urls) else allocate_local_port()
+                if port is None:
+                    raise ValueError(f"辅助服务 URL 缺少端口: {url}")
+                if adopted is None and not is_local_port_available(port):
+                    raise RuntimeError(f"辅助服务恢复端口已被占用: {service}, 127.0.0.1:{port}")
+                runtime.service_urls[service] = f"http://127.0.0.1:{port}"
+                handle = adopted or start_local_node_service_process(
+                    project_root=project_root, workspace_root=mount.workspace_root,
+                    service=node_service, port=port, log_dir=log_dir, workspace_id=mount.workspace_id,
                 )
-            await asyncio.to_thread(candidate_backend.close)
-            candidate_backend = None
-        if adopt_existing_backend:
-            adopted_backend = candidate_backend
-        elif candidate_backend is not None:
-            await asyncio.to_thread(candidate_backend.close)
-    if preferred_backend_port is not None:
-        backend_port = preferred_backend_port
-        if adopted_backend is None and not is_local_port_available(backend_port):
-            raise RuntimeError(
-                f"默认 Workspace API 端口已被其它进程占用: 127.0.0.1:{backend_port}"
+                runtime.set_process(service, handle, adopted=adopted is not None)
+                started.append(service)
+            else:
+                handle = existing
+            await wait_for_workspace_health(
+                f"{runtime.service_urls[service]}/health", mount.workspace_id,
+                getattr(handle, "process", None),
+                request_timeout_seconds=request_timeout_seconds, poll_interval_seconds=poll_interval_seconds,
             )
-    elif reusable_backend_url and adopted_backend is not None:
-        backend_port = urlparse(reusable_backend_url).port
-    else:
-        backend_port = next_port()
-    if backend_port is None:
-        raise RuntimeError(f"持久化 Workspace API URL 缺少端口: {reusable_backend_url}")
-    allocated_ports.add(backend_port)
-    reusable_terminal_url = (reusable_service_urls or {}).get("terminal_manager")
-    adopted_terminal = (
-        await _adopt_terminal_manager(
-            service_url=reusable_terminal_url,
-            backend_workspace_id=backend_workspace_id,
-        )
-        if reusable_terminal_url
-        else None
-    )
-    terminal_port = (
-        urlparse(reusable_terminal_url).port
-        if reusable_terminal_url and adopted_terminal is not None
-        else next_port()
-    )
-    reusable_browser_url = (reusable_service_urls or {}).get("browser_manager")
-    adopted_browser = (
-        await _adopt_browser_manager(
-            service_url=reusable_browser_url,
-            backend_workspace_id=backend_workspace_id,
-        )
-        if reusable_browser_url
-        else None
-    )
-    browser_port = (
-        urlparse(reusable_browser_url).port
-        if reusable_browser_url and adopted_browser is not None
-        else next_port()
-    )
-    if browser_port is None:
-        raise RuntimeError(f"Browser Manager URL 缺少端口: {reusable_browser_url}")
-    service_urls = {
-        "workspace_api": f"http://127.0.0.1:{backend_port}",
-        "terminal_manager": f"http://127.0.0.1:{terminal_port}",
-        "browser_manager": f"http://127.0.0.1:{browser_port}",
-    }
-    runtime = WorkspaceRuntime(
-        service_urls=service_urls,
-        backend_debug_port=backend_debug_port,
-        backend_workspace_id=backend_workspace_id,
-    )
-    try:
-        if adopted_terminal is None:
-            terminal = start_local_node_service_process(
-                project_root=project_root,
-                workspace_root=workspace_root,
-                service="terminal",
-                port=terminal_port,
-                log_dir=log_dir,
-                workspace_id=backend_workspace_id,
-            )
-            terminal_process = terminal.process
-        else:
-            terminal = adopted_terminal
-            terminal_process = None
-        runtime.set_process(
-            "terminal_manager", terminal, adopted=adopted_terminal is not None
-        )
-        if adopted_browser is None:
-            browser = start_local_node_service_process(
-                project_root=project_root,
-                workspace_root=workspace_root,
-                service="browser",
-                workspace_id=backend_workspace_id,
-                port=browser_port,
-                log_dir=log_dir,
-            )
-            browser_process = browser.process
-        else:
-            browser = adopted_browser
-            browser_process = None
-        runtime.set_process("browser_manager", browser, adopted=adopted_browser is not None)
-        await wait_for_workspace_health(
-            f"{service_urls['terminal_manager']}/health",
-            backend_workspace_id,
-            terminal_process,
-            request_timeout_seconds=health_request_timeout_seconds,
-            poll_interval_seconds=health_poll_interval_seconds,
-        )
-        await wait_for_http_ok(
-            f"{service_urls['browser_manager']}/health",
-            browser_process,
-            request_timeout_seconds=health_request_timeout_seconds,
-            poll_interval_seconds=health_poll_interval_seconds,
-        )
-
-        if adopted_backend is None:
-            config_env: dict[str, str] = {}
-            if config_candidate_ref is not None:
-                if not config_generation or not config_fencing_token:
-                    raise ValueError(
-                        "Workspace pending 启动必须同时提供 candidate_ref、generation 和 fencing token"
-                    )
-                config_env = {
-                    "BOXTEAM_CONFIG_CANDIDATE_REF": config_candidate_ref,
-                    "BOXTEAM_CONFIG_GENERATION": config_generation,
-                    "BOXTEAM_CONFIG_FENCING_TOKEN": config_fencing_token,
-                }
-            backend = start_local_backend_process(
-                project_root=project_root,
-                workspace_root=workspace_root,
-                backend_workspace_id=backend_workspace_id,
-                port=backend_port,
-                log_dir=log_dir,
-                extra_env={
-                    "BOXTEAM_TERMINAL_BACKEND_URL": service_urls["terminal_manager"],
-                    "BOXTEAM_BROWSER_BACKEND_URL": service_urls["browser_manager"],
-                    "BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(
-                        list(default_skill_groups),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                    **config_env,
-                },
-                debug_port=backend_debug_port,
-                connection_drain_timeout_seconds=connection_drain_timeout_seconds,
-            )
-            backend_process = backend.process
-        else:
-            backend = adopted_backend
-            backend_process = None
-        runtime.set_process("workspace_api", backend, adopted=adopted_backend is not None)
-        await wait_for_workspace_health(
-            f"{service_urls['workspace_api']}/api/v1/health",
-            backend_workspace_id,
-            backend_process,
-            request_timeout_seconds=health_request_timeout_seconds,
-            poll_interval_seconds=health_poll_interval_seconds,
-        )
         return runtime
-    except (Exception, asyncio.CancelledError):
-        # 启动失败或任务取消时没有确认的后继 Gateway，不能把已接管的进程
-        # 脱离后遗留为孤儿；真正的旧 generation handoff 在 registry.close()
-        # 中按 pending intent 单独决定保留哪些已运行服务。
-        if preserve_adopted_processes_on_failure:
-            runtime.detach_adopted_processes()
-        runtime.close()
+    except BaseException as error:
+        for service in reversed(started):
+            try:
+                if preserve_adopted_processes_on_failure and service in runtime.adopted_process_names:
+                    runtime.detach_process(service)
+                else:
+                    runtime.close_process(service)
+            except BaseException as cleanup_error:  # noqa: BLE001 — 每个新句柄均尝试清理，保留首个失败。
+                error.add_note(f"mount 辅助服务 {service} 清理失败: {cleanup_error!r}")
         raise
 
 
-async def restart_managed_workspace_backend(
-    *,
-    runtime: WorkspaceRuntime,
-    project_root: Path,
-    workspace_root: Path,
-    expected_backend_workspace_id: str | None = None,
-    log_dir: Path,
-    health_request_timeout_seconds: float = 2,
-    health_poll_interval_seconds: float = 0.5,
-    connection_drain_timeout_seconds: float = 2,
-    default_skill_groups: Sequence[str] = (),
-    config_candidate_ref: str | None = None,
-    config_generation: str | None = None,
-    config_fencing_token: str | None = None,
-    config_startup_contract: dict[str, object] | None = None,
-) -> None:
-    backend_workspace_id = await asyncio.to_thread(
-        resolve_backend_workspace_id,
-        project_root,
-        workspace_root,
-    )
-    expected_id = expected_backend_workspace_id or runtime.backend_workspace_id
-    if expected_id is not None and expected_id != backend_workspace_id:
+async def start_managed_backend_runtime(
+    *, owner: ManagedBackendOwner, project_root: Path, log_dir: Path,
+    reusable_runtimes: dict[str, WorkspaceRuntime] | None = None,
+    mount_contract: ManagedBackendContract | None = None,
+    adopt_existing_backend: bool = False,
+    preferred_backend_port: int | None = None,
+    health_request_timeout_seconds: float = 2, health_poll_interval_seconds: float = 0.5,
+    connection_drain_timeout_seconds: float = 2, default_skill_groups: Sequence[str] = (),
+    startup_contracts: dict[str, dict[str, object]] | None = None,
+    preserve_adopted_processes_on_failure: bool = False,
+    preserve_generation: bool = False,
+) -> tuple[ManagedBackendContract, dict[str, WorkspaceRuntime]]:
+    """唯一 owner 持有启动句柄；完整候选合同仅由 registry 公布。"""
+    previous = mount_contract or owner.contract
+    if owner.process is not None or owner.unpublished_runtimes:
+        raise ValueError("managed Backend 仍持有句柄；先完成唯一 owner 的回收")
+    if preferred_backend_port is not None and (
+        isinstance(preferred_backend_port, bool) or not 1 <= preferred_backend_port <= 65535
+    ):
+        raise ValueError(f"Backend 首选端口非法: {preferred_backend_port}")
+    adopted = await _adopt_workspace_backend(contract=previous) if previous.backend_url else None
+    if adopted is not None and adopt_existing_backend and preferred_backend_port is not None and urlparse(previous.backend_url).port != preferred_backend_port:
+        adopted.detach()
         raise RuntimeError(
-            "重启 Workspace backend UUID 与当前运行时不一致: "
-            f"expected={expected_id}, actual={backend_workspace_id}, "
-            f"workspace_root={workspace_root}"
+            "持久化 Backend 端口与首选端口不匹配: "
+            f"preferred={preferred_backend_port}, actual={urlparse(previous.backend_url).port}"
         )
-    backend_url = runtime.service_urls["workspace_api"]
-    parsed_backend_url = urlparse(backend_url)
-    if parsed_backend_url.port is None:
-        raise ValueError(f"Workspace API URL 缺少端口: {backend_url}")
-    old_backend = runtime.processes.get("workspace_api")
-    if old_backend is None:
-        raise RuntimeError("Workspace 重启缺少当前后端进程句柄")
-    old_port = parsed_backend_url.port
-
-    def backend_environment(*, include_config_startup_contract: bool) -> dict[str, str]:
-        environment = {
-            "BOXTEAM_TERMINAL_BACKEND_URL": runtime.service_urls["terminal_manager"],
-            "BOXTEAM_BROWSER_BACKEND_URL": runtime.service_urls["browser_manager"],
-            "BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(
-                list(default_skill_groups),
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        }
-        if include_config_startup_contract and config_candidate_ref is not None:
-            environment.update(
-                {
-                    "BOXTEAM_CONFIG_CANDIDATE_REF": config_candidate_ref,
-                    "BOXTEAM_CONFIG_GENERATION": config_generation or "",
-                    "BOXTEAM_CONFIG_FENCING_TOKEN": config_fencing_token or "",
-                }
-            )
-        return environment
-
-    # SQLite 状态库的进程所有权锁要求同一工作区同一时刻只有一个后端。
-    # 因此候选后端必须在旧后端彻底退出后启动；旧后端若已成功退出但候选
-    # 启动失败，则在原端口恢复一个当前配置的后端，交给上层取消 drain。
-    old_backend.close(timeout_seconds=connection_drain_timeout_seconds)
-    candidate_port = allocate_local_port()
-    candidate_url = f"http://127.0.0.1:{candidate_port}"
-    backend = None
-    recovered_backend = None
+    if adopted is not None:
+        owner.set_process(adopted, adopted=True)
+        if not adopt_existing_backend:
+            owner.close(timeout_seconds=connection_drain_timeout_seconds)
+            adopted = None
+    port = urlparse(previous.backend_url).port if adopted is not None else preferred_backend_port or allocate_local_port()
+    if port is None:
+        raise ValueError("Backend URL 缺少端口")
+    if adopted is None and not is_local_port_available(port):
+        raise RuntimeError(f"Backend 端口已被占用: 127.0.0.1:{port}")
+    runtimes = dict(reusable_runtimes or {})
     try:
-        backend = start_local_backend_process(
-            project_root=project_root,
-            workspace_root=workspace_root,
-            backend_workspace_id=backend_workspace_id,
-            port=candidate_port,
-            log_dir=log_dir,
-            extra_env=backend_environment(include_config_startup_contract=True),
-            debug_port=runtime.backend_debug_port,
-            connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+        members = []
+        for member in previous.members:
+            runtime = runtimes.get(member.workspace_id)
+            if runtime is None:
+                runtime = WorkspaceRuntime(service_urls={}, backend_workspace_id=member.mount.workspace_id)
+                owner.unpublished_runtimes[member.workspace_id] = runtime
+                runtimes[member.workspace_id] = runtime
+            await _start_member_auxiliary_services(
+                member, project_root=project_root, log_dir=log_dir, runtime=runtime,
+                request_timeout_seconds=health_request_timeout_seconds,
+                poll_interval_seconds=health_poll_interval_seconds,
+                preserve_adopted_processes_on_failure=preserve_adopted_processes_on_failure,
+                preserve_mount_urls=preserve_generation or adopted is not None,
+            )
+            mount = replace(
+                member.mount,
+                terminal_backend_url=runtime.service_urls["terminal_manager"],
+                browser_backend_url=runtime.service_urls["browser_manager"],
+            )
+            members.append(ManagedBackendMember(member.workspace_id, mount))
+        contract = replace(
+            previous, members=tuple(members), backend_url=f"http://127.0.0.1:{port}",
+            generation=previous.generation if adopted is not None or preserve_generation else f"backend_generation_{uuid4().hex}",
         )
-        if config_startup_contract is None:
-            await wait_for_workspace_health(
-                f"{candidate_url}/api/v1/health",
-                backend_workspace_id,
-                backend.process,
-                request_timeout_seconds=health_request_timeout_seconds,
-                poll_interval_seconds=health_poll_interval_seconds,
+        startup_mounts = []
+        for member in contract.members:
+            startup = (startup_contracts or {}).get(member.workspace_id)
+            startup_mounts.append(
+                replace(member.mount, config_candidate_ref=str(startup["candidate_ref"]),
+                        config_generation=str(startup["target_generation"]),
+                        config_fencing_token=str(startup["fencing_token"]))
+                if startup is not None else member.mount
             )
-        else:
-            await wait_for_workspace_config_proof(
-                f"{candidate_url}/api/v1/health",
-                backend.process,
-                backend_workspace_id=backend_workspace_id,
-                expected_proof=workspace_config_proof_expectation(
-                    config_startup_contract
-                ),
-                request_timeout_seconds=health_request_timeout_seconds,
-                poll_interval_seconds=health_poll_interval_seconds,
-            )
-        runtime.replace_process("workspace_api", backend)
-        runtime.service_urls["workspace_api"] = candidate_url
-        runtime.backend_workspace_id = backend_workspace_id
-    except Exception as error:
-        if backend is not None:
-            backend.close()
+        if adopted is None:
+            owner.set_process(start_local_backend_process(
+                project_root=project_root, mounts=tuple(startup_mounts), backend_generation=contract.generation,
+                port=port, log_dir=log_dir,
+                extra_env={"BOXTEAM_DEFAULT_SKILL_GROUPS": json.dumps(list(default_skill_groups), ensure_ascii=False, separators=(",", ":"))},
+                debug_port=contract.debug_port, connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+            ))
+        await verify_managed_backend_group(
+            contract, process=getattr(owner.process, "process", None), startup_contracts=startup_contracts,
+            request_timeout_seconds=health_request_timeout_seconds, poll_interval_seconds=health_poll_interval_seconds,
+        )
+        for member in contract.members:
+            runtimes[member.workspace_id].backend_owner = owner
+        return contract, {member.workspace_id: runtimes[member.workspace_id] for member in contract.members}
+    except BaseException as error:
         try:
-            recovered_backend = start_local_backend_process(
-                project_root=project_root,
-                workspace_root=workspace_root,
-                backend_workspace_id=backend_workspace_id,
-                port=old_port,
-                log_dir=log_dir,
-                extra_env=backend_environment(include_config_startup_contract=False),
-                debug_port=runtime.backend_debug_port,
-                connection_drain_timeout_seconds=connection_drain_timeout_seconds,
-            )
-            await wait_for_workspace_health(
-                f"{backend_url.rstrip('/')}/api/v1/health",
-                backend_workspace_id,
-                recovered_backend.process,
-                request_timeout_seconds=health_request_timeout_seconds,
-                poll_interval_seconds=health_poll_interval_seconds,
-            )
-        except Exception as recovery_error:
-            if recovered_backend is not None:
-                recovered_backend.close()
-            runtime.remove_process("workspace_api")
-            raise RuntimeError(
-                "Workspace 候选后端启动失败，且旧后端恢复失败: "
-                f"candidate={error}; recovery={recovery_error}"
-            ) from recovery_error
-        runtime.replace_process("workspace_api", recovered_backend)
-        runtime.service_urls["workspace_api"] = backend_url
+            if preserve_adopted_processes_on_failure:
+                if owner.adopted:
+                    owner.detach()
+                for runtime in owner.unpublished_runtimes.values():
+                    runtime.detach_adopted_processes()
+            owner.close(timeout_seconds=connection_drain_timeout_seconds)
+        except BaseException as cleanup_error:  # noqa: BLE001 — 保持原启动失败，未清句柄仍归唯一 owner。
+            error.add_note(f"Backend 完整组清理失败: {cleanup_error!r}")
         raise
+
+
+async def rebuild_managed_backend_runtime(
+    *, owner: ManagedBackendOwner, desired_members: tuple[ManagedBackendMember, ...],
+    runtimes: dict[str, WorkspaceRuntime], project_root: Path, log_dir: Path,
+    health_request_timeout_seconds: float = 2, health_poll_interval_seconds: float = 0.5,
+    connection_drain_timeout_seconds: float = 2, default_skill_groups: Sequence[str] = (),
+    startup_contracts: dict[str, dict[str, object]] | None = None,
+) -> tuple[ManagedBackendContract, dict[str, WorkspaceRuntime]]:
+    """关闭旧进程后在同一 owner 上启动候选；完整恢复由组控制器统一执行。"""
+    owner.close(timeout_seconds=connection_drain_timeout_seconds)
+    return await start_managed_backend_runtime(
+        owner=owner, mount_contract=replace(owner.contract, members=desired_members, backend_url=""),
+        project_root=project_root, log_dir=log_dir, reusable_runtimes=runtimes,
+        health_request_timeout_seconds=health_request_timeout_seconds,
+        health_poll_interval_seconds=health_poll_interval_seconds,
+        connection_drain_timeout_seconds=connection_drain_timeout_seconds,
+        default_skill_groups=default_skill_groups, startup_contracts=startup_contracts,
+    )

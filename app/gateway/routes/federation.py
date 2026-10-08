@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
+import httpx
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     HTTPException,
     Query,
@@ -28,14 +32,19 @@ from app.gateway.routes._shared import (
     _managed_workspace_list,
     get_gateway_config_reload_service,
     get_registry,
+    get_workspace_runtime_controller,
 )
-from app.schemas.gateway import (
-    CreateFederationManagedWorkspaceRequest,
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
+from app.schemas.gateway.diagnostics import GatewayDiagnosticsDTO
+from app.schemas.gateway.directory import GatewayDirectoryListDTO
+from app.schemas.gateway.federation import (
     FederationProtocolManifestDTO,
     FederationWorkspaceDTO,
     FederationWorkspaceListDTO,
-    GatewayDiagnosticsDTO,
-    GatewayDirectoryListDTO,
+)
+from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
+from app.schemas.gateway.workspaces import (
+    CreateFederationManagedWorkspaceRequest,
     GatewayManagedWorkspaceListDTO,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -95,7 +104,7 @@ async def federation_workspaces(
         ):
             try:
                 registry.resolve_service_url(workspace_id, service)
-            except LookupError:
+            except (LookupError, RuntimeError):
                 continue
             services.append(public_name)
         return services
@@ -104,6 +113,8 @@ async def federation_workspaces(
         FederationWorkspaceDTO(
             workspace_id=target.workspace_id,
             backend_workspace_id=target.backend_workspace_id,
+            backend_generation=registry.backend_owner(target.workspace_id).contract.generation if registry.backend_owner(target.workspace_id) is not None else None,
+            affected_workspace_ids=list(registry.backend_owner(target.workspace_id).contract.workspace_ids) if registry.backend_owner(target.workspace_id) is not None else [target.workspace_id],
             name=target.name,
             root_path=target.root_path,
             managed=target.managed,
@@ -205,16 +216,26 @@ async def create_federation_managed_workspace(
 )
 async def remove_federation_managed_workspace(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
+    force: bool = False,
     _: object = Depends(verify_federation_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
+    controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
 ):
     try:
-        remove_direct_managed_workspace(registry, workspace_id)
+        result = await remove_direct_managed_workspace(
+            registry, workspace_id, controller=controller, request_id=request_id,
+            group_request=payload, force=force,
+        )
+        if result.status == "blocked":
+            raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except (OSError, RuntimeError, httpx.HTTPError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(
         data=await _managed_workspace_list(registry),
         request_id=request_id,

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     HTTPException,
     Query,
@@ -33,6 +35,7 @@ from app.gateway.routes._shared import (
     _directory_listing,
     _gateway_root,
     get_registry,
+    get_workspace_runtime_controller,
 )
 from app.gateway.routes.workspaces_managed import (
     _remote_gateway_credential,
@@ -49,16 +52,18 @@ from app.gateway.ssh_connections import (
     resolve_ssh_connection_request,
 )
 from app.gateway.workspace_ids import build_workspace_id
-from app.schemas.gateway import (
-    ActivateGatewayWorkspaceResultDTO,
-    AddLocalWorkspaceRequest,
-    AddRemoteGatewayRequest,
-    GatewayDirectoryListDTO,
+from app.schemas.gateway.directory import GatewayDirectoryListDTO
+from app.schemas.gateway.lifecycle import (
+    GatewayRuntimeGroupRequest,
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,
+)
+from app.schemas.gateway.ssh import AddRemoteGatewayRequest, SshConnectionOptionListDTO
+from app.schemas.gateway.workspaces import (
+    ActivateGatewayWorkspaceResultDTO,
+    AddLocalWorkspaceRequest,
     GatewayWorkspaceListDTO,
     ReorderGatewayWorkspacesRequest,
-    SshConnectionOptionListDTO,
     UpdateGatewayWorkspaceRequest,
 )
 from app.schemas.internal_v2.common import APIResponse
@@ -69,15 +74,6 @@ router = APIRouter()
 def _workspace_name(root_path: str, fallback: str = "workspace") -> str:
     name = Path(root_path).name
     return name or fallback
-
-
-def get_workspace_runtime_controller(
-    request: Request,
-) -> GatewayWorkspaceRuntimeController:
-    controller = getattr(request.app.state, "workspace_runtime_controller", None)
-    if not isinstance(controller, GatewayWorkspaceRuntimeController):
-        raise RuntimeError("Gateway 工作区运行时控制器尚未初始化")
-    return controller
 
 
 @router.get(
@@ -338,10 +334,12 @@ async def reconnect_workspace(
         await controller.reconnect_ssh(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
+    except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
@@ -358,6 +356,7 @@ async def reconnect_workspace(
 )
 async def start_managed_workspace_backend(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -374,16 +373,21 @@ async def start_managed_workspace_backend(
         result = await controller.start_managed_backend(
             workspace_id,
             request_id=request_id,
+            group_request=payload,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except PermissionError as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -394,6 +398,7 @@ async def start_managed_workspace_backend(
 )
 async def stop_managed_workspace_backend(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -410,6 +415,7 @@ async def stop_managed_workspace_backend(
         result = await controller.stop_managed_backend(
             workspace_id,
             request_id=request_id,
+            group_request=payload,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -426,6 +432,7 @@ async def stop_managed_workspace_backend(
 )
 async def safe_restart_managed_workspace_backend(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -442,13 +449,16 @@ async def safe_restart_managed_workspace_backend(
         result = await controller.safe_restart_managed_backend(
             workspace_id,
             request_id=request_id,
+            group_request=payload,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
+    except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -459,6 +469,7 @@ async def safe_restart_managed_workspace_backend(
 )
 async def force_restart_managed_workspace_backend(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
@@ -475,13 +486,16 @@ async def force_restart_managed_workspace_backend(
         result = await controller.force_restart_managed_backend(
             workspace_id,
             request_id=request_id,
+            group_request=payload,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
+    except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (FileNotFoundError, OSError, RuntimeError, httpx.HTTPError) as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -508,10 +522,12 @@ async def probe_external_workspace_backend(
         await controller.probe_external_backend(workspace_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
+    except (PermissionError, ValueError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (OSError, RuntimeError) as error:
-        registry.mark_connection_error(workspace_id, str(error))
+        target = registry.resolve(workspace_id)
+        if target.connection_kind != "local" or not target.managed:
+            registry.mark_connection_error(workspace_id, str(error))
         raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
@@ -582,18 +598,34 @@ async def update_workspace(
 )
 async def remove_workspace(
     workspace_id: str,
+    payload: Annotated[GatewayRuntimeGroupRequest | None, Body()] = None,
+    force: bool = False,
     _: str = Depends(verify_gateway_token),
     request_id: str = Depends(get_request_id),
     registry: GatewayWorkspaceRegistry = Depends(get_registry),
     port_forward_manager: SshPortForwardManager = Depends(get_port_forward_manager),
+    controller: Annotated[GatewayWorkspaceRuntimeController, Depends(get_workspace_runtime_controller)] = None,
 ):
     try:
+        target = registry.validate_target_removal(workspace_id, owner="manual_crud")
+        managed_local = target.connection_kind == "local" and target.managed
+        if managed_local:
+            result = await controller.remove_managed_workspace(
+                workspace_id, request_id=request_id, group_request=payload, force=force,
+            )
+            if result.status == "blocked":
+                raise HTTPException(status_code=409, detail=result.model_dump(mode="json"))
         await port_forward_manager.remove_workspace(workspace_id)
-        registry.remove(workspace_id, owner="manual_crud")
+        if not managed_local:
+            registry.remove(workspace_id, owner="manual_crud")
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
-    except KeyError as error:
+    except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (OSError, RuntimeError, httpx.HTTPError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     return APIResponse(
         data=GatewayWorkspaceListDTO(
             active_workspace_id=registry.active_workspace_id,

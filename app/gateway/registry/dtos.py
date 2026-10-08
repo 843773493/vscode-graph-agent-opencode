@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 import httpx
 
 from app.gateway.service_types import GatewayServiceName
-from app.schemas.gateway import (
-    GatewayConfigReloadStatusDTO,
+from app.schemas.gateway.config import GatewayConfigReloadStatusDTO
+from app.schemas.gateway.workspaces import (
     GatewayRemoteConnectionSummaryDTO,
     GatewayServiceStatus,
     GatewayServiceStatusDTO,
@@ -21,8 +21,15 @@ from .core import WorkspaceTarget
 class RegistryDtosMixin:
     async def list_dtos(self, *, check_health: bool = True) -> list[GatewayWorkspaceDTO]:
         targets = list(self._targets.values())
+        backend_owners = tuple((owner, owner.contract) for owner in self._backend_owners.values())
+        backend_contracts = {
+            workspace_id: (owner, contract)
+            for owner, contract in backend_owners
+            for workspace_id in contract.workspace_ids
+        }
         async with httpx.AsyncClient(timeout=2) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
+                backend_owner, backend_contract = backend_contracts.get(target.workspace_id, (None, None))
                 runtime = self._runtimes.get(target.workspace_id)
                 runtime_service_urls = (
                     dict(runtime.service_urls) if runtime is not None else {}
@@ -51,12 +58,24 @@ class RegistryDtosMixin:
                     or f"工作区运行时尚未连接: {target.workspace_id}"
                 )
                 backend_url: str | None = None
+                if backend_owner is not None and not check_health:
+                    try:
+                        backend_owner.assert_healthy()
+                    except RuntimeError as error:
+                        status = "offline"
+                        workspace_service_status = "offline"
+                        workspace_service_error = str(error)
                 if check_health:
                     try:
-                        backend_url = self.resolve_service_url(
-                            target.workspace_id,
-                            "workspace_api",
-                        )
+                        if backend_owner is not None:
+                            backend_owner.assert_healthy()
+                            # 控制面读取已公布合同，不经过业务代理的生命周期暂拒入口。
+                            backend_url = backend_contract.backend_url
+                        else:
+                            backend_url = self.resolve_service_url(
+                                target.workspace_id,
+                                "workspace_api",
+                            )
                         response = await client.get(
                             f"{backend_url.rstrip('/')}/api/v1/health",
                             headers=self._target_headers(target),
@@ -72,6 +91,12 @@ class RegistryDtosMixin:
                                     f"expected={target.backend_workspace_id}, "
                                     f"actual={health_payload.get('workspace_id')!r}"
                                 )
+                            if backend_owner is not None and (
+                                health_payload.get("backend_generation") != backend_contract.generation
+                                or health_payload.get("mount_manifest_digest") != backend_contract.manifest_digest
+                                or health_payload.get("status") != "ok"
+                            ):
+                                raise RuntimeError("managed Backend 完整组健康证明不匹配")
                             status = "ready"
                             workspace_service_status = "ready"
                             workspace_service_error = None
@@ -196,6 +221,8 @@ class RegistryDtosMixin:
                 return GatewayWorkspaceDTO(
                     workspace_id=target.workspace_id,
                     backend_workspace_id=target.backend_workspace_id,
+                    backend_generation=backend_contract.generation if backend_contract is not None else target.remote_backend_generation,
+                    affected_workspace_ids=list(backend_contract.workspace_ids) if backend_contract is not None else list(target.remote_affected_workspace_ids) if target.remote_backend_generation is not None else [target.workspace_id],
                     parent_workspace_id=target.parent_workspace_id,
                     name=target.name,
                     root_path=target.root_path,
@@ -256,4 +283,29 @@ class RegistryDtosMixin:
                     checked_at=datetime.now(UTC).isoformat(),
                 )
 
-            return list(await asyncio.gather(*(build_dto(target) for target in targets)))
+            items = list(await asyncio.gather(*(build_dto(target) for target in targets)))
+            by_id = {item.workspace_id: item for item in items}
+            for owner, contract in backend_owners:
+                failed = [
+                    by_id[workspace_id] for workspace_id in contract.workspace_ids
+                    if by_id[workspace_id].status != "ready"
+                    or any(service.status == "offline" for service in by_id[workspace_id].services.values())
+                ]
+                if failed:
+                    error = owner.error or "; ".join(
+                        f"{item.workspace_id}/{name}: {service.error}"
+                        for item in failed for name, service in item.services.items() if service.status == "offline"
+                    )
+                    # 切换期间的探针失败只作为本次响应事实；旧快照也不能污染新合同。
+                    if (
+                        owner.contract is contract and not owner.lock.locked()
+                        and owner.process is not None and owner.error != error
+                    ):
+                        self.mark_backend_error(owner, error)
+                    for workspace_id in contract.workspace_ids:
+                        item = by_id[workspace_id]
+                        item.status = "offline"
+                        item.connection_error = error
+                        item.services["workspace_api"].status = "offline"
+                        item.services["workspace_api"].error = error
+            return items

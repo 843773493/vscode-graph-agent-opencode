@@ -1,4 +1,8 @@
 import { useEffect } from "react";
+import {
+  registerWorkspaceObservation,
+  useWorkspaceObservationState,
+} from "./workspaceObservationLifecycle";
 
 import {
   streamWorkspaceFileEvents,
@@ -27,13 +31,15 @@ export function useWorkspaceFileWatch({
   onOverflow,
   onStatusChange,
 }: UseWorkspaceFileWatchOptions): void {
+  const observationState = useWorkspaceObservationState(workspaceId);
   const pathKey = JSON.stringify([...new Set(paths)].sort());
 
   useEffect(() => {
-    if (!active) {
+    if (!active || observationState.paused) {
       return;
     }
     const controller = new AbortController();
+    const unregisterObservation = registerWorkspaceObservation(workspaceId, controller);
     const watchPaths = JSON.parse(pathKey) as string[];
     let reconnectDelayMs = 500;
     let reconnectAttempt = 0;
@@ -50,6 +56,7 @@ export function useWorkspaceFileWatch({
     };
 
     const connect = async (): Promise<void> => {
+      if (controller.signal.aborted) return;
       try {
         await streamWorkspaceFileEvents(port, watchPaths, {
           workspaceId,
@@ -94,10 +101,11 @@ export function useWorkspaceFileWatch({
 
     void connect();
     return () => {
+      unregisterObservation();
       controller.abort();
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
       }
     };
-  }, [active, onOverflow, onStatusChange, pathKey, port, workspaceId]);
+  }, [active, observationState, onOverflow, onStatusChange, pathKey, port, workspaceId]);
 }

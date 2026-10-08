@@ -62,8 +62,8 @@
 - 跨 change 归属：`app/gateway/main.py` 当前59行；`app/gateway/control/gateway_state/`、`app/gateway/config/`、`app/services/infrastructure/config_service/` 已是职责包，旧单文件行数不再作为进度或缺陷依据。其主归属仍见「统一资源寻址」与会话上下文资源 URI change；本 change 只引用。**本节尚未收口**：数字核验不能代替要求的文件清单、owner映射、import graph与架构复核；实现期只针对真实职责混合补齐证据或拆分，不据旧统计重建已有能力。
 
 - [x] 9.1 固定1c20的63个直接Python文件已完成逐文件owner、LOC及反向import graph审查，report/inventory位于 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/mounting-architecture-review/attempt-1/`。container与Gateway runtime controller仍是连贯的装配/生命周期owner，保留；以下两项有职责证据，仍待实现，不因统计完成勾整节。
-- [ ] 9.2 按既有Gateway DTO领域owner拆分 `app/schemas/gateway.py` 为职责包；核全仓直接/间接import及测试，将消费者平移至具体模块后删除旧文件，不留re-export兼容层、不改公开字段或行为。审查固定树有32个生产import模块，实施前重新清点完整当前调用方。
-- [ ] 9.3 将 `message_stream_store.py` 中只计算传入state/event的纯reducer/helper提为领域明确模块；Store保留同一turn锁和 `_commit_locked` 的 reducer→durable append/fsync→cache→fanout 顺序与恢复/游标owner，验证原事件投影和持久化行为不变，不拆第二事务owner。
+- [x] 9.2 按既有Gateway DTO领域owner拆分 `app/schemas/gateway.py` 为职责包；核全仓直接/间接import及测试，将消费者平移至具体模块后删除旧文件，不留re-export兼容层、不改公开字段或行为。审查固定树有32个生产import模块，实施前重新清点完整当前调用方。
+- [x] 9.3 将 `message_stream_store.py` 中只计算传入state/event的纯reducer/helper提为领域明确模块；Store保留同一turn锁和 `_commit_locked` 的 reducer→durable append/fsync→cache→fanout 顺序与恢复/游标owner，验证原事件投影和持久化行为不变，不拆第二事务owner。
 
 ### 2026-09-30 补登记：gateway scope_id 的请求级注入通道（跨 change 落差审计 F3）
 
@@ -113,10 +113,16 @@
 
 本节承接原3.3、8.2及D9的共享生命周期缺口，不重复实施已经受验的后端双mount寻址/隔离。唯一合同见本 change 的 `managed-backend-lifecycle` delta；同一作者一次迁齐源码、DTO/调用方和核心公共fixture，少量真实核心修通后集中补边界，最终停写只冻结一次完整候选。
 
-- [ ] 10.1 将共享 Backend 进程handle/generation/显式完整启动清单归一个Gateway managed owner；成员只引用，辅助服务仍按target拥有。控制面只维护一份共享成员权威，不按相同URL或运行target推导组。普通新增保持独立singleton启动，attached/external及默认target限制不变。
-- [ ] 10.2 沿现有lifecycle入口贯通完整组 `expected_backend_generation`/`expected_workspace_ids` 前置条件及owner级串行锁；共享组普通单target操作blocked且不改成员意图。实现generation内mount集合不可变，显式成员进退经全组drain/重建/验证后才公布，失败恢复完整旧组。 明确成员变更独立的desired_workspace_ids完整目标集合，joining项须已登记managed且不归其它活动owner；失败以旧已公布集合为唯一权威，无法恢复时全组offline，明确完整组start是恢复出口。包含默认成员的整组stop、移除默认成员在drain前拒绝。
-- [ ] 10.3 汇总全组Job/tool/background及proxy request/stream blockers；safe沿原30秒期限，超时撤销drain并保旧组。force先持久化全部受影响执行interrupted再唯一close；贯通 `backend_generation`、`affected_workspace_ids` 和blocker `workspace_id` 至DTO/OpenAPI/协议、Web请求/阻塞显示/确认及fixture，不混Gateway target ID与Backend UUID。
-- [ ] 10.4 统一registry remove/upsert/runtime替换、stop/close、Gateway shutdown/preserve/adopt/startup recovery按owner一次处理；共享故障使全成员offline/路由失效，按完整启动合同只恢复一次，UUID/root/membership不符明确拒绝。最后成员退出只关闭Backend一次。 覆盖Gateway候选proof/CAS成功前保旧owner/handle/完整启动清单、proof失败旧组继续服务和新旧均失效时完整组恢复，禁止部分/重复adopt。
-- [ ] 10.5 配置pending restart沿原candidate/journal/proof状态机执行整组切换，只promotion发起成员的匹配candidate，sibling只核自身身份/健康；失败恢复完整旧generation/mount集合，补偿失败按原recovery_required反馈。 proof missing/mismatch及recovery_required的retry/resolve/discard须绑定owner generation与完整旧/目标mount集合，全部sibling身份/健康未确认不公布候选或恢复generation在线；普通非配置offline恢复不新造配置状态机。
-- [ ] 10.6 先跑真实一个Gateway/一个managed Backend/两个mount核心：身份/数据隔离、普通单targetblocked、明确完整组重启及handle只关闭一次；随后集中覆盖陈旧generation/成员集、同组并发、sibling blockers/force、成员进退、故障及一次恢复/adopt、配置补偿、external同URL和默认target限制，带进程外保护并保真实退出码。 同批边界补目标集合输入、切换与旧组补偿均失败后的完整组start恢复、默认共享成员stop/remove拒绝、Gateway generation proof成败及配置域retry/resolve/discard的完整组证明。
-- [ ] 10.7 按新完整候选独立核全部生命周期调用方及旧handle/逐target恢复链已物理下线，复用依赖未变证据、增审受影响差异；完成静态/生成类型/Web构建及相关真实客户端验收，再更新本节与原关联任务，不以规划或核心绿灯勾整个change。
+- [x] 10.1 将共享 Backend 进程handle/generation/显式完整启动清单归一个Gateway managed owner；成员只引用，辅助服务仍按target拥有。控制面只维护一份共享成员权威，不按相同URL或运行target推导组。普通新增保持独立singleton启动，attached/external及默认target限制不变。
+- [x] 10.2 沿现有lifecycle入口贯通完整组 `expected_backend_generation`/`expected_workspace_ids` 前置条件及owner级串行锁；共享组普通单target操作blocked且不改成员意图。实现generation内mount集合不可变，显式成员进退经全组drain/重建/验证后才公布，失败恢复完整旧组。 明确成员变更独立的desired_workspace_ids完整目标集合，joining项须已登记managed且不归其它活动owner；失败以旧已公布集合为唯一权威，无法恢复时全组offline，明确完整组start是恢复出口。包含默认成员的整组stop、移除默认成员在drain前拒绝。
+- [x] 10.3 汇总全组Job/tool/background及proxy request/stream blockers；safe沿原30秒期限，超时撤销drain并保旧组。force先持久化全部受影响执行interrupted再唯一close；贯通 `backend_generation`、`affected_workspace_ids` 和blocker `workspace_id` 至DTO/OpenAPI/协议、Web请求/阻塞显示/确认及fixture，不混Gateway target ID与Backend UUID。
+- [x] 10.4 统一registry remove/upsert/runtime替换、stop/close、Gateway shutdown/preserve/adopt/startup recovery按owner一次处理；共享故障使全成员offline/路由失效，按完整启动合同只恢复一次，UUID/root/membership不符明确拒绝。最后成员退出只关闭Backend一次。 覆盖Gateway候选proof/CAS成功前保旧owner/handle/完整启动清单、proof失败旧组继续服务和新旧均失效时完整组恢复，禁止部分/重复adopt。
+- [x] 10.5 配置pending restart沿原candidate/journal/proof状态机执行整组切换，只promotion发起成员的匹配candidate，sibling只核自身身份/健康；失败恢复完整旧generation/mount集合，补偿失败按原recovery_required反馈。 proof missing/mismatch及recovery_required的retry/resolve/discard须绑定owner generation与完整旧/目标mount集合，全部sibling身份/健康未确认不公布候选或恢复generation在线；普通非配置offline恢复不新造配置状态机。
+- [x] 10.6 先跑真实一个Gateway/一个managed Backend/两个mount核心：身份/数据隔离、普通单targetblocked、明确完整组重启及handle只关闭一次；随后集中覆盖陈旧generation/成员集、同组并发、sibling blockers/force、成员进退、故障及一次恢复/adopt、配置补偿、external同URL和默认target限制，带进程外保护并保真实退出码。 同批边界补目标集合输入、切换与旧组补偿均失败后的完整组start恢复、默认共享成员stop/remove拒绝、Gateway generation proof成败及配置域retry/resolve/discard的完整组证明。
+- [x] 10.7 按新完整候选独立核全部生命周期调用方及旧handle/逐target恢复链已物理下线，复用依赖未变证据、增审受影响差异；完成静态/生成类型/Web构建及相关真实客户端验收，再更新本节与原关联任务，不以规划或核心绿灯勾整个change。
+
+10.2/10.4/10.6 的最后成员闭包验收同时覆盖：发起成员退出合法desired集合；显式空desired与缺省presence在HTTP及生成协议往返中严格区分；空目标不启动Backend；普通DELETE的真实Backend blocker返回409且旧owner/target/意图不变；显式force先持久化interrupted、唯一close与辅助清理，再返回完整WorkspaceList。同步迁Web确认/观察租约、直接托管与联邦删除caller，并核registry.remove/runtime替换没有活跃managed close旁路；相同候选已通过的其它主题只复用或增审差异。
+
+同一闭包还须验停机共享组的非末成员DELETE：无Backend启动、剩余全组offline/停止意图/无runtime lease、新generation使旧请求陈旧、后续完整start验证剩余启动合同；清理或发布失败保旧owner/generation/成员/登记。停机safe/force沿原路由引用owner执行。非managed远程DELETE须在SSH转发清理成功后移除登记，502时保target和未清理转发，修复后可重试清理。上述增量已完成固定增审，仅本闭包勾选完成；原 change 其余任务保持各自验收范围。
+
+2026-10-08 A05验收：169源码＋7主文档完整候选继承已验基线，严格补丁重建通过；L2停机成员退出35核心＋21相关边界＋1真实Gateway通过，L3远程转发1唯一失败/重试用例通过。固定独审确认L1/L2/L3与C1/C2已关闭，复用未变动态与批末Webbuild/strict；原643Gateway结果晚于多数改动、早于最后HTTPError catch，catch由最终7精准例补验，不称643最终重跑。报告和完整候选见 `out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/mounting-lifecycle-dto-source-bulk-dispatch/ROOT-full-final-candidate/revision3/`，L2独审见同run的 `wire_contract_reviewer/artifacts/a05-stopped-member-exit-revision3-review/`。9.2/9.3及第10节完成不代表3.3/8.2等整个change收口，真实Provider403和原goal剩余验收保留。

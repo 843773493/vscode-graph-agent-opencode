@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.gateway.control.gateway_state import GatewayStateStore
@@ -15,12 +16,13 @@ from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceTarget,
 )
+from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.workspace_ids import (
-    build_managed_local_workspace_id,
     build_workspace_id,
 )
 from app.services.infrastructure.config.state import ConfigConflictError
+from tests.support.gateway_managed_backends import ProcessProbe
 
 
 @pytest.fixture
@@ -217,11 +219,8 @@ def test_registry_reopen_rejects_invalid_persisted_connection_fields(
             )
         finally:
             registry.close()
-    with GatewayStateStore(path=state_path) as reopened_state:
-        with pytest.raises(ValueError, match=field):
-            GatewayWorkspaceRegistry(
-                storage_path=registry_path, state_store=reopened_state
-            )
+    with GatewayStateStore(path=state_path) as reopened_state, pytest.raises(ValueError, match=field):
+        GatewayWorkspaceRegistry(storage_path=registry_path, state_store=reopened_state)
 
 
 class _HealthResponse:
@@ -393,51 +392,28 @@ def test_route_references_track_requests_and_streams_without_persisting_runtime_
     assert restored.route_reference_counts("workspace") == (0, 0)
 
 
-def test_registry_rejects_local_runtime_replacement_before_route_drain(
-    tmp_path: Path,
-) -> None:
-    events: list[str] = []
+def test_registry_rejects_local_runtime_replacement_before_route_drain(tmp_path: Path, managed_backend_factory) -> None:
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    old_runtime = WorkspaceRuntime(
-        service_urls={"workspace_api": "http://127.0.0.1:41000"},
-        processes={"workspace_api": _OrderedCloseProcess("old", events, 1)},
+    target = WorkspaceTarget(
+        workspace_id="workspace", name="Workspace", root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:41000", connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001", managed=True,
     )
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="workspace",
-            name="Workspace",
-            root_path=str(tmp_path),
-            backend_url="http://127.0.0.1:41000",
-            connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            managed=True,
-        ),
-        runtime=old_runtime,
-    )
+    registry.upsert(target)
+    backend = ProcessProbe("old")
+    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=backend)
+    graph.publish(registry)
+    old_contract = graph.owner.contract
+    old_runtime = graph.runtimes["workspace"]
     registry.acquire_route_reference("workspace", streaming=False)
-    candidate_runtime = WorkspaceRuntime(
-        service_urls={"workspace_api": "http://127.0.0.1:42000"},
-        processes={"workspace_api": _OrderedCloseProcess("candidate", events, 1)},
-    )
-
+    candidate = replace(old_contract, generation="backend_generation_candidate", backend_url="http://127.0.0.1:42000")
     with pytest.raises(RuntimeError, match="先完成排空"):
-        registry.upsert(
-            WorkspaceTarget(
-                workspace_id="workspace",
-                name="Workspace",
-                root_path=str(tmp_path),
-                backend_url="http://127.0.0.1:42000",
-                connection_kind="local",
-                backend_workspace_id="00000000-0000-4000-8000-000000000001",
-                managed=True,
-            ),
-            runtime=candidate_runtime,
-            activate=False,
-        )
-
+        registry.publish_backend_runtime(graph.owner, candidate, graph.runtimes)
     assert registry.managed_runtime("workspace") is old_runtime
-    assert events == ["terminate:candidate", "close:candidate"]
+    assert graph.owner.contract == old_contract and graph.owner.process is backend
+    assert not backend.closed
     registry.release_route_reference("workspace", streaming=False)
+    registry.close()
 
 
 def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
@@ -460,7 +436,7 @@ def test_remote_gateway_runtime_retires_until_proxy_references_are_drained(
     )
     old_runtime = WorkspaceRuntime(
         service_urls={"workspace_api": "http://127.0.0.1:41000"},
-        processes={"workspace_api": _OrderedCloseProcess("old", events, 1)},
+        processes={"ssh_tunnel": _OrderedCloseProcess("old", events, 1)},
     )
     registry.upsert_remote_gateway(connection, runtime=old_runtime)
     registry.upsert(
@@ -724,27 +700,17 @@ def test_remote_projection_batch_handoff_closes_old_runtime_only_on_promotion(
     registry.close()
 
 
-def test_registry_runtime_generation_protocol_is_persistent_and_reversible(
-    tmp_path: Path,
-) -> None:
+def test_registry_runtime_generation_protocol_is_persistent_and_reversible(tmp_path: Path, managed_backend_factory) -> None:
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    registry = GatewayWorkspaceRegistry(
-        storage_path=tmp_path / "gateway.json",
-        state_store=state,
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json", state_store=state)
+    target = WorkspaceTarget(
+        workspace_id="local-runtime", name="Local runtime", root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:41000", connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001", managed=True,
     )
-    runtime = WorkspaceRuntime(service_urls={"workspace_api": "http://local"})
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="local-runtime",
-            name="Local runtime",
-            root_path="/local-runtime",
-            backend_url="http://local",
-            connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            managed=True,
-        ),
-        runtime=runtime,
-    )
+    registry.upsert(target)
+    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=ProcessProbe())
+    graph.publish(registry)
 
     assert registry.prepare_runtime_generation("gateway-generation") is None
     assert registry.apply_runtime_generation("gateway-generation") is None
@@ -757,7 +723,8 @@ def test_registry_runtime_generation_protocol_is_persistent_and_reversible(
         consumer_id="workspace-process",
         generation="gateway-generation",
     )
-    assert proof.details["local_runtime_count"] == 1
+    assert proof.details["managed_backend_count"] == 1
+    assert proof.details["backends"][0]["affected_workspace_ids"] == ["local-runtime"]
 
     restored = GatewayWorkspaceRegistry(
         storage_path=tmp_path / "gateway.json",
@@ -839,14 +806,14 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
             WorkspaceTarget(
                 workspace_id=f"workspace-{index}",
                 name=f"Workspace {index}",
-                root_path=f"/tmp/workspace-{index}",
+                root_path=str(tmp_path / f"workspace-{index}"),
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
                 backend_workspace_id="00000000-0000-4000-8000-000000000001",
             ),
             runtime=WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"},
-                processes={"workspace_api": process},
+                processes={"terminal_manager": process},
             ),
             activate=index == 0,
         )
@@ -861,202 +828,53 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
     ]
 
 
-def test_registry_can_detach_terminal_and_browser_for_gateway_restart(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.parametrize("preserve_backend", [False, True])
+def test_registry_can_detach_managed_services_for_gateway_restart(tmp_path: Path, managed_backend_factory, preserve_backend: bool) -> None:
     events: list[str] = []
-    terminal = _OrderedCloseProcess("terminal", events, 0)
-    browser = _OrderedCloseProcess("browser", events, 0)
+    backend = ProcessProbe("backend", events)
+    terminal = ProcessProbe("terminal", events)
+    browser = ProcessProbe("browser", events)
     registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="workspace",
-            name="Workspace",
-            root_path=str(tmp_path),
-            backend_url="http://127.0.0.1:8100",
-            connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            managed=True,
-        ),
-        runtime=WorkspaceRuntime(
-            service_urls={
-                "workspace_api": "http://127.0.0.1:8100",
-                "terminal_manager": "http://127.0.0.1:8101",
-                "browser_manager": "http://127.0.0.1:8102",
-            },
-            processes={
-                "terminal_manager": terminal,
-                "browser_manager": browser,
-            },
-        ),
+    target = WorkspaceTarget(
+        workspace_id="workspace", name="Workspace", root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:8100", connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001", managed=True,
     )
-
-    registry.close(
-        preserve_browser_managers=True,
-        preserve_terminal_managers=True,
+    registry.upsert(target)
+    graph = managed_backend_factory(
+        (target,), backend_url=target.backend_url, process=backend,
+        auxiliary_processes={"workspace": {"terminal_manager": terminal, "browser_manager": browser}},
     )
-
-    assert events == ["detach:browser", "detach:terminal"]
-
-
-def test_registry_can_detach_managed_workspace_backend_for_gateway_restart(
-    tmp_path: Path,
-) -> None:
-    events: list[str] = []
-    backend = _OrderedCloseProcess("backend", events, 0)
-    terminal = _OrderedCloseProcess("terminal", events, 0)
-    browser = _OrderedCloseProcess("browser", events, 0)
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway.json")
-    registry.upsert(
-        WorkspaceTarget(
-            workspace_id="workspace",
-            name="Workspace",
-            root_path=str(tmp_path),
-            backend_url="http://127.0.0.1:8100",
-            connection_kind="local",
-            backend_workspace_id="00000000-0000-4000-8000-000000000001",
-            managed=True,
-        ),
-        runtime=WorkspaceRuntime(
-            service_urls={
-                "workspace_api": "http://127.0.0.1:8100",
-                "terminal_manager": "http://127.0.0.1:8101",
-                "browser_manager": "http://127.0.0.1:8102",
-            },
-            processes={
-                "workspace_api": backend,
-                "terminal_manager": terminal,
-                "browser_manager": browser,
-            },
-        ),
-    )
-
-    registry.close(
-        preserve_browser_managers=True,
-        preserve_terminal_managers=True,
-        preserve_workspace_backends=True,
-    )
-
-    assert events == [
-        "detach:browser",
-        "detach:terminal",
-        "detach:backend",
-    ]
+    graph.publish(registry)
+    registry.close(preserve_browser_managers=True, preserve_terminal_managers=True, preserve_workspace_backends=preserve_backend)
+    assert events == [f"{'detach' if preserve_backend else 'close'}:backend", "detach:browser", "detach:terminal"]
+    assert graph.owner.process is None
+    assert graph.runtimes["workspace"].processes == {}
 
 
-def test_registry_migrates_legacy_workspace_ids_and_active_reference(tmp_path: Path):
+@pytest.mark.parametrize("schema_version", [1, 5, 8, 11])
+def test_registry_rejects_legacy_contract_without_rewriting_identity_or_running_intent(tmp_path: Path, schema_version: int) -> None:
     storage_path = tmp_path / "gateway.json"
-    local_legacy_id = "gw_0123456789ab"
-    ssh_legacy_id = "gw_abcdef012345"
     payload = {
-        "active_workspace_id": ssh_legacy_id,
-        "order_customized": True,
-        "targets": [
-            {
-                "workspace_id": local_legacy_id,
-                "name": "Local",
-                "root_path": "/workspace/local",
-                "backend_url": "http://127.0.0.1:8010",
-                "connection_kind": "local",
-                "managed": False,
-            },
-            {
-                "workspace_id": ssh_legacy_id,
-                "name": "Remote",
-                "root_path": "/workspace/remote",
-                "backend_url": "http://127.0.0.1:41000",
-                "connection_kind": "ssh",
-                "managed": True,
-                "ssh_connection": {
-                    "host": "remote.example.com",
-                    "port": 2222,
-                    "username": "developer",
-                    "private_key_path": "/home/user/.ssh/remote_ed25519",
-                    "remote_backend_host": "127.0.0.1",
-                    "remote_backend_port": 8010,
-                },
-            },
-        ],
+        "schema_version": schema_version, "active_workspace_id": "old-active",
+        "targets": [{"workspace_id": "old-active", "name": "Old", "root_path": "/workspace/managed",
+                     "backend_url": "http://127.0.0.1:41000", "connection_kind": "local", "managed": True}],
     }
-    storage_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(ValueError, match="SSH 直连后端注册记录"):
+    original = json.dumps(payload)
+    storage_path.write_text(original)
+    with pytest.raises(ValueError, match="旧单工作区合同已失效"):
         GatewayWorkspaceRegistry(storage_path=storage_path)
+    assert storage_path.read_text() == original
 
 
-def test_registry_v5_migrates_managed_local_id_to_stable_root_id(
-    tmp_path: Path,
-) -> None:
-    storage_path = tmp_path / "gateway.json"
-    root_path = "/workspace/managed"
-    old_id = build_workspace_id(
-        "local",
-        root_path,
-        "http://127.0.0.1:41000",
-    )
-    storage_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 5,
-                "active_workspace_id": old_id,
-                "targets": [
-                    {
-                        "workspace_id": old_id,
-                        "name": "Managed",
-                        "root_path": root_path,
-                        "backend_url": "http://127.0.0.1:41000",
-                        "connection_kind": "local",
-                        "managed": True,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
-    expected_id = build_managed_local_workspace_id(root_path)
-
-    assert registry.active_workspace_id == expected_id
-    assert registry.resolve(expected_id).name == "Managed"
-    persisted = json.loads(storage_path.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 11
-    assert persisted["active_workspace_id"] == expected_id
-    assert registry.resolve(expected_id).desired_running is True
-
-
-def test_registry_v8_only_migrates_active_managed_workspace_as_running(
-    tmp_path: Path,
-) -> None:
-    storage_path = tmp_path / "gateway.json"
-    storage_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 8,
-                "active_workspace_id": "active",
-                "targets": [
-                    {
-                        "workspace_id": workspace_id,
-                        "name": workspace_id,
-                        "root_path": f"/workspace/{workspace_id}",
-                        "backend_url": f"http://127.0.0.1:{port}",
-                        "connection_kind": "local",
-                        "managed": True,
-                    }
-                    for workspace_id, port in (
-                        ("active", 41000),
-                        ("stopped-with-stale-url", 42000),
-                    )
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    registry = GatewayWorkspaceRegistry(storage_path=storage_path)
-
-    assert registry.resolve("active").desired_running is True
-    assert registry.resolve("stopped-with-stale-url").desired_running is False
+def test_registry_rejects_removed_ssh_direct_backend_in_current_schema(tmp_path: Path) -> None:
+    path = tmp_path / "gateway.json"
+    path.write_text(json.dumps({"schema_version": 12, "managed_backends": [], "targets": [{
+        "workspace_id": "old-ssh", "name": "Old SSH", "root_path": "/workspace/remote",
+        "backend_url": "http://127.0.0.1:41000", "connection_kind": "ssh", "managed": True,
+    }]}))
+    with pytest.raises(ValueError, match="SSH 直连后端注册记录"):
+        GatewayWorkspaceRegistry(storage_path=path)
 
 
 def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
@@ -1089,8 +907,9 @@ def test_registry_persists_auxiliary_manager_urls_for_gateway_restart(
     assert restored.resolve("gw_browser_survival").desired_running is False
 
 
-def test_registry_persists_managed_runtime_intent_until_explicit_stop(
-    tmp_path: Path,
+@pytest.mark.asyncio
+async def test_registry_persists_managed_runtime_intent_until_explicit_stop(
+    tmp_path: Path, managed_backend_factory, monkeypatch,
 ) -> None:
     storage_path = tmp_path / "gateway.json"
     registry = GatewayWorkspaceRegistry(storage_path=storage_path)
@@ -1103,12 +922,9 @@ def test_registry_persists_managed_runtime_intent_until_explicit_stop(
         backend_workspace_id="00000000-0000-4000-8000-000000000001",
         managed=True,
     )
-    registry.upsert(
-        target,
-        runtime=WorkspaceRuntime(
-            service_urls={"workspace_api": "http://127.0.0.1:41000"}
-        ),
-    )
+    registry.upsert(target)
+    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=ProcessProbe())
+    graph.publish(registry)
 
     assert registry.resolve(target.workspace_id).desired_running is True
     assert (
@@ -1118,7 +934,19 @@ def test_registry_persists_managed_runtime_intent_until_explicit_stop(
         is True
     )
 
-    registry.stop_managed_runtime(target.workspace_id)
+    controller = GatewayWorkspaceRuntimeController(
+        registry=registry, project_root=tmp_path, log_dir=tmp_path / "logs", drain_timeout_seconds=0,
+    )
+    async def action(*_, **__):
+        return {}
+    async def status(*_, **__):
+        return {"lifecycle_state": "ready", "accepting_jobs": True, "blockers": []}
+    async def listed():
+        return []
+    monkeypatch.setattr(controller, "_runtime_action", action)
+    monkeypatch.setattr(controller, "_runtime_status", status)
+    monkeypatch.setattr(registry, "list_dtos", listed)
+    await controller.stop_managed_backend(target.workspace_id, request_id="stop")
 
     assert registry.resolve(target.workspace_id).desired_running is False
     assert (
@@ -1137,7 +965,7 @@ def registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
             WorkspaceTarget(
                 workspace_id=f"workspace-{index}",
                 name=f"Workspace {index}",
-                root_path=f"/tmp/workspace-{index}",
+                root_path=str(tmp_path / f"workspace-{index}"),
                 backend_url=f"http://127.0.0.1:{8100 + index}",
                 connection_kind="local",
                 backend_workspace_id="00000000-0000-4000-8000-000000000001",
@@ -1221,3 +1049,182 @@ async def test_list_dtos_exposes_config_restart_requirement(
     assert result[0].config_reload.restart_required is True
     assert result[0].config_reload.reason == "restart_required"
     assert result[0].config_reload.changed_sections == ["mcp"]
+
+
+def test_backend_publication_cas_restores_all_reused_runtime_and_owner_pointers(
+    tmp_path: Path, managed_backend_factory, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = GatewayStateStore(path=tmp_path / "backend-cas.sqlite")
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "gateway-cas.json", state_store=state)
+    targets = tuple(WorkspaceTarget(
+        workspace_id=f"member-{index}", name=f"Member {index}", root_path=str(tmp_path / str(index)),
+        backend_url="http://127.0.0.1:41000", connection_kind="local",
+        backend_workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}", managed=True,
+    ) for index in range(2))
+    try:
+        for target in targets:
+            registry.upsert(target, activate=False)
+        graph = managed_backend_factory(targets, backend_url=targets[0].backend_url, process=ProcessProbe())
+        graph.publish(registry)
+        old_contract = graph.owner.contract
+        old_targets = {target.workspace_id: registry.resolve(target.workspace_id) for target in targets}
+        old_urls = {member_id: runtime.service_urls for member_id, runtime in graph.runtimes.items()}
+        other_writer = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=state)
+        other_writer.rename("member-0", "Committed elsewhere")
+        replace_registry = state.replace_workspace_registry
+
+        def commit_candidate(*args, **kwargs):
+            assert graph.owner.contract is old_contract
+            for member_id, runtime in graph.runtimes.items():
+                assert registry.resolve(member_id) is old_targets[member_id]
+                assert runtime.service_urls is old_urls[member_id]
+                assert runtime.service_urls["workspace_api"] == old_contract.backend_url
+            return replace_registry(*args, **kwargs)
+
+        monkeypatch.setattr(state, "replace_workspace_registry", commit_candidate)
+        candidate = replace(old_contract, generation="candidate-generation", backend_url="http://127.0.0.1:41010")
+        with pytest.raises(RuntimeError, match="CAS"):
+            registry.publish_backend_runtime(graph.owner, candidate, graph.runtimes)
+        assert graph.owner.contract is old_contract
+        assert registry.backend_owners() == (graph.owner,)
+        for member_id, runtime in graph.runtimes.items():
+            assert registry.managed_runtime(member_id) is runtime
+            assert runtime.backend_owner is graph.owner
+            assert runtime.service_urls == old_urls[member_id]
+            assert registry.resolve(member_id) is old_targets[member_id]
+            assert runtime.service_urls is old_urls[member_id]
+        persisted = GatewayWorkspaceRegistry(storage_path=registry._storage_path, state_store=state)
+        assert persisted.resolve("member-0").name == "Committed elsewhere"
+        assert persisted.backend_owner("member-0").contract == old_contract
+    finally:
+        registry.close()
+        state.close()
+
+
+@pytest.fixture
+def backend_dto_case(tmp_path: Path, managed_backend_factory):
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "dto-gateway.json")
+    targets = tuple(WorkspaceTarget(
+        workspace_id=f"dto-member-{index}", name=f"DTO {index}",
+        root_path=str(tmp_path / str(index)), backend_url="http://127.0.0.1:41000",
+        connection_kind="local", managed=True,
+        backend_workspace_id=f"00000000-0000-4000-8000-{index + 1:012d}",
+    ) for index in range(2))
+    for target in targets:
+        registry.upsert(target, activate=False)
+    graph = managed_backend_factory(targets, backend_url=targets[0].backend_url, process=ProcessProbe())
+    graph.publish(registry)
+    try:
+        yield registry, graph
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
+async def test_backend_dtos_probe_published_contract_inside_lifecycle_lock(
+    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, graph = backend_dto_case
+    client_type = httpx.AsyncClient
+    requests = []
+
+    def response(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        payload = {"data": {"healthy": True}}
+        if request.url.path == "/api/v1/health":
+            payload = {
+                "status": "ok",
+                "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
+                "backend_generation": graph.owner.contract.generation,
+                "mount_manifest_digest": graph.owner.contract.manifest_digest,
+            }
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response), trust_env=False,
+    ))
+    async with graph.owner.lock:
+        with pytest.raises(LookupError, match="正在切换路由"):
+            registry.resolve_service_url("dto-member-0", "workspace_api")
+        items = await registry.list_dtos()
+        assert all(item.status == "ready" and item.connection_error is None for item in items)
+        assert all(item.backend_generation == graph.owner.contract.generation for item in items)
+        assert all(item.affected_workspace_ids == list(graph.owner.contract.workspace_ids) for item in items)
+        assert graph.owner.error is None
+    assert registry.resolve_service_url("dto-member-0", "workspace_api") == graph.owner.contract.backend_url
+    assert len([request for request in requests if request.url.path == "/api/v1/health"]) == 2
+    assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_transition", [True, False])
+async def test_backend_dto_probe_failure_is_visible_and_only_stable_owner_persists_it(
+    backend_dto_case, monkeypatch: pytest.MonkeyPatch, during_transition: bool,
+) -> None:
+    registry, graph = backend_dto_case
+    client_type = httpx.AsyncClient
+
+    def response(request: httpx.Request) -> httpx.Response:
+        payload = {"data": {"healthy": True}}
+        if request.url.path == "/api/v1/health":
+            payload = {
+                "status": "ok", "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
+                "backend_generation": "wrong-generation",
+                "mount_manifest_digest": graph.owner.contract.manifest_digest,
+            }
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response), trust_env=False,
+    ))
+    if during_transition:
+        await graph.owner.lock.acquire()
+    try:
+        items = await registry.list_dtos()
+        assert all(item.status == "offline" and "健康证明不匹配" in item.connection_error for item in items)
+        if during_transition:
+            assert graph.owner.error is None
+            assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
+        else:
+            original_error = graph.owner.error
+            assert original_error is not None
+            await registry.list_dtos()
+            assert graph.owner.error == original_error
+    finally:
+        if during_transition:
+            graph.owner.lock.release()
+
+
+@pytest.mark.asyncio
+async def test_old_dto_probe_cannot_mark_newly_published_owner_failed(
+    backend_dto_case, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry, graph = backend_dto_case
+    old_contract = graph.owner.contract
+    entered, release = asyncio.Event(), asyncio.Event()
+    client_type = httpx.AsyncClient
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/api/v1/health":
+            return httpx.Response(200, json={"data": {"healthy": True}})
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={
+            "status": "ok", "workspace_id": request.headers["X-BoxTeam-Workspace-Id"],
+            "backend_generation": "bad-old-proof",
+            "mount_manifest_digest": old_contract.manifest_digest,
+        })
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response), trust_env=False,
+    ))
+    pending = asyncio.create_task(registry.list_dtos())
+    await asyncio.wait_for(entered.wait(), 2)
+    candidate = replace(old_contract, generation="newly-published", backend_url="http://127.0.0.1:41020")
+    registry.publish_backend_runtime(graph.owner, candidate, graph.runtimes)
+    release.set()
+    items = await asyncio.wait_for(pending, 2)
+    assert all(item.status == "offline" and item.backend_generation == old_contract.generation for item in items)
+    assert graph.owner.contract is candidate
+    assert graph.owner.error is None
+    assert all(registry.resolve(member_id).connection_error is None for member_id in candidate.workspace_ids)

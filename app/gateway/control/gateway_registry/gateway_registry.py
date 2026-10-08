@@ -130,6 +130,7 @@ class GatewayRegistryMixin:
                 "remote_gateway_connections": metadata.get(
                     "remote_gateway_connections", []
                 ),
+                "managed_backends": metadata.get("managed_backends", []),
                 "targets": targets,
             }
         finally:
@@ -348,6 +349,7 @@ class GatewayRegistryMixin:
             "order_customized": bool(payload.get("order_customized", False)),
             "runtime_generation": payload.get("runtime_generation"),
             "remote_gateway_connections": remote_connections,
+            "managed_backends": payload.get("managed_backends", []),
         }
         apply_id = new_config_id("registry_apply")
         payload_digest = hashlib.sha256(

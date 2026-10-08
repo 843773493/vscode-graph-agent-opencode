@@ -108,8 +108,9 @@ export type GatewayUserViewStateDTO = OptionalFields<GatewayProtocol.GatewayUser
 export type GatewayUserViewStateUpdateRequest = Omit<OptionalFields<GatewayProtocol.GatewayUserViewStateUpdateRequest>, "turn_anchor"> & {
   turn_anchor?: string | null;
 };
-export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceDTO>, "backend_workspace_id" | "parent_workspace_id" | "connection_kind" | "status" | "runtime_action" | "remote"> & {
+export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceDTO>, "backend_workspace_id" | "backend_generation" | "parent_workspace_id" | "connection_kind" | "status" | "runtime_action" | "remote"> & {
   backend_workspace_id?: string | null;
+  backend_generation?: string | null;
   parent_workspace_id?: string | null;
   connection_kind: "local" | "remote_gateway";
   status: "ready" | "offline";

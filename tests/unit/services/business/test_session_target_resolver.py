@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
-from app.schemas.gateway import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import GatewayWorkspaceDTO, GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextSearchMatchDTO,
     SessionContextSearchResultDTO,

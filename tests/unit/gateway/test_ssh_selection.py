@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
-from app.schemas.gateway import AddSshWorkspaceRequest
 from app.gateway.ssh_command import build_ssh_command
 from app.gateway.ssh_config import (
     UserSshHost,
@@ -17,6 +16,7 @@ from app.gateway.ssh_config import (
     resolve_user_ssh_host,
 )
 from app.gateway.ssh_connections import resolve_ssh_connection_request
+from app.schemas.gateway.ssh import AddRemoteGatewayRequest
 
 
 @pytest.fixture
@@ -108,12 +108,12 @@ def test_ssh_command_preserves_config_alias_and_explicit_connection(
 
 
 def test_add_ssh_request_accepts_selection_or_complete_manual_connection():
-    selected = AddSshWorkspaceRequest(
+    selected = AddRemoteGatewayRequest(
         ssh_config_host="dev",
         remote_gateway_port=8014,
     )
     assert selected.ssh_config_host == "dev"
-    manual = AddSshWorkspaceRequest(
+    manual = AddRemoteGatewayRequest(
         name="GPU 主机",
         host="dev.example.com",
         port=2222,
@@ -132,21 +132,21 @@ def test_add_ssh_request_accepts_selection_or_complete_manual_connection():
     assert resolved_manual.private_key_path == "~/.ssh/id_ed25519"
 
     with pytest.raises(ValidationError, match="必须且只能选择"):
-        AddSshWorkspaceRequest(remote_gateway_port=8014)
+        AddRemoteGatewayRequest(remote_gateway_port=8014)
     with pytest.raises(ValidationError, match="必须且只能选择"):
-        AddSshWorkspaceRequest(
+        AddRemoteGatewayRequest(
             connection_workspace_id="gw_test",
             ssh_config_host="dev",
             remote_gateway_port=8014,
         )
     with pytest.raises(ValidationError, match="必须提供主机、用户名和私钥路径"):
-        AddSshWorkspaceRequest(
+        AddRemoteGatewayRequest(
             host="dev.example.com",
             username="developer",
             remote_gateway_port=8014,
         )
     with pytest.raises(ValidationError, match="必须且只能选择"):
-        AddSshWorkspaceRequest(
+        AddRemoteGatewayRequest(
             ssh_config_host="dev",
             host="dev.example.com",
             username="developer",
@@ -185,7 +185,7 @@ def test_ssh_config_selection_uses_pairing_command_from_gateway_config(
     )
 
     resolved = resolve_ssh_connection_request(
-        AddSshWorkspaceRequest(
+        AddRemoteGatewayRequest(
             ssh_config_host="a4500-windows-vm",
             remote_gateway_port=8014,
         ),

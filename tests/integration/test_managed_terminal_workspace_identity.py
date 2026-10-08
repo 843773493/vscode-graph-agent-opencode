@@ -4,16 +4,24 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import httpx
 import pytest
 import websockets
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.local_workspace import (
-    _adopt_terminal_manager,
-    start_managed_local_workspace_runtime,
+    _adopt_local_node_service,
+    start_managed_backend_runtime,
+)
+from app.gateway.runtime.managed_backend import (
+    ManagedBackendContract,
+    ManagedBackendMember,
+    ManagedBackendOwner,
 )
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from tests.support.gateway_processes import (
@@ -29,6 +37,7 @@ from tests.support.ports import integration_port_block_for_file
 async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
     integration_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     node_executable = shutil.which("node")
     if node_executable is None:
@@ -40,12 +49,21 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
     artifacts = workspace_root.parent / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     backend_workspace_id = load_or_create_workspace_id(workspace_root)
-    runtime = await start_managed_local_workspace_runtime(
-        project_root=Path.cwd().resolve(),
-        workspace_root=workspace_root,
-        expected_backend_workspace_id=backend_workspace_id,
-        log_dir=artifacts / "managed-runtime-logs",
+    owner = ManagedBackendOwner(ManagedBackendContract(
+        "backend_owner_terminal", "backend_generation_terminal",
+        (ManagedBackendMember("terminal-target", MountedWorkspace(backend_workspace_id, workspace_root)),), "",
+    ))
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "managed-runtime-gateway.json")
+    registry.upsert(WorkspaceTarget(
+        workspace_id="terminal-target", name="Terminal", root_path=str(workspace_root),
+        backend_url="", connection_kind="local", backend_workspace_id=backend_workspace_id, managed=True,
+    ))
+    registry.register_backend_owner(owner)
+    contract, runtimes = await start_managed_backend_runtime(
+        owner=owner, project_root=Path.cwd().resolve(), log_dir=artifacts / "managed-runtime-logs",
     )
+    registry.publish_backend_runtime(owner, contract, runtimes)
+    runtime = runtimes["terminal-target"]
     try:
         assert runtime.backend_workspace_id == backend_workspace_id
         terminal_url = runtime.service_urls["terminal_manager"]
@@ -58,12 +76,14 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
         assert isinstance(terminal_health["process_id"], int)
 
         with pytest.raises(RuntimeError, match="backend UUID 不匹配"):
-            await _adopt_terminal_manager(
+            await _adopt_local_node_service(
+                service_name="terminal_manager",
                 service_url=terminal_url,
                 backend_workspace_id="00000000-0000-4000-8000-000000000002",
             )
 
-        adopted = await _adopt_terminal_manager(
+        adopted = await _adopt_local_node_service(
+                service_name="terminal_manager",
             service_url=terminal_url,
             backend_workspace_id=backend_workspace_id,
         )
@@ -127,12 +147,23 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             )
             explicit.raise_for_status()
             assert explicit.json()["data"]["resource_id"] == terminal_id
+            # Terminal 先等待两段 1.5 秒进程树回收，再等待最多 3 秒 PTY Worker 退出。
+            stopped_started = time.monotonic()
             stopped = await client.post(
                 f"{workspace_api_path}/resources/{terminal_id}/stop",
                 json={"expected_revision": created["owner_revision"]},
+                timeout=15,
             )
             stopped.raise_for_status()
+            stop_elapsed = time.monotonic() - stopped_started
             assert stopped.json()["data"]["status"] == "terminated"
+            assert stopped.headers["X-Request-ID"] == stopped.json()["request_id"]
+            (artifacts / "managed-terminal-owner-result.json").write_text(json.dumps({
+                "workspace_id": backend_workspace_id, "terminal_id": terminal_id,
+                "terminal_manager_pid": terminal_health["process_id"],
+                "stop_elapsed_seconds": stop_elapsed,
+                "stopped": stopped.json()["data"],
+            }, ensure_ascii=False, indent=2) + "\n")
 
         listed = await terminal_client.list_resources()
         assert [terminal["terminal_id"] for terminal in listed] == [terminal_id]
@@ -143,7 +174,7 @@ async def test_managed_terminal_uses_backend_uuid_and_python_client_controls_it(
             "thread_associations",
         }.intersection(listed[0])
     finally:
-        runtime.close()
+        registry.close()
 
 
 @pytest.mark.asyncio

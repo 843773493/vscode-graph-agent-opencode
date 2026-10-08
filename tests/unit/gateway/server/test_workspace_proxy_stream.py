@@ -22,6 +22,7 @@ from app.gateway.server.workspace_proxy import (
     _stream_proxy_response,
     _wait_for_workspace_runtime,
 )
+from tests.support.gateway_managed_backends import ProcessProbe
 
 
 @pytest.fixture(autouse=True)
@@ -343,30 +344,22 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
 
 @pytest.mark.asyncio
 async def test_proxy_waits_for_active_workspace_restore_before_returning_503(
-    registry: GatewayWorkspaceRegistry,
+    registry: GatewayWorkspaceRegistry, managed_backend_factory,
 ) -> None:
     application = FastAPI()
     workspace_root = Path("/tmp/workspace")
-    runtime = WorkspaceRuntime(
-        service_urls={"workspace_api": "http://127.0.0.1:41003"}
+    target = WorkspaceTarget(
+        workspace_id="gw_stream", name="stream", root_path=str(workspace_root),
+        backend_url="http://127.0.0.1:41003", connection_kind="local",
+        backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        managed=True, desired_running=True,
     )
+    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=ProcessProbe())
 
     async def restore() -> None:
         await asyncio.sleep(0.01)
-        registry.upsert(
-            WorkspaceTarget(
-                workspace_id="gw_stream",
-                name="stream",
-                root_path=str(workspace_root),
-                backend_url="http://127.0.0.1:41003",
-                connection_kind="local",
-                backend_workspace_id="00000000-0000-4000-8000-000000000001",
-                managed=True,
-                desired_running=True,
-            ),
-            runtime=runtime,
-            activate=False,
-        )
+        registry.upsert(target, activate=False)
+        graph.publish(registry)
 
     application.state.managed_runtime_restore_tasks = {
         "gw_stream": asyncio.create_task(restore())

@@ -1,3 +1,4 @@
+import json
 import os
 import socket
 import subprocess
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
 from app.gateway.runtime.local_workspace import validate_workspace_root_access
 from app.gateway.runtime.process import (
     AdoptedManagedProcess,
@@ -249,6 +251,10 @@ def test_managed_process_closes_posix_process_group(
     log_file = _LogFile()
     signals: list[tuple[int, int]] = []
     monkeypatch.setattr(
+        "app.gateway.runtime.process._posix_group_is_alive",
+        lambda _pid, _starttime: process.poll() is None,
+    )
+    monkeypatch.setattr(
         "app.gateway.runtime.process.os.killpg",
         lambda pid, sent_signal: signals.append((pid, sent_signal)),
     )
@@ -267,15 +273,27 @@ def test_managed_process_kills_group_after_timeout(
     log_file = _LogFile()
     signals: list[tuple[int, int]] = []
     monkeypatch.setattr(
+        "app.gateway.runtime.process._posix_group_is_alive",
+        lambda _pid, _starttime: process.poll() is None,
+    )
+    monkeypatch.setattr(
         "app.gateway.runtime.process.os.killpg",
         lambda pid, sent_signal: signals.append((pid, sent_signal)),
     )
 
-    ManagedProcess(process=process, log_file=log_file).close(timeout_seconds=0.01)
+    managed = ManagedProcess(process=process, log_file=log_file)
+    with pytest.raises(TimeoutError, match="未完成优雅关闭") as raised:
+        managed.close(timeout_seconds=0.01)
 
     assert signals == [(4321, 15), (4321, 9)]
     assert process.wait_calls == 2
-    assert log_file.closed is True
+    assert managed.close_failure is raised.value
+    assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
+    assert log_file.closed is False
+    with pytest.raises(TimeoutError) as retried:
+        managed.close(timeout_seconds=0.01)
+    assert retried.value is raised.value
+    assert process.wait_calls == 2
 
 
 def test_managed_process_windows_stops_complete_process_tree(
@@ -312,14 +330,22 @@ def test_managed_process_windows_force_kills_complete_process_tree_after_timeout
         ),
     )
 
-    ManagedProcess(process=process, log_file=log_file).close(timeout_seconds=0.01)
+    managed = ManagedProcess(process=process, log_file=log_file)
+    with pytest.raises(TimeoutError, match="未完成优雅关闭") as raised:
+        managed.close(timeout_seconds=0.01)
 
     assert calls == [
         ["taskkill", "/T", "/PID", "4321"],
         ["taskkill", "/T", "/F", "/PID", "4321"],
     ]
     assert process.wait_calls == 2
-    assert log_file.closed is True
+    assert managed.close_failure is raised.value
+    assert isinstance(raised.value.__cause__, subprocess.TimeoutExpired)
+    assert log_file.closed is False
+    with pytest.raises(TimeoutError) as retried:
+        managed.close(timeout_seconds=0.01)
+    assert retried.value is raised.value
+    assert process.wait_calls == 2
 
 
 def test_adopted_process_windows_uses_tasklist_for_liveness(
@@ -358,8 +384,8 @@ def test_workspace_backend_has_bounded_connection_drain_timeout(
     workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        workspace_root=workspace_root,
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        mounts=(MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root),),
+        backend_generation="test-backend-generation",
         port=41000,
         log_dir=tmp_path / "logs",
     )
@@ -398,8 +424,8 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
     workspace_root.mkdir()
     managed = start_local_backend_process(
         project_root=tmp_path,
-        workspace_root=workspace_root,
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        mounts=(MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root),),
+        backend_generation="test-backend-generation",
         port=41001,
         log_dir=tmp_path / "logs",
         extra_env={"WORKSPACE_ONLY_SETTING": "present"},
@@ -417,10 +443,11 @@ def test_local_child_process_does_not_inherit_gateway_pending_contract(
         )
     )
     assert environment["WORKSPACE_ONLY_SETTING"] == "present"
-    assert environment["BOXTEAM_MOUNTED_WORKSPACES"] == (
-        '[{"workspace_id":"00000000-0000-4000-8000-000000000001",'
-        f'"workspace_root":"{workspace_root}"}}]'
-    )
+    assert json.loads(environment["BOXTEAM_MOUNTED_WORKSPACES"]) == [
+        MountedWorkspace("00000000-0000-4000-8000-000000000001", workspace_root).to_payload()
+    ]
+    assert environment["BOXTEAM_BACKEND_GENERATION"] == "test-backend-generation"
+
 
 
 def test_both_resource_managers_receive_backend_workspace_uuid(

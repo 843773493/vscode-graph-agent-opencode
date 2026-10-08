@@ -17,6 +17,7 @@ import websockets
 
 from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
+from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
 from tests.support.processes import kill_process_on_port, terminate_process
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
@@ -392,10 +393,10 @@ async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = windows_terminal_backend
-    monkeypatch.setenv(
-        "BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{backend.port}"
-    )
-    async with workspace_tool_runtime(Path(backend.workspace_root)) as (
+    root = Path(backend.workspace_root)
+    async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
+        load_or_create_workspace_id(root), root, terminal_backend_url=f"http://127.0.0.1:{backend.port}",
+    )) as (
         container,
         session_id,
         context,

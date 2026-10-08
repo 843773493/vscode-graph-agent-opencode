@@ -14,7 +14,7 @@ from app.gateway.main import app
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.server.port_forwarding import get_port_forward_manager
-from app.schemas.gateway import CreatePortForwardRequest
+from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
 
 
 class _FakeManagedProcess:

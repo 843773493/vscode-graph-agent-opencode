@@ -1,0 +1,454 @@
+"""真实 Gateway 与共享 Backend；仅模型服务使用受控 HTTP 外部边界。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import signal
+import sqlite3
+import threading
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+
+import commentjson
+import httpx
+import pytest
+
+from app.core.mounted_workspaces import (
+    MountedWorkspace,
+    mounted_workspace_manifest_digest,
+)
+from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.harness.python.run_context import TestRunContext
+from tests.integration.stubs.http_stubs import HTTPStubState, openai_chat_stub
+from tests.support.gateway_processes import (
+    LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
+)
+from tests.support.ports import integration_port_block_for_file
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_default_test_workspace,
+)
+
+
+@dataclass
+class SharedBackendCase:
+    client: httpx.AsyncClient
+    context: TestRunContext
+    roots: tuple[Path, Path]
+    boxteam_home: Path
+    provider: HTTPStubState
+
+    async def data(self, method: str, path: str, **kwargs):
+        response = await self.client.request(method, path, **kwargs)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert response.headers["X-Request-ID"] == payload["request_id"]
+        return payload["data"]
+
+
+@pytest.fixture
+async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[SharedBackendCase]:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_port_block_for_file(Path(request.node.path))
+    roots = (context.workspace_root / "primary", context.workspace_root / "secondary")
+    for root in roots:
+        prepare_default_test_workspace(
+            workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        )
+        (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
+        config_path = install_test_workspace_config(
+            workspace_root=root, config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+            schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+        )
+        config = commentjson.loads(config_path.read_text())
+        for provider in config["llm"]["providers"]:
+            provider.update({
+                "endpoint": f"http://127.0.0.1:{ports.port(80)}/v1", "model": "e2e-stub-model",
+                "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False},
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            })
+            provider.pop("auth", None)
+            provider.pop("request_options", None)
+        for agent in config["agents"].values():
+            agent["model"]["fallback_providers"] = []
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    boxteam_home = context.boxteam_home_for_node(request.node.nodeid)
+    with openai_chat_stub(ports.port(80)) as provider:
+        gateway = await asyncio.to_thread(
+            start_gateway_process, workspace_root=roots[0], default_backend_url=None, port=ports.port(20),
+            boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",
+        )
+        try:
+            async with httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
+            ) as client:
+                await acquire_gateway_guest(client)
+                yield SharedBackendCase(client, context, roots, boxteam_home, provider)
+        finally:
+            await asyncio.to_thread(close_gateway_process, gateway)
+
+
+async def _join_group(case: SharedBackendCase):
+    initial = await case.data("GET", "/api/gateway/workspaces")
+    primary = next(item for item in initial["items"] if item["system_default"])
+    added = await case.data("POST", "/api/gateway/workspaces/local", json={
+        "root_path": str(case.roots[1]), "name": "Secondary",
+    })
+    secondary = next(item for item in added["items"] if item["root_path"] == str(case.roots[1]))
+    assert secondary["status"] == "ready", "普通新增必须自动启动独立 singleton"
+    assert secondary["backend_generation"] != primary["backend_generation"]
+    await case.data("POST", f"/api/gateway/workspaces/{secondary['workspace_id']}/runtime/stop")
+    request = {
+        "expected_backend_generation": primary["backend_generation"],
+        "expected_workspace_ids": primary["affected_workspace_ids"],
+        "desired_workspace_ids": [primary["workspace_id"], secondary["workspace_id"]],
+    }
+    joined = await case.data(
+        "POST", f"/api/gateway/workspaces/{primary['workspace_id']}/runtime/restart-safe", json=request,
+    )
+    assert joined["status"] == "restarted"
+    members = joined["workspaces"]["items"]
+    assert all(item["status"] == "ready" for item in members)
+    assert {item["backend_generation"] for item in members} == {joined["backend_generation"]}
+    assert all(set(item["affected_workspace_ids"]) == set(request["desired_workspace_ids"]) for item in members)
+    return primary["workspace_id"], secondary["workspace_id"], joined
+
+
+@pytest.mark.asyncio
+async def test_real_gateway_one_backend_two_mounts_and_isolated_session_jobs(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    ids = (primary, secondary)
+    healths = [await case.data("GET", "/api/v1/workspace", headers={"X-BoxTeam-Workspace-Id": identity}) for identity in ids]
+    assert len({item["workspace_id"] for item in healths}) == 2
+    backend_healths = []
+    sessions = []
+    for index, identity in enumerate(ids):
+        headers = {"X-BoxTeam-Workspace-Id": identity}
+        response = await case.client.get("/api/v1/health", headers=headers)
+        response.raise_for_status()
+        backend_healths.append(response.json())
+        session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": f"mount-{index}"})
+        sessions.append(session["session_id"])
+        accepted = await case.data("POST", f"/api/v1/sessions/{sessions[-1]}/messages", headers=headers, json={
+            "message": {"content": f"回复 mount-{index}"}, "run": {"mode": "single_agent", "agent_id": "default"},
+        })
+        async with asyncio.timeout(60):
+            while True:
+                job = await case.data("GET", f"/api/v1/jobs/{accepted['job_id']}", headers=headers)
+                if job["status"] in {"completed", "failed", "interrupted", "cancelled"}:
+                    assert job["status"] == "completed", job
+                    assert job["session_id"] == sessions[-1]
+                    break
+                await asyncio.sleep(0.1)
+    assert len({item["process_id"] for item in backend_healths}) == 1
+    assert {item["backend_generation"] for item in backend_healths} == {joined["backend_generation"]}
+    assert len({item["mount_manifest_digest"] for item in backend_healths}) == 1
+    for root, session_id, other in zip(case.roots, sessions, reversed(sessions), strict=True):
+        path = root / ".boxteam/navigation/session-catalog.sqlite"
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+            assert connection.execute("SELECT count(*) FROM nodes WHERE node_id=?", (session_id,)).fetchone()[0] == 1
+            assert connection.execute("SELECT count(*) FROM nodes WHERE node_id=?", (other,)).fetchone()[0] == 0
+    wrong = await case.client.get(f"/api/v1/sessions/{sessions[0]}", headers={"X-BoxTeam-Workspace-Id": secondary})
+    assert wrong.status_code == 404
+    state_path = case.boxteam_home / "state/gateway/gateway.sqlite"
+    with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
+        metadata = json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+        ).fetchone()[0])
+    assert len(metadata["managed_backends"]) == 1
+    assert len(metadata["managed_backends"][0]["members"]) == 2
+    (case.context.artifacts_dir / "shared-owner-core.json").write_text(json.dumps({
+        "members": ids, "health": backend_healths, "sessions": sessions,
+        "managed_backends": metadata["managed_backends"],
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_shared_member_requests_block_and_stale_contract_preserves_whole_group(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    for action in ("start", "stop", "restart-safe", "restart-force"):
+        blocked = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/{action}")
+        assert blocked["status"] == "blocked"
+        assert set(blocked["affected_workspace_ids"]) == {primary, secondary}
+        assert blocked["blockers"][0]["workspace_id"] == secondary
+        assert blocked["blockers"][0]["kind"] == "backend_group"
+    response = await case.client.post(f"/api/gateway/workspaces/{primary}/runtime/restart-safe", json={
+        "expected_backend_generation": joined["backend_generation"],
+        "expected_workspace_ids": [primary],
+    })
+    assert response.status_code == 409
+    after = await case.data("GET", "/api/gateway/workspaces")
+    assert {item["backend_generation"] for item in after["items"]} == {joined["backend_generation"]}
+    assert all(item["status"] == "ready" for item in after["items"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="候选退出注入需要 POSIX signal")
+async def test_candidate_process_failure_recovers_complete_previous_group(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    gateway_log = case.context.artifacts_dir / "gateway/gateway.stderr.log"
+    previous_pids = set(re.findall(r"启动工作区后端: pid=(\d+)", gateway_log.read_text()))
+
+    async def interrupt_only_candidate() -> int:
+        async with asyncio.timeout(45):
+            while True:
+                matches = re.findall(r"启动工作区后端: pid=(\d+) port=(\d+)", gateway_log.read_text())
+                candidate = next(((int(pid), int(port)) for pid, port in matches if pid not in previous_pids), None)
+                if candidate is not None:
+                    pid, port = candidate
+                    command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
+                    assert b"app.main:app" in command and str(port).encode() in command
+                    os.kill(pid, signal.SIGKILL)
+                    return pid
+                await asyncio.sleep(0.05)
+
+    monitor = asyncio.create_task(interrupt_only_candidate())
+    try:
+        response = await case.client.post(f"/api/gateway/workspaces/{primary}/runtime/restart-safe", json={
+            "expected_backend_generation": joined["backend_generation"],
+            "expected_workspace_ids": [primary, secondary],
+        })
+        killed_pid = await monitor
+        assert response.status_code == 502, response.text
+        failed_status = response.status_code
+    finally:
+        if not monitor.done():
+            monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)
+    recovered = await case.data("GET", "/api/gateway/workspaces")
+    assert all(item["status"] == "ready" and item["connection_error"] is None for item in recovered["items"])
+    assert {item["backend_generation"] for item in recovered["items"]} == {joined["backend_generation"]}
+    healths = []
+    for identity in (primary, secondary):
+        response = await case.client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": identity})
+        response.raise_for_status()
+        healths.append(response.json())
+    assert len({item["process_id"] for item in healths}) == 1
+    assert all(item["process_id"] != killed_pid for item in healths)
+    assert {item["backend_generation"] for item in healths} == {joined["backend_generation"]}
+    assert len({item["mount_manifest_digest"] for item in healths}) == 1
+    (case.context.artifacts_dir / "candidate-recovery.json").write_text(json.dumps({
+        "candidate_pid": killed_pid, "response": failed_status, "recovered_health": healths,
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+async def _add_nondefault_singleton(case: SharedBackendCase):
+    added = await case.data("POST", "/api/gateway/workspaces/local", json={
+        "root_path": str(case.roots[1]), "name": "Exit Secondary",
+    })
+    return next(item for item in added["items"] if item["root_path"] == str(case.roots[1]))
+
+
+def _managed_owner_snapshot(case: SharedBackendCase):
+    path = case.boxteam_home / "state/gateway/gateway.sqlite"
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        return json.loads(connection.execute(
+            "SELECT payload_json FROM gateway_config WHERE config_key='workspace_registry_meta'",
+        ).fetchone()[0])["managed_backends"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="真实退出进程证明需要 POSIX pid")
+async def test_real_delete_last_member_blocks_job_then_force_commits_durable_interrupted(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    secondary = await _add_nondefault_singleton(case)
+    identity = secondary["workspace_id"]
+    headers = {"X-BoxTeam-Workspace-Id": identity}
+    health = (await case.client.get("/api/v1/health", headers=headers)).json()
+    owner_before = _managed_owner_snapshot(case)
+    log_path = case.context.artifacts_dir / "gateway/gateway.stderr.log"
+    starts_before = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
+    assert starts_before[-1] == str(health["process_id"])
+    entered, release = threading.Event(), threading.Event()
+    def paused_response(_):
+        entered.set()
+        assert release.wait(90), "模型边界等待未释放"
+        return {"content": "退出探针完成"}
+    case.provider.response_callback = paused_response
+    request = {
+        "expected_backend_generation": secondary["backend_generation"],
+        "expected_workspace_ids": secondary["affected_workspace_ids"],
+        "desired_workspace_ids": [],
+    }
+    try:
+        session = await case.data("POST", "/api/v1/sessions", headers=headers, json={"title": "last-member-job"})
+        accepted = await case.data("POST", f"/api/v1/sessions/{session['session_id']}/messages", headers=headers, json={
+            "message": {"content": "保持运行直到受控退出"}, "run": {"mode": "single_agent", "agent_id": "default"},
+        })
+        assert await asyncio.to_thread(entered.wait, 20), "真实 Job 未到达模型边界"
+        blocked = await case.client.request("DELETE", f"/api/gateway/workspaces/{identity}", json=request)
+        assert blocked.status_code == 409, blocked.text
+        detail = blocked.json()["detail"]
+        assert detail["status"] == "blocked" and detail["backend_generation"] == secondary["backend_generation"]
+        assert any(item["workspace_id"] == identity and item["kind"] == "job" and item["resource_id"] == accepted["job_id"] for item in detail["blockers"])
+        after = await case.data("GET", "/api/gateway/workspaces")
+        preserved = next(item for item in after["items"] if item["workspace_id"] == identity)
+        assert preserved["status"] == "ready"
+        assert preserved["backend_generation"] == secondary["backend_generation"]
+        assert {name: service["local_url"] for name, service in preserved["services"].items()} == {name: service["local_url"] for name, service in secondary["services"].items()}
+        assert _managed_owner_snapshot(case) == owner_before
+        with sqlite3.connect(f"file:{case.boxteam_home / 'state/gateway/gateway.sqlite'}?mode=ro", uri=True) as connection:
+            persisted = json.loads(connection.execute("SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (identity,)).fetchone()[0])
+        assert persisted["desired_running"]
+        runtime = await case.data("GET", "/api/v1/runtime/status", headers=headers)
+        assert runtime["lifecycle_state"] == "ready" and runtime["accepting_jobs"]
+        forced = await case.data("DELETE", f"/api/gateway/workspaces/{identity}?force=true", json=request)
+        assert all(item["workspace_id"] != identity for item in forced["items"])
+        assert len(_managed_owner_snapshot(case)) == 1
+        assert len(_managed_owner_snapshot(case)[0]["members"]) == 1
+        interrupted = [
+            event for event in TraceEventStore(case.roots[1] / ".boxteam/sessions").read_events(session["session_id"])
+            if event.job_id == accepted["job_id"] and event.type == "session_interrupted"
+        ]
+        assert len(interrupted) == 1 and interrupted[0].payload.session_id == session["session_id"]
+        async with asyncio.timeout(10):
+            while True:
+                try:
+                    os.kill(health["process_id"], 0)
+                except ProcessLookupError:
+                    break
+                await asyncio.sleep(0.05)
+        starts = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
+        assert starts == starts_before, "最后成员退出不得启动空 Backend"
+        (case.context.artifacts_dir / "controlled-last-member-delete.json").write_text(json.dumps({
+            "safe_blocked": detail, "forced_workspaces": forced,
+            "durable_interrupted": interrupted[0].model_dump(mode="json"),
+            "old_process_id": health["process_id"], "backend_starts": starts,
+            "remaining_owners": _managed_owner_snapshot(case),
+        }, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        release.set()
+        case.provider.response_callback = None
+
+
+@pytest.mark.asyncio
+async def test_real_initiator_exit_then_explicit_empty_target_releases_owner(shared_backend_case: SharedBackendCase) -> None:
+    case = shared_backend_case
+    primary, secondary, joined = await _join_group(case)
+    request = {
+        "expected_backend_generation": joined["backend_generation"],
+        "expected_workspace_ids": joined["affected_workspace_ids"],
+        "desired_workspace_ids": [primary],
+    }
+    exited = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/restart-safe", json=request)
+    assert exited["status"] == "restarted"
+    assert set(exited["affected_workspace_ids"]) == {primary, secondary}
+    offline = next(item for item in exited["workspaces"]["items"] if item["workspace_id"] == secondary)
+    assert offline["status"] == "offline" and offline["backend_generation"] is None
+    started = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/start")
+    stopped = await case.data("POST", f"/api/gateway/workspaces/{secondary}/runtime/restart-safe", json={
+        "expected_backend_generation": started["backend_generation"],
+        "expected_workspace_ids": started["affected_workspace_ids"],
+        "desired_workspace_ids": [],
+    })
+    assert stopped["status"] == "stopped" and stopped["affected_workspace_ids"] == [secondary]
+    owners = _managed_owner_snapshot(case)
+    assert len(owners) == 1 and [member["workspace_id"] for member in owners[0]["members"]] == [primary]
+    final = await case.data("GET", "/api/gateway/workspaces")
+    target = next(item for item in final["items"] if item["workspace_id"] == secondary)
+    assert target["status"] == "offline"
+    assert target["backend_generation"] is None and target["affected_workspace_ids"] == [secondary]
+    (case.context.artifacts_dir / "controlled-last-member-empty-target.json").write_text(json.dumps({
+        "initiator_exit": exited, "explicit_empty_exit": stopped, "remaining_owners": owners,
+    }, ensure_ascii=False, indent=2) + "\n")
+
+
+@pytest.fixture
+def nondefault_third_root(shared_backend_case: SharedBackendCase) -> Path:
+    case = shared_backend_case
+    root = case.context.workspace_root / "stopped-member-exit-third"
+    prepare_default_test_workspace(
+        workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    )
+    (root / ".boxteam/workspace-identity.json").unlink(missing_ok=True)
+    (root / ".boxteam/workspace.jsonc").write_bytes((case.roots[1] / ".boxteam/workspace.jsonc").read_bytes())
+    return root
+
+
+@pytest.mark.asyncio
+async def test_real_stopped_shared_delete_persists_remaining_contract_then_starts_one_mount(
+    shared_backend_case: SharedBackendCase, nondefault_third_root: Path,
+) -> None:
+    case = shared_backend_case
+    secondary = await _add_nondefault_singleton(case)
+    added = await case.data("POST", "/api/gateway/workspaces/local", json={
+        "root_path": str(nondefault_third_root), "name": "Stopped Exit Third",
+    })
+    third = next(item for item in added["items"] if item["root_path"] == str(nondefault_third_root))
+    first_id, remaining_id = secondary["workspace_id"], third["workspace_id"]
+    await case.data("POST", f"/api/gateway/workspaces/{remaining_id}/runtime/stop")
+    joined = await case.data("POST", f"/api/gateway/workspaces/{first_id}/runtime/restart-safe", json={
+        "expected_backend_generation": secondary["backend_generation"],
+        "expected_workspace_ids": [first_id], "desired_workspace_ids": [first_id, remaining_id],
+    })
+    assert joined["status"] == "restarted" and set(joined["affected_workspace_ids"]) == {first_id, remaining_id}
+    old_owner = next(owner for owner in _managed_owner_snapshot(case) if {member["workspace_id"] for member in owner["members"]} == {first_id, remaining_id})
+    old_member = next(member for member in old_owner["members"] if member["workspace_id"] == remaining_id)
+    previous_healths = []
+    for identity in (first_id, remaining_id):
+        response = await case.client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": identity})
+        response.raise_for_status()
+        previous_healths.append(response.json())
+    assert len({health["process_id"] for health in previous_healths}) == 1
+    log_path = case.context.artifacts_dir / "gateway/gateway.stderr.log"
+    starts_before = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
+    previous_request = {"expected_backend_generation": joined["backend_generation"], "expected_workspace_ids": [first_id, remaining_id]}
+    stopped = await case.data("POST", f"/api/gateway/workspaces/{first_id}/runtime/stop", json=previous_request)
+    assert stopped["status"] == "stopped" and stopped["backend_generation"] == joined["backend_generation"]
+    deleted = await case.data("DELETE", f"/api/gateway/workspaces/{first_id}", json={**previous_request, "desired_workspace_ids": [remaining_id]})
+    assert first_id not in {item["workspace_id"] for item in deleted["items"]}
+    remaining = next(item for item in deleted["items"] if item["workspace_id"] == remaining_id)
+    assert remaining["status"] == "offline" and remaining["affected_workspace_ids"] == [remaining_id]
+    assert all(service["local_url"] is None for service in remaining["services"].values())
+    new_owner = next(owner for owner in _managed_owner_snapshot(case) if any(member["workspace_id"] == remaining_id for member in owner["members"]))
+    assert new_owner["owner_id"] == old_owner["owner_id"] and new_owner["generation"] != old_owner["generation"]
+    assert new_owner["members"] == [old_member] and remaining["backend_generation"] == new_owner["generation"]
+    path = case.boxteam_home / "state/gateway/gateway.sqlite"
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        assert connection.execute("SELECT count(*) FROM gateway_workspace_registry WHERE workspace_id=?", (first_id,)).fetchone()[0] == 0
+        persisted = json.loads(connection.execute("SELECT payload_json FROM gateway_workspace_registry WHERE workspace_id=?", (remaining_id,)).fetchone()[0])
+    assert not persisted["desired_running"] and persisted["runtime_lease_id"] is None
+    starts_after_exit = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
+    assert starts_after_exit == starts_before, "停机成员删除不能启动旧组或剩余 Backend"
+    stale = await case.client.post(f"/api/gateway/workspaces/{remaining_id}/runtime/start", json=previous_request)
+    assert stale.status_code == 409 and "陈旧" in stale.json()["detail"]
+    started = await case.data("POST", f"/api/gateway/workspaces/{remaining_id}/runtime/start", json={
+        "expected_backend_generation": new_owner["generation"], "expected_workspace_ids": [remaining_id],
+    })
+    assert started["status"] == "started" and started["affected_workspace_ids"] == [remaining_id]
+    response = await case.client.get("/api/v1/health", headers={"X-BoxTeam-Workspace-Id": remaining_id})
+    response.raise_for_status()
+    health = response.json()
+    published_owner = next(owner for owner in _managed_owner_snapshot(case) if any(member["workspace_id"] == remaining_id for member in owner["members"]))
+    assert [member["workspace_id"] for member in published_owner["members"]] == [remaining_id]
+    mount_payload = published_owner["members"][0]["mount"]
+    mount = MountedWorkspace(
+        mount_payload["workspace_id"], Path(mount_payload["workspace_root"]),
+        mount_payload["terminal_backend_url"], mount_payload["browser_backend_url"],
+    )
+    assert health["workspace_id"] == third["backend_workspace_id"] == mount.workspace_id
+    assert mount.workspace_root == nondefault_third_root.resolve()
+    assert health["backend_generation"] == published_owner["generation"] == started["backend_generation"]
+    assert health["mount_manifest_digest"] == mounted_workspace_manifest_digest((mount,))
+    assert health["process_id"] != previous_healths[0]["process_id"]
+    starts_final = re.findall(r"启动工作区后端: pid=(\d+)", log_path.read_text())
+    assert starts_final[:-1] == starts_before and starts_final[-1] == str(health["process_id"])
+    (case.context.artifacts_dir / "stopped-shared-member-delete.json").write_text(json.dumps({
+        "old_owner": old_owner, "stopped": stopped, "deleted": deleted, "remaining_owner": new_owner,
+        "remaining_target": persisted, "stale_status": stale.status_code, "started": started,
+        "health": health, "published_owner": published_owner,
+        "starts_before": starts_before, "starts_after_exit": starts_after_exit, "starts_final": starts_final,
+    }, ensure_ascii=False, indent=2) + "\n")

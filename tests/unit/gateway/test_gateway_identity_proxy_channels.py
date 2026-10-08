@@ -19,6 +19,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.core.path_utils import get_gateway_root
+from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.auxiliary_proxy import _proxy_auxiliary_websocket
 from app.gateway.federation import workspace_port as workspace_port_module
@@ -57,10 +58,19 @@ def test_backend_headers_inject_authoritative_gateway_id(tmp_path: Path) -> None
     assert headers["X-BoxTeam-Workspace-Id"] == "00000000-0000-4000-8000-000000000001"
 
 
+@pytest.fixture
+def catalog_request_id():
+    request_id = "req_catalog_gateway_identity"
+    token = set_current_request_id(request_id)
+    yield request_id
+    reset_current_request_id(token)
+
+
 @pytest.mark.asyncio
 async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    catalog_request_id: str,
 ) -> None:
     """联邦冷 catalog 端口对工作区后端的请求带真实 gateway_id。"""
 
@@ -71,11 +81,16 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
         captured.append(dict(request.headers))
         return httpx.Response(
             200,
-            json={"data": {"catalog_revision": "rev_34c", "sessions": []}},
+            json={
+                "request_id": request.headers["X-Request-ID"],
+                "data": {"catalog_revision": "rev_34c", "sessions": []},
+            },
+            headers={"X-Request-ID": request.headers["X-Request-ID"]},
         )
 
-    def handler_client(*, timeout: float) -> httpx.AsyncClient:
-        return real_client(transport=httpx.MockTransport(handler), timeout=timeout)
+    def handler_client(*, timeout: float, trust_env: bool) -> httpx.AsyncClient:
+        assert trust_env is False
+        return real_client(transport=httpx.MockTransport(handler), timeout=timeout, trust_env=trust_env)
 
     monkeypatch.setattr(workspace_port_module.httpx, "AsyncClient", handler_client)
 
@@ -91,6 +106,7 @@ async def test_workspace_catalog_port_injects_authoritative_gateway_id(
     # httpx 头部名统一小写；断言线上可见的真实权威值。
     assert captured[0]["x-boxteam-gateway-id"] == _gateway_id(tmp_path)
     assert captured[0]["x-boxteam-workspace-id"] == "00000000-0000-4000-8000-000000000001"
+    assert captured[0]["x-request-id"] == catalog_request_id
 
 
 class _FakeWebSocket:

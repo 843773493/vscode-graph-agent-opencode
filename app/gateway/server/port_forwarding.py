@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.schemas.gateway import (
+from app.schemas.gateway.port_forwarding import (
     ChangePortForwardLabelRequest,
     ChangePortForwardLocalPortRequest,
     CreatePortForwardRequest,

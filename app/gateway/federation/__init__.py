@@ -24,7 +24,7 @@ from app.gateway.runtime.process import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
-from app.schemas.gateway import FederationWorkspaceDTO
+from app.schemas.gateway.federation import FederationWorkspaceDTO
 
 FEDERATION_PROTOCOL_VERSION = 1
 #: SSH 配对是有界等待：对端 TCP 吞包时必须在有限时间内响亮失败，绝不无限挂起
@@ -261,12 +261,13 @@ async def request_remote_gateway_management(
     path: str,
     request_id: str,
     payload: dict[str, object] | None = None,
+    timeout_seconds: float = 45,
 ) -> dict[str, object]:
     headers = {
         "X-BoxTeam-Federation-Token": credential.token,
         "X-Request-ID": request_id,
     }
-    async with httpx.AsyncClient(timeout=45) as client:
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         response = await client.request(
             method,
             f"{gateway_url.rstrip('/')}{path}",

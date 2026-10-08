@@ -5,6 +5,7 @@ import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import httpx
 
@@ -18,24 +19,24 @@ from app.gateway.remote_gateway import (
     refresh_remote_gateway_projections,
 )
 from app.gateway.runtime.consumer_protocol import GatewayRuntimeHealthProof
+from app.gateway.runtime.group_actions import ManagedBackendGroupActions
 from app.gateway.runtime.local_workspace import (
-    restart_managed_workspace_backend,
-    start_managed_local_workspace_runtime,
     wait_for_workspace_health,
 )
 from app.gateway.runtime.process import resolve_backend_workspace_id
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.schemas.gateway import (
+from app.schemas.gateway.lifecycle import (
     GatewayRuntimeBlockerDTO,
+    GatewayRuntimeGroupRequest,
     GatewayRuntimeRestartResultDTO,
     GatewayRuntimeStateResultDTO,
-    GatewayWorkspaceListDTO,
 )
+from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 
 _LOCK_SHARDS = 64
 
 
-class GatewayWorkspaceRuntimeController:
+class GatewayWorkspaceRuntimeController(ManagedBackendGroupActions):
     def __init__(
         self,
         *,
@@ -68,50 +69,37 @@ class GatewayWorkspaceRuntimeController:
         )
 
     async def start_managed_backend(
-        self,
-        workspace_id: str,
-        *,
-        request_id: str,
+        self, workspace_id: str, *, request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
-        async with self._lock(workspace_id):
-            target = self._registry.resolve(workspace_id)
-            if target.connection_kind == "remote_gateway":
-                return await self._delegated_runtime_state(
-                    target,
-                    "start",
-                    request_id=request_id,
-                )
-            if target.connection_kind != "local" or not target.managed:
-                raise ValueError("只有 Gateway 托管的本地工作区可以启动后端")
-            if self._registry.has_runtime(workspace_id):
-                raise ValueError(f"工作区后端已经启动: {target.name}")
-            workspace_root = Path(target.root_path).expanduser().resolve()
-            if not workspace_root.is_dir():
-                raise FileNotFoundError(f"工作区目录不存在: {workspace_root}")
-            runtime = await start_managed_local_workspace_runtime(
-                project_root=self._project_root,
-                workspace_root=workspace_root,
-                expected_backend_workspace_id=target.backend_workspace_id,
-                log_dir=self._log_dir,
-                reusable_backend_url=target.backend_url or None,
-                adopt_existing_backend=False,
-                reusable_service_urls=target.local_service_urls,
-                health_request_timeout_seconds=self._health_request_timeout_seconds,
-                health_poll_interval_seconds=self._health_poll_interval_seconds,
-                connection_drain_timeout_seconds=(
-                    self._connection_drain_timeout_seconds
-                ),
-                default_skill_groups=self._default_skill_groups,
-            )
-            target.backend_url = runtime.service_urls["workspace_api"]
-            target.backend_workspace_id = runtime.backend_workspace_id
-            target.local_service_urls = {
-                "terminal_manager": runtime.service_urls["terminal_manager"],
-                "browser_manager": runtime.service_urls["browser_manager"]
-            }
-            target.connection_error = None
-            self._registry.upsert(target, runtime=runtime, activate=False)
-            return await self._state_result(workspace_id, "started")
+        return await self._managed_group_action(workspace_id, "start", request_id=request_id, group_request=group_request)
+
+    async def stop_managed_backend(
+        self, workspace_id: str, *, request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None,
+    ) -> GatewayRuntimeStateResultDTO:
+        return await self._managed_group_action(workspace_id, "stop", request_id=request_id, group_request=group_request)
+
+    async def safe_restart_managed_backend(
+        self, workspace_id: str, *, request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None,
+    ) -> GatewayRuntimeRestartResultDTO:
+        return await self._managed_group_action(workspace_id, "restart-safe", request_id=request_id, group_request=group_request)
+
+    async def force_restart_managed_backend(
+        self, workspace_id: str, *, request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None,
+    ) -> GatewayRuntimeRestartResultDTO:
+        return await self._managed_group_action(workspace_id, "restart-force", request_id=request_id, group_request=group_request)
+
+    async def remove_managed_workspace(
+        self, workspace_id: str, *, request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None, force: bool = False,
+    ) -> GatewayRuntimeRestartResultDTO:
+        return await self._managed_group_action(
+            workspace_id, "restart-force" if force else "restart-safe",
+            request_id=request_id, group_request=group_request, remove_target=True,
+        )
 
     def update_health_controller_config(
         self,
@@ -166,250 +154,6 @@ class GatewayWorkspaceRuntimeController:
             raise RuntimeError("Gateway 健康控制器 request_timeout_seconds 无效")
         if self._health_poll_interval_seconds <= 0:
             raise RuntimeError("Gateway 健康控制器 poll_interval_seconds 无效")
-
-    async def stop_managed_backend(
-        self,
-        workspace_id: str,
-        *,
-        request_id: str,
-    ) -> GatewayRuntimeStateResultDTO:
-        async with self._lock(workspace_id):
-            target = self._registry.resolve(workspace_id)
-            if target.connection_kind == "remote_gateway":
-                return await self._delegated_runtime_state(
-                    target,
-                    "stop",
-                    request_id=request_id,
-                )
-            target, _ = self._managed_local_target(workspace_id)
-            if target.system_default or not target.removable:
-                raise PermissionError(f"默认工作区不能关闭: {target.name}")
-            await self._runtime_action(
-                target,
-                "/api/v1/runtime/drain",
-                request_id=request_id,
-            )
-            deadline = asyncio.get_running_loop().time() + self._drain_timeout_seconds
-            blockers: list[GatewayRuntimeBlockerDTO] = []
-            while True:
-                runtime_status = await self._runtime_status(
-                    target,
-                    request_id=request_id,
-                )
-                blockers = self._parse_blockers(runtime_status.get("blockers"))
-                blockers.extend(self._route_reference_blockers(workspace_id))
-                if not blockers:
-                    break
-                if asyncio.get_running_loop().time() >= deadline:
-                    await self._runtime_action(
-                        target,
-                        "/api/v1/runtime/drain/cancel",
-                        request_id=request_id,
-                    )
-                    return await self._state_result(
-                        workspace_id,
-                        "blocked",
-                        blockers=blockers,
-                    )
-                await asyncio.sleep(self._drain_poll_interval_seconds)
-            self._registry.stop_managed_runtime(workspace_id)
-            return await self._state_result(workspace_id, "stopped")
-
-    async def safe_restart_managed_backend(
-        self,
-        workspace_id: str,
-        *,
-        request_id: str,
-    ) -> GatewayRuntimeRestartResultDTO:
-        async with self._lock(workspace_id):
-            target = self._registry.resolve(workspace_id)
-            if target.connection_kind == "remote_gateway":
-                return await self._delegated_restart(
-                    target,
-                    request_id=request_id,
-                    forced=False,
-                )
-            target, runtime = self._managed_local_target(workspace_id)
-            startup_contract = await self._pending_startup_contract(
-                target,
-                request_id=request_id,
-            )
-            await self._runtime_action(
-                target,
-                "/api/v1/runtime/drain",
-                request_id=request_id,
-            )
-            deadline = (
-                asyncio.get_running_loop().time() + self._drain_timeout_seconds
-            )
-            blockers: list[GatewayRuntimeBlockerDTO] = []
-            while True:
-                runtime_status = await self._runtime_status(
-                    target,
-                    request_id=request_id,
-                )
-                blockers = self._parse_blockers(runtime_status.get("blockers"))
-                blockers.extend(self._route_reference_blockers(workspace_id))
-                if not blockers:
-                    break
-                if asyncio.get_running_loop().time() >= deadline:
-                    await self._runtime_action(
-                        target,
-                        "/api/v1/runtime/drain/cancel",
-                        request_id=request_id,
-                    )
-                    return await self._restart_result(
-                        workspace_id=workspace_id,
-                        status="blocked",
-                        forced=False,
-                        blockers=blockers,
-                    )
-                await asyncio.sleep(self._drain_poll_interval_seconds)
-
-            await self._restart_backend(
-                target,
-                runtime,
-                startup_contract=startup_contract,
-                request_id=request_id,
-            )
-            return await self._restart_result(
-                workspace_id=workspace_id,
-                status="restarted",
-                forced=False,
-            )
-
-    async def force_restart_managed_backend(
-        self,
-        workspace_id: str,
-        *,
-        request_id: str,
-    ) -> GatewayRuntimeRestartResultDTO:
-        async with self._lock(workspace_id):
-            target = self._registry.resolve(workspace_id)
-            if target.connection_kind == "remote_gateway":
-                return await self._delegated_restart(
-                    target,
-                    request_id=request_id,
-                    forced=True,
-                )
-            target, runtime = self._managed_local_target(workspace_id)
-            startup_contract = await self._pending_startup_contract(
-                target,
-                request_id=request_id,
-            )
-            await self._runtime_action(
-                target,
-                "/api/v1/runtime/drain",
-                request_id=request_id,
-            )
-            runtime_status = await self._runtime_status(
-                target,
-                request_id=request_id,
-            )
-            blockers = self._parse_blockers(runtime_status.get("blockers"))
-            await self._runtime_action(
-                target,
-                "/api/v1/runtime/drain/force",
-                request_id=request_id,
-            )
-            await self._restart_backend(
-                target,
-                runtime,
-                startup_contract=startup_contract,
-                request_id=request_id,
-            )
-            return await self._restart_result(
-                workspace_id=workspace_id,
-                status="restarted",
-                forced=True,
-                blockers=blockers,
-            )
-
-    def _managed_local_target(
-        self,
-        workspace_id: str,
-    ) -> tuple[WorkspaceTarget, WorkspaceRuntime]:
-        target = self._registry.resolve(workspace_id)
-        if target.connection_kind != "local" or not target.managed:
-            raise ValueError("只有 Gateway 托管的本地工作区可以重启后端")
-        return target, self._registry.managed_runtime(workspace_id)
-
-    async def _restart_backend(
-        self,
-        target: WorkspaceTarget,
-        runtime: WorkspaceRuntime,
-        *,
-        startup_contract: dict[str, object] | None = None,
-        request_id: str,
-    ) -> None:
-        try:
-            await restart_managed_workspace_backend(
-                runtime=runtime,
-                project_root=self._project_root,
-                workspace_root=Path(target.root_path),
-                expected_backend_workspace_id=target.backend_workspace_id,
-                log_dir=self._log_dir,
-                health_request_timeout_seconds=self._health_request_timeout_seconds,
-                health_poll_interval_seconds=self._health_poll_interval_seconds,
-                connection_drain_timeout_seconds=self._connection_drain_timeout_seconds,
-                default_skill_groups=self._default_skill_groups,
-                config_candidate_ref=(
-                    str(startup_contract["candidate_ref"])
-                    if startup_contract is not None
-                    else None
-                ),
-                config_generation=(
-                    str(startup_contract["target_generation"])
-                    if startup_contract is not None
-                    else None
-                ),
-                config_fencing_token=(
-                    str(startup_contract["fencing_token"])
-                    if startup_contract is not None
-                    else None
-                ),
-                config_startup_contract=startup_contract,
-            )
-        except Exception as error:
-            old_runtime_recovered = False
-            recovery_error: Exception | None = None
-            try:
-                await self._runtime_action(
-                    target,
-                    "/api/v1/runtime/drain/cancel",
-                    request_id=request_id,
-                )
-                old_runtime_recovered = True
-            except Exception as cancel_error:  # noqa: BLE001 - 恢复失败需与启动错误一起暴露
-                recovery_error = cancel_error
-            if startup_contract is not None:
-                try:
-                    await self._record_pending_restart_failure(
-                        target,
-                        candidate_ref=str(startup_contract["candidate_ref"]),
-                        error=str(error),
-                        old_runtime_recovered=old_runtime_recovered,
-                        request_id=request_id,
-                    )
-                except Exception as record_error:  # noqa: BLE001 - 记录失败不能中断恢复清理
-                    recovery_error = recovery_error or record_error
-            if recovery_error is not None:
-                raise RuntimeError(
-                    "Workspace pending 重启失败，且旧 generation 恢复协议失败: "
-                    f"restart={error}; recovery={recovery_error}"
-                ) from recovery_error
-            raise
-        self._registry.invalidate_route(target.workspace_id)
-        target.backend_url = runtime.service_urls["workspace_api"]
-        target.backend_workspace_id = runtime.backend_workspace_id
-        target.connection_error = None
-        self._registry.upsert(target, activate=False)
-        if startup_contract is not None:
-            await self._resolve_pending_restart(
-                target,
-                candidate_ref=str(startup_contract["candidate_ref"]),
-                request_id=request_id,
-            )
 
     async def _record_pending_restart_failure(
         self,
@@ -604,10 +348,10 @@ class GatewayWorkspaceRuntimeController:
         return data
 
     @staticmethod
-    def _parse_blockers(value: object) -> list[GatewayRuntimeBlockerDTO]:
+    def _parse_blockers(value: object, workspace_id: str | None = None) -> list[GatewayRuntimeBlockerDTO]:
         if not isinstance(value, list):
             raise TypeError("Workspace API 生命周期响应缺少 blockers 数组")
-        return [GatewayRuntimeBlockerDTO.model_validate(item) for item in value]
+        return [GatewayRuntimeBlockerDTO.model_validate({**item, "workspace_id": workspace_id or item["workspace_id"]}) for item in value]
 
     def _route_reference_blockers(
         self,
@@ -620,6 +364,7 @@ class GatewayWorkspaceRuntimeController:
         if request_count:
             blockers.append(
                 GatewayRuntimeBlockerDTO(
+                    workspace_id=workspace_id,
                     kind="proxy_request",
                     resource_id=f"{workspace_id}:requests",
                     session_id="gateway-proxy",
@@ -630,6 +375,7 @@ class GatewayWorkspaceRuntimeController:
         if stream_count:
             blockers.append(
                 GatewayRuntimeBlockerDTO(
+                    workspace_id=workspace_id,
                     kind="proxy_stream",
                     resource_id=f"{workspace_id}:streams",
                     session_id="gateway-proxy",
@@ -639,41 +385,42 @@ class GatewayWorkspaceRuntimeController:
             )
         return blockers
 
-    async def _restart_result(
-        self,
-        *,
-        workspace_id: str,
-        status: Literal["restarted", "blocked"],
-        forced: bool,
-        blockers: list[GatewayRuntimeBlockerDTO] | None = None,
-    ) -> GatewayRuntimeRestartResultDTO:
-        return GatewayRuntimeRestartResultDTO(
-            workspace_id=workspace_id,
-            status=status,
-            forced=forced,
-            blockers=blockers or [],
-            workspaces=GatewayWorkspaceListDTO(
-                active_workspace_id=self._registry.active_workspace_id,
-                items=await self._registry.list_dtos(),
-            ),
-        )
+    async def _delegated_result(
+        self, target: WorkspaceTarget, data: dict[str, object], *,
+        restart: bool = False, forced: bool = False,
+    ) -> GatewayRuntimeStateResultDTO | GatewayRuntimeRestartResultDTO:
+        connection_id = target.remote_gateway_connection_id
+        if connection_id is None:
+            raise RuntimeError("远程生命周期响应缺少 Gateway 连接")
+        await refresh_remote_gateway_projections(registry=self._registry, connection_id=connection_id)
+        await self._reconcile_registry_dependents()
+        by_remote = {
+            item.remote_workspace_id: item.workspace_id for item in self._registry.targets()
+            if item.remote_gateway_connection_id == connection_id
+        }
 
-    async def _state_result(
-        self,
-        workspace_id: str,
-        status: Literal["started", "stopped", "blocked"],
-        *,
-        blockers: list[GatewayRuntimeBlockerDTO] | None = None,
-    ) -> GatewayRuntimeStateResultDTO:
-        return GatewayRuntimeStateResultDTO(
-            workspace_id=workspace_id,
-            status=status,
-            blockers=blockers or [],
-            workspaces=GatewayWorkspaceListDTO(
-                active_workspace_id=self._registry.active_workspace_id,
-                items=await self._registry.list_dtos(),
+        def local_id(remote_id: object) -> str:
+            if not isinstance(remote_id, str) or remote_id not in by_remote:
+                raise RuntimeError(f"远程完整组响应包含未登记成员: {remote_id!r}")
+            return by_remote[remote_id]
+
+        raw_affected = data.get("affected_workspace_ids")
+        if not isinstance(raw_affected, list):
+            raise TypeError("远程完整组响应缺少 affected_workspace_ids")
+        affected = [local_id(member_id) for member_id in raw_affected]
+        blockers = [
+            blocker.model_copy(update={"workspace_id": local_id(blocker.workspace_id)})
+            for blocker in self._parse_blockers(data.get("blockers"))
+        ]
+        result = {
+            "workspace_id": target.workspace_id, "status": data["status"],
+            "backend_generation": data.get("backend_generation"), "affected_workspace_ids": affected,
+            "blockers": blockers,
+            "workspaces": GatewayWorkspaceListDTO(
+                active_workspace_id=self._registry.active_workspace_id, items=await self._registry.list_dtos(),
             ),
-        )
+        }
+        return GatewayRuntimeRestartResultDTO.model_validate({**result, "forced": forced}) if restart else GatewayRuntimeStateResultDTO.model_validate(result)
 
     async def reconnect_ssh(self, workspace_id: str) -> None:
         async with self._lock(workspace_id):
@@ -757,6 +504,7 @@ class GatewayWorkspaceRuntimeController:
         *,
         request_id: str,
         forced: bool,
+        group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeRestartResultDTO:
         if not target.managed:
             raise ValueError("远程 Gateway 报告该后端不是托管目标，只能重新探测")
@@ -775,6 +523,7 @@ class GatewayWorkspaceRuntimeController:
                     f"{gateway_url}/api/gateway/workspaces/"
                     f"{remote_workspace_id}/runtime/{path}"
                 ),
+                json=self._remote_group_request(target, group_request),
                 headers={
                     "X-BoxTeam-Federation-Token": credential.token,
                     "X-Request-ID": request_id,
@@ -782,16 +531,10 @@ class GatewayWorkspaceRuntimeController:
             )
             response.raise_for_status()
         data = self._response_data(response)
-        blockers = self._parse_blockers(data.get("blockers"))
         status = data.get("status")
-        if status not in {"restarted", "blocked"}:
+        if status not in {"restarted", "stopped", "blocked"}:
             raise RuntimeError(f"远程 Gateway 返回未知重启状态: {status}")
-        return await self._restart_result(
-            workspace_id=target.workspace_id,
-            status=status,
-            forced=forced,
-            blockers=blockers,
-        )
+        return await self._delegated_result(target, data, restart=True, forced=forced)
 
     async def _delegated_runtime_state(
         self,
@@ -799,6 +542,7 @@ class GatewayWorkspaceRuntimeController:
         action: Literal["start", "stop"],
         *,
         request_id: str,
+        group_request: GatewayRuntimeGroupRequest | None = None,
     ) -> GatewayRuntimeStateResultDTO:
         if not target.managed:
             raise ValueError("远程 Gateway 报告该工作区不是托管目标")
@@ -815,6 +559,7 @@ class GatewayWorkspaceRuntimeController:
                     f"{self._registry.remote_gateway_url(connection_id)}"
                     f"/api/gateway/workspaces/{remote_workspace_id}/runtime/{action}"
                 ),
+                json=self._remote_group_request(target, group_request),
                 headers={
                     "X-BoxTeam-Federation-Token": credential.token,
                     "X-Request-ID": request_id,
@@ -827,17 +572,24 @@ class GatewayWorkspaceRuntimeController:
             raise RuntimeError(
                 f"远程 Gateway 返回未知工作区状态: {status}"
             )
-        blockers = self._parse_blockers(data.get("blockers"))
-        await refresh_remote_gateway_projections(
-            registry=self._registry,
-            connection_id=connection_id,
-        )
-        await self._reconcile_registry_dependents()
-        return await self._state_result(
-            target.workspace_id,
-            status,
-            blockers=blockers,
-        )
+        return await self._delegated_result(target, data)
+
+    def _remote_group_request(self, target: WorkspaceTarget, request: GatewayRuntimeGroupRequest | None) -> dict[str, object] | None:
+        if request is None:
+            return None
+        payload = request.model_dump()
+        for field in ("expected_workspace_ids", "desired_workspace_ids"):
+            ids = payload[field]
+            if ids is None:
+                continue
+            remote_ids = []
+            for workspace_id in ids:
+                member = self._registry.resolve(workspace_id)
+                if member.remote_gateway_connection_id != target.remote_gateway_connection_id or member.remote_workspace_id is None:
+                    raise ValueError("远端完整组成员必须属于同一已登记 Gateway 投影")
+                remote_ids.append(member.remote_workspace_id)
+            payload[field] = remote_ids
+        return payload
 
     async def _reconcile_registry_dependents(self) -> None:
         if self._on_registry_reconciled is not None:
@@ -872,25 +624,20 @@ async def reconnect_gateway_workspace(
         return
 
     if target.managed:
-        runtime = await start_managed_local_workspace_runtime(
-            project_root=project_root,
-            workspace_root=Path(target.root_path),
-            expected_backend_workspace_id=target.backend_workspace_id,
-            log_dir=log_dir,
-            reusable_backend_url=target.backend_url or None,
-            adopt_existing_backend=False,
-            reusable_service_urls=target.local_service_urls,
+        controller = GatewayWorkspaceRuntimeController(
+            registry=registry, project_root=project_root, log_dir=log_dir,
             health_request_timeout_seconds=health_request_timeout_seconds,
             health_poll_interval_seconds=health_poll_interval_seconds,
             connection_drain_timeout_seconds=connection_drain_timeout_seconds,
             default_skill_groups=default_skill_groups,
         )
-        target.backend_url = runtime.service_urls["workspace_api"]
-        target.backend_workspace_id = runtime.backend_workspace_id
-        target.local_service_urls = {
-            "terminal_manager": runtime.service_urls["terminal_manager"],
-            "browser_manager": runtime.service_urls["browser_manager"]
-        }
+        owner = registry.backend_owner(workspace_id)
+        request = GatewayRuntimeGroupRequest(
+            expected_backend_generation=owner.contract.generation,
+            expected_workspace_ids=list(owner.contract.workspace_ids),
+        ) if owner is not None else None
+        await controller.start_managed_backend(workspace_id, request_id=f"reconnect_{uuid4().hex}", group_request=request)
+        return
     else:
         backend_workspace_id = await asyncio.to_thread(
             resolve_backend_workspace_id,

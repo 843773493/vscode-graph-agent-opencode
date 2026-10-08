@@ -10,6 +10,8 @@ from textwrap import dedent
 import pytest
 
 from app.agents.tools.terminal import create_exec_command_tool, create_write_stdin_tool
+from app.core.mounted_workspaces import MountedWorkspace
+from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     start_terminal_backend,
 )
@@ -29,10 +31,11 @@ async def terminal_runtime(
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     root = Path(integration_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    monkeypatch.setenv("BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{port}")
     process = start_terminal_backend(backend_port=port, workspace_root=str(root))
     try:
-        async with workspace_tool_runtime(root) as runtime:
+        async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
+            load_or_create_workspace_id(root), root, terminal_backend_url=f"http://127.0.0.1:{port}",
+        )) as runtime:
             yield runtime
     finally:
         terminate_process(process)
@@ -99,16 +102,20 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
 
     root = Path(integration_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
-    monkeypatch.setenv("BOXTEAM_TERMINAL_BACKEND_URL", f"http://127.0.0.1:{port}")
     process = start_terminal_backend(backend_port=port, workspace_root=str(root))
     child = dedent(r"""
         import asyncio, json, os, sys
         from pathlib import Path
         from app.core.turn_execution_scope import get_current_turn_execution_scope
         from tests.support.workspace_tool_runtime import workspace_tool_runtime
+        from app.core.mounted_workspaces import MountedWorkspace
+        from app.core.workspace_identity import load_or_create_workspace_id
 
         async def crash():
-            async with workspace_tool_runtime(Path(sys.argv[1])) as (container, session_id, context):
+            root = Path(sys.argv[1])
+            async with workspace_tool_runtime(root, startup_mount=MountedWorkspace(
+                load_or_create_workspace_id(root), root, terminal_backend_url=sys.argv[2],
+            )) as (container, session_id, context):
                 owner = container.terminal_resource_owner
                 scope = get_current_turn_execution_scope()
                 async with owner.operation(
@@ -128,7 +135,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
     """)
     try:
         crashed = await asyncio.to_thread(
-            subprocess.run, ["uv", "run", "python", "-c", child, str(root)],
+            subprocess.run, ["uv", "run", "python", "-c", child, str(root), f"http://127.0.0.1:{port}"],
             capture_output=True, text=True, timeout=45, check=False,
         )
         assert crashed.returncode == 71, crashed.stderr
@@ -138,7 +145,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
         workspace_id = load_or_create_workspace_id(root)
         with (
             WorkspaceContainerRegistry(
-                mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, root)]),
+                mounted_workspaces=MountedWorkspaceRegistry([MountedWorkspace(workspace_id, root, terminal_backend_url=f"http://127.0.0.1:{port}")]),
                 project_root=Path.cwd(),
             ) as registry,
             catalog_provider_scope(registry),

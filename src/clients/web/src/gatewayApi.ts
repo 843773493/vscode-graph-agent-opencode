@@ -9,6 +9,7 @@ import type {
   CreatedGatewayDeviceConnection,
   GatewayWorkspaceList,
   GatewayRuntimeRestartResult,
+  GatewayRuntimeGroupRequest,
   GatewayRuntimeStateResult,
   GatewayHealth,
   GatewayDiagnostics,
@@ -506,12 +507,18 @@ export async function addSshGatewayWorkspace(
 export async function removeGatewayWorkspace(
   port: number,
   workspaceId: string,
+  groupRequest?: GatewayRuntimeGroupRequest,
+  force = false,
 ): Promise<GatewayWorkspaceList> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayWorkspaceList>>(
       port,
-      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}`,
-      { method: "DELETE" },
+      `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}?force=${force}`,
+      {
+        method: "DELETE",
+        timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS,
+        body: groupRequest ? JSON.stringify(groupRequest) : undefined,
+      },
     ),
   );
 }
@@ -557,12 +564,13 @@ export async function reconnectGatewayWorkspace(
 export async function safeRestartManagedGatewayWorkspaceBackend(
   port: number,
   workspaceId: string,
+  groupRequest?: GatewayRuntimeGroupRequest,
 ): Promise<GatewayRuntimeRestartResult> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-safe`,
-      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+      { method: "POST", body: groupRequest === undefined ? undefined : JSON.stringify(groupRequest), timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -570,12 +578,13 @@ export async function safeRestartManagedGatewayWorkspaceBackend(
 export async function startManagedGatewayWorkspaceBackend(
   port: number,
   workspaceId: string,
+  groupRequest?: GatewayRuntimeGroupRequest,
 ): Promise<GatewayRuntimeStateResult> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayRuntimeStateResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/start`,
-      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+      { method: "POST", body: groupRequest === undefined ? undefined : JSON.stringify(groupRequest), timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -583,12 +592,13 @@ export async function startManagedGatewayWorkspaceBackend(
 export async function stopManagedGatewayWorkspaceBackend(
   port: number,
   workspaceId: string,
+  groupRequest?: GatewayRuntimeGroupRequest,
 ): Promise<GatewayRuntimeStateResult> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayRuntimeStateResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/stop`,
-      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+      { method: "POST", body: groupRequest === undefined ? undefined : JSON.stringify(groupRequest), timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }
@@ -596,12 +606,13 @@ export async function stopManagedGatewayWorkspaceBackend(
 export async function forceRestartManagedGatewayWorkspaceBackend(
   port: number,
   workspaceId: string,
+  groupRequest?: GatewayRuntimeGroupRequest,
 ): Promise<GatewayRuntimeRestartResult> {
   return unwrapApiData(
     await requestJson<APIResponse<GatewayRuntimeRestartResult>>(
       port,
       `/api/gateway/workspaces/${encodeURIComponent(workspaceId)}/runtime/restart-force`,
-      { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+      { method: "POST", body: groupRequest === undefined ? undefined : JSON.stringify(groupRequest), timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
     ),
   );
 }

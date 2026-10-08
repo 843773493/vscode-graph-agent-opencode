@@ -121,57 +121,6 @@ export declare type AddRemoteGatewayRequest = Message<"boxteam.gateway.v1.AddRem
 export declare const AddRemoteGatewayRequestSchema: GenMessage<AddRemoteGatewayRequest>;
 
 /**
- * @generated from message boxteam.gateway.v1.AddSshWorkspaceRequest
- */
-export declare type AddSshWorkspaceRequest = Message<"boxteam.gateway.v1.AddSshWorkspaceRequest"> & {
-  /**
-   * @generated from field: optional string name = 1;
-   */
-  name?: string | undefined;
-
-  /**
-   * @generated from field: optional string connection_workspace_id = 2;
-   */
-  connectionWorkspaceId?: string | undefined;
-
-  /**
-   * @generated from field: optional string ssh_config_host = 3;
-   */
-  sshConfigHost?: string | undefined;
-
-  /**
-   * @generated from field: optional string host = 4;
-   */
-  host?: string | undefined;
-
-  /**
-   * @generated from field: optional int64 port = 5;
-   */
-  port?: bigint | undefined;
-
-  /**
-   * @generated from field: optional string username = 6;
-   */
-  username?: string | undefined;
-
-  /**
-   * @generated from field: optional string private_key_path = 7;
-   */
-  privateKeyPath?: string | undefined;
-
-  /**
-   * @generated from field: optional int64 remote_gateway_port = 8;
-   */
-  remoteGatewayPort?: bigint | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v1.AddSshWorkspaceRequest.
- * Use `create(AddSshWorkspaceRequestSchema)` to create a new message.
- */
-export declare const AddSshWorkspaceRequestSchema: GenMessage<AddSshWorkspaceRequest>;
-
-/**
  * @generated from message boxteam.gateway.v1.ChangePortForwardLabelRequest
  */
 export declare type ChangePortForwardLabelRequest = Message<"boxteam.gateway.v1.ChangePortForwardLabelRequest"> & {
@@ -428,6 +377,16 @@ export declare type FederationWorkspaceDTO = Message<"boxteam.gateway.v1.Federat
    * @generated from field: string backend_workspace_id = 7;
    */
   backendWorkspaceId: string;
+
+  /**
+   * @generated from field: optional string backend_generation = 8;
+   */
+  backendGeneration?: string | undefined;
+
+  /**
+   * @generated from field: repeated string affected_workspace_ids = 9;
+   */
+  affectedWorkspaceIds: string[];
 };
 
 /**
@@ -1218,6 +1177,48 @@ export declare type GatewayResourceScopeErrorDTO = Message<"boxteam.gateway.v1.G
 export declare const GatewayResourceScopeErrorDTOSchema: GenMessage<GatewayResourceScopeErrorDTO>;
 
 /**
+ * @generated from message boxteam.gateway.v1.GatewayRuntimeDesiredWorkspaceSet
+ */
+export declare type GatewayRuntimeDesiredWorkspaceSet = Message<"boxteam.gateway.v1.GatewayRuntimeDesiredWorkspaceSet"> & {
+  /**
+   * @generated from field: repeated string workspace_ids = 1;
+   */
+  workspaceIds: string[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayRuntimeDesiredWorkspaceSet.
+ * Use `create(GatewayRuntimeDesiredWorkspaceSetSchema)` to create a new message.
+ */
+export declare const GatewayRuntimeDesiredWorkspaceSetSchema: GenMessage<GatewayRuntimeDesiredWorkspaceSet>;
+
+/**
+ * @generated from message boxteam.gateway.v1.GatewayRuntimeGroupRequest
+ */
+export declare type GatewayRuntimeGroupRequest = Message<"boxteam.gateway.v1.GatewayRuntimeGroupRequest"> & {
+  /**
+   * @generated from field: optional string expected_backend_generation = 1;
+   */
+  expectedBackendGeneration?: string | undefined;
+
+  /**
+   * @generated from field: repeated string expected_workspace_ids = 2;
+   */
+  expectedWorkspaceIds: string[];
+
+  /**
+   * @generated from field: boxteam.gateway.v1.GatewayRuntimeDesiredWorkspaceSet desired_workspace_ids = 4;
+   */
+  desiredWorkspaceIds?: GatewayRuntimeDesiredWorkspaceSet | undefined;
+};
+
+/**
+ * Describes the message boxteam.gateway.v1.GatewayRuntimeGroupRequest.
+ * Use `create(GatewayRuntimeGroupRequestSchema)` to create a new message.
+ */
+export declare const GatewayRuntimeGroupRequestSchema: GenMessage<GatewayRuntimeGroupRequest>;
+
+/**
  * @generated from message boxteam.gateway.v1.GatewayRuntimeBlockerDTO
  */
 export declare type GatewayRuntimeBlockerDTO = Message<"boxteam.gateway.v1.GatewayRuntimeBlockerDTO"> & {
@@ -1245,6 +1246,11 @@ export declare type GatewayRuntimeBlockerDTO = Message<"boxteam.gateway.v1.Gatew
    * @generated from field: optional string detail = 5;
    */
   detail?: string | undefined;
+
+  /**
+   * @generated from field: string workspace_id = 6;
+   */
+  workspaceId: string;
 };
 
 /**
@@ -1281,6 +1287,16 @@ export declare type GatewayRuntimeRestartResultDTO = Message<"boxteam.gateway.v1
    * @generated from field: boxteam.gateway.v1.GatewayWorkspaceListDTO workspaces = 5;
    */
   workspaces?: GatewayWorkspaceListDTO | undefined;
+
+  /**
+   * @generated from field: optional string backend_generation = 6;
+   */
+  backendGeneration?: string | undefined;
+
+  /**
+   * @generated from field: repeated string affected_workspace_ids = 7;
+   */
+  affectedWorkspaceIds: string[];
 };
 
 /**
@@ -1312,6 +1328,16 @@ export declare type GatewayRuntimeStateResultDTO = Message<"boxteam.gateway.v1.G
    * @generated from field: boxteam.gateway.v1.GatewayWorkspaceListDTO workspaces = 4;
    */
   workspaces?: GatewayWorkspaceListDTO | undefined;
+
+  /**
+   * @generated from field: optional string backend_generation = 5;
+   */
+  backendGeneration?: string | undefined;
+
+  /**
+   * @generated from field: repeated string affected_workspace_ids = 6;
+   */
+  affectedWorkspaceIds: string[];
 };
 
 /**
@@ -1968,6 +1994,16 @@ export declare type GatewayWorkspaceDTO = Message<"boxteam.gateway.v1.GatewayWor
    * @generated from field: optional string backend_workspace_id = 18;
    */
   backendWorkspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string backend_generation = 19;
+   */
+  backendGeneration?: string | undefined;
+
+  /**
+   * @generated from field: repeated string affected_workspace_ids = 20;
+   */
+  affectedWorkspaceIds: string[];
 };
 
 /**

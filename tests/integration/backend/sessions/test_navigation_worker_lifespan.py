@@ -64,8 +64,7 @@ def _isolate_non_navigation_services(
         "BOXTEAM_MOUNTED_WORKSPACES",
         json.dumps([{
             "workspace_id": container.workspace_id,
-            "workspace_root": str(container.workspace_root),
-        }]),
+            "workspace_root": str(container.workspace_root), "terminal_backend_url": None, "browser_backend_url": None, "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None}]),
     )
     async_stubs: dict[str, tuple[object, str, object]] = {
         "mcp_start": (container.mcp_catalog_owner, "start", None),

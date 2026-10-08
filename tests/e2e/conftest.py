@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.core.mounted_workspaces import MountedWorkspace
 from tests.support.gateway_processes import reset_gateway_persistent_state
 from tests.support.model_stream_config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
@@ -139,7 +140,14 @@ def e2e_backend_port(request: pytest.FixtureRequest) -> int:
 
 
 @pytest.fixture(scope="module")
+def e2e_startup_mount() -> MountedWorkspace | None:
+    """需要辅助服务的场景通过 fixture 显式提供该工作区完整 mount。"""
+    return None
+
+
+@pytest.fixture(scope="module")
 def e2e_backend_process(
+    e2e_startup_mount: MountedWorkspace | None,
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
     e2e_backend_port: int,
@@ -155,6 +163,7 @@ def e2e_backend_process(
         else None
     )
     handle = start_backend_process(
+        startup_mount=e2e_startup_mount,
         workspace_root=e2e_workspace_root_path,
         port=e2e_backend_port,
         log_name="e2e-backend",

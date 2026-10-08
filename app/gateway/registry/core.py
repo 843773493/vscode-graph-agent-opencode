@@ -8,15 +8,16 @@ from typing import TYPE_CHECKING, Literal
 
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.federation import RemoteGatewayConnection
+from app.gateway.runtime.managed_backend import ManagedBackendOwner
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.service_types import GatewayServiceName
-from app.schemas.gateway import GatewayConnectionKind
+from app.schemas.gateway.workspaces import GatewayConnectionKind
 
 if TYPE_CHECKING:
     from app.gateway.registry import GatewayWorkspaceRegistry
 
 
-_REGISTRY_SCHEMA_VERSION = 11
+_REGISTRY_SCHEMA_VERSION = 12
 _UNSET = object()
 RegistryTargetOwner = Literal["config", "manual", "system", "remote_projection"]
 @dataclass(slots=True)
@@ -43,6 +44,8 @@ class WorkspaceTarget:
     remote_workspace_id: str | None = None
     remote_config_event_cursor: int | None = None
     remote_service_names: tuple[GatewayServiceName, ...] = ()
+    remote_backend_generation: str | None = None
+    remote_affected_workspace_ids: tuple[str, ...] = ()
     local_service_urls: dict[str, str] = field(default_factory=dict)
     connection_error: str | None = None
     backend_workspace_id: str | None = None
@@ -115,6 +118,8 @@ class RegistryCoreMixin:
         self._registry_revision = 0
         self._order_customized = False
         self._runtimes: dict[str, WorkspaceRuntime] = {}
+        self._backend_owners: dict[str, ManagedBackendOwner] = {}
+        self.backend_topology_lock = asyncio.Lock()
         self._remote_gateway_connections: dict[str, RemoteGatewayConnection] = {}
         self._remote_gateway_runtimes: dict[str, WorkspaceRuntime] = {}
         self._retired_remote_gateway_runtimes: dict[str, list[WorkspaceRuntime]] = {}
