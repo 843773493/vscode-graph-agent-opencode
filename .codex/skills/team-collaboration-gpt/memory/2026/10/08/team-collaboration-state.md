@@ -87,3 +87,7 @@ Luna真实Node v22.17.0 paused frame的Debugger.evaluateOnCallFrame抛字符串�
 主首次Luna冻结漏read-tree误列全路径，未恢复/改源码；初始化固定base后核仅2路径，已记录candidate.json为主协调输入错误，不算作者返工。A04两个只读独审实际覆盖各自主题及直接callee，未逐行认证105路径、未重跑动态测试；wire JSON对7文件defer与外部前置混写已由主integration receipt纠正，不能按它认定限制造成source漏交。
 
 A05只读准备以固定8215重算gateway DTO直接import为生产34/测试9，16f的32仅历史。真实待实施闭包还包含每mount Terminal/Browser URL与Workspace candidate/generation/fencing token的启动输入，不能让所有ConfigService读取同一进程级candidate_ref；同批保唯一配置owner/CAS并验sibling隔离。A05源码已授权、该新增核查尚无动态验收，不宣称已修。目录AGENTS和规范由主维护，Sol整批源码不因逐路径说明停等。
+
+A04 session-uri 三项固定复核 report.json（SHA2050bc9f0ccfa1ea2e0b7006c7513196d1a70a9978fa152ebdd523e0bb069f74）无确认源码 finding。5.2原零存量raw未定位，已按用户旧开发数据可删/无兼容授权同步修订proposal/D5/spec/tasks为明确数据政策；保历史摘要及未复核限制，不新扫描/迁移、不宣称历史取证通过，fresh writer/reader/恢复验收不变。9.1/9.2共owner/冻结目标已接通，缺三入口双形态/full URI wait/切换重连联合收据，纳同Sol A06，保持未勾；不重复A03 durable生命周期验收。主strict实际0，见A/session-uri-historical-policy-reconciliation/。
+
+Luna Node两次只读调查均无新finding，复用真实primitive响应及既有timeout/cancellation/receive路径，不重复探针、测试或加源码；报告见TEMP/luna_narrow_fixes/artifacts/node-remote-value-readonly-probe/与node-request-lifecycle-readonly-probe/。Luna等待A05固定候选独审，wire已完成A06条件门复核：原目录GET median16.26ms被旧登记误写成mutation p95，重载/无丢失更新也缺原raw；主已更正10.4b/10.7为证据不全，未开工、不称已无瓶颈。A06补真正mutation量化再按原条件判10.4c；Gateway10.5须自身10.1量化，不用Session数据代替。不碰Sol live或运行正式测试。

@@ -142,16 +142,11 @@
 - **WHEN** 会话上下文资源引用被写入持久化记录
 - **THEN** 该字段由资源身份、URI 与独立 revision 组成，不含任何真实路径
 
-### Requirement: 旧式上下文 URI 只能被入口拒绝，且已确证无历史落盘实例
+### Requirement: 旧式上下文 URI 必须被入口拒绝且不保留历史数据兼容
 
 系统 MUST 停止接受旧式上下文 URI 形态（含身份/领域段 `%` 编码、`#fragment`、未登记 scope 的自有正则语法；合法文件段规则引用统一寻址 owner），入口 MUST 显式拒绝并指向结构化字段表示。
 
-**已确证的存量事实（建案时取证快照）**：旧式会话上下文 URI 当时**没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。以下“未装配/生产不写”只描述建案基线，不代表当前缺口；A01 已接通 activation freeze/seal/restore，A04 迁移现有 URI 字段与消费者。历史取证：
-
-- 旧形态字符串（自有正则 `app/services/business/session_context_resource.py:12-16`、`ParsedSessionContextResource.canonical`、`session_context_query_service.py` 的 `locator` 字段、`app/services/business/session_context_projection.py:317` 与 `session_context_query_service.py:481` 的 base64 `next_cursor`）**全部在请求/响应链路内构造并随响应返回调用方**，不存在把它写入 session/catalog/checkpoint/rollout 存储的代码路径；
-- 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`），其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`三处调用 `attach_resource_activation_store` / `ResourceActivationStore(...)`），`app/container.py` 未装配（`rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故该列在生产中从不被写入；
-- 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**，`out/development-runtime` 的真实 `rollout.jsonl` 与 `tests/fixtures/` 亦 0 命中；
-- 会话上下文分页游标从不落盘：全仓不存在承载 `SessionContextCursorCodec` 输出的持久化列（唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value` 是工作区活动 `event_seq`，与上下文游标无关）。
+本 change 按已授权的开发数据处理政策实施：开发生成的新旧中间数据无需保留，MUST NOT 为旧式上下文 URI 新增历史扫描、规范化、失效或兼容读写链路。该政策不依赖“历史存量为零”；建案取证摘要及原始收据未定位的限制只记录在 design D5，MUST NOT 当作本轮已复核的事实。新写入、封存、读取与恢复 MUST 完整兑现当前合同，MUST NOT 通过删除当前 fresh 数据掩盖 writer 或 caller 缺陷。
 
 因此本 capability 的迁移面只有两点：(a) 入口对旧形态 fail-closed 拒绝；(b) 由现有 owner 迁移确需资源引用的持久化字段，按新格式**新写入**并切换读路径——属「新写字段」，不是「存量数据迁移」。`resource_activation_bindings.display_uri` 复用已接通的 writer/reader；`context_source_control_states` 保持来源追踪事实，只有其 owner 确需持久资源定位时才增加 URI，不默认添加地址镜像。
 
@@ -161,7 +156,7 @@
 
 #### Scenario: 不构造历史数据迁移
 - **WHEN** 实施本次寻址统一
-- **THEN** 不扫描、不规范化、不失效任何既有记录，因为已确证不存在内嵌旧式上下文 URI 的持久化记录
+- **THEN** 按已授权的数据政策不构造旧式 URI 的历史扫描、规范化、失效或兼容读写链路；不宣称历史零存量已复核，新 writer/reader 和恢复仍按当前合同验收
 
 #### Scenario: 新写入字段即迁移面
 - **WHEN** 某个既有持久化字段（如 `display_uri`、来源事实）需要承载资源引用
@@ -187,9 +182,9 @@
 
 本 capability MUST 把**已确证**的结论写成可执行任务或 normative 断言，MUST 把**已由「统一资源寻址」change 定稿**的内容（scope 闭集、scope_id 语义、kind 闭集、拒绝码）写为具名引用；MUST NOT 把已定稿项写成本地待定。**本 capability 无待该 owner 裁定的项。** 会话上下文资源**自身**的 kind 已由「统一资源寻址」change 在 kind 闭集内定稿为 `session`（见其 requirement「kind 闭集定稿且描述符闭集独立不可混用」），本 capability 直接引用、无需新登记。
 
-已确证（本轮实测取证）：
+已明确的数据政策与独立义务：
 
-- 旧式会话上下文 URI **零历史落盘实例**，迁移面只有「入口拒绝 + 新写字段」；
+- 旧式会话上下文 URI 的迁移面按已授权数据政策限定为「入口拒绝 + 新写字段」；历史零存量摘要未在本轮复核，不能列为本轮实测结论；
 - 配置来源的真实路径外泄义务（持久化侧与 API 响应体侧）已由 `add-unified-virtual-resource-addressing` 的 requirement「既有配置来源持久化必须按同一模式迁移为 URI 兄弟字段」唯一登记，本 capability 只具名引用；该义务已由 `50bffa45`（持久化改 URI、删 `source_path`/`backup_path`）与 `76ed0089`（`ConfigSourceDTO.path` 与 `ConfigSourcesDTO.schema_path` 均改 URI）落地；
 - `inline` 配置来源的地址与逻辑 layer/precedence 规则均引用「统一资源寻址」change 的对应 owner requirement；`memory` 不是 URI scope。
 

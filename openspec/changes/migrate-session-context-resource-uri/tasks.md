@@ -30,8 +30,8 @@
 
 ## 5. 入口破坏与「新写字段」（不是存量数据迁移）
 
-- [x] 5.1 让入口停止接受旧式上下文 URI：对含身份/领域段 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
-- [ ] 5.2 记录并复核**零存量**取证基线（见 design D5 与 spec「旧式上下文 URI 只能被入口拒绝」）：旧式上下文 URI 无任何持久化实例，故 MUST NOT 构造扫描/规范化/失效的历史数据迁移脚本。
+- [x] 5.1 让入口停止接受旧式上下文 URI：对含身份/领域段 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 必须被入口拒绝且不保留历史数据兼容」的 scenario「旧式 fragment 形态被拒绝」。）**
+- [x] 5.2 按用户已授权的开发数据政策确认不保留旧式 URI 历史兼容，不构造扫描/规范化/失效迁移脚本；协调 proposal、design D5 与 spec「旧式上下文 URI 必须被入口拒绝且不保留历史数据兼容」。**（2026-10-08 修订原“复核零存量”任务：原始取证收据未定位，历史摘要未复核，不计为当前零存量证明；新 writer/reader、恢复和真实入口验收要求保留。固定证据复核 report.json SHA256 `2050bc9f0ccfa1ea2e0b7006c7513196d1a70a9978fa152ebdd523e0bb069f74`。）**
 - [x] 5.3 新写字段切换：让确需资源定位的既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri` 与 `context_source_control_states`（来源追踪事实），不为不需定位的状态增加冗余URI列。内部聚合的必填nullable display_uri引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」，activation读写/serde/fork/detail/projection在同一闭包迁齐；不得保留旧写入形态或兼容读写双轨。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 - [x] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 
@@ -69,9 +69,11 @@
 - [x] 8.2 **`assembly_ref` 使用 `ResourceIdentity`**：复用统一 URI owner 的既有领域定义，不另造专用 ref 类型；本决定收口类型分支，ResourceIdentity已进入本地DTO、工具及assembly查询；完整生产验收由3.1跟踪。
 - [x] 8.3 **fragment 信息映射为结构化字段**：`#information` 映射到 `view=information`；`#record={index}` 映射到 `view=records` 与 `record_index`；`#assembly={assembly_id}` 映射到 `view=assembly` 与 `assembly_ref: ResourceIdentity`。映射与禁止 fragment 的规范已定稿于 design D2 与 spec「会话上下文视图选择必须结构化」；生产实现仍由 3.1 跟踪。
 
-## 9. 会话目标入口统一（2026-10-05 补充验收，未实施）
+## 9. 会话目标入口统一（2026-10-05 补充；生产闭包已接通，联合验收待补）
 
 - [ ] 9.1 让send/read/wait共用已有target-main解析owner；裸Session ID和完整会话URI归一到同一稳定Gateway/workspace/Session/main-thread target，再冻结目标，不因激活工作区或channel重连改投。复用已有main-thread endpoint，不新增同义接口或文件工具目标状态机。
 - [ ] 9.2 保留各业务Job、Turn、通信ID selector的原合同，验证三入口对同一目标一致、歧义/不可达显式失败，read/wait不物化runtime；durable acceptance/observation仍由itemized8.10闭合，不因URI规范化完成而勾通信恢复。
 
-A04完整证据入口：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/addressing-existing-source-bulk-dispatch/ROOT-full-final-candidate/`；105源码＋11主文档tree8215be15严格重建、两独审findings=[]并串行集成。作者manifest引用39具名attempt，028/029授权/loopback、032真实三节点受控Provider、031/037真实信息页/生命周期、035直接68项、038合同16项及039 Web build actual0。033/034原失败由具名fixture修订闭合，其余未变绿灯按依赖复用，不相加重叠pass；全局strict41/0。外部Provider quota与补充C1端口仍UNMET，原100条Ruff诊断无新增，SSE生成后续阶段未认证失败原子性。5.2历史取证复核与9.1/9.2三入口完整同目标验收保持未勾，不能由A04 read/search通过自动推断。
+9.1/9.2 固定复核：现有生产入口共用 `SessionCommunicationService.resolve_main` 并冻结稳定目标，尚无确认的源码缺陷；既有 C1/C3、selector、拒绝和冷观察各自证据可复用，缺同一目标 send/read/wait 各自 bare/full URI 对照、full URI wait 和切换/重连后目标保持的联合收据。剩余验收归同 Sol A06，不据未勾重建解析 owner。报告：`out/tests/temp/2026/10/04/024121-team-execution/wire_contract_reviewer/artifacts/a04-final-three-task-evidence/report.json`。
+
+A04完整证据入口：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/addressing-existing-source-bulk-dispatch/ROOT-full-final-candidate/`；105源码＋11主文档tree8215be15严格重建、两独审findings=[]并串行集成。作者manifest引用39具名attempt，028/029授权/loopback、032真实三节点受控Provider、031/037真实信息页/生命周期、035直接68项、038合同16项及039 Web build actual0。033/034原失败由具名fixture修订闭合，其余未变绿灯按依赖复用，不相加重叠pass；全局strict41/0。外部Provider quota与补充C1端口仍UNMET，原100条Ruff诊断无新增，SSE生成后续阶段未认证失败原子性。5.2已按明确数据政策修订，不代表原历史取证通过；9.1/9.2三入口完整同目标验收保持未勾，不能由A04 read/search通过自动推断。

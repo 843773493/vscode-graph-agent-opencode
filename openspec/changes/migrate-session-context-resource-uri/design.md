@@ -134,11 +134,11 @@ SessionContextResourceRef {
 
 **理由**：与既有 federation/跨 Session 目标解析的有界拓扑（`B → A → C`、最多一个 hub transit）天然兼容；复用同一份 URI 避免为会话上下文单开一条解析路径。
 
-### D5：迁移面是「新写字段」而非「存量数据迁移」（U1 实测定稿）
+### D5：入口拒绝与新写字段，不保留历史开发数据兼容
 
-**决定**：本次寻址统一的迁移工作**不含历史数据迁移**，只含两点——(a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段改为按新格式**新写入**并在读路径切换。
+**决定**：按用户已授权的开发数据政策，本次寻址统一不保留历史开发中间数据兼容，不扫描或转换旧式 URI 历史记录；迁移工作只含 (a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段改为按新格式**新写入**并完整迁移读路径。该决定不依赖旧数据为零，也不允许删除当前 fresh 数据掩盖 writer、seal、restore 或 caller 缺陷。
 
-**已确证的零存量（建案时独立取证）**：旧式会话上下文 URI 当时没有任何持久化实例。下列“未装配/生产不写”仅描述该历史快照；A01 已接通 activation freeze/seal/restore，A04 迁移现有 writer/reader 的 URI 字段，不重新建立该 owner。
+**建案时的取证摘要，未在本轮独立复核**：旧记录描述旧式会话上下文 URI 零持久化实例，但原始盘点清单、命令输出和 hash 收据尚未定位。以下内容只保留为历史摘要，不能作为当前零存量或本轮已通过的证明；A01 已接通 activation freeze/seal/restore，A04 已迁移现有 writer/reader 的 URI 字段，不据历史“未装配/生产不写”重建该 owner。固定树证据复核见 `out/tests/temp/2026/10/04/024121-team-execution/wire_contract_reviewer/artifacts/a04-final-three-task-evidence/report.json`（SHA256 `2050bc9f0ccfa1ea2e0b7006c7513196d1a70a9978fa152ebdd523e0bb069f74`）。
 
 - 旧形态字符串全部在请求/响应链路内构造并随响应返回调用方：`app/services/business/session_context_resource.py:12-16` 的自有正则只做解析、`ParsedSessionContextResource.canonical` 只是内存值、`session_context_query_service.py`/`session_context_projection.py` 的 `locator` 与 base64 `next_cursor` 只进 API DTO（`app/schemas/internal_v2/session_context.py:99,123`）。全仓不存在把 `SessionContextCursorCodec` 输出写入 session/catalog/checkpoint/rollout 存储的路径。
 - 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）；其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`），`app/container.py` 未装配（实测 `rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故生产中该列从不被写入。
@@ -147,7 +147,7 @@ SessionContextResourceRef {
 
 **新写字段的挂点**：`resource_activation_bindings.display_uri` 使用已接通的 activation owner 完成 writer/reader/clone/fork/detail round-trip；内部 aggregate 的必填 null 引用统一寻址 owner 合同。`context_source_control_states` 保持来源追踪事实，只有其 owner 证明需要持久资源定位时才增加 URI，不能把地址镜像加到每个来源状态。
 
-**理由**：不构造不存在的迁移脚本，既省成本，也避免「为一个不存在的存量对象写规范化/失效逻辑」这种虚假工作。
+**理由**：旧开发数据无需保留是本轮明确授权，不需要为不可复核的历史盘点重复扫描当前库；新 writer/reader 和恢复合同仍须真实验收。
 
 ### D6：配置来源真实路径持久化的迁移（已确证义务）
 
@@ -183,7 +183,7 @@ send/read/wait复用同一target-main owner，把裸Session ID和完整会话引
 ## Migration Plan
 
 1. **冻结入口**：会话上下文入口按 D1 的结构化引用表示；旧式字符串入口对**新写入**直接拒绝（身份/领域段escape、fragment、未登记scope，含memory两点式）。
-2. **确认无存量**：按 D5 的取证确认不存在内嵌旧式上下文 URI 的持久化记录，**不构造**扫描/规范化/失效的存量迁移脚本。
+2. **确认数据处理政策**：按 D5 不保留旧开发数据兼容；记录历史摘要未复核的限制，不扫描当前数据代替历史取证，不构造旧式 URI 的存量迁移脚本。
 3. **新写字段切换**：让既有持久化挂点（`display_uri` 列、`context_source_control_states` 的来源事实）按 identity + URI 的新格式写入，并在读路径切换到新格式，旧写入形态物理下线。
 4. **配置来源真实路径迁移（已确证义务，见 D6）**：按 `add-unified-virtual-resource-addressing` 的配置来源 URI 与 config layer 两项 owner requirement，实施 `ConfigSource` 平级字段模式与 real path 清除；layer 表、runtime override carrier、snapshot 边界与 nullable URI 按 owner 定义执行，不在本 change 重复定义。
 5. **（已落地，登记为完成基线）删除 bundled 到 builtin 的改名 shim**：`app/agents/skill_runtime.py` 的 `bundled`→`builtin` 映射已由 `298ef599` 物理删除（`layer_order` 现为 `(inline, gateway, workspace)`），`layer` 名与 URI scope 名自此逐字一致；该 shim 已不存在，实施期无需再删。

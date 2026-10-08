@@ -79,3 +79,7 @@ Inspector 后续单复现接收故障只写 runtime.error_message、pending call
 - **生成器先删输出导致级联红灯。** A04 Buf远端插件不可用时，脚本先清4个generated根，原绑定需按固定preimage恢复（实际142files）；NoPythonFiles、OpenAPI/import和Web缺文件失败不能计绿或当独立业务缺陷。完整生成应先写out指定暂存根，全部步骤成功后替换；插件版本/实际生成未验证不能手改generated或恢复别名求绿。原生成attempt及后续修复效果按台账记。
 
 A04最终独审收尾曾重复触达另一主审的联邦主题，且可行动结论先于完整报告。主明确每人剩余主审边界、停止扩查后，两份固定报告交付，均findings=[]；只证明本次交付收尾有效，不证明审查可整体省略或模型倍速。下次先按主题分主审，跨主题引用证据，短结论立即交；无需为了所有任务表格或目录统计延后核心批次。
+
+Luna 后续 RemoteObject 优先级调查在复用已集成的真实 Node primitive throw 证据后无新 finding 收尾；request timeout/cancellation/receiver 生命周期静态与已有测试亦无具体新候选，无探针、动态测试或源码分支。只证明这两项停止条件执行有效，不能外推 Node 全面无缺陷或模型速度差。既有证据够判就停止，避免为常驻人数制造重复调查。
+
+A06前置只读复核发现原文件树“不实施”登记把目录GET的3样本median16.26ms写成mutation p9516.3ms，并将源码推断的重载/无丢失更新写成实测。原raw只证明GET；create/refresh数据属于Session catalog。主撤回“已验证无瓶颈”登记，不改原阈值，补mutation级量化后再判10.4c，Gateway10.5须自己10.1证据。只证明口径错误被发现、队列已纠正，后续量化/实施效果待验。证据：TEMP/wire_contract_reviewer/artifacts/a06-navigation-conditional-evidence/report.json与原measure_tree_m200.json。

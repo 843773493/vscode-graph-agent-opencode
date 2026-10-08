@@ -13,7 +13,7 @@
 - 采用**星型解析 / star-topology resolution**：本地 parse(fail-closed) → 本进程解析 → 跨边界经 gateway 层（hub 可直接解析其直接 spoke；spoke 经唯一 hub 做一次有界 transit，携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）→ 不可达/未共享/未找到一律 fail-closed **拒绝码 / rejection code**。**解析命中只返回稳定身份与内容，locator 是输入不是输出**。
 - 既有单会话视图、工作区/Gateway 会话清单与搜索共用该目标解析链；远端查询绑定真实资源引用并在目标端执行，不能以虚构 Session ID 代替清单目标，或因激活工作区变化而改投。
 - **BREAKING**：information 的唯一 owner/DTO 下线 `workspace.root_path`、`storage_path` 诊断物理定位字段，API、read/search、模型工具与持久观察共同消费无这些字段的输出。保留会话/工作区身份、名称和诊断状态，直接迁移协议与实际调用方，不添加兼容字段或新的文件根。
-- 明确迁移面是**入口破坏性拒绝 + 新写字段**，而非存量数据迁移：已实测确证旧式上下文 URI **零历史落盘实例**，故不构造扫描/规范化/失效脚本；既有持久化挂点（`resource_activation_bindings.display_uri`、`context_source_control_states`）改为按 identity + URI 新写入并在读路径切换。
+- 明确迁移面是**入口破坏性拒绝 + 新写字段**，不保留历史开发数据兼容：用户已授权删除开发生成的新旧中间数据，不构造旧式上下文 URI 的扫描、规范化、失效或兼容读写脚本。建案的零存量摘要保留在 design D5，但原始取证收据尚未定位，本轮不将其计为已复核事实；既有持久化挂点（`resource_activation_bindings.display_uri`、`context_source_control_states`）仍按 identity + URI 新写入并完整迁移读路径。
 - 登记一条**已确证**的迁移义务：配置来源曾将真实路径写入持久化并由 API 响应（`ConfigSourceLayerRecord.source_path`/`backup_path`、`ConfigSourceDTO.path`）；该违约已由 owner change 实施，但规范仍保留其不变量。本 change 只引用 `add-unified-virtual-resource-addressing` 唯一登记的配置来源 URI 与 config layer requirements，包括平级字段、逻辑来源与 precedence、SQLite 内部 carrier、runtime override 可无 URI，以及 active/pending snapshot 与来源清单分离；本 change 不复述 layer 闭集或另造 kind / URI 地址。
 - 收口在途 change `add-itemized-rollout-context`：其 `specs/itemized-rollout-context/spec.md` 的会话上下文 URI requirement 指向本 change，消除两套定义并存。
 
