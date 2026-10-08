@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionInformationErrorDTO,
@@ -87,12 +86,10 @@ class SessionInformationService:
         session_service: SessionService,
         session_resource_service: SessionResourceService,
         workspace_service: WorkspaceService,
-        path_resolver: SessionCatalogPathResolver,
     ) -> None:
         self._session_service = session_service
         self._session_resource_service = session_resource_service
         self._workspace_service = workspace_service
-        self._path_resolver = path_resolver
 
     async def get_information(self, session_id: str) -> SessionInformationSnapshotDTO:
         session = await self._session_service.get(session_id)
@@ -125,9 +122,7 @@ class SessionInformationService:
             workspace=SessionInformationWorkspaceDTO(
                 workspace_id=workspace.workspace_id,
                 name=workspace.name,
-                root_path=workspace.root_path,
             ),
-            storage_path=str(self._path_resolver.resolve_session_node(session_id)),
             execution=self._build_execution(trace_events),
             trace=self._build_trace(trace_events, truncated=trace_page.has_more),
             relations=SessionInformationRelationsDTO(

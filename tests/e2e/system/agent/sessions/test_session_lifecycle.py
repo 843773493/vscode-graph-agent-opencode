@@ -1,22 +1,57 @@
 """Session 生命周期端到端测试。"""
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.gateway_processes import (
+    LOCAL_TOKEN_HEADERS,
+    acquire_gateway_guest,
+    close_gateway_process,
+    start_gateway_process,
+)
 from tests.support.messages import last_assistant_message
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.text import normalize_text
 
 
+@pytest.fixture
+async def information_client(
+    request: pytest.FixtureRequest,
+    e2e_workspace_root_path: str,
+) -> AsyncIterator[httpx.AsyncClient]:
+    # 信息投影真实读取资源 owner，由 Gateway 生命周期启动工作区及辅助服务。
+    port = e2e_port_block_for_file(Path(request.node.path)).port(21)
+    gateway = await asyncio.to_thread(
+        start_gateway_process,
+        workspace_root=Path(e2e_workspace_root_path), port=port,
+        default_backend_url=None,
+    )
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}",
+            headers=LOCAL_TOKEN_HEADERS, timeout=30,
+        ) as client:
+            await acquire_gateway_guest(client)
+            response = await client.get("/api/gateway/workspaces")
+            assert response.status_code == 200, response.text
+            client.headers["X-BoxTeam-Workspace-Id"] = response.json()["data"]["active_workspace_id"]
+            yield client
+    finally:
+        await asyncio.to_thread(close_gateway_process, gateway)
+
+
 @pytest.mark.asyncio
-async def test_session_information_uses_backend_authoritative_paths(
-    client: httpx.AsyncClient,
+async def test_session_information_uses_backend_identity_without_physical_paths(
+    information_client: httpx.AsyncClient,
     e2e_workspace_root_path: str,
 ):
+    client = information_client
     create_response = await client.post(
         "/api/v1/sessions",
         json={"title": "Session Information Test"},
@@ -32,18 +67,15 @@ async def test_session_information_uses_backend_authoritative_paths(
     information = payload["data"]
 
     expected_root = str(Path(e2e_workspace_root_path).resolve())
-    assert payload["request_id"]
+    assert payload["request_id"] == response.headers["X-Request-ID"]
     assert information["kind"] == "session_diagnostic_snapshot"
     assert information["schema_version"] == 2
     assert information["session"]["session_id"] == session["session_id"]
     assert information["session"]["parent_session_id"] is None
-    assert information["workspace"]["root_path"] == expected_root
-    expected_session_dir = get_session_path_resolver(
-        Path(expected_root) / ".boxteam" / "sessions"
-    ).resolve_session_node(session["session_id"])
-    assert information["storage_path"] == str(
-        expected_session_dir
-    )
+    assert information["workspace"]["workspace_id"] == session["workspace_id"]
+    assert "root_path" not in information["workspace"]
+    assert "storage_path" not in information
+    assert expected_root not in response.text
     assert information["execution"] == {
         "job_id": None,
         "status": "idle",

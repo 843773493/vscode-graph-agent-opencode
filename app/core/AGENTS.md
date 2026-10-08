@@ -4,6 +4,7 @@
 
 ## 子包索引
 
+- `resource_uri.py`：资源 URI 的唯一纯 grammar、值对象与构造器，供 domain、Gateway 和 infrastructure 直接消费。只校验逻辑地址，不访问 catalog、正文、文件系统或网络；资源绑定、revision、能力和联邦策略仍归各自 owner。旧 `resource_platform/virtual_resources/grammar.py` 下线，不增加重导出 shim 或第二解析器。
 - `atomic_fs.py`：文件级 durability 原语（`fsync_directory`/`fsync_file`/
   `atomic_write_bytes`）。会话创建、child thread 创建与子树删除共用同一套
   tempfile + fsync + os.replace + 目录 fsync 语义，单点承载。

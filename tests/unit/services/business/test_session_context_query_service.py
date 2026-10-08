@@ -219,10 +219,6 @@ class _FakeInformationSource:
             workspace=SessionInformationWorkspaceDTO(
                 workspace_id=BACKEND_WORKSPACE_ID,
                 name="测试工作区",
-                root_path="/workspace",
-            ),
-            storage_path=(
-                "/workspace/.boxteam/sessions/项目会话--12345678/目标会话--87654321"
             ),
             execution=SessionInformationExecutionDTO(
                 status="running",

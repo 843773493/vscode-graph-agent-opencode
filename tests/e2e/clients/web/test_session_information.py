@@ -87,7 +87,7 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             {
                 "BOXTEAM_E2E_BASE_URL": f"http://127.0.0.1:{port}",
                 "BOXTEAM_E2E_FIXTURE": json.dumps(
-                    {"sessionId": session_id}, ensure_ascii=False
+                    {"sessionId": session_id, "workspacePath": str(workspace_root)}, ensure_ascii=False
                 ),
                 "BOXTEAM_E2E_RESULT_PATH": str(result_path),
                 "BOXTEAM_E2E_SCREENSHOT_PATH": str(screenshot_path),
@@ -111,6 +111,8 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
         browser_result = json.loads(result_path.read_text(encoding="utf-8"))
         assert browser_result["kind"] == "session_diagnostic_snapshot"
         assert browser_result["schemaVersion"] == 2
+        assert browser_result["noPhysicalLocator"] is True
+        assert browser_result["apiWorkspaceId"] == browser_result["clipboardWorkspaceId"]
         assert browser_result["titleTruncated"] is True
         assert browser_result["titleLength"] == 512
         assert browser_result["activeResourceCount"] <= 32

@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.core.lifecycle import LifetimeScope
+from app.domain.itemized.epoch.prefix_epoch import (
+    EpochReason,
+    PendingPrefixEpochTransition,
+)
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservationChannel,
 )
@@ -16,6 +20,10 @@ from app.services.infrastructure.resource_platform.registry.context_source_react
 )
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
+)
+from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
+    ContextSourceOwnerKey,
+    ContextSourceRebuildState,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
@@ -27,8 +35,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
+from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
+)
 
-SKILL_URI = "boxteam://workspace/skill/demo"
+SKILL_URI = "boxteam://workspace/test/resources/skills/demo/SKILL.md"
 SKILL_VIRTUAL_PATH = "/.boxteam/skills/demo/SKILL.md"
 
 
@@ -290,7 +301,7 @@ def _overflow_fixture(
         skill_path = workspace / ".boxteam" / "skills" / name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         skill_path.write_text(f"v{index}\n", encoding="utf-8")
-        uri = f"boxteam://workspace/skill/{name}"
+        uri = f"boxteam://workspace/test/resources/skills/{name}/SKILL.md"
         registry.register_file(uri=uri, path=skill_path)
         manager.register(
             ContextSourceDescriptor(
@@ -372,3 +383,89 @@ async def test_channel_gap_marks_all_sources_and_recovers(tmp_path: Path) -> Non
     finally:
         await lifetime_scope.close()
         await watch_service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_optional_agents_reactor_and_rebuild_consume_only_published_revisions(
+    tmp_path: Path, registry_db, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """缺失、空文件、正文与删除都先由原 reader 发布；CSM 消费与重建不读源。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path = workspace / "AGENTS.md"
+    uri = "boxteam://workspace/test/resources/agent-spec/root/AGENTS.md"
+    watch = WorkspaceFileWatchService(workspace_root=workspace)
+    registry = WorkspaceFileResourceRegistry(
+        workspace_root=workspace, watch_service=watch, project_root=tmp_path,
+    )
+    saver, session, _connection, _accepted = registry_db
+    owner = ContextSourceOwnerKey(session, saver._storage.main_thread_id(session))
+    manager = ContextSourceManager(owner=owner, control_state_port=saver)
+    manager.register(
+        ContextSourceDescriptor(
+            source_id="workspace-agents", source_kind="workspace_instructions",
+            name="AGENTS.md", description="可选工作区指引", internal_locator="AGENTS.md",
+            resource_uri=uri,
+        ), tracking_status="tracked",
+    )
+    scope = LifetimeScope("optional-agents-rebuild")
+    reactor = ContextSourceReactor(
+        sources=registry, context_sources=manager, lifetime_scope=scope,
+        reactor_id="optional-agents",
+    )
+    manager.bind_published_revision_supplier(reactor.freeze_published_sources)
+    revisions = []
+
+    def forbid_source_io(*_args, **_kwargs):
+        raise AssertionError("reactor/CSM rebuild 只能消费原 owner 的已发布内存 revision")
+
+    try:
+        for index, body in enumerate((None, "", "实际 AGENTS 正文\n", None)):
+            if body is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(body, encoding="utf-8")
+            published = (
+                registry.register_file(uri=uri, path=path, optional=True)
+                if index == 0 else registry.refresh(uri)
+            )
+            assert published.available and published.revision
+            assert published.exists is (body is not None)
+            assert published.content == (body or "")
+            revisions.append(published.revision)
+            with monkeypatch.context() as patch:
+                patch.setattr(registry._reconciler._reader, "read", forbid_source_io)
+                patch.setattr(registry._reconciler, "reconcile", forbid_source_io)
+                patch.setattr(registry, "refresh", forbid_source_io)
+                reactor.sync_sources()
+                observed = tuple(reactor.drain())
+                assert len(observed) == 1 and observed[0].revision == published.revision
+                assert reactor.content_for(observed[0]) == published.content
+                assert manager.observe(
+                    observed[0].source_id, reactor.content_for(observed[0]),
+                    revision=observed[0].revision,
+                )
+                assert manager.source_observation_state("workspace-agents") == (
+                    "tracked", published.revision,
+                )
+                frozen = reactor.freeze_published_sources(manager.descriptors())
+                assert [(item.revision, item.content) for item in frozen] == [
+                    (published.revision, published.content),
+                ]
+                rebuild = ContextSourceRebuildState(
+                    transition=PendingPrefixEpochTransition(
+                        transition_id=f"optional-rebuild-{index}", reason=EpochReason.REWIND,
+                    ), states=saver.load_context_source_control_states(owner),
+                )
+                batch = manager.prepare_rebuild_sources(rebuild)
+                assert [(item.revision, item.content) for item in batch.sources] == [
+                    (published.revision, published.content),
+                ]
+                assert len(batch.deltas) == 1
+                assert batch.deltas[0].kind == "rebuild"
+                assert batch.deltas[0].revision == published.revision
+        assert revisions[0] == revisions[3]
+        assert len(set(revisions[:3])) == 3
+    finally:
+        await scope.close()
+        await watch.shutdown()

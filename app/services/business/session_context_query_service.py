@@ -11,6 +11,7 @@ from app.abstractions.session_context import (
     SessionInformationSourceProtocol,
     SessionLookupProtocol,
 )
+from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
@@ -458,7 +459,7 @@ class SessionContextQueryService:
                     session.workspace_id,
                     session.session_id,
                 ),
-                uri=session_resource_uri(session.workspace_id, session.session_id),
+                uri=session_resource_uri(session.workspace_id, session.session_id, gateway_authority=resource.gateway_authority),
                 scope="workspace",
                 data=public_session_data(session),
             )
@@ -506,6 +507,7 @@ class SessionContextQueryService:
                 session_uri = session_resource_uri(
                     session.workspace_id,
                     session_id,
+                    gateway_authority=resource.gateway_authority,
                 )
                 session_identity = session_resource_identity(
                     session.workspace_id,
@@ -630,7 +632,7 @@ class SessionContextQueryService:
         self,
         resource: ParsedSessionContextResource,
     ) -> None:
-        if resource.scope != "workspace" or resource.scope_id != self._workspace_id:
+        if (resource.gateway_authority is not None and resource.gateway_authority != get_current_gateway_id()) or resource.scope != "workspace" or resource.scope_id != self._workspace_id:
             raise ResourceUriResolveError(
                 "scope_mismatch",
                 "session context URI 未绑定当前后端工作区: "

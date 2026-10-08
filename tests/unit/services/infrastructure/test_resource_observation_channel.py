@@ -13,7 +13,7 @@ from app.services.infrastructure.resource_platform.observation.resource_observat
     assert_notification_is_lightweight,
 )
 
-AGENTS_URI = "boxteam://workspace/agents"
+AGENTS_URI = "boxteam://workspace/test/resources/agent-spec/root/AGENTS.md"
 
 
 def _revision(label: str) -> str:
@@ -29,7 +29,7 @@ def test_channel_delivers_lightweight_observation_per_subscriber() -> None:
     assert channel.channel == RESOURCE_OBSERVATION_CHANNEL
     deliveries = channel.notify(
         ResourceObservation(
-            uri="boxteam://workspace/skill/demo",
+            uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             revision=_revision("abc"),
             available=True,
         )
@@ -39,7 +39,7 @@ def test_channel_delivers_lightweight_observation_per_subscriber() -> None:
     for subscription in (first, second):
         pending = subscription.pending()
         assert len(pending) == 1
-        assert pending[0].uri == "boxteam://workspace/skill/demo"
+        assert pending[0].uri == "boxteam://workspace/test/resources/skills/demo/SKILL.md"
         assert pending[0].revision == _revision("abc")
         assert pending[0].gap is False
 
@@ -56,7 +56,7 @@ def test_channel_reports_gap_and_drops_oldest_on_overflow() -> None:
     # 队列满：丢最旧一条，保留其它来源，并放入 gap 标记。
     deliveries = channel.notify(
         ResourceObservation(
-            uri="boxteam://workspace/skill/other",
+            uri="boxteam://workspace/test/resources/skills/other/SKILL.md",
             revision=_revision("r2"),
             available=True,
         )
@@ -71,7 +71,7 @@ def test_channel_reports_gap_and_drops_oldest_on_overflow() -> None:
     assert len(pending) == 2
     # 第一条（r1）被丢弃，其它来源的通知保留，最新一条是 gap 标记。
     assert [(item.uri, item.revision, item.gap) for item in pending] == [
-        ("boxteam://workspace/skill/other", _revision("r2"), False),
+        ("boxteam://workspace/test/resources/skills/other/SKILL.md", _revision("r2"), False),
         (AGENTS_URI, _revision("r3"), True),
     ]
 

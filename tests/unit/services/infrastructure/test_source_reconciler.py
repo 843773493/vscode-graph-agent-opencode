@@ -32,7 +32,7 @@ def _file_handle(path: Path, root: Path, source_id: str = "src-1") -> ObservedSo
         descriptor=ObservedSourceDescriptor(
             source_id=source_id,
             source_kind="file",
-            display_uri="boxteam://workspace/skill/demo",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             entry_identity="entry-demo",
         ),
         file_path=str(path),
@@ -144,7 +144,7 @@ def test_reclaimed_kinds_and_reason_codes_are_rejected() -> None:
         ObservedSourceDescriptor(
             source_id="gw-agents",
             source_kind="gateway_snapshot",
-            display_uri="boxteam://gateway/agents",
+            display_uri="boxteam://gateway/gateway_test/resources/agent-spec/root/AGENTS.md",
             entry_identity="entry-gw-agents",
         )
     with pytest.raises(ValueError, match="未知 ObservedSourceRevision.revision_kind"):

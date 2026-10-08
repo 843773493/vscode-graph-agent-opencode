@@ -20,12 +20,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.resource_uri import parse_resource_uri
+from app.domain.itemized.hashing import canonical_json_bytes
+
 # 固定阈值:与历史 workspace_file_resources 常量保持一致,调用方不可覆盖。
 MAX_STABLE_READ_BYTES = 512 * 1024
 STABLE_READ_ATTEMPTS = 3
 
 _SOURCE_KINDS = frozenset({"file"})
-_REVISION_KINDS = frozenset({"file_byte_hash"})
+_REVISION_KINDS = frozenset({"file_byte_hash", "file_absence"})
 _REASON_CODES = frozenset(
     {
         "outside_allowed_root",
@@ -69,12 +72,7 @@ class ObservedSourceDescriptor:
             raise ValueError(
                 f"未知 ObservedSourceDescriptor.source_kind: {self.source_kind}"
             )
-        if not isinstance(self.display_uri, str) or not self.display_uri.startswith(
-            "boxteam://"
-        ):
-            raise ValueError(
-            "ObservedSourceDescriptor.display_uri 必须是 boxteam:// 虚拟 URI"
-        )
+        parse_resource_uri(self.display_uri)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +87,11 @@ class ObservedSourceHandle:
     descriptor: ObservedSourceDescriptor
     file_path: str | None = None
     allowed_root: str | None = None
+    allow_missing: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.allow_missing, bool):
+            raise TypeError("ObservedSourceHandle.allow_missing 必须是 bool")
         if not isinstance(self.descriptor, ObservedSourceDescriptor):
             raise TypeError(
             "ObservedSourceHandle.descriptor 必须是 ObservedSourceDescriptor"
@@ -128,6 +129,7 @@ class ObservedSourceRevision:
     error: str | None = None
     error_code: str | None = None
     retained_revision: str | None = None
+    exists: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_id, str) or not self.source_id:
@@ -144,6 +146,12 @@ class ObservedSourceRevision:
             or self.byte_length < 0
         ):
             raise ValueError("ObservedSourceRevision.byte_length 必须是非负整数")
+        if not isinstance(self.exists, bool):
+            raise TypeError("ObservedSourceRevision.exists 必须是 bool")
+        if self.available and not self.exists and (
+            self.revision_kind != "file_absence" or self.content or self.byte_length
+        ):
+            raise ValueError("缺失的可选文件必须发布显式 absence revision，不能伪造文件正文")
         if self.available:
             if not self.revision or self.error is not None or self.retained_revision is not None:
                 raise ValueError(
@@ -180,6 +188,15 @@ class StableSourceReader:
         try:
             fd = os.open(file_path, open_flags)
         except FileNotFoundError as error:
+            if handle.allow_missing:
+                # 缺失是可选来源的真实观察状态；与存在但为空的 byte revision 分离。
+                return ObservedSourceRevision(
+                    source_id=handle.descriptor.source_id,
+                    revision="sha256:" + hashlib.sha256(canonical_json_bytes({
+                        "source_id":handle.descriptor.source_id, "presence":"absent",
+                    })).hexdigest(),
+                    revision_kind="file_absence", content="", byte_length=0, exists=False,
+                )
             raise StableSourceReadError(
             "missing", f"来源文件不存在: {handle.file_path}"
             ) from error
@@ -363,13 +380,14 @@ class SourceReconciler:
         return ObservedSourceRevision(
         source_id=source_id,
         revision=retained or "",
-        revision_kind="file_byte_hash",
+        revision_kind=previous.revision_kind if previous_valid else "file_byte_hash",
         content=previous.content if previous_valid else "",
         byte_length=previous.byte_length if previous_valid else 0,
         available=False,
         error=f"{error.reason_code}: {error}",
         error_code=error.reason_code,
         retained_revision=retained,
+        exists=error.reason_code != "missing",
         )
 
     def _store_and_notify(self, revision: ObservedSourceRevision) -> None:

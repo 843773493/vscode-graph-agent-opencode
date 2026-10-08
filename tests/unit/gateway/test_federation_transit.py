@@ -24,12 +24,16 @@ from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
 from app.gateway.federation.errors import (
     FEDERATION_AUTHORIZATION_REVOKED,
     FEDERATION_CHANNEL_CLOSED,
+    FEDERATION_DEADLINE_EXCEEDED,
+    FEDERATION_GRANT_KIND_MISMATCH,
     FEDERATION_TARGET_NOT_RESOLVABLE,
+    FEDERATION_UNKNOWN_PEER,
     FederationError,
 )
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
+    ContextGrantTarget,
     GrantTarget,
 )
 from app.gateway.federation.identity import load_or_create_signing_key
@@ -45,7 +49,13 @@ from app.services.business.session_context_resource import (
     session_resource_identity,
     session_resource_uri,
 )
-from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, TARGET_THREAD
+from tests.support.communication import (
+    SOURCE_SESSION,
+    SOURCE_THREAD,
+    TARGET_SESSION,
+    TARGET_THREAD,
+    WORKSPACE_ID,
+)
 
 pytestmark = pytest.mark.contract
 
@@ -685,3 +695,63 @@ async def test_new_channel_epoch_cancels_old_in_flight_disclosure(
             paused_main.release.set()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_qualified_discovery_and_context_rejects_share_original_star_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """定点查找不查 source catalog，资源 read 沿原 hub 路由给出闭合拒绝码。"""
+    async with _federation(tmp_path, c_catalog={TARGET_SESSION: (WORKSPACE_ID,)}) as (
+        hub, source, _target,
+    ):
+        def forbid_local_catalog(*_args, **_kwargs):
+            raise AssertionError("qualified remote Session 不得查询本机 cold catalog")
+        monkeypatch.setattr(source.service.catalog, "local_session_workspaces", forbid_local_catalog)
+        resolved = await source.service.resolve_session_target(
+            session_id=TARGET_SESSION, workspace_id=WORKSPACE_ID, gateway_id="gateway_c",
+        )
+        assert resolved["gateway_id"] == "gateway_c" and resolved["workspace_id"] == WORKSPACE_ID
+        assert resolved["main_thread_id"] == TARGET_THREAD
+        target = ContextGrantTarget(
+            "gateway_c", str(session_resource_identity(WORKSPACE_ID, TARGET_SESSION)),
+            session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_c"), "workspace",
+        )
+        fields = {key: target.to_payload()[key] for key in ("resource_identity", "uri", "scope")}
+        body = {
+            "source_gateway_id":"gateway_b", "resource_target":target.to_payload(),
+            "read":{**fields, "view":"information"},
+        }
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(
+                target=target, operation="send", body=body,
+            )
+        assert error.value.code == FEDERATION_GRANT_KIND_MISMATCH
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(
+                target=target, operation="read", body=body, deadline_at=time.time() - 1,
+            )
+        assert error.value.code == FEDERATION_DEADLINE_EXCEEDED
+        source.service.policy_store.publish({"rules":[{"capability":"read","effect":"deny"}]})
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(target=target, operation="read", body=body)
+        assert error.value.code == FEDERATION_AUTHORIZATION_REVOKED
+        source.service.policy_store.publish({"rules":[]})
+        unknown = ContextGrantTarget(
+            "gateway_unknown", target.resource_identity,
+            session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_unknown"),
+            "workspace",
+        )
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(
+                target=unknown, operation="read",
+                body={**body, "resource_target":unknown.to_payload(), "read":{**body["read"],"uri":unknown.uri}},
+            )
+        assert error.value.code == FEDERATION_UNKNOWN_PEER
+        channel = hub.service._channels["gateway_c"]
+        await channel.close()
+        await channel.join()
+        hub.service.unregister_channel(channel.channel_instance_id)
+        with pytest.raises(FederationError) as error:
+            await source.service.relay_operation(target=target, operation="read", body=body)
+        assert error.value.code == FEDERATION_CHANNEL_CLOSED

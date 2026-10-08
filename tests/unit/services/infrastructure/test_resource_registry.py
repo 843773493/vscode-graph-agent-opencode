@@ -44,7 +44,7 @@ def _skill_source(source_id: str, path: Path, root: Path) -> ObservedSourceHandl
         descriptor=ObservedSourceDescriptor(
             source_id=source_id,
             source_kind="file",
-            display_uri="boxteam://workspace/skill/demo",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             entry_identity=source_id,
         ),
         file_path=str(path),
@@ -76,7 +76,7 @@ def _build_skill_graph(
             resource_kind="skills",
             resource_id="skill:demo:metadata",
             facet="metadata",
-            display_uri="boxteam://workspace/skill/demo",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             source_ids=("src-skill",),
         ),
         _metadata_loader,
@@ -86,7 +86,7 @@ def _build_skill_graph(
             resource_kind="skills",
             resource_id="skill:demo:activation",
             facet="activation",
-            display_uri="boxteam://workspace/skill/demo",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             source_ids=("src-skill",),
         ),
         _activation_loader,
@@ -106,7 +106,7 @@ def test_registration_rejects_dependency_cycle(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="a",
             facet="facet",
-            display_uri="boxteam://workspace/a",
+            display_uri="boxteam://workspace/test/resources/skills/a/SKILL.md",
             dependency_resource_ids=("b",),
         ),
         lambda inputs: SemanticPayload(payload={"a": 1}),
@@ -117,7 +117,7 @@ def test_registration_rejects_dependency_cycle(tmp_path: Path) -> None:
                 resource_kind="skills",
                 resource_id="b",
                 facet="facet",
-                display_uri="boxteam://workspace/b",
+                display_uri="boxteam://workspace/test/resources/skills/b/SKILL.md",
                 dependency_resource_ids=("a",),
             ),
             lambda inputs: SemanticPayload(payload={"b": 1}),
@@ -186,7 +186,7 @@ def test_fan_in_multiple_sources_one_resource(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="config:effective",
             facet="config",
-            display_uri="boxteam://workspace/config",
+            display_uri="boxteam://workspace/test/resources/config/workspace",
             source_ids=("src-inline", "src-user"),
         ),
         lambda inputs: SemanticPayload(
@@ -220,7 +220,7 @@ def test_dependency_chain_missing_and_mixed_generation(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="agents:content",
             facet="content",
-            display_uri="boxteam://workspace/agents",
+            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
             source_ids=("src-agents",),
         ),
         lambda inputs: SemanticPayload(
@@ -232,7 +232,7 @@ def test_dependency_chain_missing_and_mixed_generation(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="agents:projected",
             facet="projected",
-            display_uri="boxteam://workspace/agents-projected",
+            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
             dependency_resource_ids=("agents:content",),
         ),
         lambda inputs: SemanticPayload(
@@ -286,7 +286,7 @@ def test_publish_all_follows_topological_order(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="agents:content",
             facet="content",
-            display_uri="boxteam://workspace/agents",
+            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
             source_ids=("src-agents",),
         ),
         lambda inputs: SemanticPayload(
@@ -298,7 +298,7 @@ def test_publish_all_follows_topological_order(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="agents:projected",
             facet="projected",
-            display_uri="boxteam://workspace/agents-projected",
+            display_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
             dependency_resource_ids=("agents:content",),
         ),
         lambda inputs: SemanticPayload(
@@ -365,7 +365,7 @@ def test_loader_failure_marks_unavailable_and_keeps_old(tmp_path: Path) -> None:
             resource_kind="skills",
             resource_id="skill:demo:metadata",
             facet="metadata",
-            display_uri="boxteam://workspace/skill/demo",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
             source_ids=("src-skill",),
         ),
         loader,
@@ -434,7 +434,8 @@ def test_restart_rebuilds_identity_stable(tmp_path: Path) -> None:
     # registry 快照不含任何物理路径/locator。
     for snapshot in after.values():
         assert tmp_path.as_posix() not in repr(snapshot)
-        assert "SKILL.md" not in repr(snapshot)
+        assert str(source) not in repr(snapshot)
+        assert snapshot.display_uri == "boxteam://workspace/test/resources/skills/demo/SKILL.md"
 
 
 def test_no_dynamic_import_or_plugin_surface_in_core_modules() -> None:
@@ -474,7 +475,7 @@ def registry_catalog_snapshot() -> ResourceSnapshot:
     payload = {"guidance": "固定目录指引"}
     return ResourceSnapshot(
         resource_id="mcp:catalog", resource_kind="mcp_tool_catalog",
-        facet="guidance", display_uri="boxteam://workspace/mcp/catalog",
+        facet="guidance", display_uri=None,
         revision=sha256_jcs(payload), payload=payload,
         source_lineage=(("mcp:catalog-source", "catalog-revision-1"),),
         generation=1,

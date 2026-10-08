@@ -100,7 +100,7 @@ def test_binding_mismatch_with_registration_fails_closed():
             name="shared",
             description="共享 Skill",
             internal_locator="/.boxteam/skills/shared/SKILL.md",
-            resource_uri="boxteam://workspace/skill/shared",
+            resource_uri="boxteam://workspace/test/resources/skills/shared/SKILL.md",
         )
     )
     manager.install_skill_activation_snapshot(

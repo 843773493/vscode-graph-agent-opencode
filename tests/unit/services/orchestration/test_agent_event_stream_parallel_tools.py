@@ -1114,7 +1114,9 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
                 "input": {
                     "tool_name": "read_context",
                     "arguments": {
-                        "resource": "boxteam://workspace/gw_typo/session/ses_target",
+                        "resource_identity": "11111111-1111-5111-8111-111111111111",
+                        "uri": "boxteam://workspace/11111111-1111-4111-8111-111111111111/resources/session/ses_target",
+                        "scope": "workspace",
                     },
                 }
             },
@@ -1126,7 +1128,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
             "name": "invoke_extension_tool",
             "data": {
                 "output": ToolMessage(
-                    content="Gateway 工作区不存在: gw_typo；请修正 workspace_id 后重试",
+                    content="资源目标不可解析（target_not_resolvable）；请修正资源 URI 后重试",
                     tool_call_id="call_failed",
                     name="invoke_extension_tool",
                     status="error",
@@ -1162,7 +1164,7 @@ async def test_failed_tool_message_publishes_failed_tool_call_end(
     assert end_payload["status"] == "error"
     assert end_payload["failed"] is True
     assert end_payload["result"] == result.last_tool_result_text
-    assert "修正 workspace_id" in end_payload["result"]
+    assert "target_not_resolvable" in end_payload["result"]
     assert result.successful_tool_calls == ()
 
 

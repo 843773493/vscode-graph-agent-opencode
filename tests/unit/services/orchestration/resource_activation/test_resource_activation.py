@@ -110,7 +110,7 @@ def _snapshot(
         resource_id=resource_id,
         resource_kind=resource_kind,
         facet="activation",
-        display_uri=f"boxteam://workspace/test/{resource_kind}",
+        display_uri=None if resource_kind == "mcp_tool_catalog" else "boxteam://workspace/test/resources/skills/demo/SKILL.md",
         revision=f"rev-{resource_id}",
         payload=payload if available else None,
         source_lineage=(("source-1", f"source-rev-{resource_id}"),),
@@ -129,7 +129,7 @@ def _registry() -> ResourceRegistry:
             resource_id="skill:demo",
             resource_kind="skills",
             facet="activation",
-            display_uri="boxteam://workspace/test/skills",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
         )
     )
     registry.register_descriptor(
@@ -137,7 +137,7 @@ def _registry() -> ResourceRegistry:
             resource_id="mcp:catalog",
             resource_kind="mcp_tool_catalog",
             facet="activation",
-            display_uri="boxteam://workspace/test/mcp_tool_catalog",
+            display_uri=None,
         )
     )
     registry.publish(_snapshot("skill:demo", "skills", {"skill": 1}, generation=2))
@@ -215,7 +215,7 @@ async def test_freeze_execution_and_model_call_reuses_parent_bytes() -> None:
             resource_id="mcp:catalog",
             resource_kind="mcp_tool_catalog",
             facet="activation",
-            display_uri="boxteam://workspace/test/mcp_tool_catalog",
+            display_uri=None,
             revision="rev-mcp:catalog:2",
             payload={"mcp": 2},
             source_lineage=(("source-1", "source-rev-mcp:catalog-2"),),
@@ -263,7 +263,7 @@ async def test_model_call_policy_without_required_published_snapshot_fails_close
             resource_id="skill:demo",
             resource_kind="skills",
             facet="activation",
-            display_uri="boxteam://workspace/test/skills",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
         )
     )
     # mcp_tool_catalog 已登记但尚未发布任何可用 snapshot。
@@ -272,7 +272,7 @@ async def test_model_call_policy_without_required_published_snapshot_fails_close
             resource_id="mcp:catalog",
             resource_kind="mcp_tool_catalog",
             facet="activation",
-            display_uri="boxteam://workspace/test/mcp_tool_catalog",
+            display_uri=None,
         )
     )
     registry.publish(_snapshot("skill:demo", "skills", {"skill": 1}, generation=2))
@@ -387,7 +387,7 @@ async def test_bounded_wait_recovers_when_resource_becomes_available() -> None:
             resource_id="skill:demo",
             resource_kind="skills",
             facet="activation",
-            display_uri="boxteam://workspace/test/skills",
+            display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
         )
     )
     coordinator = ResourceActivationCoordinator(
@@ -525,7 +525,7 @@ async def test_registry_to_coordinator_freezes_typed_members_outside_generic_has
     )
     published = registry.publish(ResourceSnapshot(
         resource_id="mcp:catalog", resource_kind="mcp_tool_catalog",
-        facet="guidance", display_uri="boxteam://workspace/mcp/catalog",
+        facet="guidance", display_uri=None,
         revision=sha256_jcs(payload), payload=payload,
         source_lineage=(("mcp:catalog-source", "catalog-revision-1"),),
         generation=1, members=(member,),

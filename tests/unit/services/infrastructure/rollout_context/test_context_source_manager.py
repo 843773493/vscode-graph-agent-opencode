@@ -26,7 +26,7 @@ def _manager(source_seal_case):
             name="debugging",
             description="调试工作流",
             internal_locator="/.boxteam/skills/debugging/SKILL.md",
-            resource_uri="boxteam://workspace/skill/debugging",
+            resource_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
         )
     )
     return manager
@@ -44,7 +44,7 @@ def _install_snapshot(
         name=name,
         resource_id=f"skill-entry:test:{name}:activation",
         entry_identity=f"skill-entry:test:{name}",
-        display_uri=display_uri or f"boxteam://workspace/skill/{name}",
+        display_uri=display_uri or f"boxteam://workspace/test/resources/skills/{name}/SKILL.md",
         activation_revision=_revision(body),
         body=body,
     )
@@ -178,7 +178,7 @@ def test_skill_load_receipt_exposes_safe_display_uri_and_hash():
             name="report",
             description="周报工作流",
             internal_locator="/.boxteam/skills/report/SKILL.md",
-            resource_uri="boxteam://workspace/skill/report",
+            resource_uri="boxteam://workspace/test/resources/skills/report/SKILL.md",
         )
     )
     binding = _install_snapshot(manager, "report", "# 周报\n")
@@ -334,14 +334,14 @@ def test_load_tracked_with_changed_effective_entry_rebinds_and_freezes_old(sourc
             name="debugging",
             description="新优先级 entry",
             internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
-            resource_uri="boxteam://workspace/skill/debugging-next",
+            resource_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
         )
     )
     binding = _install_snapshot(
         manager,
         "debugging",
         "v2\n",
-        display_uri="boxteam://workspace/skill/debugging-next",
+        display_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
     )
     assert manager._source_ids_by_name["debugging"] == "skill:debugging-next"
 
@@ -402,14 +402,14 @@ def test_load_tracked_rebind_with_entry_already_visible_reports_both_dimensions(
             name="debugging",
             description="新优先级 entry",
             internal_locator="/.boxteam/skills/debugging-next/SKILL.md",
-            resource_uri="boxteam://workspace/skill/debugging-next",
+            resource_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
         )
     )
     binding = _install_snapshot(
         manager,
         "debugging",
         "v2\n",
-        display_uri="boxteam://workspace/skill/debugging-next",
+        display_uri="boxteam://workspace/test/resources/skills/debugging-next/SKILL.md",
     )
     # 新 entry 的当前 revision 已在可见台账：source owner 已交付并提交其正文，
     # 但此时该 entry 仍未建立 tracked registration。
@@ -456,7 +456,7 @@ def test_load_tracked_duplicate_same_effective_entry_fails_closed(source_seal_ca
             name="debugging",
             description="同 entry 别名",
             internal_locator="/.boxteam/skills/debugging/SKILL.md",
-            resource_uri="boxteam://workspace/skill/debugging",
+            resource_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
         )
     )
     assert manager._source_ids_by_name["debugging"] == "skill:debugging-alias"
@@ -511,8 +511,8 @@ def test_register_tracked_source_consumes_event_observations(source_seal_case):
         source_kind="workspace_agents",
         name="AGENTS.md",
         description="工作区指令",
-        internal_locator="boxteam://workspace/agents",
-        resource_uri="boxteam://workspace/agents",
+        internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+        resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
     )
     manager.register(descriptor, tracking_status="tracked")
 

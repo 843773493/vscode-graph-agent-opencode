@@ -867,17 +867,31 @@ def test_workspace_agents_source_late_appearance_still_uses_csm_chain(
     )
     middleware.before_agent({}, MagicMock(), None)
     assert middleware.before_model({}, MagicMock()) is None
+    uri = workspace_agents_uri(load_or_create_workspace_id(tmp_path))
+    absent = registry.snapshot(uri)
+    assert absent.available and not absent.exists
+    initial = manager.prepare_pending()
+    assert initial is not None
+    assert [(delta.source_id, delta.revision, delta.content) for delta in initial.deltas] == [
+        ("agents:workspace", absent.revision, ""),
+    ]
+    _, first = source_seal_case.seal(manager)
     assert manager.prepare_pending() is None
 
     (tmp_path / "AGENTS.md").write_text("# 迟到指令\n", encoding="utf-8")
-    registry.refresh(workspace_agents_uri(load_or_create_workspace_id(tmp_path)))
+    present = registry.refresh(uri)
+    assert present.available and present.exists and present.revision != absent.revision
     assert middleware.before_model({}, MagicMock()) is None
     batch = manager.prepare_pending()
-    assert batch is not None and batch.deltas[0].content == "# 迟到指令\n"
+    assert batch is not None and len(batch.deltas) == 1
+    delta = batch.deltas[0]
+    assert delta.kind == "delta" and "+# 迟到指令" in delta.content
+    assert delta.revision == present.revision
     _, binding = source_seal_case.seal(manager)
-    assert binding.root is not None and "迟到指令" in binding.root.content
-    sources = [source for source in binding.root.sources
-               if source.source_identity == "agents:workspace"]
-    assert len(sources) == 1 and sources[0].source_kind == "workspace_agents"
-    assert sources[0].revision == batch.deltas[0].revision
+    assert binding.root == first.root
+    frames = [frame for frame in binding.prefix.state.frames
+              if frame.item_ref.source_identity == "agents:workspace"
+              and frame.item_ref.source_revision == delta.revision]
+    assert len(frames) == 1 and frames[0].role == "user"
+    assert frames[0].content == delta.content
     assert manager.prepare_pending() is None

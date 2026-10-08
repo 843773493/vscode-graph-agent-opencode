@@ -134,6 +134,7 @@ async def catalog_runtime(catalog_workspace):
 async def test_owner_schema_only_change_preserves_selected_guidance_bytes(catalog_runtime):
     owner, factory, registry, _scope = catalog_runtime
     before = registry.snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert before.display_uri is None
     original_publication = owner.publication_snapshot()
     factory.session.minimum = 5
     factory.changed()
@@ -264,6 +265,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     thread = saver._storage.main_thread_id(session)
     first, before = guidance_prepare("owner-guidance-first")
     parent = next(binding for binding in before.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+    assert parent.display_uri is None
     original_body = saver.read_resource_activation_payload(before, parent)
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
     assert any(
@@ -292,6 +294,9 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     later = saver.get_context_assembly(session, thread, assembly_id=second["assembly_id"])
     assert later.plan_hash == original.plan_hash
     assert later.request_hash == original.request_hash
+    assert later.seal_binding.prefix.state.epoch == original.seal_binding.prefix.state.epoch
+    assert later.seal_binding.prefix.state.epoch.reason.value != "toolset_changed"
+    assert after.activation_provenance_hash != before.activation_provenance_hash
     assert second["messages"] == first["messages"]
 
     def forbid_live_capture():
@@ -308,6 +313,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
             plan_hash=later.plan_hash, request_hash=later.request_hash,
         )
         ref = next(binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert ref.display_uri is None
         assert ref.members == changed.members
         assert restarted.read_resource_activation_payload(restored, ref) == original_body
 

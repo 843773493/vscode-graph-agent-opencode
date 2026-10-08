@@ -96,9 +96,23 @@
 
 会话上下文资源的解析 MUST 复用该唯一星型顺序，MUST NOT 为会话上下文单开第二条解析路径；跨边界传输 MUST 只包含资源身份、URI、revision 与内容，MUST NOT 传输 real path。
 
+已支持的单会话视图、会话清单与搜索 MUST 采用同一目标解析与授权链，由目标端既有查询 owner 执行。清单或搜索目标 MUST 保留真实资源引用，MUST NOT 伪造 Session ID 或回退到当前激活工作区；请求授权 MUST 绑定该资源引用与实际查询字段。
+
 #### Scenario: 跨 gateway 只回内容
 - **WHEN** URI 的 gateway authority 指向对端且对端可达
 - **THEN** 对端在本地解析该 URI，响应中只包含稳定身份、URI、revision 与内容，不含任何真实路径、provider locator 或解析 locator
+
+#### Scenario: information 与搜索不外投诊断物理位置
+- **WHEN** 读取 `view=information` 或搜索 `session_information`，包括其远端与持久观察入口
+- **THEN** 唯一 information owner 保留会话、工作区身份、名称和诊断状态，并下线软件生成的 `workspace.root_path`、`storage_path` 真实定位字段；API、工具、搜索与冻结载荷共同消费该输出，不以中继层过滤或仅检查 URI envelope 替代 owner 收口
+
+#### Scenario: 远端会话清单使用真实资源目标
+- **WHEN** 调用方读取已共享的远端工作区或 Gateway 会话清单
+- **THEN** 请求绑定该清单的 ResourceIdentity、URI 和 scope，由目标端既有清单 owner 执行，不转换成单个 Session 的通信请求
+
+#### Scenario: 远端搜索固定目标和查询
+- **WHEN** 调用方搜索已共享的远端会话上下文资源，并在请求途中切换激活工作区
+- **THEN** 授权仍绑定原目标及 query、view、revision、cursor 等实际字段，搜索在原目标端执行，不切换到本地或新的激活工作区
 
 #### Scenario: spoke 只经唯一 hub 做一次有界 transit
 - **WHEN** 本地 gateway 是 spoke，请求的目标位于另一个 spoke
@@ -132,14 +146,14 @@
 
 系统 MUST 停止接受旧式上下文 URI 形态（含身份/领域段 `%` 编码、`#fragment`、未登记 scope 的自有正则语法；合法文件段规则引用统一寻址 owner），入口 MUST 显式拒绝并指向结构化字段表示。
 
-**已确证的存量事实（本轮实测取证）**：旧式会话上下文 URI **没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。取证：
+**已确证的存量事实（建案时取证快照）**：旧式会话上下文 URI 当时**没有任何持久化实例**，因此本 capability MUST NOT 要求对历史记录做数据迁移。以下“未装配/生产不写”只描述建案基线，不代表当前缺口；A01 已接通 activation freeze/seal/restore，A04 迁移现有 URI 字段与消费者。历史取证：
 
 - 旧形态字符串（自有正则 `app/services/business/session_context_resource.py:12-16`、`ParsedSessionContextResource.canonical`、`session_context_query_service.py` 的 `locator` 字段、`app/services/business/session_context_projection.py:317` 与 `session_context_query_service.py:481` 的 base64 `next_cursor`）**全部在请求/响应链路内构造并随响应返回调用方**，不存在把它写入 session/catalog/checkpoint/rollout 存储的代码路径；
 - 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`），其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`三处调用 `attach_resource_activation_store` / `ResourceActivationStore(...)`），`app/container.py` 未装配（`rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故该列在生产中从不被写入；
 - 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**，`out/development-runtime` 的真实 `rollout.jsonl` 与 `tests/fixtures/` 亦 0 命中；
 - 会话上下文分页游标从不落盘：全仓不存在承载 `SessionContextCursorCodec` 输出的持久化列（唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value` 是工作区活动 `event_seq`，与上下文游标无关）。
 
-因此本 capability 的迁移面只有两点：(a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段（`display_uri` 列、`context_source_control_states` 的来源事实）改为按新格式**新写入**并在读路径切换——属「新写字段」，不是「存量数据迁移」。
+因此本 capability 的迁移面只有两点：(a) 入口对旧形态 fail-closed 拒绝；(b) 由现有 owner 迁移确需资源引用的持久化字段，按新格式**新写入**并切换读路径——属「新写字段」，不是「存量数据迁移」。`resource_activation_bindings.display_uri` 复用已接通的 writer/reader；`context_source_control_states` 保持来源追踪事实，只有其 owner 确需持久资源定位时才增加 URI，不默认添加地址镜像。
 
 #### Scenario: 旧式 fragment 形态被拒绝
 - **WHEN** 调用方提交 `boxteam://session/{session_id}#assembly={id}` 一类旧式 URI

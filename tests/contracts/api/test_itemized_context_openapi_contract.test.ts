@@ -28,12 +28,18 @@ for (const model of ["SessionContextReadRequest", "SessionContextReadResultDTO"]
 
     test.each(["assembly", "assemblies"])("Proto 生成的 TS JSON 绑定无损保留 %s", (view) => {
       // OpenAPI 负责枚举约束；公开 TS DTO 继续唯一来自 Proto string 字段。
-      const resource = "boxteam://session/ses_contract" + (view === "assembly" ? "#assembly=assembly-contract" : "");
-      const wire = { resource, view, revision: "sealed-contract", include: [], items: [], partial_errors: [] };
+      const reference = {
+        resource_identity: "11111111-1111-5111-8111-111111111111",
+        uri: "boxteam://workspace/11111111-1111-4111-8111-111111111111/resources/session/ses_contract",
+        scope: "workspace",
+        ...(view === "assembly" ? { assembly_ref: "22222222-2222-5222-8222-222222222222" } : {}),
+      };
+      const wire = { ...reference, view, revision: "sealed-contract", include: [], items: [], partial_errors: [] };
       const projected = model === "SessionContextReadRequest"
         ? SessionContextReadRequest.toJSON(SessionContextReadRequest.fromJSON(wire))
         : SessionContextReadResultDTO.toJSON(SessionContextReadResultDTO.fromJSON(wire));
-      expect(projected).toMatchObject({ resource, view });
+      expect(projected).toMatchObject({ ...reference, view });
+      expect(projected).not.toHaveProperty("resource");
       expect(validate((projected as { view: string }).view)).toBe(true);
     });
 

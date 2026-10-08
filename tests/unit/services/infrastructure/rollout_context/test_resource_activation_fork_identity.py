@@ -150,7 +150,7 @@ async def test_full_copy_rebuilds_target_local_activation_identity(
     registry = ResourceRegistry()
     descriptor = SemanticResourceDescriptor(
         resource_id="mcp:catalog", resource_kind="mcp_tool_catalog", facet="activation",
-        display_uri="boxteam://workspace/test/mcp-catalog",
+        display_uri=None,
     )
     registry.register_descriptor(descriptor)
     registry.publish(ResourceSnapshot(

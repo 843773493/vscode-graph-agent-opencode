@@ -1,4 +1,4 @@
-"""URI 严格 grammar：boxteam:// 虚拟资源 URI 的唯一解析入口。
+"""资源 URI 的纯 grammar 与构造：boxteam:// 的唯一实现。
 
 规范 URI 只表达逻辑 scope/kind/name，不携带 revision、物理路径、endpoint
 或 credential。解析只接受已登记 grammar：百分号编码整体拒绝（因此不存在
@@ -66,9 +66,10 @@ class ParsedResourceUri:
 
     scope: str
     scope_id: str
-    kind: str | None
+    kind: str
     logical_name: str
     display_uri: str
+    gateway_authority: str | None
     # 规范化尾段（resources/{kind}/ 之后的全部 segment）。固定形态 kind（skills /
     # agent-spec）的 logical_name 是规范化后的权威值，可能与尾段字面不同（大小写、
     # skills 尾段丢弃文件名）；发现式 kind（config / session）的 logical_name 即尾段
@@ -132,6 +133,7 @@ def _parsed(
     tail_segments: list[str],
     logical_name: str,
     display_uri: str,
+    gateway_authority: str | None,
 ) -> ParsedResourceUri:
     return ParsedResourceUri(
         scope=scope,
@@ -139,12 +141,13 @@ def _parsed(
         kind=kind,
         logical_name=logical_name,
         display_uri=display_uri,
+        gateway_authority=gateway_authority,
         tail_segments=tuple(tail_segments),
     )
 
 
-def parse_resource_uri(uri: str) -> ParsedResourceUri:
-    """严格解析 boxteam:// 虚拟资源 URI；任何拒绝都先于一切资源访问。"""
+def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> ParsedResourceUri:
+    """严格解析 boxteam:// 资源 URI；任何拒绝都先于一切资源访问。"""
     if not isinstance(uri, str) or not uri:
         raise ResourceUriGrammarError("empty_uri", "URI 必须是非空字符串")
     if "\\" in uri:
@@ -177,6 +180,13 @@ def parse_resource_uri(uri: str) -> ParsedResourceUri:
     if any(segment == "" for segment in segments):
         raise ResourceUriGrammarError("empty_segment", f"URI 不得有空 segment: {uri!r}")
 
+    authority = None
+    if len(segments) > 1 and segments[0].lower() not in _SCOPE_KEYWORDS and segments[1] in _SCOPE_KEYWORDS:
+        authority = segments.pop(0)
+        _validate_dynamic_segment(authority, field="gateway authority")
+        if authority == local_gateway_id:
+            authority = None
+            uri = _SCHEME + "/".join(segments)
     scope = _parse_scope(segments[0])
     body = segments[1:]
 
@@ -199,7 +209,7 @@ def parse_resource_uri(uri: str) -> ParsedResourceUri:
             )
         _expect_fixed_segment(tails[1], "SKILL.md")
         _validate_dynamic_segment(tails[0], field="skill name")
-        return _parsed(scope, body[0], kind, tails, tails[0], uri)
+        return _parsed(scope, body[0], kind, tails, tails[0], uri, authority)
 
     if kind == "agent-spec":
         if len(tails) != 2:
@@ -210,7 +220,7 @@ def parse_resource_uri(uri: str) -> ParsedResourceUri:
             )
         _expect_fixed_segment(tails[0], "root")
         _expect_fixed_segment(tails[1], "AGENTS.md")
-        return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri)
+        return _parsed(scope, body[0], kind, tails, "root/AGENTS.md", uri, authority)
 
     # config / session 无固定尾段（规范形态 .../resources/{kind}/{...canonical path
     # segments}）；logical_name 即尾段逐段拼接的规范化结果。
@@ -222,11 +232,12 @@ def parse_resource_uri(uri: str) -> ParsedResourceUri:
         )
     for tail in tails:
         _validate_dynamic_segment(tail, field=f"{kind} path")
-    return _parsed(scope, body[0], kind, tails, "/".join(tails), uri)
+    return _parsed(scope, body[0], kind, tails, "/".join(tails), uri, authority)
 
 
 def resource_display_uri(
-    *, scope: str, scope_id: str, kind: str, tail_segments: Sequence[str]
+    *, scope: str, scope_id: str, kind: str, tail_segments: Sequence[str],
+    gateway_authority: str | None = None,
 ) -> str:
     """按 kind 构造规范 display URI；URI 构造的唯一通用入口。
 
@@ -243,7 +254,8 @@ def resource_display_uri(
     # 固定尾段（skills 的 SKILL.md / agent-spec 的 AGENTS.md）合法含 '.'，不在
     # charset 内，故不在此逐段校验；尾段的固定/动态约束与拒绝码统一由 parse_resource_uri
     # 判定（kind 专属的动态段校验由各 kind 包装函数负责）。
-    uri = _SCHEME + "/".join((scope, scope_id, "resources", kind, *tail_segments))
+    prefix = () if gateway_authority is None else (gateway_authority,)
+    uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
     return parse_resource_uri(uri).display_uri
 
 

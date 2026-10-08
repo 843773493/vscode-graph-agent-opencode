@@ -7,13 +7,20 @@ import httpx
 from pydantic import BaseModel
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.core.trace_middleware import (
+    require_current_gateway_id,
+    require_current_request_id,
+)
+from app.gateway.federation.grants import ContextGrantTarget
 from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextReadResultDTO,
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
+from app.services.business.session_context_resource import parse_session_context_ref
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_client_common import (
     MODEL_RECOVERABLE_HTTP_STATUSES,
@@ -74,6 +81,40 @@ class GatewaySessionContextClient:
             json_body=request.model_dump(mode="json"),
         )
 
+    async def read_resource_context(
+        self, request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        return await self._resource_query(request, SessionContextReadResultDTO)
+
+    async def search_resource_context(
+        self, request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO:
+        return await self._resource_query(request, SessionContextSearchResultDTO)
+
+    async def _resource_query(
+        self, request: SessionContextReadRequest | SessionContextSearchRequest,
+        response_type: type[ResponseDTO],
+    ) -> ResponseDTO:
+        source_gateway_id = require_current_gateway_id("上下文资源 relay")
+        resource = parse_session_context_ref(
+            resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+            local_gateway_id=source_gateway_id,
+        )
+        target = ContextGrantTarget(
+            gateway_id=resource.gateway_authority or source_gateway_id,
+            resource_identity=str(resource.resource_identity), uri=resource.uri, scope=resource.scope,
+        )
+        request = request.model_copy(update={"uri":resource.uri})
+        query = ContextQueryRequest(
+            source_gateway_id=source_gateway_id, resource_target=target,
+            read=request if isinstance(request, SessionContextReadRequest) else None,
+            search=request if isinstance(request, SessionContextSearchRequest) else None,
+        )
+        return await self._request(
+            "POST", "/api/gateway/federation/relay", response_type=response_type,
+            json_body={"operation":"read", "resource_target":target.to_payload(), "body":query.model_dump(mode="json")},
+        )
+
     async def _request(
         self,
         method: str,
@@ -88,6 +129,10 @@ class GatewaySessionContextClient:
                 "workspace_id 不能为空；请使用 Gateway inventory 返回的工作区 ID"
             )
         headers = {"X-Local-Token": self._local_token_supplier()}
+        request_id = None
+        if path == "/api/gateway/federation/relay":
+            request_id = require_current_request_id("上下文资源 relay")
+            headers["X-Request-ID"] = request_id
         if workspace_id is not None:
             headers["X-BoxTeam-Workspace-Id"] = workspace_id.strip()
         async with httpx.AsyncClient(
@@ -115,4 +160,6 @@ class GatewaySessionContextClient:
         payload = response.json()
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
             raise TypeError(f"Gateway 上下文查询响应缺少 data object: path={path}")
+        if request_id is not None and (payload.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id):
+            raise RuntimeError("上下文资源 relay 响应 request_id 漂移")
         return response_type.model_validate(payload["data"])

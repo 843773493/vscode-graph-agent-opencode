@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, Literal
 
+from app.core.resource_uri import ResourceUriGrammarError, parse_resource_uri
 from app.domain.itemized.enums import DetailAvailability
 from app.domain.itemized.errors import CodeCarryingError, ItemSchemaError
 from app.domain.itemized.hashing import sha256_jcs
@@ -322,13 +323,15 @@ def _safe_identity(value: object, field_name: str) -> str:
     return text
 
 
-def _display_uri(value: object, field_name: str) -> str:
+def _display_uri(value: object, field_name: str) -> str | None:
     """校验模型可见的安全虚拟 URI；它不是 identity，也不得解析回当前资源。
 
     完整 URI grammar 由资源平台单一 owner 维护，本模块只校验 provenance
     安全投影不变量，避免在 domain 复制第二套 URI 语法。
     """
 
+    if value is None:
+        return None
     text = _non_empty_string(value, field_name)
     _reject_path_or_credential_shape(text, field_name)
     if not text.isascii():
@@ -338,15 +341,10 @@ def _display_uri(value: object, field_name: str) -> str:
             _CODE_PROVIDER_LOCATOR_REJECTED,
             f"{field_name} 必须是 {_DISPLAY_URI_SCHEME} 逻辑地址: {text!r}",
         )
-    for marker in ("?", "#"):
-        if marker in text:
-            raise _schema_error(f"{field_name} 不得携带 query/fragment: {text!r}")
-    segments = text[len(_DISPLAY_URI_SCHEME):].split("/")
-    if any(segment in ("", ".", "..") for segment in segments):
-        raise _schema_error(
-            f"{field_name} 不得有空的或 . / .. segment: {text!r}"
-        )
-    return text
+    try:
+        return parse_resource_uri(text).display_uri
+    except ResourceUriGrammarError as error:
+        raise _schema_error(f"{field_name} 资源 URI 非法: {error.reason_code}: {error}") from error
 
 
 def _reject_forbidden_fields(

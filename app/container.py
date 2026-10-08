@@ -896,7 +896,6 @@ def _build_app_container(
         session_service=session_service,
         session_resource_service=session_resource_service,
         workspace_service=workspace_service,
-        path_resolver=session_path_resolver,
     )
     session_context_query_service.bind_information_source(
         session_information_service

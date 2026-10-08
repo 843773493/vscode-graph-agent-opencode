@@ -26,7 +26,7 @@ def _manager(*names: str) -> ContextSourceManager:
                 name=name,
                 description=f"{name} Skill",
                 internal_locator=f"/.boxteam/skills/{name}/SKILL.md",
-                resource_uri=f"boxteam://workspace/skill/{name}",
+                resource_uri=f"boxteam://workspace/test/resources/skills/{name}/SKILL.md",
             )
         )
     return manager
@@ -38,7 +38,7 @@ def _install_snapshot(manager: ContextSourceManager, name: str, body: str) -> No
         name=name,
         resource_id=f"skill-entry:test:{name}:activation",
         entry_identity=f"skill-entry:test:{name}",
-        display_uri=f"boxteam://workspace/skill/{name}",
+        display_uri=f"boxteam://workspace/test/resources/skills/{name}/SKILL.md",
         activation_revision=_revision_of(body),
         body=body,
     )

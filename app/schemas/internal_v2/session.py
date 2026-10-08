@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal, Optional, Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -28,9 +28,9 @@ class SessionGenerationOriginDTO(BaseModel):
 class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Optional[str] = "新会话"
-    agent_id: Optional[str] = None
-    folder_id: Optional[str] = None
+    title: str | None = "新会话"
+    agent_id: str | None = None
+    folder_id: str | None = None
 
 
 class SessionForkRequest(BaseModel):
@@ -46,8 +46,8 @@ class SessionForkRequest(BaseModel):
 class SessionUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_id: Optional[str] = None
-    provider_id: Optional[str] = None
+    agent_id: str | None = None
+    provider_id: str | None = None
 
 
 class SessionDTO(TimestampedDTO):
@@ -59,11 +59,11 @@ class SessionDTO(TimestampedDTO):
     title: str
     title_source: TitleSource = "default"
     current_agent_id: str
-    current_provider_id: Optional[str] = None
-    parent_session_id: Optional[str] = None
-    context_source_session_id: Optional[str] = None
+    current_provider_id: str | None = None
+    parent_session_id: str | None = None
+    context_source_session_id: str | None = None
     kind: SessionKind = "normal"
-    generation_origin: Optional[SessionGenerationOriginDTO] = None
+    generation_origin: SessionGenerationOriginDTO | None = None
     # 普通 Session 入口显式解析出的 main thread 身份；child thread 只能经
     # 精确 (session_id, thread_id) 定位，这里不回退成 session_id。
     thread_id: str | None = None
@@ -78,7 +78,7 @@ class SessionDTO(TimestampedDTO):
 class SessionListResultDTO(BaseModel):
     items: list[SessionDTO]
     total: int
-    next_cursor: Optional[str] = None
+    next_cursor: str | None = None
     has_more: bool = False
 
 
@@ -118,7 +118,6 @@ class SessionMainThreadDTO(BaseModel):
 class SessionInformationWorkspaceDTO(BaseModel):
     workspace_id: str
     name: str
-    root_path: str
 
 
 class SessionInformationSessionDTO(BaseModel):
@@ -126,9 +125,9 @@ class SessionInformationSessionDTO(BaseModel):
     workspace_id: str
     title: str = Field(max_length=512)
     current_agent_id: str
-    current_provider_id: Optional[str] = None
-    parent_session_id: Optional[str] = None
-    context_source_session_id: Optional[str] = None
+    current_provider_id: str | None = None
+    parent_session_id: str | None = None
+    context_source_session_id: str | None = None
     kind: SessionKind
     created_at: datetime
     updated_at: datetime
@@ -136,18 +135,18 @@ class SessionInformationSessionDTO(BaseModel):
 
 
 class SessionInformationExecutionDTO(BaseModel):
-    job_id: Optional[str] = None
+    job_id: str | None = None
     status: str = "idle"
-    current_tool: Optional[str] = None
-    last_error: Optional[str] = None
+    current_tool: str | None = None
+    last_error: str | None = None
     last_error_truncated: bool = False
 
 
 class SessionInformationTraceDTO(BaseModel):
     observed_event_count: int = 0
-    last_event_id: Optional[str] = None
-    last_event_type: Optional[str] = None
-    last_event_at: Optional[datetime] = None
+    last_event_id: str | None = None
+    last_event_type: str | None = None
+    last_event_at: datetime | None = None
     truncated: bool = False
 
 
@@ -157,7 +156,7 @@ class SessionInformationResourceDTO(BaseModel):
     name: str = Field(max_length=512)
     status: str = Field(max_length=128)
     updated_at: datetime
-    ended_at: Optional[datetime] = None
+    ended_at: datetime | None = None
     name_truncated: bool = False
 
 
@@ -198,7 +197,6 @@ class SessionInformationSnapshotDTO(BaseModel):
     generated_at: datetime
     session: SessionInformationSessionDTO
     workspace: SessionInformationWorkspaceDTO
-    storage_path: str
     execution: SessionInformationExecutionDTO
     trace: SessionInformationTraceDTO
     relations: SessionInformationRelationsDTO = Field(
@@ -230,7 +228,7 @@ class SessionInterruptResultDTO(BaseModel):
     status: str
     interrupt_request_id: str
     phase: str
-    tool_name: Optional[str] = None
+    tool_name: str | None = None
     interrupted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -243,9 +241,9 @@ class SessionCompactResultDTO(BaseModel):
     effective_message_count_after: int
     summarized_message_count: int
     retained_message_count: int
-    summary: Optional[str] = None
-    history_file_path: Optional[str] = None
-    strategy: Optional[Literal["cache_preserving", "cache_replacement"]] = None
+    summary: str | None = None
+    history_file_path: str | None = None
+    strategy: Literal["cache_preserving", "cache_replacement"] | None = None
     compacted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

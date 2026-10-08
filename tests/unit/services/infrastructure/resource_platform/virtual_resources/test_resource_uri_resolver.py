@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     ResourceUriGrammarError,
     parse_resource_uri,
     skill_display_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     CatalogBinding,
+    ResourceUriCatalog,
     ResourceUriResolveError,
-    VirtualResourceCatalog,
-    VirtualResourceResolver,
+    ResourceUriResolver,
     require_scope_binding,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -50,13 +50,13 @@ def _descriptor(resource_id: str, display_uri: str, *, kind: str = "skills") -> 
     )
 
 
-def _catalog(bindings: dict) -> VirtualResourceCatalog:
+def _catalog(bindings: dict) -> ResourceUriCatalog:
     name_index = {}
     for uri in bindings:
         parsed = parse_resource_uri(uri)
         if parsed.kind == "skills":
             name_index[(parsed.scope, parsed.logical_name)] = uri
-    return VirtualResourceCatalog(
+    return ResourceUriCatalog(
         bindings=bindings,
         name_index=name_index,
     )
@@ -81,7 +81,7 @@ def _workspace_context() -> ResolutionContext:
 
 def test_resolve_returns_typed_handle_with_provenance() -> None:
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
-    resolver = VirtualResourceResolver(_catalog({uri: _workspace_binding()}))
+    resolver = ResourceUriResolver(_catalog({uri: _workspace_binding()}))
     handle = resolver.resolve(
         uri, operation=OPERATION_ACTIVATE, context=_workspace_context()
     )
@@ -95,7 +95,7 @@ def test_grammar_and_scope_reject_before_catalog_access() -> None:
     bindings = _RecordingBindings()
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
     bindings[uri] = _workspace_binding()
-    resolver = VirtualResourceResolver(_catalog(bindings))
+    resolver = ResourceUriResolver(_catalog(bindings))
     with pytest.raises(ResourceUriGrammarError):
         resolver.resolve(
             "boxteam://workspace/ws-1/resources/skills/../evil/SKILL.md",
@@ -117,7 +117,7 @@ def test_grammar_and_scope_reject_before_catalog_access() -> None:
 def test_scope_mismatch_per_scope() -> None:
     gateway_uri = skill_display_uri(scope="gateway", scope_id="gw-1", skill_name="code-review")
     inline_uri = skill_display_uri(scope="inline", scope_id="dist-1", skill_name="code-review")
-    resolver = VirtualResourceResolver(
+    resolver = ResourceUriResolver(
         _catalog(
             {
                 gateway_uri: CatalogBinding(
@@ -152,7 +152,7 @@ def test_scope_mismatch_per_scope() -> None:
 
 def test_unknown_resource_operation_capability_and_snapshot() -> None:
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
-    resolver = VirtualResourceResolver(_catalog({uri: _workspace_binding()}))
+    resolver = ResourceUriResolver(_catalog({uri: _workspace_binding()}))
     forged = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="ghost")
     with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(forged, operation=OPERATION_ACTIVATE, context=_workspace_context())
@@ -166,7 +166,7 @@ def test_unknown_resource_operation_capability_and_snapshot() -> None:
     no_snapshot = CatalogBinding(
         descriptor=_descriptor("res-ws-1", uri), capabilities=_CAPS, snapshot_ref=None
     )
-    resolver2 = VirtualResourceResolver(_catalog({uri: no_snapshot}))
+    resolver2 = ResourceUriResolver(_catalog({uri: no_snapshot}))
     with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver2.resolve(uri, operation=OPERATION_ACTIVATE, context=_workspace_context())
     assert excinfo.value.reason_code == "snapshot_unavailable"
@@ -174,7 +174,7 @@ def test_unknown_resource_operation_capability_and_snapshot() -> None:
 
 def test_resolve_name_uses_current_catalog_index() -> None:
     uri = skill_display_uri(scope="workspace", scope_id="ws-1", skill_name="code-review")
-    resolver = VirtualResourceResolver(_catalog({uri: _workspace_binding()}))
+    resolver = ResourceUriResolver(_catalog({uri: _workspace_binding()}))
     handle = resolver.resolve_name(
         scope="workspace",
         logical_name="code-review",
@@ -196,7 +196,7 @@ def test_config_and_session_kinds_reach_catalog_lookup() -> None:
     # config/session 已进语法闭集，必须在 parser 之后贯通 resolver 门卫链：scope
     # 校验先行，随后落到 catalog 查询（当前无 owner 登记其描述符，故 unknown_resource
     # 是正确 fail-closed 结果，而不是在 grammar 期被 unknown_resource_kind 拒绝）。
-    resolver = VirtualResourceResolver(_catalog({}))
+    resolver = ResourceUriResolver(_catalog({}))
     with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             "boxteam://workspace/ws-1/resources/session/sess-1",
@@ -216,7 +216,7 @@ def test_config_and_session_kinds_reach_catalog_lookup() -> None:
 
 
 def test_config_and_session_still_fail_scope_binding() -> None:
-    resolver = VirtualResourceResolver(_catalog({}))
+    resolver = ResourceUriResolver(_catalog({}))
     with pytest.raises(ResourceUriResolveError) as excinfo:
         resolver.resolve(
             "boxteam://workspace/ws-OTHER/resources/session/sess-1",
@@ -246,7 +246,7 @@ def test_user_scope_binding_accepts_local_and_rejects_other() -> None:
 
 def test_user_scope_resolves_through_catalog() -> None:
     uri = skill_display_uri(scope="user", scope_id="local", skill_name="code-review")
-    resolver = VirtualResourceResolver(
+    resolver = ResourceUriResolver(
         _catalog(
             {
                 uri: CatalogBinding(

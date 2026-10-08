@@ -516,7 +516,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     assert source_session_response.status_code == 200
     source_session_data = source_session_response.json()["data"]
     source_session_id = source_session_data["session_id"]
-    source_resource = f"boxteam://session/{source_session_id}"
+    source_ref = {key: source_session_data[key] for key in ("resource_identity", "uri", "scope")}
 
     source_marker = "SOURCE_SESSION_HISTORY_ALPHA"
     await _write_source_session_checkpoint(
@@ -542,13 +542,12 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     prompt = (
         "先调用 skill_load，参数只能是 name=gateway-context；它不计入下面的业务步骤。"
         "随后严格完成以下三个业务调用，不要改写资源地址，也不要使用 boxteam://gateway："
-        f"第一步调用 read_context，resource 原样使用 {source_resource}，view=overview。"
-        "第二步调用 search_context，参数名必须使用 query（不是 pattern），"
-        "resource 仍原样使用同一个地址，"
-        f"query 原样使用 {source_marker}；将第一步响应的 revision 原样复制到 "
-        "第二步的 expected_revision（请求中禁止传 revision 字段）。"
-        "第三步调用 read_context；resource 使用第二步响应 matches[0].locator，"
-        "view=records，并将 matches[0].revision 原样复制到 expected_revision。"
+        f"第一步调用 read_context，原样使用这些资源字段 {json.dumps(source_ref)}，view=overview。"
+        "第二步调用 search_context，原样使用同一组 resource_identity、uri、scope，"
+        f"query 原样使用 {source_marker}；将第一步响应的 revision 原样复制到第二步的 revision。"
+        "第三步调用 read_context；resource_identity、uri、scope 使用第二步响应 matches[0] 的同名字段，"
+        "view=records，record_index 使用 matches[0].record_index，"
+        "并将 matches[0].revision 原样复制到 revision。"
         "三个业务调用全部成功后才回复完成，不要抄写工具返回的大段 JSON。"
     )
     reader_message_response = await client.post(
@@ -591,8 +590,12 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     assert overview_result["revision"]
     assert source_marker in json.dumps(overview_result, ensure_ascii=False)
     assert search_result["revision"] == overview_result["revision"]
-    assert search_result["total_matches"] >= 1
-    assert search_result["matches"][0]["locator"]
+    assert search_result["matches"]
+    matched = search_result["matches"][0]
+    assert {key: matched[key] for key in source_ref} == source_ref
+    assert matched["record_index"] is not None
+    assert {key: expanded_result[key] for key in source_ref} == source_ref
+    assert expanded_result["record_index"] == matched["record_index"]
     assert expanded_result["revision"] == search_result["matches"][0]["revision"]
     assert source_marker in json.dumps(expanded_result, ensure_ascii=False)
 

@@ -2,20 +2,39 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 
-from app.core.trace_middleware import require_current_request_id
+from app.core.trace_middleware import (
+    require_current_gateway_id,
+    require_current_request_id,
+)
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.federation.errors import (
+    FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
+    FEDERATION_TARGET_NOT_RESOLVABLE,
     FederationError,
 )
 from app.gateway.federation.rpc import FederationSpoke
 from app.gateway.proxy_upstream import load_proxy_gateway_id
+from app.schemas.gateway import GatewayWorkspaceListDTO
+from app.schemas.internal_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextReadResultDTO,
+    SessionContextSearchRequest,
+    SessionContextSearchResultDTO,
+)
+from app.services.business.gateway_context_query_service import (
+    GatewayContextQueryService,
+)
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    RESOURCE_URI_RESOLVE_REASON_CODES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +142,13 @@ class WorkspaceCatalogPort:
 class WorkspaceSessionMainPort:
     """只调用注册工作区的权威 HTTP 端点，不读业务盘或创建 Job。"""
 
-    def __init__(self, *, request_timeout: float = 5.0) -> None:
+    def __init__(
+        self, *, request_timeout: float = 5.0,
+        inventory_provider: Callable[[], Awaitable[GatewayWorkspaceListDTO]] | None = None,
+    ) -> None:
         self._request_timeout = request_timeout
+        self._inventory_provider = inventory_provider
+        self._context_query = GatewayContextQueryService(transport=self)
         self._backend_urls: dict[str, str] = {}
         self._backend_workspace_ids: dict[str, str] = {}
 
@@ -157,6 +181,21 @@ class WorkspaceSessionMainPort:
             from app.core.session_control_communication_ledger.observations import (
                 observation_error_code,
             )
+            if path in {"/api/v1/context/read", "/api/v1/context/search"}:
+                if response.status_code in {403, 404}:
+                    raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文资源未共享或不存在")
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    payload = response.json()
+                    detail = payload.get("detail") if isinstance(payload, dict) else None
+                    code = detail.get("code") if isinstance(detail, dict) else None
+                    if isinstance(code, str) and (
+                        code in RESOURCE_URI_RESOLVE_REASON_CODES or code == "snapshot_changed"
+                    ):
+                        raise FederationError(code, code)
+                raise FederationError(
+                    FEDERATION_SESSION_MAIN_UNAVAILABLE,
+                    f"工作区上下文 HTTP 失败: status={response.status_code}",
+                )
             if response.headers.get("content-type", "").startswith("application/json"):
                 code = observation_error_code(response.json())
                 if code is not None:
@@ -169,6 +208,35 @@ class WorkspaceSessionMainPort:
         if not isinstance(data, dict) or data.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id or not isinstance(data.get("data"), dict):
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区通信响应身份或 data 非法")
         return data["data"]
+
+    async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO:
+        if self._inventory_provider is None:
+            raise RuntimeError("Gateway inventory provider 尚未装配")
+        inventory = await self._inventory_provider()
+        # 联邦目标只执行自己拥有的资源；不经 registry 的远端投影继续第四跳。
+        return inventory.model_copy(update={
+            "items": [item for item in inventory.items if item.connection_kind == "local"],
+        })
+
+    async def read_context_in_workspace(
+        self, workspace_id: str, request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        data = await self._request(
+            workspace_id=self.canonical_workspace_id(workspace_id), method="POST",
+            path="/api/v1/context/read", origin=require_current_gateway_id("read context target"),
+            body=request.model_dump(mode="json"),
+        )
+        return SessionContextReadResultDTO.model_validate(data)
+
+    async def search_context_in_workspace(
+        self, workspace_id: str, request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO:
+        data = await self._request(
+            workspace_id=self.canonical_workspace_id(workspace_id), method="POST",
+            path="/api/v1/context/search", origin=require_current_gateway_id("search context target"),
+            body=request.model_dump(mode="json"),
+        )
+        return SessionContextSearchResultDTO.model_validate(data)
 
     async def resolve_main_thread(self, *, gateway_id: str, workspace_id: str, session_id: str) -> str:
         from app.core.session_catalog_store import (
@@ -184,6 +252,34 @@ class WorkspaceSessionMainPort:
         return thread_id
 
     async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        if "resource_identity" in target:
+            from app.schemas.internal_v2.communication import ContextQueryRequest
+            from app.services.business.session_context_resource import (
+                parse_session_context_ref,
+            )
+            query = ContextQueryRequest.model_validate(body)
+            if operation != "read" or query.resource_target.to_payload() != target or query.source_gateway_id != origin:
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "上下文查询与 read grant target/origin 不一致")
+            resource = parse_session_context_ref(
+                resource_identity=query.resource_target.resource_identity,
+                uri=query.resource_target.uri, scope=query.resource_target.scope,
+                local_gateway_id=require_current_gateway_id("context target"),
+            )
+            if resource.gateway_authority is not None:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文 URI 不属于当前 Gateway")
+            if resource.scope == "workspace" and resource.scope_id not in self._backend_urls:
+                raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "上下文 workspace 未共享或不存在")
+            try:
+                async with asyncio.timeout(timeout):
+                    if resource.scope == "gateway":
+                        result = await self._context_query.read_gateway_context(query.read) if query.read is not None else await self._context_query.search_gateway_context(query.search)
+                    elif query.read is not None:
+                        result = await self.read_context_in_workspace(resource.scope_id, query.read)
+                    else:
+                        result = await self.search_context_in_workspace(resource.scope_id, query.search)
+            except TimeoutError as error:
+                raise FederationError(FEDERATION_DEADLINE_EXCEEDED, "上下文查询超过联邦总 deadline") from error
+            return result.model_dump(mode="json")
         if operation in {"send", "reply"}:
             from app.schemas.internal_v2.communication import (
                 CommunicationAcceptanceRequest,

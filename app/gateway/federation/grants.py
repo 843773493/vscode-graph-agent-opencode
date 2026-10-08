@@ -87,6 +87,63 @@ class GrantTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextGrantTarget:
+    """read grant 的真实上下文资源目标，和 Session 通信地址保持各自字段闭集。"""
+
+    gateway_id: str
+    resource_identity: str
+    uri: str
+    scope: str
+
+    def __post_init__(self) -> None:
+        from app.services.business.session_context_resource import (
+            gateway_session_inventory_identity,
+            parse_session_context_ref,
+            session_resource_identity,
+            workspace_session_inventory_identity,
+        )
+        resource = parse_session_context_ref(
+            resource_identity=self.resource_identity, uri=self.uri, scope=self.scope,
+            local_gateway_id=self.gateway_id,
+        )
+        if resource.gateway_authority is not None:
+            raise ValueError("资源 URI authority 与 grant audience 不一致")
+        if resource.scope == "workspace":
+            if resource.kind == "session" and resource.session_id is not None:
+                expected = session_resource_identity(resource.scope_id, resource.session_id)
+            elif resource.kind == "workspace_sessions":
+                expected = workspace_session_inventory_identity(resource.scope_id)
+            else:
+                raise ValueError("read grant 只支持现有 Session 上下文资源")
+        elif resource.scope == "gateway" and resource.kind == "workspace_sessions" and resource.scope_id == self.gateway_id:
+            expected = gateway_session_inventory_identity(self.gateway_id)
+        else:
+            raise ValueError("read grant 资源 scope 与实际 Gateway 不一致")
+        if resource.resource_identity != expected:
+            raise ValueError("read grant ResourceIdentity 与 URI owner 不一致")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "gateway_id": self.gateway_id, "resource_identity": self.resource_identity,
+            "uri": self.uri, "scope": self.scope,
+        }
+
+
+def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget:
+    """grant 和实际 RPC 请求共用同一闭集 decoder，不猜测或补齐目标字段。"""
+    if not isinstance(raw, dict):
+        raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 必须是对象")
+    if set(raw) == {"gateway_id", "workspace_id", "session_id"}:
+        return GrantTarget(**{key: _require_str(raw, key) for key in raw})
+    if set(raw) == {"gateway_id", "resource_identity", "uri", "scope"}:
+        try:
+            return ContextGrantTarget(**{key: _require_str(raw, key) for key in raw})
+        except (TypeError, ValueError) as error:
+            raise FederationError(FEDERATION_MALFORMED_FRAME, str(error)) from error
+    raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 字段闭集不一致")
+
+
+@dataclass(frozen=True, slots=True)
 class FederationGrant:
     """已签名的 grant 明文：``signature`` 覆盖除自身外的全部字段。"""
 
@@ -101,7 +158,7 @@ class FederationGrant:
     issued_at: datetime
     principal_ref: str
     request_hash: str
-    target: GrantTarget | None = None
+    target: GrantTarget | ContextGrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
     operation_invocation_id: str | None = None
@@ -156,17 +213,9 @@ class FederationGrant:
                     FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {operation!r}"
                 )
             raw_target = raw.get("target")
-            target: GrantTarget | None = None
+            target: GrantTarget | ContextGrantTarget | None = None
             if raw_target is not None:
-                if not isinstance(raw_target, dict):
-                    raise FederationError(
-                        FEDERATION_MALFORMED_FRAME, "grant.target 必须是对象"
-                    )
-                target = GrantTarget(
-                    gateway_id=_require_str(raw_target, "gateway_id"),
-                    workspace_id=_require_str(raw_target, "workspace_id"),
-                    session_id=_require_str(raw_target, "session_id"),
-                )
+                target = decode_grant_target(raw_target)
             raw_path = raw.get("transit_path")
             if not isinstance(raw_path, list) or not all(
                 isinstance(item, str) and item for item in raw_path
@@ -248,7 +297,7 @@ def sign_grant(
     principal_ref: str,
     request_preimage: dict[str, object],
     lifetime_seconds: float,
-    target: GrantTarget | None = None,
+    target: GrantTarget | ContextGrantTarget | None = None,
     operation: OperationKind | None = None,
     source_gateway_id: str | None = None,
     operation_invocation_id: str | None = None,
@@ -385,10 +434,12 @@ __all__ = [
     "GRANT_CLOCK_SKEW_SECONDS",
     "MAX_GATEWAY_HOPS",
     "MAX_TRANSIT_GATEWAYS",
+    "ContextGrantTarget",
     "FederationGrant",
     "GrantKind",
     "GrantTarget",
     "OperationKind",
+    "decode_grant_target",
     "required_wait_grant_lifetime",
     "sign_grant",
     "verify_grant",

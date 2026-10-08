@@ -1184,7 +1184,8 @@ message SessionInformationSnapshotDTO {
   SessionInformationSessionDTO session = 4;
   reserved 5;
   SessionInformationWorkspaceDTO workspace = 6;
-  string storage_path = 7;
+  reserved 7;
+  reserved "storage_path";
   SessionInformationExecutionDTO execution = 8;
   SessionInformationTraceDTO trace = 9;
   reserved 10, 11;
@@ -1204,7 +1205,8 @@ message SessionInformationTraceDTO {
 message SessionInformationWorkspaceDTO {
   string workspace_id = 1;
   string name = 2;
-  string root_path = 3;
+  reserved 3;
+  reserved "root_path";
 }
 
 message SessionInterruptResultDTO {
@@ -1242,6 +1244,7 @@ message CommunicationDiscoveryRequest {
   GlobalThreadAddress source = 1;
   string session_id = 2;
   optional string workspace_id = 3;
+  optional string gateway_id = 4;
 }
 
 message CommunicationAcceptanceRequest {
@@ -1274,9 +1277,29 @@ message CommunicationObservationRequest {
   string expires_at = 9;
 }
 
+// read 授权绑定真实资源引用；清单不制造 Session 或 main thread。
+message ContextGrantTarget {
+  string gateway_id = 1;
+  string resource_identity = 2;
+  string uri = 3;
+  string scope = 4;
+}
+
+message ContextQueryRequest {
+  string source_gateway_id = 1;
+  ContextGrantTarget resource_target = 2;
+  oneof query {
+    SessionContextReadRequest read = 3;
+    SessionContextSearchRequest search = 4;
+  }
+}
+
 message CommunicationGatewayRequest {
   string operation = 1;
-  GlobalThreadAddress target = 2;
+  oneof destination {
+    GlobalThreadAddress target = 2;
+    ContextGrantTarget resource_target = 4;
+  }
   google.protobuf.Struct body = 3;
 }
 

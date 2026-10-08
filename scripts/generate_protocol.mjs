@@ -1,5 +1,5 @@
 // 该脚本负责从 proto/ 生成各运行时的公开协议绑定。
-import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -11,6 +11,13 @@ const breakingAgainstIndex = scriptArguments.indexOf("--breaking-against");
 const breakingAgainst = breakingAgainstIndex >= 0
   ? scriptArguments[breakingAgainstIndex + 1]
   : null;
+const stagingRootIndex = scriptArguments.indexOf("--staging-root");
+const stagingRoot = path.resolve(
+  workspaceRoot,
+  stagingRootIndex >= 0
+    ? scriptArguments[stagingRootIndex + 1]
+    : path.join("out", "protocol-generation"),
+);
 const bufExecutable = path.join(
   workspaceRoot,
   "node_modules",
@@ -112,13 +119,30 @@ async function main() {
     return;
   }
 
-  for (const generatedRoot of generatedRoots) {
-    await mkdir(generatedRoot.directory, { recursive: true });
-    await removeGeneratedFiles(generatedRoot.directory, generatedRoot.extensions);
+  await mkdir(stagingRoot, { recursive: true });
+  const stagingDirectory = await mkdtemp(path.join(stagingRoot, "protocol-"));
+  try {
+    // 原 Buf 模板和插件版本不变；远端生成全部成功前，不移除现有绑定。
+    await run(bufExecutable, ["generate", "--output", stagingDirectory]);
+    await addPythonPackageMarkers(
+      path.join(stagingDirectory, path.relative(workspaceRoot, pythonOutputRoot)),
+    );
+    await run(process.execPath, [path.join(workspaceRoot, "scripts", "generate_sse_runtime.mjs")]);
+    const stagedRoots = generatedRoots.map((generatedRoot) => ({
+      ...generatedRoot,
+      generated: path.join(stagingDirectory, path.relative(workspaceRoot, generatedRoot.directory)),
+    }));
+    for (const { generated } of stagedRoots) {
+      await access(generated, constants.R_OK);
+    }
+    for (const { directory, extensions, generated } of stagedRoots) {
+      await mkdir(directory, { recursive: true });
+      await removeGeneratedFiles(directory, extensions);
+      await cp(generated, directory, { recursive: true });
+    }
+  } finally {
+    await rm(stagingDirectory, { recursive: true, force: true });
   }
-  await run(bufExecutable, ["generate"]);
-  await addPythonPackageMarkers(pythonOutputRoot);
-  await run(process.execPath, [path.join(workspaceRoot, "scripts", "generate_sse_runtime.mjs")]);
 }
 
 await main();

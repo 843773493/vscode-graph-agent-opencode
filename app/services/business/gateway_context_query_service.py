@@ -23,7 +23,6 @@ from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
     SessionContextCursorCodec,
     gateway_session_inventory_identity,
-    gateway_session_inventory_uri,
     parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
@@ -66,6 +65,16 @@ class GatewayContextQueryService:
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
         return await self._transport.search_context_in_workspace(workspace_id, request)
+
+    async def read_resource_context(
+        self, request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO:
+        return await self._transport.read_resource_context(request)
+
+    async def search_resource_context(
+        self, request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO:
+        return await self._transport.search_resource_context(request)
 
     async def read_gateway_context(
         self,
@@ -111,7 +120,7 @@ class GatewayContextQueryService:
                 resource_identity=workspace_session_inventory_identity(
                     _backend_workspace_id(item)
                 ),
-                uri=workspace_session_inventory_uri(_backend_workspace_id(item)),
+                uri=workspace_session_inventory_uri(_backend_workspace_id(item), gateway_authority=resource.gateway_authority),
                 scope="workspace",
                 data=_workspace_public_data(item),
             )
@@ -148,7 +157,7 @@ class GatewayContextQueryService:
         self,
         request: SessionContextSearchRequest,
     ) -> SessionContextSearchResultDTO:
-        _require_gateway_inventory(
+        resource = _require_gateway_inventory(
             resource_identity=request.resource_identity,
             uri=request.uri,
             scope=request.scope,
@@ -166,7 +175,7 @@ class GatewayContextQueryService:
                     "resource_identity": str(
                         workspace_session_inventory_identity(backend_workspace_id)
                     ),
-                    "uri": workspace_session_inventory_uri(backend_workspace_id),
+                    "uri": workspace_session_inventory_uri(backend_workspace_id, gateway_authority=resource.gateway_authority),
                     "scope": "workspace",
                     "cursor": None,
                     "revision": None,
@@ -453,7 +462,7 @@ def _require_gateway_inventory(
         or resource.scope_id != gateway_id
         or resource.kind != "workspace_sessions"
         or resource.resource_identity != gateway_session_inventory_identity(gateway_id)
-        or resource.uri != gateway_session_inventory_uri(gateway_id)
+        or resource.gateway_authority not in {None, gateway_id}
     ):
         raise WorkspaceSessionContextAccessError(
             "Gateway session inventory resource_identity/URI 与当前真实 Gateway 身份不匹配"
@@ -486,6 +495,9 @@ def _validate_workspace_search_result(
             "Workspace context search 响应资源身份与请求不一致: "
             f"workspace_scope_id={backend_workspace_id}"
         )
+    request_resource = parse_session_context_ref(
+        resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+    )
     for match in result.matches:
         resource = parse_session_context_ref(
             resource_identity=match.resource_identity,
@@ -494,6 +506,7 @@ def _validate_workspace_search_result(
         )
         if (
             resource.scope != "workspace"
+            or resource.gateway_authority != request_resource.gateway_authority
             or resource.scope_id != backend_workspace_id
             or resource.kind != "session"
             or resource.session_id is None

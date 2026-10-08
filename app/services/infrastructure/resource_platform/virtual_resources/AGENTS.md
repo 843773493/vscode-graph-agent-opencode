@@ -1,10 +1,10 @@
 # 目录用途
 
-`resource_platform/virtual_resources/` 提供 `boxteam://` 统一资源寻址的严格 grammar、纯值对象与 typed resolver。URI 只是安全展示/引用层，不是 identity、capability、dedupe 或幂等 key，也不携带物理路径、endpoint 或 credential。
+`resource_platform/virtual_resources/` 提供统一资源寻址的 catalog 绑定、资源值对象与 typed resolver。`boxteam://` 的纯 grammar、解析值与构造器唯一归 `app/core/resource_uri.py`；本目录消费该内核，不再拥有 grammar 模块。URI 只是安全展示/引用层，不是 identity、capability、dedupe 或幂等 key，也不携带物理路径、endpoint 或 credential。
 
 # 可修改内容
 
-- 可以扩展已登记的 authority/path grammar、资源 kind、operation 与闭合错误码。
+- 可以维护已登记资源 kind、operation、catalog 绑定和 resolve 闭合错误码；authority/path 的纯语法改动在 `app/core/resource_uri.py` 及其 owner 规范统一登记。
 - 可以维护 `SemanticResourceDescriptor`、`ResolvedResourceHandle`、`ResourceProvenance`、`ResolutionContext` 的一致性校验与公共出口；`ObservedSourceDescriptor` 的唯一实现仍归 `sources/` 所有，这里只复用。
 
 # 不可修改内容
@@ -16,6 +16,6 @@
 
 # 规范
 
-- 解析只接受已登记 grammar：percent 编码整体拒绝（因此不存在二次解码歧义），userinfo、query/fragment、控制字符、反斜杠、空 segment、`.`/`..`、非 ASCII 与大小写变体一律显式报错，错误码闭合。
+- 解析只消费内核的已登记 grammar 与错误码，不复制正则或构造分支。当前源码范围的身份/领域段仍严格校验；可导航文件根与 child 编码是独立规划任务，未实施前不得把规划能力当成已支持。
 - resolver 必须在任何 owner/provider 访问前依次完成 grammar、scope、catalog 绑定、operation 与 capability 校验。
 - tracked 绑定在绑定时冻结 resource/revision/hash/snapshot_ref；同名覆盖只影响未来名称解析，不改绑既有 registration。

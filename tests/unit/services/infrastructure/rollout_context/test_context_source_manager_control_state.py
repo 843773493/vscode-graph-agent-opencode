@@ -55,7 +55,7 @@ def _install_snapshot(manager: ContextSourceManager, content: str = "v1\n") -> N
                     name="debugging",
                     resource_id="skill-entry:test:debugging:activation",
                     entry_identity="skill-entry:test:debugging",
-                    display_uri="boxteam://workspace/skill/debugging",
+                    display_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
                     activation_revision=_revision(content),
                     body=content,
                 )
@@ -295,8 +295,8 @@ def test_restart_recovery_allows_tracked_registration_awaiting_first_observation
             source_kind="workspace_agents",
             name="AGENTS.md",
             description="工作区指令",
-            internal_locator="boxteam://workspace/agents",
-            resource_uri="boxteam://workspace/agents",
+            internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
+            resource_uri="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
         ),
         tracking_status="tracked",
     )

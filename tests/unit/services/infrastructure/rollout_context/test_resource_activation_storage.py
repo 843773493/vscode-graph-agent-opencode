@@ -58,7 +58,7 @@ def _binding(
 ) -> ResourceProvenanceRef:
     return ResourceProvenanceRef(
         resource_id=resource_id,
-        display_uri=f"boxteam://workspace/test/{resource_id.replace(':', '-')}",
+        display_uri=None if boundary == "model_call" else f"boxteam://workspace/test/resources/skills/{resource_id.replace(':', '-')}/SKILL.md",
         resource_kind="mcp_tool_catalog" if boundary == "model_call" else "skills",
         owner_scope="workspace",
         facet="activation",

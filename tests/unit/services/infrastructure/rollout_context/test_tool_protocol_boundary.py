@@ -459,7 +459,7 @@ def test_rewind_keeps_sealed_assembly_bytes_unchanged(frozen_provider_activation
     manager.register(ContextSourceDescriptor(
         source_id="agents:rewind-policy", source_kind="workspace_agents",
         name="rewind policy", description="边界保护策略",
-        internal_locator="boxteam://workspace/agents",
+        internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
     ), tracking_status="tracked")
     manager.observe(
         "agents:rewind-policy", "rewind-guard-prompt", revision="rewind-guard-prompt",

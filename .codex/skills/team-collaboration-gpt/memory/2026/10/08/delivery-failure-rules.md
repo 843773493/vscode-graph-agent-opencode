@@ -38,7 +38,7 @@
 
 冻结参数须核真实绑定和发送结果：框架会按 structured-output strategy 改写或省略 `tool_choice`，adapter 还会强制 `stream/include/store`。直接抄 `ModelRequest` 字段曾在固定增量早审中漏掉这些事实；先修提取再接封存，不等完整 HTTP 验收才查。 Auto策略fixture还须核框架模型名兜底，profile=False未必选工具策略；按实际策略提供HTTP输出，不将错配fixture归生产回归。
 
-- **交付残缺、漏真实入口。** 手筛hunk曾漏签名、删除和Web caller。用[交付校验脚本](../../../../scripts/verify_delivery.py)从固定树严格重建，核blob/hash及候选外源码；调用清单包括API/UI、CLI/进程启动、恢复、协议和间接kwargs消费者。同类必填签名一次迁完，核真实callee再跑代表入口；不存在的Saver属性曾阻断28项，旧签名曾让15项连续失败耗时299秒，不能加alias求绿。完整模型E2E前先核真实路由状态码、异步回执和各窗口可见控件；主测试误设enqueue200、误点扩展窗口隐藏会话树，曾到末端才暴露并重复整场景。迁移规划也核原输入/输出和正式用例：曾漏图片读取、文本补丁删除/移动，新增能力延期不能废除已有能力。可行动增量先交，未知及后续范围分开，不等全量调查才回报。主独占验收候选固定后合并通知一次；状态消息不新增实现前置，作者不重复承担已分配的测试独审。连续通知曾引出重复读测试、下一生产增量延迟，收窄后的效果待实际交付。
+- **交付残缺、漏真实入口。** 手筛hunk曾漏签名、删除和Web caller。用[交付校验脚本](../../../../scripts/verify_delivery.py)从固定树严格重建，核blob/hash及候选外源码；调用清单包括API/UI、CLI/进程启动、恢复、协议、间接kwargs消费者及实际分发的resources/skills和提示模板。A04生产/API验收后才发现gateway-context技能仍教模型调用旧resource/expected_revision/locator；运行时说明也是直接caller，须随唯一工具schema迁齐，不能把它误当纯规划文档。同类必填签名一次迁完，核真实callee再跑代表入口；不存在的Saver属性曾阻断28项，旧签名曾让15项连续失败耗时299秒，不能加alias求绿。完整模型E2E前先核真实路由状态码、异步回执和各窗口可见控件；主测试误设enqueue200、误点扩展窗口隐藏会话树，曾到末端才暴露并重复整场景。迁移规划也核原输入/输出和正式用例：曾漏图片读取、文本补丁删除/移动，新增能力延期不能废除已有能力。可行动增量先交，未知及后续范围分开，不等全量调查才回报。主独占验收候选固定后合并通知一次；状态消息不新增实现前置，作者不重复承担已分配的测试独审。连续通知曾引出重复读测试、下一生产增量延迟，收窄后的效果待实际交付。
 - **合同与基线错配。** live、旧HEAD、固定候选混读曾误判接口。先辨Git对象ID与文件SHA256，后者不能交cat-file；一次误用曾引出无关环境调查。tree没有提交历史；tree到worktree比较须用该tree初始化的私有index或直接blob，错误index曾让主把未变fixture报成删除。唯一提供者先交完整合同和依赖，消费者待实现字段不能阻挡取得前置。闭集只在owner登记，消费者具名引用；同步清旧spec/验收要求，严格校验不能发现全部语义矛盾。early包可先审，必要caller闭合才集成。
 - **身份、writer和跨载体约束漏项。** Thread/Session混用、内部通知伪造user Turn、取消后未收to_thread writer都曾过helper测试。核真实user/internal/child、HTTP/WS和恢复入口，只消费已校验admission；prepare与封存读取须消费同一规范checkpoint namespace，曾漏传namespace而查错owner，缺失记录必须明确报source-mismatch并保原因；幂等比durable原请求。首次final与checkpoint重复提交、重放和fork须联验同一model-call身份；codec从消息自身取权威值，显式caller或持久字段冲突必须拒绝，不能放宽typed provenance guard。typed字段核owner/slot/revision CAS及未封存约束；descriptor/root policy、prefix/ToolSet与public/protected binding须联校，各自hash合法不足以通过。
 - **未知结果和镜像脱节。** 确定拒绝漏回执、以资源存活证明动作完成、释放失败先丢句柄均曾污染owner。原业务owner在真实转换边界记录结果并同步镜像；未知副作用继续阻断，按精确身份/revision/终态核实后结清。回滚或释放失败不得发布verified/closed，普通列表不能清unknown。传输授权只接受精确入口的专用no-effect拒绝和同身份、工作区、verified、非倒退revision快照；一般409/超时不能当确定拒绝。
@@ -73,3 +73,7 @@
 
 
 Inspector 后续单复现接收故障只写 runtime.error_message、pending caller 却拿通用关闭错误。只在原 receive_messages 传诊断 RuntimeError 并以捕获对象作 cause，保 traceback、正常关闭/取消分支与原清理。固定2路径 tree379258f4，专项1passed/0.22s、主固定Ruff/AST/严格重建实际0，作者树差异0；原timeout文件虽未事先hash，主已从7d基线blob逐字确认还原，不重新造preimage。作者又从业务workspace cwd跑pytest、触及旧共享测试且bare status；已纠正到独立测试和代码树根，Git禁令覆盖status。不能因D/??恢复源码。前期探针无持久raw不计红测actual；具名成功不外推真Node或模型倍速。
+
+- **固定审查输入未及时交付增加核查成本。** 主给95ab任务却允许读仍在写的ROOT，information字段已被Sol删掉，审查者无法复核原preimage，且扩大一次全树只读rg。主冻结原Git对象及manifest后重锚报告；合同判断无阻塞，未审生产。派单前提供本任务完整且最小固定输入，区分preimage、生产候选与规划快照，不能事后把活树SHA写成95ab。
+
+- **生成器先删输出导致级联红灯。** A04 Buf远端插件不可用时，脚本先清4个generated根，原绑定需按固定preimage恢复（实际142files）；NoPythonFiles、OpenAPI/import和Web缺文件失败不能计绿或当独立业务缺陷。完整生成应先写out指定暂存根，全部步骤成功后替换；插件版本/实际生成未验证不能手改generated或恢复别名求绿。原生成attempt及后续修复效果按台账记。

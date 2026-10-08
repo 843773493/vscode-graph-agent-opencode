@@ -8,6 +8,7 @@ from dataclasses import asdict
 import httpx
 
 from app.abstractions.session_context import WorkspaceSessionContextAccessError
+from app.core.resource_uri import parse_resource_uri
 from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.services.business.communication.addresses import (
@@ -95,8 +96,18 @@ class GatewayCommunicationClient:
         self, *, source: GlobalThreadAddress, session_id: str,
         workspace_id: str | None = None,
     ) -> ResolvedMainTargetBinding:
+        gateway_id = None
+        if session_id.startswith("boxteam://"):
+            parsed = parse_resource_uri(session_id, local_gateway_id=source.gateway_id)
+            if parsed.scope != "workspace" or parsed.kind != "session" or len(parsed.tail_segments) != 1 or parsed.tail_segments == ("inventory",):
+                raise ValueError("通信 target URI 必须指向单个 workspace Session")
+            if workspace_id is not None and workspace_id != parsed.scope_id:
+                raise ValueError("通信 target URI 与 workspace_id 冲突")
+            gateway_id = parsed.gateway_authority or source.gateway_id
+            session_id, workspace_id = parsed.tail_segments[0], parsed.scope_id
         data = await self._request("/api/gateway/federation/discovery", {
             "source": asdict(source), "session_id": session_id, "workspace_id": workspace_id,
+            "gateway_id": gateway_id,
         })
         target = GlobalThreadAddress(**data["target"])
         return ResolvedMainTargetBinding(target.session_id, data["main_thread_id"], target)

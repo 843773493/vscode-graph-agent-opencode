@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -101,7 +101,7 @@ def _snapshot() -> SkillCatalogActivationSnapshot:
                 name=SKILL_NAME,
                 resource_id="skill-entry:test:debugging:activation",
                 entry_identity="skill-entry:test:debugging",
-                display_uri="boxteam://workspace/skill/debugging",
+                display_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
                 activation_revision=_revision(SKILL_CONTENT),
                 body=SKILL_CONTENT,
             )
@@ -109,9 +109,12 @@ def _snapshot() -> SkillCatalogActivationSnapshot:
     )
 
 
-async def _seed_session_with_tracked_skill(
+@pytest.fixture
+async def tracked_skill_session(
     session_service: SessionService,
     saver: RolloutCheckpointSaver,
+    frozen_provider_wire: Callable[[str, str], dict[str, object]],
+    frozen_provider_activation: Callable[..., dict[str, object]],
 ) -> tuple[str, ContextSourceOwnerKey]:
     session = await session_service.create(
         SessionCreateRequest(title="untrack 测试")
@@ -135,16 +138,16 @@ async def _seed_session_with_tracked_skill(
         admission_idempotency_key="skill-api-admission",
         payload="API untrack 前真实 seal",
     )
-    SourceSealCase(saver, owner, accepted).seal(manager)
+    SourceSealCase(saver, owner, accepted, frozen_provider_wire, frozen_provider_activation).seal(manager)
     return session.session_id, owner
 
 
 async def test_untrack_success_persists_frozen_state_without_reading_source(
     service: SessionSkillTrackingService,
     saver: RolloutCheckpointSaver,
-    session_service: SessionService,
+    tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
-    session_id, owner = await _seed_session_with_tracked_skill(session_service, saver)
+    session_id, owner = tracked_skill_session
 
     result = await service.untrack(
         session_id=session_id,
@@ -168,9 +171,9 @@ async def test_untrack_success_persists_frozen_state_without_reading_source(
 async def test_untrack_not_tracked_is_deterministic_and_zero_state_change(
     service: SessionSkillTrackingService,
     saver: RolloutCheckpointSaver,
-    session_service: SessionService,
+    tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
-    session_id, owner = await _seed_session_with_tracked_skill(session_service, saver)
+    session_id, owner = tracked_skill_session
     first = await service.untrack(
         session_id=session_id, thread_id=owner.thread_id, name=SKILL_NAME
     )
@@ -191,10 +194,9 @@ async def test_untrack_not_tracked_is_deterministic_and_zero_state_change(
 
 async def test_untrack_api_handler_maps_unknown_thread_to_404(
     service: SessionSkillTrackingService,
-    saver: RolloutCheckpointSaver,
-    session_service: SessionService,
+    tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
-    session_id, _owner = await _seed_session_with_tracked_skill(session_service, saver)
+    session_id, _owner = tracked_skill_session
 
     with pytest.raises(HTTPException) as raised:
         await untrack_session_skill(
@@ -211,12 +213,10 @@ async def test_untrack_api_handler_maps_unknown_thread_to_404(
 
 def test_untrack_api_http_envelope_auth_and_success(
     saver: RolloutCheckpointSaver,
-    session_service: SessionService,
     service: SessionSkillTrackingService,
+    tracked_skill_session: tuple[str, ContextSourceOwnerKey],
 ) -> None:
-    session_id, owner = asyncio.run(
-        _seed_session_with_tracked_skill(session_service, saver)
-    )
+    session_id, owner = tracked_skill_session
     (before,) = saver.load_context_source_control_states(owner)
     url = (
         f"/api/v1/sessions/{session_id}/threads/{owner.thread_id}/skills/untrack"

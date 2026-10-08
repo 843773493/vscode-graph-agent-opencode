@@ -42,7 +42,7 @@ def _binding(
     )
     return ResourceProvenanceRef(
         resource_id=resource_id,
-        display_uri=f"boxteam://workspace/test/{resource_id.replace(':', '-')}",
+        display_uri=f"boxteam://workspace/test/resources/skills/{resource_id.replace(':', '-')}/SKILL.md",
         resource_kind="skills",
         owner_scope="session",
         facet="activation",

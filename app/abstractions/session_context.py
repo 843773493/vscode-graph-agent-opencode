@@ -120,6 +120,14 @@ class SessionContextQueryProtocol(Protocol):
 
 
 class WorkspaceSessionContextClientProtocol(Protocol):
+    async def read_resource_context(
+        self, request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO: ...
+
+    async def search_resource_context(
+        self, request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...
+
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...
 
     async def read_gateway_context(
@@ -146,6 +154,14 @@ class WorkspaceSessionContextClientProtocol(Protocol):
 
 
 class WorkspaceSessionContextTransportProtocol(Protocol):
+    async def read_resource_context(
+        self, request: SessionContextReadRequest,
+    ) -> SessionContextReadResultDTO: ...
+
+    async def search_resource_context(
+        self, request: SessionContextSearchRequest,
+    ) -> SessionContextSearchResultDTO: ...
+
     async def list_gateway_workspaces(self) -> GatewayWorkspaceListDTO: ...
 
     async def read_context_in_workspace(

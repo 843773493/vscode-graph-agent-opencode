@@ -18,9 +18,14 @@ from app.api import runtime as runtime_api
 from app.api import tools as tools_api
 from app.schemas.internal_v2.agent import WorkspaceDefaultAgentUpdateRequest
 from app.schemas.internal_v2.runtime import UiSnapshotResultDTO
-from app.schemas.internal_v2.session_context import SessionContextSearchRequest
+from app.schemas.internal_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextSearchRequest,
+)
 from app.schemas.internal_v2.tool import ToolSelectionPatchRequest
 from app.schemas.internal_v2.tool_test import ToolTestRunDTO
+from app.services.business.session_context_resource import session_resource_identity
+from tests.support.communication import TARGET_SESSION, WORKSPACE_ID
 
 
 class _MissingAgentToolService:
@@ -45,10 +50,10 @@ class _UnsupportedToolTestService:
 
 class _RejectingContextService:
     async def search_context(self, payload):
-        raise ValueError("resource 必须是 boxteam://session/{session_id}")
+        raise ValueError("上下文资源 URI 不符合规范")
 
     async def read_context(self, payload):
-        raise ValueError("resource 必须是 boxteam://session/{session_id}")
+        raise ValueError("上下文资源 URI 不符合规范")
 
 
 class _UnwritableLogService:
@@ -120,7 +125,10 @@ async def test_start_tool_test_maps_busy_tool_to_409() -> None:
 async def test_search_context_maps_bad_resource_to_400() -> None:
     with pytest.raises(HTTPException) as captured:
         await context_api.search_context(
-            SessionContextSearchRequest(resource="!!bad!!", query="x"),
+            SessionContextSearchRequest(
+                resource_identity=session_resource_identity(WORKSPACE_ID, TARGET_SESSION),
+                uri="!!bad!!", scope="workspace", query="x",
+            ),
             request_id="req",
             query_service=_RejectingContextService(),
         )
@@ -177,9 +185,10 @@ def _start_request():
 
 
 def _read_request():
-    from app.schemas.internal_v2.session_context import SessionContextReadRequest
-
-    return SessionContextReadRequest(resource="!!bad!!", view="overview")
+    return SessionContextReadRequest(
+        resource_identity=session_resource_identity(WORKSPACE_ID, TARGET_SESSION),
+        uri="!!bad!!", scope="workspace", view="overview",
+    )
 
 
 class _StubRuntimeService:

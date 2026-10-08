@@ -2,7 +2,9 @@
 
 见 `proposal.md` 的 Why。此处只补充塑造方案所需的现状与约束。
 
-当前会话上下文资源的真实形态（`app/services/business/session_context_resource.py`）：
+以下为本 change 建立时的取证快照，不代表 A01–A04 实施后的当前缺口。当前已集成范围以任务项的具名收据为准。
+
+当时会话上下文资源的真实形态（`app/services/business/session_context_resource.py`）：
 
 - 三个自有正则 `_SESSION_RESOURCE` / `_WORKSPACE_SESSION_RESOURCE` / `_WORKSPACE_SESSIONS_RESOURCE` 各自 `fullmatch` 一个字符串；
 - `parse_session_context_resource(resource)` 先按 `#` 切出 `base` 与 `selector`，selector 只允许 `information` / `assembly={id}` / `record={index}` 三种；
@@ -25,7 +27,7 @@
 - scope 闭合集定稿为 `workspace` / `user` / `gateway` / `inline`：`builtin` 正名为 `inline`，`user` 为本次新增；`memory` **已确证不是 URI scope，移出闭合集**（零生产构造方、resolver 不比对 scope_id、container 未装配（原 `configs/workspace_inline.jsonc:427-433` 的 `agent.memory` 6 键配置块与 schema `$defs.agentMemory` 已随 `remove-agent-memory` 物理删除，现配置已无该块））。
 - `scope_id` 必须由真实身份推导、MUST NOT 硬编码字面量：`workspace`→真实 workspace_id、`gateway`→真实 gateway_id（取值来源与注入 owner 按「统一资源寻址」change 的 requirement「gateway scope 的 scope_id 由 Gateway 身份文件按请求注入推导」定稿，本 change 只具名引用、不复述取值规则）、`inline`→真实 distribution_id、`user`→`local`（单用户本地约定，已由 owner 定为终值）。
 - 星型解析唯一顺序，上界为显式策略常量；不可达/未共享/未找到 fail-closed 结构化拒绝码；**locator 是输入不是输出**。
-- 拒绝码**本 change 只引用其中两套**——grammar 分段编码修订闭集（唯一owner登记）、resolve 规范闭集 7 个——均由「统一资源寻址」change 集中登记；当前生产 resolver 仍只有原有 6 个 resolve 码，缺少 `unsupported_view`，由 owner 的实现任务 1.3 补齐。该 owner 另登记**第三套：联邦解析期** `FederationError.code`，归属 `app/gateway/federation/`，见其 requirement「拒绝码必须分三套集中登记且命名不得自造」；本 change 不引用该套、也不实现跨 gateway 解析。本 change **只能引用不能自造**，且 MUST NOT 混用任何两套闭集。URI 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
+- grammar 与 resolve 拒绝码由「统一资源寻址」change 集中登记；会话 kind/view 不兼容使用该 owner 的 `unsupported_view`。联邦解析期 `FederationError.code` 归 `app/gateway/federation/`，本 change 的跨 Gateway 消费链复用该 owner，不新增或混用拒绝码。URI 语法本体、固定段序与 `kind` 闭集同样不由本 change 拥有。
 - `memory` 不是 URI scope：不基于它做设计、不为它规定 scope_id；既有两点式 `boxteam://memory/{scope}/{name}` 只作**非 URI 示意**（它无 `resources` 段、无 kind、恰好两段，曾走独立特例分支；**该特例分支已由提交 32bc6256 物理删除，现以 `unknown_scope` 类拒绝码 fail-closed 拒绝**）。
 - 命名必须逐字使用：`资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`。
 
@@ -41,7 +43,7 @@
 **Non-Goals:**
 
 - 不定义 URI 语法本体、scope 关键字集合、`kind` 闭集与拒绝码登记（归「统一资源寻址」change）。
-- 不实现任何生产代码；本 change 只产出规划产物。
+- 不拥有统一寻址语法与联邦授权的第二套实现；生产任务消费各自现有 owner。
 - 不设计「单后端多工作区挂载」（归另一个并行 change）。
 - 不改变会话上下文的**业务语义**（读什么视图、投影边界、权限判定），只改变其**寻址表示与解析**。
 - 不引入 `virtual url` / `VURI` 等同义异名。
@@ -122,6 +124,10 @@ SessionContextResourceRef {
 
 跨边界传输只含**资源身份、URI、revision、内容**；`real path` 不跨边界。
 
+**既有查询与通信目标的接线边界**：单会话 read 保留原 durable observation 链；工作区/Gateway 清单及搜索由同一联邦 grant owner 的真实上下文资源目标承载 `ResourceIdentity + URI + scope`，仍使用 `read` operation/capability。签名和 request hash 绑定完整目标与实际 query/view/revision/cursor，audience/path 必须与执行目标一致；目标端分别复用既有工作区 context query 与 Gateway inventory owner。send/wait/reply 只接受原 Session 通信目标，不接受清单资源目标。不新增公共端点、capability、账本或 resolver，也不通过虚构 Session/main/workspace 地址绕过目标校验。
+
+**information 的物理位置出口**：既有诊断 DTO 的 `workspace.root_path`、`storage_path` 是软件生成的真实定位字段，须从唯一 information owner/DTO 下线并迁齐直接/间接调用方、协议与测试；read/search、API、模型工具及 durable observation 不保留另一套过滤输出。保留身份、名称与诊断业务事实；需要可继续访问的引用时消费既有 Session URI 或端点，不为 storage 位置发明文件根。不得用全正文路径字符串替换处理用户内容，也不得仅缩窄 envelope 断言掩盖该出口。
+
 **「locator 是输入，不是输出」不变量**：解析命中**只返回稳定身份与内容**，MUST NOT 返回或携带 locator。这是可机械检查的约束——可以写断言扫描所有跨边界响应，确认输出中不含 real path、provider locator 或任何解析 locator 形式。它与三层分离（real path 不跨边界）互相加固：输入侧用 URI 声明位置，输出侧只回身份与内容。
 
 **上界必须策略化**：`max_transit_gateways` / `max_gateway_hops` / deadline 等上界 MUST 表达为**显式策略常量**，MUST NOT 散落成魔法数字；拓扑变化时改策略而非重写解析器。
@@ -132,14 +138,14 @@ SessionContextResourceRef {
 
 **决定**：本次寻址统一的迁移工作**不含历史数据迁移**，只含两点——(a) 入口对旧形态 fail-closed 拒绝；(b) 既有持久化字段改为按新格式**新写入**并在读路径切换。
 
-**已确证的零存量（本轮独立取证）**：旧式会话上下文 URI 没有任何持久化实例。
+**已确证的零存量（建案时独立取证）**：旧式会话上下文 URI 当时没有任何持久化实例。下列“未装配/生产不写”仅描述该历史快照；A01 已接通 activation freeze/seal/restore，A04 迁移现有 writer/reader 的 URI 字段，不重新建立该 owner。
 
 - 旧形态字符串全部在请求/响应链路内构造并随响应返回调用方：`app/services/business/session_context_resource.py:12-16` 的自有正则只做解析、`ParsedSessionContextResource.canonical` 只是内存值、`session_context_query_service.py`/`session_context_projection.py` 的 `locator` 与 base64 `next_cursor` 只进 API DTO（`app/schemas/internal_v2/session_context.py:99,123`）。全仓不存在把 `SessionContextCursorCodec` 输出写入 session/catalog/checkpoint/rollout 存储的路径。
 - 全仓唯一承载 `boxteam://` 的持久化列是 `resource_activation_bindings.display_uri`（`resource_activation_schema.py:85`）；其唯一写入方 `ResourceActivationStore.persist_snapshot` 的**调用方全在测试**（`tests/unit/services/infrastructure/rollout_context/test_resource_activation_storage.py`、`test_resource_activation_retention.py`、`test_resource_activation_fork_identity.py`），`app/container.py` 未装配（实测 `rg resource_activation app/container.py` 退出 1），生产 seal 链路从未传入 `activation_snapshot`（恒为默认 `None`），故生产中该列从不被写入。
 - 磁盘取证：157 个 live 库 + 44 个 dev/temp 库中 **0 个 activation 表、0 个 `boxteam://` 命中**；`out/development-runtime` 的真实 `rollout.jsonl`（含 2026/09/24、2026/09/27 会话）与 `tests/fixtures/` 亦 0 命中。
 - 唯一 `cursor` 持久化列 `workspace_event_cursors.cursor_value`（`app/services/infrastructure/workspace_state_store.py:71`）承载的是工作区活动 `event_seq`，与上下文游标无关。
 
-**新写字段的挂点**（既已存在、只是尚未承载 URI）：`context_source_control_states`（`runtime/context_sources/registry.py`）已持久化来源追踪事实（`source_id`/`name`/`revision`）但无 URI 列；`resource_activation_bindings.display_uri` 已建表但生产从不写。落地方向是让它们按 identity + URI 的新格式写入。
+**新写字段的挂点**：`resource_activation_bindings.display_uri` 使用已接通的 activation owner 完成 writer/reader/clone/fork/detail round-trip；内部 aggregate 的必填 null 引用统一寻址 owner 合同。`context_source_control_states` 保持来源追踪事实，只有其 owner 证明需要持久资源定位时才增加 URI，不能把地址镜像加到每个来源状态。
 
 **理由**：不构造不存在的迁移脚本，既省成本，也避免「为一个不存在的存量对象写规范化/失效逻辑」这种虚假工作。
 

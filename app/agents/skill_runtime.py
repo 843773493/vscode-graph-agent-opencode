@@ -274,6 +274,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         self._source_registry.register_file(
             uri=agents_uri,
             path=self._source_registry.workspace_root / WORKSPACE_AGENTS_FILE,
+            optional=True,
         )
         self._context_source_manager.register(
             ContextSourceDescriptor(
@@ -504,7 +505,7 @@ def _publish_skill_facet(
     *,
     layer: str,
     name: str,
-    display_uri: str,
+    display_uri: str | None,
     facet: str,
     payload: object,
     source_revision: str,
@@ -720,9 +721,8 @@ def build_workspace_skill_catalog(
         registry,
         layer="workspace",
         name="catalog",
-        # catalog facet 不是 skill 资源条目，其 display URI 只作内部标识，
-        # 不参与 URI 寻址；保留既有形态以避免改动内部 registry key。
-        display_uri=f"boxteam://workspace/{workspace_id}/resources/skills/catalog",
+        # catalog 是内部语义聚合，没有可访问地址；条目仍携带真实资源 URI。
+        display_uri=None,
         facet="catalog",
         payload={"entries": catalog_payload_entries},
         source_revision="sha256:" + hashlib.sha256(

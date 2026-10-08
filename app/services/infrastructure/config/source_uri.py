@@ -20,7 +20,7 @@ config kind 且 sqlite 层不可寻址」定稿：
 from __future__ import annotations
 
 from app.core.distribution_identity import load_distribution_id
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     resource_display_uri,
 )
 

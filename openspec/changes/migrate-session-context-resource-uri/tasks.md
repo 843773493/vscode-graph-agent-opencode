@@ -22,10 +22,10 @@
 
 ## 4. 星型解析 / star-topology resolution 接入
 
-- [ ] 4.1 实现唯一解析顺序：本地 parse（fail-closed）→ 本进程解析 → hub 可直接解析其直接 spoke；spoke 经唯一 hub 做一次有界 transit（携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）。
+- [ ] 4.1 实现唯一解析顺序：本地 parse（fail-closed）→ 本进程解析 → hub 可直接解析其直接 spoke；spoke 经唯一 hub 做一次有界 transit（携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）。覆盖既有单会话 read、远端工作区/Gateway inventory 与 search 的正例；同一 read grant owner 绑定真实 ResourceIdentity/URI/scope 和查询字段，由目标端既有 owner 执行，不伪造 Session 目标、不回退当前激活工作区。集中验证错误目标类型、未共享、签名/请求字段不匹配及原 deadline/hop 边界；send/wait/reply 不接受上下文清单目标。
 - [ ] 4.2 把 `max_transit_gateways`/`max_gateway_hops`/deadline 等上界实现为**显式策略常量**，禁止散落魔法数字。
 - [ ] 4.3 实现 fail-closed 拒绝：对端不可达、资源未共享、资源未找到一律返回结构化拒绝码；禁止猜测路径、禁止返回虚假默认值。
-- [ ] 4.4 约束跨边界载荷只含资源身份、URI、revision 与内容；断言 real path 不跨 gateway 边界。
+- [ ] 4.4 约束跨边界载荷只含资源身份、URI、revision 与内容；断言 real path 不跨 gateway 边界。直接下线唯一 information owner/DTO 的 workspace.root_path、storage_path，迁齐 API/proto/生成类型/前端与测试实际 caller；read information、search session_information 及持久观察输出同源，保身份/名称/诊断状态，不在中继过滤、不把验收缩为仅 envelope，也不造 files URI 或兼容字段。
 - [ ] 4.5 落地「locator 是输入不是输出」不变量：断言解析命中的响应只含稳定身份与内容，不含 real path、provider locator 或任何解析 locator。
 
 ## 5. 入口破坏与「新写字段」（不是存量数据迁移）

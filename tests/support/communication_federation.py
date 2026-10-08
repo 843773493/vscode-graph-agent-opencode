@@ -19,6 +19,13 @@ import httpx
 
 from app.core.workspace_identity import workspace_identity_path
 from tests.e2e.system.gateway.gateway_target import GatewaySshTarget, wait_for_ssh_ready
+from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
+    start_terminal_backend,
+)
+from tests.harness.python.browser_manager import (
+    close_browser_manager_processes,
+    start_browser_manager_processes,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.support.gateway_processes import (
     LOCAL_TOKEN_HEADERS,
@@ -70,6 +77,8 @@ def _close_ssh(process: subprocess.Popen[str]) -> None:
 async def open_communication_triad(
     context: TestRunContext,
     prepare_workspace: Callable[[TestRunContext, int, int], Path],
+    *,
+    resource_service_nodes: tuple[str, ...] = (),
 ) -> AsyncIterator[dict[str, CommunicationNode]]:
     ports = integration_port_block_for_file(context.test_file)
     root = context.project_root
@@ -109,7 +118,36 @@ async def open_communication_triad(
             # 模板身份不能被三个独立工作区共享；由正式启动 owner 创建各自 UUID。
             workspace_identity_path(workspace).unlink()
             reset_gateway_persistent_state(workspace_root=workspace)
-            backend = await asyncio.to_thread(start_backend_process, workspace_root=str(workspace), port=ports.port(offset), log_name="c3-backend")
+            environment = {"BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{ports.port(offset + 1)}"}
+            if name in resource_service_nodes:
+                terminal_port = ports.port(offset + 4)
+                browser_port = ports.port(offset + 5)
+                browser_frontend_port = ports.port(offset + 6)
+                for service_port in (terminal_port, browser_port, browser_frontend_port):
+                    ensure_local_port_available(service_port, service_name="会话信息正式辅助服务")
+                terminal = await asyncio.to_thread(
+                    start_terminal_backend, backend_port=terminal_port, workspace_root=str(workspace),
+                )
+                register_test_process(terminal, lambda process=terminal: terminate_process(process))
+                resources.push_async_callback(asyncio.to_thread, unregister_test_process, terminal)
+                resources.push_async_callback(asyncio.to_thread, terminate_process, terminal)
+                browser = await asyncio.to_thread(
+                    start_browser_manager_processes, workspace_root=workspace,
+                    backend_port=browser_port, frontend_port=browser_frontend_port,
+                    backend_host="127.0.0.1",
+                )
+                for process in (browser.backend_process, browser.frontend_process):
+                    register_test_process(process, lambda process=process: terminate_process(process))
+                    resources.push_async_callback(asyncio.to_thread, unregister_test_process, process)
+                resources.push_async_callback(asyncio.to_thread, close_browser_manager_processes, browser)
+                environment.update({
+                    "BOXTEAM_TERMINAL_BACKEND_URL": f"http://127.0.0.1:{terminal_port}",
+                    "BOXTEAM_BROWSER_BACKEND_URL": f"http://127.0.0.1:{browser_port}",
+                })
+            backend = await asyncio.to_thread(
+                start_backend_process, workspace_root=str(workspace), port=ports.port(offset),
+                log_name="c3-backend", env_overrides=environment,
+            )
             resources.push_async_callback(asyncio.to_thread, close_backend_process, backend)
             workspaces[name], backends[name] = workspace, backend
         nodes = {}

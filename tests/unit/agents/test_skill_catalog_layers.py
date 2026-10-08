@@ -121,6 +121,7 @@ def test_catalog_revision_is_immutable_and_registry_cas_is_idempotent(
 def test_catalog_binding_payload_contains_registry_owned_refs(layered_workspace):
     registry = ResourceRegistry()
     catalog = _build(layered_workspace, registry)
+    assert catalog.catalog_snapshot.display_uri is None
     payload = catalog.catalog_snapshot.payload
     assert isinstance(payload, dict)
 

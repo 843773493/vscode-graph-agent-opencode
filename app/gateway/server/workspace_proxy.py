@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Callable
 from functools import partial
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -10,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_gateway_root
+from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.user_access import (
@@ -18,6 +21,9 @@ from app.gateway.control.user_access import (
     UserAccessService,
 )
 from app.gateway.credentials import FederationCredentialStore
+from app.gateway.federation.errors import FederationError
+from app.gateway.federation.grants import ContextGrantTarget
+from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
@@ -32,6 +38,16 @@ from app.gateway.registry import (
     GatewayWorkspaceRegistry,
     WorkspaceRouteLease,
     WorkspaceTarget,
+)
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.communication import ContextQueryRequest
+from app.schemas.internal_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextSearchRequest,
+)
+from app.services.business.session_context_resource import parse_session_context_ref
+from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
+    ResourceUriResolveError,
 )
 
 router = APIRouter()
@@ -352,9 +368,11 @@ async def _proxy_workspace_request(
     auth: GatewayAuthContext | None,
     user_access: UserAccessContext | None,
     include_credentials: bool,
+    target_workspace_id: str | None = None,
+    request_body: bytes | None = None,
 ) -> Response:
     registry = _registry(request)
-    workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+    workspace_id = target_workspace_id or request.headers.get("X-BoxTeam-Workspace-Id")
     try:
         target = registry.resolve(workspace_id)
     except LookupError as error:
@@ -392,7 +410,7 @@ async def _proxy_workspace_request(
         request,
         streaming=_is_streaming_workspace_path(path),
     )
-    request_content = (
+    request_content = request_body if request_body is not None else (
         request.stream()
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}
         else None
@@ -605,34 +623,86 @@ async def _proxy_workspace_request(
             release_route_reference()
 
 
-@router.api_route(
-    "/api/v1/context/read",
-    methods=["POST"],
-)
-async def proxy_context_read(request: Request) -> Response:
-    """按工作区 ID 转发结构化上下文读取，不要求 Gateway 凭据。"""
-    return await _proxy_workspace_request(
-        "context/read",
-        request,
-        auth=None,
-        user_access=None,
-        include_credentials=False,
+async def _proxy_context_request(
+    request: Request,
+    query: SessionContextReadRequest | SessionContextSearchRequest,
+    *,
+    auth: GatewayAuthContext,
+    user_access: UserAccessContext | None,
+) -> Response:
+    """结构化 URI 由原 registry 选归属路由，目标上下文 owner 决定内容。"""
+    search = isinstance(query, SessionContextSearchRequest)
+    try:
+        resource = parse_session_context_ref(
+            resource_identity=query.resource_identity, uri=query.uri, scope=query.scope,
+            local_gateway_id=request.app.state.gateway_id,
+        )
+        query = query.model_copy(update={"uri":resource.uri})
+        if resource.gateway_authority is None and resource.scope == "workspace":
+            targets = [
+                target for target in _registry(request).targets()
+                if target.connection_kind == "local" and target.backend_workspace_id == resource.scope_id
+            ]
+            if not targets:
+                raise HTTPException(status_code=404, detail="上下文 workspace 未注册或不存在")
+            if len(targets) != 1:
+                raise RuntimeError("多个本地 Gateway route 指向同一上下文 workspace")
+            return await _proxy_workspace_request(
+                "context/search" if search else "context/read", request,
+                auth=auth, user_access=user_access, include_credentials=True,
+                target_workspace_id=targets[0].workspace_id,
+                request_body=query.model_dump_json().encode("utf-8"),
+            )
+        if auth.kind == "federation":
+            raise HTTPException(status_code=400, detail="bounded federation 上下文资源必须通过原 read grant relay")
+        service = request.app.state.federation_rpc_service
+        target = ContextGrantTarget(
+            gateway_id=resource.gateway_authority or service.gateway_id,
+            resource_identity=str(resource.resource_identity), uri=resource.uri, scope=resource.scope,
+        )
+        envelope = ContextQueryRequest(
+            source_gateway_id=service.gateway_id, resource_target=target,
+            read=None if search else query, search=query if search else None,
+        )
+        result = await service.relay_operation(
+            target=target, operation="read", body=envelope.model_dump(mode="json"),
+            deadline_at=time.time() + FEDERATION_DEADLINE_SECONDS,
+        )
+        while isinstance(result.get("result"), dict) and "relayed_by" in result:
+            result = result["result"]
+    except FederationError as error:
+        raise HTTPException(status_code=409, detail=error.to_wire()) from error
+    except (ResourceUriGrammarError, ResourceUriResolveError) as error:
+        raise HTTPException(
+            status_code=400, detail={"code":error.reason_code,"message":str(error)},
+        ) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    request_id = get_request_id(request)
+    return Response(
+        content=APIResponse(data=result, request_id=request_id).model_dump_json(),
+        media_type="application/json", headers={"X-Request-ID":request_id},
     )
 
 
-@router.api_route(
-    "/api/v1/context/search",
-    methods=["POST"],
-)
-async def proxy_context_search(request: Request) -> Response:
-    """按工作区 ID 转发结构化上下文搜索，不要求 Gateway 凭据。"""
-    return await _proxy_workspace_request(
-        "context/search",
-        request,
-        auth=None,
-        user_access=None,
-        include_credentials=False,
-    )
+@router.api_route("/api/v1/context/read", methods=["POST"])
+async def proxy_context_read(
+    payload: SessionContextReadRequest,
+    request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+) -> Response:
+    return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
+
+
+@router.api_route("/api/v1/context/search", methods=["POST"])
+async def proxy_context_search(
+    payload: SessionContextSearchRequest,
+    request: Request,
+    auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
+    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
+) -> Response:
+    return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
 
 
 @router.api_route(

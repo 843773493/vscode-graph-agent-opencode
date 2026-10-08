@@ -103,8 +103,8 @@ async def test_before_model_consumes_event_driven_observation_only(
         # before_agent 用真实 workspace backend 解析 metadata、注册来源并
         # 标记首次观察；该阶段是会话初始化边界，不属于请求路径轮询。
         assert middleware.before_agent({}, None, {}) is not None
-        assert manager.pending_observation_count() == 1
-        # AGENTS.md 尚未创建：注册仅做一次注册期读取，无首帧 pending。
+        assert manager.pending_observation_count() == 2
+        # Skill 与 optional AGENTS absence 都发布首帧观察；注册各读取一次。
         assert registry.snapshot_reads == 2
 
         # 模型调用 skill_load：从冻结 SkillCatalog binding 激活正文并进入
@@ -119,10 +119,12 @@ async def test_before_model_consumes_event_driven_observation_only(
         assert first is not None
         first_delta = next(delta for delta in first.deltas if delta.source_id == "skill:demo")
         assert "demo v1" in first_delta.content and first_delta.source_kind == "skill"
-        # 请求路径只读取已绑定来源的内存快照：一次解析 observation revision，
-        # 一次取正文；skill_load 本身零读取（正文来自冻结 binding）。
+        absent_agents = next(delta for delta in first.deltas if delta.source_id == "agents:workspace")
+        assert absent_agents.content == "" and absent_agents.revision
+        # 每个来源各读两次内存快照：解析 observation revision 与取正文；
+        # skill_load 本身零读取（正文来自冻结 binding）。
         assert reads_after_load == 2
-        assert registry.snapshot_reads == reads_after_load + 2
+        assert registry.snapshot_reads == reads_after_load + 4
         receipt, binding = source_seal_case.seal(manager)
         assert receipt.deltas == first.deltas
         frames = [frame for frame in binding.prefix.state.frames

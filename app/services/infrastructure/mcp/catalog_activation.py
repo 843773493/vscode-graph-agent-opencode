@@ -71,7 +71,7 @@ class McpCatalogResourcePublisher:
         ).members
         registry.register_descriptor(SemanticResourceDescriptor(
             resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",
-            facet="activation", display_uri="boxteam://workspace/mcp-tool-catalog",
+            facet="activation", display_uri=None,
             source_ids=(MCP_OWNER_CATALOG_SOURCE_ID, CUSTOM_CATALOG_SOURCE_ID, EXTENSION_CATALOG_SOURCE_ID),
         ))
 
@@ -111,7 +111,7 @@ class McpCatalogResourcePublisher:
             )}
             resource = ResourceSnapshot(
                 resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",
-                facet="activation", display_uri="boxteam://workspace/mcp-tool-catalog",
+                facet="activation", display_uri=None,
                 revision=sha256_jcs(payload), payload=payload,
                 source_lineage=lineage, generation=publication.binding_ref.generation,
                 members=tuple(members),
@@ -120,7 +120,7 @@ class McpCatalogResourcePublisher:
             retained = self._registry.latest_revision(MCP_TOOL_CATALOG_RESOURCE_ID)
             resource = ResourceSnapshot(
                 resource_id=MCP_TOOL_CATALOG_RESOURCE_ID, resource_kind="mcp_tool_catalog",
-                facet="activation", display_uri="boxteam://workspace/mcp-tool-catalog",
+                facet="activation", display_uri=None,
                 revision=retained or "", payload=None,
                 source_lineage=lineage, generation=publication.binding_ref.generation,
                 available=False, error=publication.error, error_code="source-unavailable",

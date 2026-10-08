@@ -469,7 +469,10 @@ async def communication_triad(request: pytest.FixtureRequest) -> AsyncIterator[t
     artifacts.mkdir(parents=True, exist_ok=True)
     ports = integration_port_block_for_file(Path(request.node.path))
     with openai_chat_stub(ports.port(10)) as model:
-        async with open_communication_triad(context, _prepare_workspace) as nodes:
+        async with open_communication_triad(
+            context, _prepare_workspace,
+            resource_service_nodes=getattr(request, "param", {}).get("resource_service_nodes", ()),
+        ) as nodes:
             try:
                 yield nodes, model, artifacts
             finally:
@@ -499,7 +502,7 @@ async def test_c3_real_reverse_channel_question_and_reply(communication_triad) -
                 correlation = re.search(r'"communication_id"\s*:\s*"([^"]+)"', human)
                 assert correlation is not None, human
                 return _tool("send_message_to_session", {
-                    "target_session_id": session_resource_uri(source.workspace_id, source_session), "kind": "reply",
+                    "target_session_id": session_resource_uri(source.workspace_id, source_session, gateway_authority=source.gateway_id), "kind": "reply",
                     "reply_to_communication_id": correlation[1], "content": "c3-reply-from-C",
                 }, "call_c3_reply")
             return {"content": "c3-C-completed"}
@@ -508,7 +511,7 @@ async def test_c3_real_reverse_channel_question_and_reply(communication_triad) -
         if "c3-source-trigger" in human:
             if "send_message_to_session" not in tools:
                 return _tool("send_message_to_session", {
-                    "target_session_id": session_resource_uri(target.workspace_id, target_session), "kind": "question", "content": "c3-question",
+                    "target_session_id": session_resource_uri(target.workspace_id, target_session, gateway_authority=target.gateway_id), "kind": "question", "content": "c3-question",
                 }, "call_c3_question")
             if "wait_for_session" not in tools:
                 return _tool("wait_for_session", {"target_session_id": target_session, "communication_id": results["question"]["communication_id"], "timeout_seconds": 30}, "call_c3_wait")

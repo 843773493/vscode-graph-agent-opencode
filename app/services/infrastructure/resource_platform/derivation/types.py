@@ -10,6 +10,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from app.core.resource_uri import (
+    parse_resource_uri,
+)
 from app.domain.itemized.resource_activation import ResourceMemberBinding
 
 _SNAPSHOT_ERROR_CODES = frozenset(
@@ -36,21 +39,19 @@ class SemanticResourceDescriptor:
     resource_id: str
     resource_kind: str
     facet: str
-    display_uri: str
+    display_uri: str | None
     source_ids: tuple[str, ...] = ()
     dependency_resource_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for field_name in ("resource_id", "resource_kind", "facet", "display_uri"):
+        for field_name in ("resource_id", "resource_kind", "facet"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(
                     f"SemanticResourceDescriptor.{field_name} 必须是非空字符串"
                 )
-        if not self.display_uri.startswith("boxteam://"):
-            raise ValueError(
-                "SemanticResourceDescriptor.display_uri 必须是 boxteam:// 虚拟 URI"
-            )
+        if self.display_uri is not None:
+            parse_resource_uri(self.display_uri)
         for tuple_field in ("source_ids", "dependency_resource_ids"):
             value = getattr(self, tuple_field)
             if (
@@ -104,7 +105,7 @@ class ResourceSnapshot:
     resource_id: str
     resource_kind: str
     facet: str
-    display_uri: str
+    display_uri: str | None
     revision: str
     payload: object
     source_lineage: tuple[tuple[str, str], ...]
@@ -116,10 +117,12 @@ class ResourceSnapshot:
     members: tuple[ResourceMemberBinding, ...] = ()
 
     def __post_init__(self) -> None:
-        for field_name in ("resource_id", "resource_kind", "facet", "display_uri"):
+        for field_name in ("resource_id", "resource_kind", "facet"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"ResourceSnapshot.{field_name} 必须是非空字符串")
+        if self.display_uri is not None:
+            parse_resource_uri(self.display_uri)
         if (
             not isinstance(self.generation, int)
             or isinstance(self.generation, bool)

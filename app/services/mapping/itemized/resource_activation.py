@@ -70,7 +70,7 @@ class SafeResourceProjection:
     parent_execution_snapshot_id: str | None
     effective_boundary: str
     activation_ordinal: int
-    display_uri: str
+    display_uri: str | None
     resource_kind: str
     facet: str
     revision: str

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Final, NewType
 from uuid import UUID, uuid5
 
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     parse_resource_uri,
 )
 

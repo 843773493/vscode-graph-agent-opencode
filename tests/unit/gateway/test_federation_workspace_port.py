@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
-from app.core.trace_middleware import reset_current_request_id, set_current_request_id
+from app.core.trace_middleware import (
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
 from app.gateway.federation.errors import (
+    FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
+    FEDERATION_TARGET_NOT_RESOLVABLE,
     FederationError,
 )
 from app.gateway.federation.workspace_port import (
@@ -75,7 +83,9 @@ def http_context(monkeypatch: pytest.MonkeyPatch):
         lambda: "gateway_local",
     )
     token = set_current_request_id(REQUEST_ID)
+    gateway_token = set_current_gateway_id("gateway_local")
     yield context
+    reset_current_gateway_id(gateway_token)
     reset_current_request_id(token)
 
 
@@ -227,3 +237,73 @@ async def test_cold_catalog_rejects_non_json(http_context: _HTTPContext) -> None
     with pytest.raises(FederationError, match="不是 JSON") as error:
         await http_context.catalog.local_session_workspaces(TARGET_SESSION)
     assert error.value.code == FEDERATION_SESSION_MAIN_UNAVAILABLE
+
+
+@pytest.fixture
+def context_read_body() -> dict[str, object]:
+    uri = session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority="gateway_local")
+    target = {
+        "gateway_id": "gateway_local", "resource_identity": str(session_resource_identity(WORKSPACE_ID, TARGET_SESSION)),
+        "uri": uri, "scope": "workspace",
+    }
+    return {
+        "source_gateway_id": "gateway_source", "resource_target": target,
+        "read": {key: target[key] for key in ("resource_identity", "uri", "scope")} | {"view": "information"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "detail", "expected_code"),
+    [
+        (404, "missing", FEDERATION_TARGET_NOT_RESOLVABLE),
+        (403, "unshared", FEDERATION_TARGET_NOT_RESOLVABLE),
+        (400, {"code": "unsupported_view"}, "unsupported_view"),
+        (400, {"code": "scope_mismatch"}, "scope_mismatch"),
+        (409, {"code": "snapshot_changed"}, "snapshot_changed"),
+        (400, {"code": "made-up-code", "message": "/private/path"}, FEDERATION_SESSION_MAIN_UNAVAILABLE),
+    ],
+)
+async def test_context_query_preserves_owner_reject_codes_without_locator_disclosure(
+    http_context: _HTTPContext, context_read_body: dict[str, object],
+    status: int, detail: object, expected_code: str,
+) -> None:
+    http_context.status = status
+    http_context.data = {"request_id": REQUEST_ID, "detail": detail}
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(
+            operation="read", target=context_read_body["resource_target"], body=context_read_body,
+            origin="gateway_source", timeout=5,
+        )
+    assert error.value.code == expected_code
+    assert "/private/path" not in str(error.value)
+    assert len(http_context.requests) == 1
+    assert http_context.requests[0].url.path == "/api/v1/context/read"
+
+
+async def test_context_target_rejects_unregistered_workspace_before_http(
+    http_context: _HTTPContext, context_read_body: dict[str, object],
+) -> None:
+    http_context.port.project_workspaces(())
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(
+            operation="read", target=context_read_body["resource_target"], body=context_read_body,
+            origin="gateway_source", timeout=5,
+        )
+    assert error.value.code == FEDERATION_TARGET_NOT_RESOLVABLE
+    assert not http_context.requests
+
+
+async def test_context_target_enforces_one_total_deadline(
+    http_context: _HTTPContext, context_read_body: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def wait_beyond_deadline(*_args, **_kwargs):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(http_context.port, "read_context_in_workspace", wait_beyond_deadline)
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(
+            operation="read", target=context_read_body["resource_target"], body=context_read_body,
+            origin="gateway_source", timeout=0.02,
+        )
+    assert error.value.code == FEDERATION_DEADLINE_EXCEEDED
+    assert not http_context.requests

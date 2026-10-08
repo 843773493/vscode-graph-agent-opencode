@@ -163,7 +163,11 @@ class _Transport:
 
     async def resolve_main(self, **kwargs) -> ResolvedMainTargetBinding:
         self.resolves += 1
-        assert kwargs["session_id"] == TARGET_SESSION
+        # read discovery 保留规范 URI；wait 使用原 Session selector。
+        assert (kwargs["session_id"], kwargs["workspace_id"]) in {
+            (session_resource_uri(WORKSPACE_ID, TARGET_SESSION), WORKSPACE_ID),
+            (TARGET_SESSION, None),
+        }
         return ResolvedMainTargetBinding(TARGET_SESSION, TARGET_THREAD, TARGET)
 
     async def operation(self, *, operation, target, body, timeout=None):

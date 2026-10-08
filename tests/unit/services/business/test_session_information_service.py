@@ -1,6 +1,4 @@
 from datetime import UTC, datetime
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -94,7 +92,6 @@ class _Workspace:
 
 @pytest.mark.asyncio
 async def test_information_rejects_mismatched_session_and_backend_workspace_ids(
-    tmp_path: Path,
 ) -> None:
     resource_service = _Resources()
     service = SessionInformationService(
@@ -104,9 +101,6 @@ async def test_information_rejects_mismatched_session_and_backend_workspace_ids(
         ),  # type: ignore[arg-type]
         session_resource_service=resource_service,  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     with pytest.raises(RuntimeError, match="会话与工作区后端标识不一致"):
@@ -142,7 +136,6 @@ def _trace_event(
 
 @pytest.mark.asyncio
 async def test_information_uses_latest_bounded_trace_page_for_execution_and_errors(
-    tmp_path: Path,
 ) -> None:
     now = datetime.now(UTC)
     events = [
@@ -166,13 +159,14 @@ async def test_information_uses_latest_bounded_trace_page_for_execution_and_erro
         session_service=_Sessions(events),  # type: ignore[arg-type]
         session_resource_service=resource_service,  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")
 
+    assert "root_path" not in result.workspace.model_dump()
+    assert "storage_path" not in result.model_dump()
+    assert "/workspace" not in result.model_dump_json()
+    assert result.workspace.workspace_id == "workspace_information"
     assert resource_service.include_history is False
     assert result.execution.job_id == "job_latest"
     assert result.execution.status == "failed"
@@ -187,7 +181,7 @@ async def test_information_uses_latest_bounded_trace_page_for_execution_and_erro
 
 
 @pytest.mark.asyncio
-async def test_information_marks_process_exit_as_failed(tmp_path: Path) -> None:
+async def test_information_marks_process_exit_as_failed() -> None:
     now = datetime.now(UTC)
     events = [
         _trace_event(
@@ -209,9 +203,6 @@ async def test_information_marks_process_exit_as_failed(tmp_path: Path) -> None:
         session_service=_Sessions(events),  # type: ignore[arg-type]
         session_resource_service=resource_service,  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")
@@ -224,7 +215,6 @@ async def test_information_marks_process_exit_as_failed(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_information_ignores_session_scoped_goal_events_in_execution(
-    tmp_path: Path,
 ) -> None:
     # Goal 事件带 "goal:{session_id}" 合成 job_id，不是真实 Job；若计入执行
     # 投影会伪造出永远 running 的执行态，并把 execution.job_id 指向不存在的 Job。
@@ -257,9 +247,6 @@ async def test_information_ignores_session_scoped_goal_events_in_execution(
         session_service=_Sessions(events),  # type: ignore[arg-type]
         session_resource_service=_Resources(),  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")
@@ -270,7 +257,6 @@ async def test_information_ignores_session_scoped_goal_events_in_execution(
 
 @pytest.mark.asyncio
 async def test_information_is_bounded_and_omits_agent_state_history(
-    tmp_path: Path,
 ) -> None:
     now = datetime.now(UTC)
     events = [
@@ -312,9 +298,6 @@ async def test_information_is_bounded_and_omits_agent_state_history(
         ),  # type: ignore[arg-type]
         session_resource_service=resource_service,  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")
@@ -366,7 +349,6 @@ def test_information_keeps_non_closed_browser_resource_states_active() -> None:
 
 @pytest.mark.asyncio
 async def test_information_excludes_user_interrupt_from_recent_errors(
-    tmp_path: Path,
 ) -> None:
     """用户主动打断不是故障，不得出现在 recent_errors 里。
 
@@ -388,9 +370,6 @@ async def test_information_excludes_user_interrupt_from_recent_errors(
         session_service=_Sessions(events),  # type: ignore[arg-type]
         session_resource_service=_Resources(),  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")
@@ -402,7 +381,6 @@ async def test_information_excludes_user_interrupt_from_recent_errors(
 
 @pytest.mark.asyncio
 async def test_information_keeps_execution_lost_interrupt_in_recent_errors(
-    tmp_path: Path,
 ) -> None:
     """执行丢失是真实故障，必须同时进入 recent_errors 与 execution.last_error。"""
     now = datetime.now(UTC)
@@ -425,9 +403,6 @@ async def test_information_keeps_execution_lost_interrupt_in_recent_errors(
         session_service=_Sessions(events),  # type: ignore[arg-type]
         session_resource_service=_Resources(),  # type: ignore[arg-type]
         workspace_service=_Workspace(),  # type: ignore[arg-type]
-        path_resolver=SimpleNamespace(
-            resolve_session_node=lambda session_id: tmp_path / session_id
-        ),
     )
 
     result = await service.get_information("ses_information")

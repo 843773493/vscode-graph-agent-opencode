@@ -319,7 +319,7 @@ class CommunicationObservationService:
                     target = (await service.resolve_main(source, target_session_id, target_workspace_id)).target
                 except _DELETED as error:
                     raise RemoteObservationError("target-deleted") from error
-                frozen_query = {"read": {**query, "resource_identity": session_resource_identity(target.workspace_id, target.session_id), "uri": session_resource_uri(target.workspace_id, target.session_id), "cursor": None}} if operation == "read" else {**query, "deadline": asdict(freeze_wait_deadline(clock=self._clock, timeout_seconds=cast(int, query["timeout_seconds"])))}
+                frozen_query = {"read": {**query, "resource_identity": session_resource_identity(target.workspace_id, target.session_id), "uri": session_resource_uri(target.workspace_id, target.session_id, gateway_authority=None if target.gateway_id == source.gateway_id else target.gateway_id), "cursor": None}} if operation == "read" else {**query, "deadline": asdict(freeze_wait_deadline(clock=self._clock, timeout_seconds=cast(int, query["timeout_seconds"])))}
                 envelope = CommunicationObservationRequest(observation_id=observation_id, source_call_id=source_call_id, page_identity=page_id, page_ordinal=0, expires_at=source_call_created_at + RECOVERY_WINDOW, source=source, target=target, operation=operation, query=frozen_query)
             request_query = envelope.query
             if operation == "read":
@@ -397,7 +397,7 @@ class CommunicationObservationService:
         resource = parse_session_context_ref(resource_identity=request.resource_identity, uri=request.uri, scope=request.scope)
         if resource.kind != "session" or resource.session_id is None:
             raise ValueError("通信 read 只接受单个 Session 资源")
-        result = await self._source_call(session_id=session_id, thread_id=thread_id, source_call_id=source_call_id, source_call_created_at=source_call_created_at, operation="read", target_session_id=resource.session_id, target_workspace_id=resource.scope_id, query=request.model_dump(mode="json"))
+        result = await self._source_call(session_id=session_id, thread_id=thread_id, source_call_id=source_call_id, source_call_created_at=source_call_created_at, operation="read", target_session_id=resource.uri, target_workspace_id=resource.scope_id, query=request.model_dump(mode="json"))
         return SessionContextReadResultDTO.model_validate(result)
 
     async def wait(self, *, session_id: str, thread_id: str, source_call_id: str, source_call_created_at: datetime, target_session_id: str, selector: WaitSelector | None, until: WaitUntil, timeout_seconds: int) -> dict[str, object]:
@@ -482,7 +482,14 @@ class CommunicationObservationService:
             raise RemoteObservationError("read-snapshot-mismatch")
         if request.operation == "read":
             read_query = SessionContextReadRequest.model_validate(request.query["read"])
-            if (read_query.resource_identity, read_query.uri, read_query.scope) != (session_resource_identity(target.workspace_id, target.session_id), session_resource_uri(target.workspace_id, target.session_id), "workspace"):
+            resource = parse_session_context_ref(
+                resource_identity=read_query.resource_identity, uri=read_query.uri,
+                scope=read_query.scope, local_gateway_id=target.gateway_id,
+            )
+            if resource.gateway_authority is not None or (resource.resource_identity, resource.uri, resource.scope) != (
+                session_resource_identity(target.workspace_id, target.session_id),
+                session_resource_uri(target.workspace_id, target.session_id), "workspace",
+            ):
                 raise RemoteObservationError("read-snapshot-mismatch")
         async with self._hold("target", request.observation_id):
             if request.expires_at <= self._clock.utc_now():

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 from langchain.agents.middleware import ModelRequest, ModelResponse
@@ -12,6 +15,7 @@ from langgraph.types import Command
 
 from app.agents import itemized_context_middleware
 from app.agents.itemized_context_middleware import SealedAssemblyDispatchBridge
+from app.core.identifier import uuid7_datetime_from_hex
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
@@ -156,3 +160,28 @@ def test_prepare_projection_without_losses_skips_loss_identity(bridge, monkeypat
     monkeypatch.setattr(itemized_context_middleware.logger, "warning", warning)
     bridge._prepare_projection(object())
     assert not [call for call in warning.call_args_list if call.args[0].startswith("itemized provider projection capability loss")]
+
+
+@pytest.fixture
+def preparation_bridge(bridge):
+    frozen = SimpleNamespace(activation_policy=SimpleNamespace(has_model_call_boundary=lambda: True))
+    bridge._request_preparation = MagicMock(return_value=SimpleNamespace(checkpoint_ns=""))
+    bridge._frozen_preparation = MagicMock(return_value=(None, frozen))
+    bridge._resource_activation = SimpleNamespace(prepare_model_call=AsyncMock(return_value=frozen))
+    bridge._complete_preparation = MagicMock(side_effect=lambda *_args: _args[-1])
+    return bridge
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_actual_preparation_allocates_uuid7_for_frozen_call_and_callback(preparation_bridge, mode):
+    bridge = preparation_bridge
+    started = datetime.now(UTC)
+    callback = bridge._prepare(object()) if mode == "sync" else asyncio.run(bridge._aprepare(object()))
+    ended = datetime.now(UTC)
+    identity = UUID(callback)
+    assert identity.version == 7
+    assert str(identity) == callback
+    assert abs((uuid7_datetime_from_hex(identity.hex) - started).total_seconds()) < 1
+    assert uuid7_datetime_from_hex(identity.hex) <= ended
+    bridge._resource_activation.prepare_model_call.assert_awaited_once()
+    assert bridge._resource_activation.prepare_model_call.await_args.kwargs["model_call_id"] == callback

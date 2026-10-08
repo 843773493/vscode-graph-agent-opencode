@@ -8,7 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from app.schemas.internal_v2.session_context import SessionContextReadRequest
+from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.internal_v2.session_context import (
+    SessionContextReadRequest,
+    SessionContextSearchRequest,
+)
 from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import DurableDeadline, WaitSelector
@@ -23,6 +27,7 @@ class CommunicationDiscoveryRequest(BaseModel):
     source: GlobalThreadAddress
     session_id: str = Field(min_length=1)
     workspace_id: str | None = None
+    gateway_id: str | None = Field(default=None, min_length=1)
 
 
 class CommunicationAcceptanceRequest(BaseModel):
@@ -82,9 +87,42 @@ class CommunicationObservationRequest(BaseModel):
         return self
 
 
+class ContextQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_gateway_id: str = Field(min_length=1)
+    resource_target: ContextGrantTarget
+    read: SessionContextReadRequest | None = None
+    search: SessionContextSearchRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_query(self) -> ContextQueryRequest:
+        if (self.read is None) == (self.search is None):
+            raise ValueError("上下文查询必须恰好提供 read 或 search")
+        query = self.read if self.read is not None else self.search
+        if (query.resource_identity, query.uri, query.scope) != (
+            self.resource_target.resource_identity, self.resource_target.uri, self.resource_target.scope,
+        ):
+            raise ValueError("上下文查询与 read grant 资源目标不一致")
+        return self
+
+
 class CommunicationGatewayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     operation: Literal["send", "reply", "read", "wait"]
-    target: GlobalThreadAddress
+    target: GlobalThreadAddress | None = None
+    resource_target: ContextGrantTarget | None = None
     body: dict[str, object]
+
+    @model_validator(mode="after")
+    def validate_target(self) -> CommunicationGatewayRequest:
+        if (self.target is None) == (self.resource_target is None):
+            raise ValueError("relay 必须恰好提供 Session target 或 resource_target")
+        if self.resource_target is not None:
+            if self.operation != "read":
+                raise ValueError("资源 target 只能使用 read capability")
+            query = ContextQueryRequest.model_validate(self.body)
+            if query.resource_target != self.resource_target:
+                raise ValueError("relay resource_target 与查询 envelope 不一致")
+        return self

@@ -6,15 +6,15 @@ import dataclasses
 
 import pytest
 
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     skill_display_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     CatalogBinding,
+    ResourceUriCatalog,
     ResourceUriResolveError,
+    ResourceUriResolver,
     TrackedResourceBinding,
-    VirtualResourceCatalog,
-    VirtualResourceResolver,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     OPERATION_ACTIVATE,
@@ -62,8 +62,8 @@ def test_frozen_binding_survives_same_name_override() -> None:
         scope="workspace", scope_id="ws-1", skill_name="code-review"
     )
     new_binding = _binding("res-ws-2", new_uri, revision="rev-2", snapshot_ref="cas:2")
-    resolver = VirtualResourceResolver(
-        VirtualResourceCatalog(
+    resolver = ResourceUriResolver(
+        ResourceUriCatalog(
             bindings={new_uri: new_binding},
             name_index={("workspace", "code-review"): new_uri},
         )
@@ -89,8 +89,8 @@ def test_frozen_binding_ignores_same_uri_revision_update() -> None:
         name="code-review", binding=_binding("res-gw-1", uri, revision="rev-1")
     )
     # 同一 display URI 当前 revision 已更新，历史恢复仍用封存 revision。
-    resolver = VirtualResourceResolver(
-        VirtualResourceCatalog(
+    resolver = ResourceUriResolver(
+        ResourceUriCatalog(
             bindings={uri: _binding("res-gw-1", uri, revision="rev-9", snapshot_ref="cas:9")},
             name_index={("gateway", "code-review"): uri},
         )

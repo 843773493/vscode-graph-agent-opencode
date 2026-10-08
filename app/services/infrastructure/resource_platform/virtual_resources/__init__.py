@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.infrastructure.resource_platform.sources.observed_source import (
-    ObservedSourceDescriptor,
-)
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     ParsedResourceUri,
     ResourceUriGrammarError,
     parse_resource_uri,
@@ -15,10 +12,10 @@ from app.services.infrastructure.resource_platform.virtual_resources.grammar imp
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     CatalogBinding,
+    ResourceUriCatalog,
     ResourceUriResolveError,
+    ResourceUriResolver,
     TrackedResourceBinding,
-    VirtualResourceCatalog,
-    VirtualResourceResolver,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     CONTEXT_ASSEMBLY_IDENTITY_NAMESPACE,
@@ -42,18 +39,17 @@ __all__ = [
     "OPERATION_READ_CONTENT",
     "SESSION_RESOURCE_IDENTITY_NAMESPACE",
     "CatalogBinding",
-    "ObservedSourceDescriptor",
     "ParsedResourceUri",
     "ResolutionContext",
     "ResolvedResourceHandle",
     "ResourceIdentity",
     "ResourceProvenance",
+    "ResourceUriCatalog",
     "ResourceUriGrammarError",
     "ResourceUriResolveError",
+    "ResourceUriResolver",
     "SemanticResourceDescriptor",
     "TrackedResourceBinding",
-    "VirtualResourceCatalog",
-    "VirtualResourceResolver",
     "derive_resource_identity",
     "parse_resource_uri",
     "resource_display_uri",

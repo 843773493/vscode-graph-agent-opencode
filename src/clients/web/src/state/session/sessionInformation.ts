@@ -9,17 +9,13 @@ export const SESSION_INFORMATION_KIND = "session_diagnostic_snapshot" as const;
 
 interface LocalSessionConnection {
   kind: "local";
-  backend_url: string;
   managed: boolean;
   connection_error: string | null;
 }
 
 interface RemoteGatewaySessionConnection {
   kind: "remote_gateway";
-  gateway_connection_id: string;
   gateway_id: string;
-  remote_workspace_id: string;
-  gateway_proxy_url: string;
   managed: boolean;
   connection_error: string | null;
 }
@@ -41,14 +37,12 @@ export interface SessionInformationDump {
     title_truncated: boolean;
     created_at: string;
     updated_at: string;
-    storage_path: string;
   };
   relations: SessionInformationSnapshot["relations"];
   workspace: {
     id: string;
     backend_workspace_id: string;
     name: string;
-    root_path: string;
     active: boolean;
     status: GatewayWorkspace["status"];
     connection: SessionConnection;
@@ -59,14 +53,6 @@ export interface SessionInformationDump {
   recent_errors: SessionInformationSnapshot["recent_errors"];
 }
 
-function normalizedPath(path: string): string {
-  const trimmed = path.trim();
-  if (trimmed === "/") {
-    return trimmed;
-  }
-  return trimmed.replace(/[\\/]+$/, "");
-}
-
 function buildConnection(workspace: GatewayWorkspace): SessionConnection {
   const common = {
     managed: workspace.managed,
@@ -75,7 +61,6 @@ function buildConnection(workspace: GatewayWorkspace): SessionConnection {
   if (workspace.connection_kind === "local") {
     return {
       kind: "local",
-      backend_url: workspace.backend_url,
       ...common,
     };
   }
@@ -85,10 +70,7 @@ function buildConnection(workspace: GatewayWorkspace): SessionConnection {
 
   return {
     kind: "remote_gateway",
-    gateway_connection_id: workspace.remote.gateway_connection_id,
     gateway_id: workspace.remote.gateway_id,
-    remote_workspace_id: workspace.remote.remote_workspace_id,
-    gateway_proxy_url: workspace.backend_url,
     ...common,
   };
 }
@@ -106,13 +88,10 @@ export function buildSessionInformationDump(
         `workspace=${information.workspace.workspace_id}`,
     );
   }
-  if (
-    normalizedPath(information.workspace.root_path) !==
-    normalizedPath(gatewayWorkspace.root_path)
-  ) {
+  if (gatewayWorkspace.backend_workspace_id !== information.workspace.workspace_id) {
     throw new Error(
-      `Gateway 与工作区后端路径不一致: gateway=${gatewayWorkspace.root_path}, ` +
-        `backend=${information.workspace.root_path}`,
+      `Gateway 与工作区后端 ID 不一致: gateway=${gatewayWorkspace.backend_workspace_id}, ` +
+        `backend=${information.workspace.workspace_id}`,
     );
   }
 
@@ -129,14 +108,12 @@ export function buildSessionInformationDump(
       title_truncated: information.session.title_truncated ?? false,
       created_at: information.session.created_at,
       updated_at: information.session.updated_at,
-      storage_path: information.storage_path,
     },
     relations: information.relations,
     workspace: {
       id: gatewayWorkspace.workspace_id,
       backend_workspace_id: information.workspace.workspace_id,
       name: gatewayWorkspace.name,
-      root_path: information.workspace.root_path,
       active: gatewayWorkspace.active,
       status: gatewayWorkspace.status,
       connection: buildConnection(gatewayWorkspace),

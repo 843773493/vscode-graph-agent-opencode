@@ -100,7 +100,7 @@ def _snapshot_with_detail(detail_ref: DetailRef, payload: object, thread_id: str
     )
     binding = ResourceProvenanceRef(
         resource_id="skill:body-owner",
-        display_uri="boxteam://workspace/test/body-owner",
+        display_uri="boxteam://workspace/test/resources/skills/body-owner/SKILL.md",
         resource_kind="skills",
         owner_scope="session",
         facet="activation",
@@ -280,7 +280,7 @@ async def test_coordinator_freezes_through_protected_body_port(
             resource_id="skill:body-owner",
             resource_kind="skills",
             facet="activation",
-            display_uri="boxteam://workspace/test/body-owner",
+            display_uri="boxteam://workspace/test/resources/skills/body-owner/SKILL.md",
             revision=sha256_jcs(payload),
             payload=payload,
             source_lineage=(("source-1", "source-revision-1"),),

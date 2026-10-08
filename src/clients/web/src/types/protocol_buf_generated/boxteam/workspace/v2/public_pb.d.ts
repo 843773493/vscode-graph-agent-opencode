@@ -5279,11 +5279,6 @@ export declare type SessionInformationSnapshotDTO = Message<"boxteam.workspace.v
   workspace?: SessionInformationWorkspaceDTO | undefined;
 
   /**
-   * @generated from field: string storage_path = 7;
-   */
-  storagePath: string;
-
-  /**
    * @generated from field: boxteam.workspace.v2.SessionInformationExecutionDTO execution = 8;
    */
   execution?: SessionInformationExecutionDTO | undefined;
@@ -5364,11 +5359,6 @@ export declare type SessionInformationWorkspaceDTO = Message<"boxteam.workspace.
    * @generated from field: string name = 2;
    */
   name: string;
-
-  /**
-   * @generated from field: string root_path = 3;
-   */
-  rootPath: string;
 };
 
 /**
@@ -5531,6 +5521,11 @@ export declare type CommunicationDiscoveryRequest = Message<"boxteam.workspace.v
    * @generated from field: optional string workspace_id = 3;
    */
   workspaceId?: string | undefined;
+
+  /**
+   * @generated from field: optional string gateway_id = 4;
+   */
+  gatewayId?: string | undefined;
 };
 
 /**
@@ -5678,6 +5673,77 @@ export declare type CommunicationObservationRequest = Message<"boxteam.workspace
 export declare const CommunicationObservationRequestSchema: GenMessage<CommunicationObservationRequest>;
 
 /**
+ * read 授权绑定真实资源引用；清单不制造 Session 或 main thread。
+ *
+ * @generated from message boxteam.workspace.v2.ContextGrantTarget
+ */
+export declare type ContextGrantTarget = Message<"boxteam.workspace.v2.ContextGrantTarget"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string resource_identity = 2;
+   */
+  resourceIdentity: string;
+
+  /**
+   * @generated from field: string uri = 3;
+   */
+  uri: string;
+
+  /**
+   * @generated from field: string scope = 4;
+   */
+  scope: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextGrantTarget.
+ * Use `create(ContextGrantTargetSchema)` to create a new message.
+ */
+export declare const ContextGrantTargetSchema: GenMessage<ContextGrantTarget>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ContextQueryRequest
+ */
+export declare type ContextQueryRequest = Message<"boxteam.workspace.v2.ContextQueryRequest"> & {
+  /**
+   * @generated from field: string source_gateway_id = 1;
+   */
+  sourceGatewayId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.ContextGrantTarget resource_target = 2;
+   */
+  resourceTarget?: ContextGrantTarget | undefined;
+
+  /**
+   * @generated from oneof boxteam.workspace.v2.ContextQueryRequest.query
+   */
+  query: {
+    /**
+     * @generated from field: boxteam.workspace.v2.SessionContextReadRequest read = 3;
+     */
+    value: SessionContextReadRequest;
+    case: "read";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.SessionContextSearchRequest search = 4;
+     */
+    value: SessionContextSearchRequest;
+    case: "search";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextQueryRequest.
+ * Use `create(ContextQueryRequestSchema)` to create a new message.
+ */
+export declare const ContextQueryRequestSchema: GenMessage<ContextQueryRequest>;
+
+/**
  * @generated from message boxteam.workspace.v2.CommunicationGatewayRequest
  */
 export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.CommunicationGatewayRequest"> & {
@@ -5687,9 +5753,21 @@ export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.
   operation: string;
 
   /**
-   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 2;
+   * @generated from oneof boxteam.workspace.v2.CommunicationGatewayRequest.destination
    */
-  target?: GlobalThreadAddress | undefined;
+  destination: {
+    /**
+     * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 2;
+     */
+    value: GlobalThreadAddress;
+    case: "target";
+  } | {
+    /**
+     * @generated from field: boxteam.workspace.v2.ContextGrantTarget resource_target = 4;
+     */
+    value: ContextGrantTarget;
+    case: "resourceTarget";
+  } | { case: undefined; value?: undefined };
 
   /**
    * @generated from field: google.protobuf.Struct body = 3;

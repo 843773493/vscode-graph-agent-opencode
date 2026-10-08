@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
+from app.agents.tools.session_history import ReadContextInput, SearchContextInput
 from app.main import app
 from tests.contracts.api.openapi_snapshots import (
     OPENAPI_SNAPSHOTS,
@@ -53,3 +58,29 @@ def test_context_read_views_match_in_live_and_offline_openapi(
 def test_offline_openapi_is_generated_from_current_routes(snapshot: str) -> None:
     document = load_openapi_snapshot(snapshot)
     assert document == app.openapi(), f"需运行 bun run gen:openapi 更新 {snapshot}"
+
+
+@pytest.fixture
+def gateway_context_skill_schemas() -> dict[str, dict[str, object]]:
+    path = Path.cwd() / "resources/skills/gateway-context/SKILL.md"
+    content = path.read_text()
+    assert "allowed-tools: read_context, search_context" in content
+    contracts = [json.loads(block) for block in re.findall(r"```json\n([\s\S]*?)\n```", content)]
+    assert [contract["tool_name"] for contract in contracts] == ["read_context", "search_context"]
+    return {contract["tool_name"]: contract["arguments_schema"] for contract in contracts}
+
+
+def _schema_constraints(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _schema_constraints(part) for key, part in value.items() if key not in {"title", "description"}}
+    if isinstance(value, list):
+        return [_schema_constraints(part) for part in value]
+    return value
+
+
+@pytest.mark.parametrize("tool_name,input_type", (("read_context", ReadContextInput), ("search_context", SearchContextInput)))
+def test_builtin_gateway_context_skill_matches_real_tool_input_contract(
+    gateway_context_skill_schemas, tool_name, input_type,
+) -> None:
+    # 模型读到的发行包参数合同必须与真实工具保持一致，防止旧字段诱发错误调用。
+    assert _schema_constraints(gateway_context_skill_schemas[tool_name]) == _schema_constraints(input_type.model_json_schema())

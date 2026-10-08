@@ -103,7 +103,7 @@ def _install_debugging_snapshot(
                     name="debugging",
                     resource_id="skill-entry:test:debugging:activation",
                     entry_identity="skill-entry:test:debugging",
-                    display_uri="boxteam://workspace/skill/debugging",
+                    display_uri="boxteam://workspace/test/resources/skills/debugging/SKILL.md",
                     activation_revision=_revision(content),
                     body=content,
                 )

@@ -12,15 +12,16 @@ import time
 from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_GRANT_KIND_MISMATCH,
-    FEDERATION_TARGET_NOT_RESOLVABLE,
     FEDERATION_TRANSIT_LIMIT_EXCEEDED,
     FederationError,
 )
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
+    ContextGrantTarget,
     GrantTarget,
     OperationKind,
+    decode_grant_target,
 )
 
 # 单次 discovery/operation fan-out 的总 deadline 上界；超时必须响亮失败。
@@ -126,28 +127,8 @@ def require_operation(request: dict[str, object]) -> OperationKind:
     return value
 
 
-def require_target(payload: dict[str, object]) -> GrantTarget:
-    raw = payload.get("target")
-    if not isinstance(raw, dict):
-        raise FederationError(
-            FEDERATION_TARGET_NOT_RESOLVABLE, "请求缺少 target 对象"
-        )
-    gateway_id = raw.get("gateway_id")
-    workspace_id = raw.get("workspace_id")
-    session_id = raw.get("session_id")
-    for field, value in (
-        ("gateway_id", gateway_id),
-        ("workspace_id", workspace_id),
-        ("session_id", session_id),
-    ):
-        if not isinstance(value, str) or not value:
-            raise FederationError(
-                FEDERATION_TARGET_NOT_RESOLVABLE,
-                f"target.{field} 必须是非空字符串",
-            )
-    return GrantTarget(
-        gateway_id=gateway_id, workspace_id=workspace_id, session_id=session_id
-    )
+def require_target(payload: dict[str, object]) -> GrantTarget | ContextGrantTarget:
+    return decode_grant_target(payload.get("target"))
 
 
 def remaining_deadline(deadline_at: float | None) -> float:

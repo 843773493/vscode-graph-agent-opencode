@@ -38,7 +38,7 @@ def binding(
     ordinal: int = 1,
     boundary: str = "turn",
     lineage_ref: SourceLineageRef | None = None,
-    display_uri: str = "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
+    display_uri: str | None = "boxteam://workspace/ws/resources/skills/demo/SKILL.md",
 ) -> ResourceProvenanceRef:
     resolved = lineage() if lineage_ref is None else lineage_ref
     return ResourceProvenanceRef(
@@ -113,7 +113,7 @@ def test_snapshot_kind_execution_and_model_call_bind_parent_and_ordinal() -> Non
     call_binding = binding(
         ordinal=2,
         boundary="model_call",
-        display_uri="boxteam://workspace/ws/resources/mcp_tool_catalog/cat",
+        display_uri=None,
     )
     call = model_call_snapshot(turn, call_binding)
     assert call.snapshot_kind == "model_call"

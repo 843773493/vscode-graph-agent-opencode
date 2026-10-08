@@ -97,15 +97,15 @@ class SessionCommunicationService:
         self, source: GlobalThreadAddress, target_session_id: str, target_workspace_id: str | None,
     ) -> ResolvedMainTargetBinding:
         if target_session_id.startswith("boxteam://"):
-            from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+            from app.core.resource_uri import (
                 parse_resource_uri,
             )
-            parsed = parse_resource_uri(target_session_id)
-            if parsed.scope != "workspace" or parsed.kind != "session" or len(parsed.tail_segments) != 1:
+            parsed = parse_resource_uri(target_session_id, local_gateway_id=source.gateway_id)
+            if parsed.scope != "workspace" or parsed.kind != "session" or len(parsed.tail_segments) != 1 or parsed.tail_segments == ("inventory",):
                 raise ValueError("通信 target URI 必须指向单个 workspace Session")
             if target_workspace_id is not None and target_workspace_id != parsed.scope_id:
                 raise ValueError("通信 target URI 与 target_workspace_id 冲突")
-            target_session_id, target_workspace_id = parsed.tail_segments[0], parsed.scope_id
+            target_session_id, target_workspace_id = parsed.display_uri, parsed.scope_id
         return await self._transport.resolve_main(
             source=source, session_id=target_session_id, workspace_id=target_workspace_id,
         )

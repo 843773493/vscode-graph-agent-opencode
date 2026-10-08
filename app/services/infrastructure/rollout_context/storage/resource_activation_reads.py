@@ -469,7 +469,7 @@ class ResourceActivationReadMixin:
         )
         return ResourceProvenanceRef(
             resource_id=resource_id,
-            display_uri=strict_text(record["display_uri"], field="display_uri"),
+            display_uri=strict_optional_text(record["display_uri"], field="display_uri"),
             resource_kind=strict_text(record["resource_kind"], field="resource_kind"),
             owner_scope=strict_text(record["owner_scope"], field="owner_scope"),
             facet=strict_text(record["facet"], field="facet"),

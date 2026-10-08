@@ -83,12 +83,26 @@ try {
   if (dump.session.title_truncated !== true || dump.resources.active.length > 32) {
     throw new Error("剪贴板没有保留有界诊断投影");
   }
+  if (information.session.session_id !== fixture.sessionId || dump.session.id !== fixture.sessionId
+    || information.workspace.workspace_id !== dump.workspace.backend_workspace_id) {
+    throw new Error("API 与剪贴板的稳定会话/工作区身份不一致");
+  }
+  // 软件生成的真实定位字段必须由原 information owner 下线，浏览器不补地址。
+  for (const [label, text] of [["API", informationText], ["剪贴板", clipboardText]]) {
+    if (text.includes(fixture.workspacePath)
+      || /"(storage_path|root_path|backend_url|gateway_proxy_url)"\s*:/.test(text)) {
+      throw new Error(label + "仍包含软件生成的物理路径或端点");
+    }
+  }
 
   await writeFile(resultPath, `${JSON.stringify({
     apiPayloadBytes: Buffer.byteLength(informationText),
     clipboardBytes: Buffer.byteLength(clipboardText),
     kind: dump.kind,
     schemaVersion: dump.schema_version,
+    noPhysicalLocator: true,
+    apiWorkspaceId: information.workspace.workspace_id,
+    clipboardWorkspaceId: dump.workspace.backend_workspace_id,
     titleLength: dump.session.title.length,
     titleTruncated: dump.session.title_truncated,
     activeResourceCount: dump.resources.active.length,

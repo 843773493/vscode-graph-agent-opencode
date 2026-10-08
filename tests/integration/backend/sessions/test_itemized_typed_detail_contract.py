@@ -236,7 +236,7 @@ def test_seal_failure_keeps_prepared_details_out_of_durable_storage(frozen_provi
     manager.register(ContextSourceDescriptor(
         source_id="agents:cleanup-source", source_kind="workspace_agents",
         name="cleanup source", description="详情清理来源",
-        internal_locator="boxteam://workspace/agents",
+        internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
     ), tracking_status="tracked")
     manager.observe("agents:cleanup-source", json.dumps(body), revision="source-v1")
     selected = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())

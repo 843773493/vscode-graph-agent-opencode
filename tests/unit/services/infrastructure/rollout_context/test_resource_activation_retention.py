@@ -124,7 +124,7 @@ def _activation_snapshot(
         bindings=(
             ResourceProvenanceRef(
                 resource_id="skill:demo",
-                display_uri="boxteam://workspace/test/skill-demo",
+                display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
                 resource_kind="skills",
                 owner_scope="session",
                 facet="activation",

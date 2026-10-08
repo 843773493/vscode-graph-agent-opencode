@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from inspect import getclosurevars
 from typing import Any
-from uuid import uuid4
+from uuid import UUID
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.middleware.types import ExtendedModelResponse, StateT
@@ -29,6 +29,7 @@ from app.agents.sealed_assembly_dispatch import sealed_assembly_dispatch_scope
 from app.agents.tool_identity import tool_definition_name
 from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.core.execution_admission_context import require_current_execution_admission
+from app.core.identifier import create_uuid_hex
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.execution_admission import ExecutionAdmission
@@ -319,7 +320,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
     def _prepare(self, request: ModelRequest[Any]) -> dict[str, object]:
         context = self._request_preparation(request)
         sealed, frozen = self._frozen_preparation(context)
-        callback_id = str(uuid4())
+        callback_id = str(UUID(create_uuid_hex()))
         if sealed is None and frozen.activation_policy.has_model_call_boundary():
             # 同步接口只允许在无运行事件循环时等待；sealed 重入始终仅只读恢复。
             try:
@@ -335,7 +336,7 @@ class SealedAssemblyDispatchBridge(AgentMiddleware[StateT, Any, Any]):
     async def _aprepare(self, request: ModelRequest[Any]) -> dict[str, object]:
         context = self._request_preparation(request)
         sealed, frozen = self._frozen_preparation(context)
-        callback_id = str(uuid4())
+        callback_id = str(UUID(create_uuid_hex()))
         if sealed is None:
             frozen = await self._resource_activation.prepare_model_call(
                 parent=frozen, model_call_id=callback_id, checkpoint_ns=context.checkpoint_ns,

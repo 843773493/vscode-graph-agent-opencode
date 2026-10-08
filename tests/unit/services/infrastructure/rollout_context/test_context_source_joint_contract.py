@@ -114,7 +114,7 @@ def _install_demo_snapshot(manager: ContextSourceManager, content: str) -> None:
                     name="demo",
                     resource_id="skill-entry:test:demo:activation",
                     entry_identity="skill-entry:test:demo",
-                    display_uri="boxteam://workspace/skill/demo",
+                    display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
                     activation_revision=_revision(content),
                     body=content,
                 )
@@ -178,11 +178,11 @@ def source_reactor(tmp_path: Path, source_seal_owner: SourceSealCase):
     registry = WorkspaceFileResourceRegistry(
         workspace_root=workspace, watch_service=watch_service, project_root=tmp_path,
     )
-    registry.register_file(uri="boxteam://workspace/skill/demo", path=skill_path)
+    registry.register_file(uri="boxteam://workspace/test/resources/skills/demo/SKILL.md", path=skill_path)
     manager = source_seal_owner.manager()
     manager.register(ContextSourceDescriptor(
         source_id="skill:demo", source_kind="skill", name="demo", description="事件驱动测试 Skill",
-        internal_locator="/.boxteam/skills/demo/SKILL.md", resource_uri="boxteam://workspace/skill/demo",
+        internal_locator="/.boxteam/skills/demo/SKILL.md", resource_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
     ))
     lifetime_scope = LifetimeScope("joint-source-reactor")
     reactor = ContextSourceReactor(
@@ -1048,7 +1048,7 @@ class TestSealedTypedFieldConsumption:
         manager, registry, watch_service, reactor, lifetime_scope = source_reactor
         try:
             registration = registry.snapshot(
-                "boxteam://workspace/skill/demo",
+                "boxteam://workspace/test/resources/skills/demo/SKILL.md",
             )
             manager.activate_skill_content("demo", registration.content)
             _install_demo_snapshot(manager, registration.content)
@@ -1063,7 +1063,7 @@ class TestSealedTypedFieldConsumption:
             # 消费时以来源 owner 的权威内存快照 revision 裁决。
             latest_visible_committed_revision = registration.revision
             _write_skill(tmp_path / "workspace", "v2\n")
-            mid_revision = registry.refresh("boxteam://workspace/skill/demo").revision
+            mid_revision = registry.refresh("boxteam://workspace/test/resources/skills/demo/SKILL.md").revision
             assert mid_revision != latest_visible_committed_revision
             assert (
                 manager.mark_pending_observation(
@@ -1073,7 +1073,7 @@ class TestSealedTypedFieldConsumption:
                 is True
             )
             _write_skill(tmp_path / "workspace", "v3\n")
-            fresh_revision = registry.refresh("boxteam://workspace/skill/demo").revision
+            fresh_revision = registry.refresh("boxteam://workspace/test/resources/skills/demo/SKILL.md").revision
             assert fresh_revision != mid_revision
             assert (
                 manager.mark_pending_observation(

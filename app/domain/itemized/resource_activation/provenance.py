@@ -84,7 +84,7 @@ class ResourceProvenanceRef:
     """一条已激活语义资源的 provenance；不含 payload、locator 或凭据。"""
 
     resource_id: str
-    display_uri: str
+    display_uri: str | None
     resource_kind: str
     owner_scope: str
     facet: str

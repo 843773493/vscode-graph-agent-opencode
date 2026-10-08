@@ -70,7 +70,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from tests.harness.python.run_context import TestRunContext
 
 AGENTS_URI = "boxteam://workspace/agent-spec/epoch-test"
-SKILL_URI = "boxteam://workspace/skill/debugging"
+SKILL_URI = "boxteam://workspace/test/resources/skills/debugging/SKILL.md"
 SKILL_FRONTMATTER = "---\nname: debugging\ndescription: 调试规则\n---\n"
 
 
@@ -236,7 +236,7 @@ class EpochCase:
         return self.prepare("second")
 
     def load_snapshot(self, *, root_eligible: bool = False) -> SkillCatalogBinding:
-        uri = "boxteam://workspace/skill/one-shot"
+        uri = "boxteam://workspace/test/resources/skills/one-shot/SKILL.md"
         self.manager.register(ContextSourceDescriptor(
             source_id="skill:one-shot", source_kind="skill", name="one-shot",
             description="仅本次加载", internal_locator="/绝不读取/one-shot/SKILL.md",

@@ -81,6 +81,7 @@ from app.gateway.server.bootstrap import (
     _restore_managed_local_runtimes,
     create_registry,
 )
+from app.schemas.gateway import GatewayWorkspaceListDTO
 from app.services.infrastructure.config.state import build_secret_binding_summary
 
 logger = logging.getLogger(__name__)
@@ -172,13 +173,19 @@ async def lifespan(app: FastAPI):
     app.state.federation_gateway_root = _gateway_root()
     app.state.federation_policy_store = federation_policy
     app.state.federation_control_store = federation_control
+    async def federation_inventory() -> GatewayWorkspaceListDTO:
+        return GatewayWorkspaceListDTO(
+            active_workspace_id=registry.active_workspace_id,
+            items=await registry.list_dtos(check_health=False),
+        )
+
     app.state.federation_rpc_service = FederationRpcService(
         gateway_id=gateway_id,
         policy_store=federation_policy,
         control_store=federation_control,
         signing_key=load_or_create_signing_key(_gateway_root()),
         catalog=WorkspaceCatalogPort(),
-        session_main=WorkspaceSessionMainPort(),
+        session_main=WorkspaceSessionMainPort(inventory_provider=federation_inventory),
         credential_store=app.state.federation_credential_store,
         spoke_directory=FederationSpokeDirectory(provider=lambda: registered_spokes(registry)),
     )

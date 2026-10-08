@@ -35,7 +35,7 @@ def _install_snapshot(manager: ContextSourceManager, content: str) -> None:
                     name="demo",
                     resource_id="skill-entry:test:demo:activation",
                     entry_identity="skill-entry:test:demo",
-                    display_uri="boxteam://workspace/skills/demo",
+                    display_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
                     activation_revision=_revision(content),
                     body=content,
                 )
@@ -51,7 +51,7 @@ def _descriptor(source_id: str = "src_skill_1", name: str = "demo") -> ContextSo
         name=name,
         description="demo skill",
         internal_locator=".boxteam/skills/demo/SKILL.md",
-        resource_uri="boxteam://workspace/skills/demo",
+        resource_uri="boxteam://workspace/test/resources/skills/demo/SKILL.md",
     )
 
 

@@ -12,7 +12,7 @@ from app.abstractions.session_context import (
 )
 from app.abstractions.session_target import SessionTarget
 from app.agents.custom_tools import CustomToolFactoryContext
-from app.core.trace_middleware import require_current_gateway_id
+from app.core.trace_middleware import get_current_gateway_id, require_current_gateway_id
 from app.schemas.internal_v2.session_context import (
     SessionContextInclude,
     SessionContextMatchMode,
@@ -25,7 +25,6 @@ from app.services.business.session_context_resource import (
     gateway_session_inventory_uri,
     parse_session_context_ref,
     session_resource_identity,
-    session_resource_uri,
 )
 
 ResultModel = TypeVar("ResultModel", bound=BaseModel)
@@ -80,22 +79,11 @@ def _request_identity(
             resource_identity=resource_identity,
             uri=uri,
             scope=scope,
+            local_gateway_id=get_current_gateway_id(),
         )
     except ValueError as error:
         raise ToolException(str(error)) from error
     return str(resource.resource_identity), resource.uri, resource.scope
-
-
-def _target_request_identity(
-    *,
-    session_id: str,
-    backend_workspace_id: str,
-) -> tuple[str, str, str]:
-    return (
-        str(session_resource_identity(backend_workspace_id, session_id)),
-        session_resource_uri(backend_workspace_id, session_id),
-        "workspace",
-    )
 
 
 async def _resolve_session_target(
@@ -144,14 +132,14 @@ def _validate_target_identity(
     backend_workspace_id: str,
     session_id: str,
 ) -> None:
-    expected_identity, expected_uri, expected_scope = _target_request_identity(
-        session_id=session_id,
-        backend_workspace_id=backend_workspace_id,
+    resource = parse_session_context_ref(
+        resource_identity=resource_identity, uri=uri, scope=scope,
     )
     if (
-        resource_identity != expected_identity
-        or uri != expected_uri
-        or scope != expected_scope
+        resource.resource_identity != session_resource_identity(backend_workspace_id, session_id)
+        or resource.scope != "workspace"
+        or resource.scope_id != backend_workspace_id
+        or resource.session_id != session_id
     ):
         raise ToolException(
             "会话上下文资源身份与当前 session/backend workspace 不一致: "
@@ -211,6 +199,10 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             revision=revision,
         )
 
+        if resource.gateway_authority is not None and resource.kind == "workspace_sessions":
+            return await _result_json(
+                context.workspace_session_context_client.read_resource_context(request)
+            )
         if resource.scope == "gateway":
             gateway_id = require_current_gateway_id("read_context")
             expected_identity = gateway_session_inventory_identity(gateway_id)
@@ -310,6 +302,10 @@ def create_search_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             revision=revision,
         )
 
+        if resource.gateway_authority is not None:
+            return await _result_json(
+                context.workspace_session_context_client.search_resource_context(request)
+            )
         if resource.scope == "gateway":
             gateway_id = require_current_gateway_id("search_context")
             if (

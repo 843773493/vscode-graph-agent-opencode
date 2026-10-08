@@ -1163,7 +1163,6 @@ export interface SessionInformationSnapshotDTO {
   generated_at: string | undefined;
   session: SessionInformationSessionDTO | undefined;
   workspace: SessionInformationWorkspaceDTO | undefined;
-  storage_path: string;
   execution: SessionInformationExecutionDTO | undefined;
   trace: SessionInformationTraceDTO | undefined;
   relations: SessionInformationRelationsDTO | undefined;
@@ -1182,7 +1181,6 @@ export interface SessionInformationTraceDTO {
 export interface SessionInformationWorkspaceDTO {
   workspace_id: string;
   name: string;
-  root_path: string;
 }
 
 export interface SessionInterruptResultDTO {
@@ -1220,6 +1218,7 @@ export interface CommunicationDiscoveryRequest {
   source: GlobalThreadAddress | undefined;
   session_id: string;
   workspace_id?: string | undefined;
+  gateway_id?: string | undefined;
 }
 
 export interface CommunicationAcceptanceRequest {
@@ -1252,9 +1251,29 @@ export interface CommunicationObservationRequest {
   expires_at: string;
 }
 
+/** read 授权绑定真实资源引用；清单不制造 Session 或 main thread。 */
+export interface ContextGrantTarget {
+  gateway_id: string;
+  resource_identity: string;
+  uri: string;
+  scope: string;
+}
+
+export interface ContextQueryRequest {
+  source_gateway_id: string;
+  resource_target: ContextGrantTarget | undefined;
+  query:
+    | { $case: "read"; read: SessionContextReadRequest }
+    | { $case: "search"; search: SessionContextSearchRequest }
+    | undefined;
+}
+
 export interface CommunicationGatewayRequest {
   operation: string;
-  target: GlobalThreadAddress | undefined;
+  destination: { $case: "target"; target: GlobalThreadAddress } | {
+    $case: "resource_target";
+    resource_target: ContextGrantTarget;
+  } | undefined;
   body: { [key: string]: any } | undefined;
 }
 
@@ -9740,7 +9759,6 @@ function createBaseSessionInformationSnapshotDTO(): SessionInformationSnapshotDT
     generated_at: undefined,
     session: undefined,
     workspace: undefined,
-    storage_path: "",
     execution: undefined,
     trace: undefined,
     relations: undefined,
@@ -9757,7 +9775,6 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
       generated_at: isSet(object.generated_at) ? globalThis.String(object.generated_at) : undefined,
       session: isSet(object.session) ? SessionInformationSessionDTO.fromJSON(object.session) : undefined,
       workspace: isSet(object.workspace) ? SessionInformationWorkspaceDTO.fromJSON(object.workspace) : undefined,
-      storage_path: isSet(object.storage_path) ? globalThis.String(object.storage_path) : "",
       execution: isSet(object.execution) ? SessionInformationExecutionDTO.fromJSON(object.execution) : undefined,
       trace: isSet(object.trace) ? SessionInformationTraceDTO.fromJSON(object.trace) : undefined,
       relations: isSet(object.relations) ? SessionInformationRelationsDTO.fromJSON(object.relations) : undefined,
@@ -9784,9 +9801,6 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
     }
     if (message.workspace !== undefined) {
       obj.workspace = SessionInformationWorkspaceDTO.toJSON(message.workspace);
-    }
-    if (message.storage_path !== "") {
-      obj.storage_path = message.storage_path;
     }
     if (message.execution !== undefined) {
       obj.execution = SessionInformationExecutionDTO.toJSON(message.execution);
@@ -9822,7 +9836,6 @@ export const SessionInformationSnapshotDTO: MessageFns<SessionInformationSnapsho
     message.workspace = (object.workspace !== undefined && object.workspace !== null)
       ? SessionInformationWorkspaceDTO.fromPartial(object.workspace)
       : undefined;
-    message.storage_path = object.storage_path ?? "";
     message.execution = (object.execution !== undefined && object.execution !== null)
       ? SessionInformationExecutionDTO.fromPartial(object.execution)
       : undefined;
@@ -9898,7 +9911,7 @@ export const SessionInformationTraceDTO: MessageFns<SessionInformationTraceDTO> 
 };
 
 function createBaseSessionInformationWorkspaceDTO(): SessionInformationWorkspaceDTO {
-  return { workspace_id: "", name: "", root_path: "" };
+  return { workspace_id: "", name: "" };
 }
 
 export const SessionInformationWorkspaceDTO: MessageFns<SessionInformationWorkspaceDTO> = {
@@ -9906,7 +9919,6 @@ export const SessionInformationWorkspaceDTO: MessageFns<SessionInformationWorksp
     return {
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      root_path: isSet(object.root_path) ? globalThis.String(object.root_path) : "",
     };
   },
 
@@ -9917,9 +9929,6 @@ export const SessionInformationWorkspaceDTO: MessageFns<SessionInformationWorksp
     }
     if (message.name !== "") {
       obj.name = message.name;
-    }
-    if (message.root_path !== "") {
-      obj.root_path = message.root_path;
     }
     return obj;
   },
@@ -9933,7 +9942,6 @@ export const SessionInformationWorkspaceDTO: MessageFns<SessionInformationWorksp
     const message = createBaseSessionInformationWorkspaceDTO();
     message.workspace_id = object.workspace_id ?? "";
     message.name = object.name ?? "";
-    message.root_path = object.root_path ?? "";
     return message;
   },
 };
@@ -10135,7 +10143,7 @@ export const CommunicationPayload: MessageFns<CommunicationPayload> = {
 };
 
 function createBaseCommunicationDiscoveryRequest(): CommunicationDiscoveryRequest {
-  return { source: undefined, session_id: "", workspace_id: undefined };
+  return { source: undefined, session_id: "", workspace_id: undefined, gateway_id: undefined };
 }
 
 export const CommunicationDiscoveryRequest: MessageFns<CommunicationDiscoveryRequest> = {
@@ -10144,6 +10152,7 @@ export const CommunicationDiscoveryRequest: MessageFns<CommunicationDiscoveryReq
       source: isSet(object.source) ? GlobalThreadAddress.fromJSON(object.source) : undefined,
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : undefined,
     };
   },
 
@@ -10157,6 +10166,9 @@ export const CommunicationDiscoveryRequest: MessageFns<CommunicationDiscoveryReq
     }
     if (message.workspace_id !== undefined) {
       obj.workspace_id = message.workspace_id;
+    }
+    if (message.gateway_id !== undefined) {
+      obj.gateway_id = message.gateway_id;
     }
     return obj;
   },
@@ -10173,6 +10185,7 @@ export const CommunicationDiscoveryRequest: MessageFns<CommunicationDiscoveryReq
       : undefined;
     message.session_id = object.session_id ?? "";
     message.workspace_id = object.workspace_id ?? undefined;
+    message.gateway_id = object.gateway_id ?? undefined;
     return message;
   },
 };
@@ -10390,15 +10403,123 @@ export const CommunicationObservationRequest: MessageFns<CommunicationObservatio
   },
 };
 
+function createBaseContextGrantTarget(): ContextGrantTarget {
+  return { gateway_id: "", resource_identity: "", uri: "", scope: "" };
+}
+
+export const ContextGrantTarget: MessageFns<ContextGrantTarget> = {
+  fromJSON(object: any): ContextGrantTarget {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      resource_identity: isSet(object.resource_identity) ? globalThis.String(object.resource_identity) : "",
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+    };
+  },
+
+  toJSON(message: ContextGrantTarget): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.resource_identity !== "") {
+      obj.resource_identity = message.resource_identity;
+    }
+    if (message.uri !== "") {
+      obj.uri = message.uri;
+    }
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ContextGrantTarget>, I>>(base?: I): ContextGrantTarget {
+    return ContextGrantTarget.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextGrantTarget>, I>>(object: I): ContextGrantTarget {
+    const message = createBaseContextGrantTarget();
+    message.gateway_id = object.gateway_id ?? "";
+    message.resource_identity = object.resource_identity ?? "";
+    message.uri = object.uri ?? "";
+    message.scope = object.scope ?? "";
+    return message;
+  },
+};
+
+function createBaseContextQueryRequest(): ContextQueryRequest {
+  return { source_gateway_id: "", resource_target: undefined, query: undefined };
+}
+
+export const ContextQueryRequest: MessageFns<ContextQueryRequest> = {
+  fromJSON(object: any): ContextQueryRequest {
+    return {
+      source_gateway_id: isSet(object.source_gateway_id) ? globalThis.String(object.source_gateway_id) : "",
+      resource_target: isSet(object.resource_target) ? ContextGrantTarget.fromJSON(object.resource_target) : undefined,
+      query: isSet(object.read)
+        ? { $case: "read", read: SessionContextReadRequest.fromJSON(object.read) }
+        : isSet(object.search)
+        ? { $case: "search", search: SessionContextSearchRequest.fromJSON(object.search) }
+        : undefined,
+    };
+  },
+
+  toJSON(message: ContextQueryRequest): unknown {
+    const obj: any = {};
+    if (message.source_gateway_id !== "") {
+      obj.source_gateway_id = message.source_gateway_id;
+    }
+    if (message.resource_target !== undefined) {
+      obj.resource_target = ContextGrantTarget.toJSON(message.resource_target);
+    }
+    if (message.query?.$case === "read") {
+      obj.read = SessionContextReadRequest.toJSON(message.query.read);
+    } else if (message.query?.$case === "search") {
+      obj.search = SessionContextSearchRequest.toJSON(message.query.search);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ContextQueryRequest>, I>>(base?: I): ContextQueryRequest {
+    return ContextQueryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextQueryRequest>, I>>(object: I): ContextQueryRequest {
+    const message = createBaseContextQueryRequest();
+    message.source_gateway_id = object.source_gateway_id ?? "";
+    message.resource_target = (object.resource_target !== undefined && object.resource_target !== null)
+      ? ContextGrantTarget.fromPartial(object.resource_target)
+      : undefined;
+    switch (object.query?.$case) {
+      case "read": {
+        if (object.query?.read !== undefined && object.query?.read !== null) {
+          message.query = { $case: "read", read: SessionContextReadRequest.fromPartial(object.query.read) };
+        }
+        break;
+      }
+      case "search": {
+        if (object.query?.search !== undefined && object.query?.search !== null) {
+          message.query = { $case: "search", search: SessionContextSearchRequest.fromPartial(object.query.search) };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
 function createBaseCommunicationGatewayRequest(): CommunicationGatewayRequest {
-  return { operation: "", target: undefined, body: undefined };
+  return { operation: "", destination: undefined, body: undefined };
 }
 
 export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest> = {
   fromJSON(object: any): CommunicationGatewayRequest {
     return {
       operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
-      target: isSet(object.target) ? GlobalThreadAddress.fromJSON(object.target) : undefined,
+      destination: isSet(object.target)
+        ? { $case: "target", target: GlobalThreadAddress.fromJSON(object.target) }
+        : isSet(object.resource_target)
+        ? { $case: "resource_target", resource_target: ContextGrantTarget.fromJSON(object.resource_target) }
+        : undefined,
       body: isObject(object.body) ? object.body : undefined,
     };
   },
@@ -10408,8 +10529,10 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
     if (message.operation !== "") {
       obj.operation = message.operation;
     }
-    if (message.target !== undefined) {
-      obj.target = GlobalThreadAddress.toJSON(message.target);
+    if (message.destination?.$case === "target") {
+      obj.target = GlobalThreadAddress.toJSON(message.destination.target);
+    } else if (message.destination?.$case === "resource_target") {
+      obj.resource_target = ContextGrantTarget.toJSON(message.destination.resource_target);
     }
     if (message.body !== undefined) {
       obj.body = message.body;
@@ -10423,9 +10546,23 @@ export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest
   fromPartial<I extends Exact<DeepPartial<CommunicationGatewayRequest>, I>>(object: I): CommunicationGatewayRequest {
     const message = createBaseCommunicationGatewayRequest();
     message.operation = object.operation ?? "";
-    message.target = (object.target !== undefined && object.target !== null)
-      ? GlobalThreadAddress.fromPartial(object.target)
-      : undefined;
+    switch (object.destination?.$case) {
+      case "target": {
+        if (object.destination?.target !== undefined && object.destination?.target !== null) {
+          message.destination = { $case: "target", target: GlobalThreadAddress.fromPartial(object.destination.target) };
+        }
+        break;
+      }
+      case "resource_target": {
+        if (object.destination?.resource_target !== undefined && object.destination?.resource_target !== null) {
+          message.destination = {
+            $case: "resource_target",
+            resource_target: ContextGrantTarget.fromPartial(object.destination.resource_target),
+          };
+        }
+        break;
+      }
+    }
     message.body = object.body ?? undefined;
     return message;
   },

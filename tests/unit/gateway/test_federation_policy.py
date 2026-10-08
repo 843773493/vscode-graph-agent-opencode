@@ -19,7 +19,10 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
+    ContextGrantTarget,
+    FederationGrant,
     GrantTarget,
+    decode_grant_target,
     required_wait_grant_lifetime,
     sign_grant,
     verify_grant,
@@ -34,6 +37,15 @@ from app.gateway.federation.policy import (
     default_policy_payload,
     normalize_policy,
 )
+from app.services.business.session_context_resource import (
+    gateway_session_inventory_identity,
+    gateway_session_inventory_uri,
+    session_resource_identity,
+    session_resource_uri,
+    workspace_session_inventory_identity,
+    workspace_session_inventory_uri,
+)
+from tests.support.communication import TARGET_SESSION, WORKSPACE_ID
 
 
 def test_default_policy_allows_all_core_capabilities() -> None:
@@ -351,3 +363,90 @@ def test_transit_limit_constant_is_documented() -> None:
     # design.md §8.9-A：只允许一次 hub transit，恰好 2 跳。
     assert MAX_TRANSIT_GATEWAYS == 1
     assert MAX_GATEWAY_HOPS == 2
+
+
+@pytest.fixture(params=("session", "workspace_inventory", "gateway_inventory"))
+def context_grant_target(request: pytest.FixtureRequest) -> ContextGrantTarget:
+    gateway = "gateway_c"
+    if request.param == "session":
+        identity = session_resource_identity(WORKSPACE_ID, TARGET_SESSION)
+        uri = session_resource_uri(WORKSPACE_ID, TARGET_SESSION, gateway_authority=gateway)
+        scope = "workspace"
+    elif request.param == "workspace_inventory":
+        identity = workspace_session_inventory_identity(WORKSPACE_ID)
+        uri = workspace_session_inventory_uri(WORKSPACE_ID, gateway_authority=gateway)
+        scope = "workspace"
+    else:
+        identity = gateway_session_inventory_identity(gateway)
+        uri = gateway_session_inventory_uri(gateway, gateway_authority=gateway)
+        scope = "gateway"
+    return ContextGrantTarget(gateway, str(identity), uri, scope)
+
+
+@pytest.mark.parametrize("query_kind", ["read", "search"])
+def test_context_grant_roundtrip_binds_all_resource_and_query_fields(
+    tmp_path: Path, grant_request: dict[str, object],
+    context_grant_target: ContextGrantTarget, query_kind: str,
+) -> None:
+    fields = {
+        key: context_grant_target.to_payload()[key] for key in ("resource_identity", "uri", "scope")
+    }
+    query = {**fields, "view": "inventory" if context_grant_target.scope == "gateway" else "information"}
+    if query_kind == "search":
+        query = {**fields, "query": "exact marker", "sources": ["session_information"], "limit": 2}
+    preimage = {
+        **{key: value for key, value in grant_request.items() if key != "session_id"},
+        "operation": "read", "target": context_grant_target.to_payload(),
+        "body": {"source_gateway_id": "gateway_b", "resource_target": context_grant_target.to_payload(), query_kind: query},
+    }
+    grant = sign_grant(
+        private_key=load_or_create_signing_key(tmp_path), grant_kind="operation",
+        issuer_gateway_id="gateway_hub", origin_gateway_id="gateway_b",
+        audience_gateway_id="gateway_c", transit_path=("gateway_b", "gateway_hub", "gateway_c"),
+        request_id="req", request_preimage=preimage, principal_ref="prn_b", lifetime_seconds=30,
+        target=context_grant_target, operation="read",
+    )
+    decoded = FederationGrant.decode(grant.encode())
+    assert isinstance(decoded.target, ContextGrantTarget)
+    assert decoded.target == context_grant_target
+    assert decoded.encode() == grant.encode()
+    verify_grant(
+        decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+        expected_kind="operation", request_preimage=preimage, expected_origin="gateway_b",
+        expected_path=("gateway_b", "gateway_hub", "gateway_c"),
+    )
+    for field in ("gateway_id", "resource_identity", "uri", "scope"):
+        changed = deepcopy(preimage)
+        changed["target"][field] = "changed"
+        with pytest.raises(FederationError) as error:
+            verify_grant(
+                decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+                expected_kind="operation", request_preimage=changed,
+            )
+        assert error.value.code == FEDERATION_GRANT_INVALID_SIGNATURE
+    changed = deepcopy(preimage)
+    changed["body"][query_kind]["query" if query_kind == "search" else "view"] = "changed"
+    with pytest.raises(FederationError) as error:
+        verify_grant(
+            decoded, issuer=_identity(tmp_path, "gateway_hub"), local_gateway_id="gateway_c",
+            expected_kind="operation", request_preimage=changed,
+        )
+    assert error.value.code == FEDERATION_GRANT_INVALID_SIGNATURE
+
+
+@pytest.mark.parametrize("bad", ["extra_field", "missing_uri", "wrong_authority", "wrong_identity"])
+def test_context_grant_target_rejects_wrong_type_or_owner(
+    context_grant_target: ContextGrantTarget, bad: str,
+) -> None:
+    raw = context_grant_target.to_payload()
+    if bad == "extra_field":
+        raw["session_id"] = TARGET_SESSION
+    elif bad == "missing_uri":
+        del raw["uri"]
+    elif bad == "wrong_authority":
+        raw["gateway_id"] = "gateway_other"
+    else:
+        raw["resource_identity"] = "unrelated-identity"
+    with pytest.raises(FederationError) as error:
+        decode_grant_target(raw)
+    assert error.value.code == "federation-malformed-frame"

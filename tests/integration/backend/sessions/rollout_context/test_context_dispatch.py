@@ -98,7 +98,7 @@ def dispatch_manager(dispatch_session) -> ContextSourceManager:
     manager.register(ContextSourceDescriptor(
         source_id="agents:dispatch", source_kind="workspace_agents",
         name="dispatch policy", description="当前模型调用来源",
-        internal_locator="boxteam://workspace/agents",
+        internal_locator="boxteam://workspace/test/resources/agent-spec/root/AGENTS.md",
     ), tracking_status="tracked")
     return manager
 

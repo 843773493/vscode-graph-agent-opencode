@@ -200,7 +200,7 @@ MCP/Skill catalog 聚合是 Registry/activation 内部语义资源，当前没�
 ## Migration Plan
 
 1. 本 change 落地寻址 capability：术语表、scope 闭集与 scope_id 表、kind 闭集、**分三套**拒绝码集中登记处（spec 层）。
-2. 实现统一语法与规范化单一实现，替换 `virtual_resources/grammar.py` 的旧形态；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
+2. 实现统一语法与规范化单一实现，由 `app/core/resource_uri.py` 承载唯一纯 grammar 并物理下线 `virtual_resources/grammar.py` 的旧实现；同一步内修正 `skill_runtime.py:52` 与 `:619` 的裸拼接、删除 `:538` 的 `bundled`→`builtin` shim、并把 layer 名同步正名为 `inline`（不暴露中间态）。
 3. 把 `distribution_id` 接到已定稿来源（发行 manifest 的 `distribution` + `version`，编码规则见 D4b；已由 `298ef599`+`f3bd8213` 装配），并把 `gateway` 的 `gateway_id` 接到已定稿来源（`identity.json` 的 `load_or_create_gateway_id`，由 Gateway 侧按请求经 `X-BoxTeam-Gateway-Id` 注入，见 D4c）；落实 `gateway`/`inline` 的 scope_id 由真实身份推导。 **（修订注（2026-10-01 第四轮复核更正）：`distribution_id` 部分已由 `298ef599`+`f3bd8213` 落地；`gateway_id` 请求级注入已落地——`64ba30c8`/`53befbfc`/`9881a3b2`）**
 4. 接入解析链（本机分支），使 Skill/配置/状态链路改用 URI 解析，而非仅打印。
 5. 按 D10 把配置来源 real path 迁移为 URI 兄弟字段（`config/state.py` + `config_sources.py` + `api/config.py` 对齐）；layer、precedence、URI 是否存在、内部 carrier 与 snapshot 边界均按 D13 及其 spec owner requirement 实施。

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     ResourceUriGrammarError,
     parse_resource_uri,
     resource_display_uri,

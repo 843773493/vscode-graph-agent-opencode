@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     parse_resource_uri,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
@@ -26,7 +26,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
     SemanticResourceDescriptor,
 )
 
-_RESOLVE_REASON_CODES = frozenset(
+RESOURCE_URI_RESOLVE_REASON_CODES = frozenset(
     {
         "scope_mismatch",
         "unknown_resource",
@@ -43,7 +43,7 @@ class ResourceUriResolveError(RuntimeError):
     """resolver 显式拒绝；reason_code 是闭合集合。"""
 
     def __init__(self, reason_code: str, message: str) -> None:
-        if reason_code not in _RESOLVE_REASON_CODES:
+        if reason_code not in RESOURCE_URI_RESOLVE_REASON_CODES:
             raise ValueError(f"未知 ResourceUriResolveError reason_code: {reason_code}")
         super().__init__(message)
         self.reason_code = reason_code
@@ -77,7 +77,7 @@ class CatalogBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class VirtualResourceCatalog:
+class ResourceUriCatalog:
     """当前 catalog 快照：display_uri 绑定与逻辑名称索引。"""
 
     bindings: Mapping[str, CatalogBinding]
@@ -148,10 +148,10 @@ def require_scope_binding(
         )
 
 
-class VirtualResourceResolver:
+class ResourceUriResolver:
     """按 grammar → scope → catalog → operation → capability 顺序拒绝的纯门卫。"""
 
-    def __init__(self, catalog: VirtualResourceCatalog) -> None:
+    def __init__(self, catalog: ResourceUriCatalog) -> None:
         self._catalog = catalog
 
     def resolve(
@@ -161,7 +161,10 @@ class VirtualResourceResolver:
         operation: str,
         context: ResolutionContext,
     ) -> ResolvedResourceHandle:
-        parsed = parse_resource_uri(uri)
+        parsed = parse_resource_uri(uri, local_gateway_id=context.gateway_id)
+        if parsed.gateway_authority is not None:
+            raise ResourceUriResolveError("scope_mismatch", "远端资源 URI 必须经 Gateway 的原联邦 owner 解析")
+        uri = parsed.display_uri
         self._check_scope(parsed.scope, parsed.scope_id, context)
         try:
             binding = self._catalog.bindings[uri]

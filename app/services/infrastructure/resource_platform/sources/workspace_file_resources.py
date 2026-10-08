@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.path_utils import get_boxteam_home
+from app.core.resource_uri import parse_resource_uri
 from app.services.infrastructure.resource_platform.observation.resource_observation_channel import (
     ResourceObservation,
     ResourceObservationChannel,
@@ -46,6 +47,7 @@ class WorkspaceFileResourceSnapshot:
     content: str
     available: bool
     error: str | None = None
+    exists: bool = True
 
 
 class WorkspaceFileResourceRegistry:
@@ -92,9 +94,8 @@ class WorkspaceFileResourceRegistry:
         self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
 
-    def register_file(self, *, uri: str, path: Path) -> WorkspaceFileResourceSnapshot:
-        if not uri or not uri.startswith("boxteam://"):
-            raise ValueError("工作区文件来源必须使用 boxteam:// 虚拟 URI")
+    def register_file(self, *, uri: str, path: Path, optional: bool = False) -> WorkspaceFileResourceSnapshot:
+        parse_resource_uri(uri)
         resolved_path = path.resolve()
         if not resolved_path.is_file() and resolved_path.exists():
             raise RuntimeError(f"工作区资源路径不是文件: {resolved_path}")
@@ -112,6 +113,7 @@ class WorkspaceFileResourceRegistry:
                 ),
                 file_path=str(resolved_path),
                 allowed_root=str(allowed_root),
+                allow_missing=optional,
             )
         )
         self._paths_by_uri[uri] = resolved_path
@@ -165,20 +167,7 @@ class WorkspaceFileResourceRegistry:
         return snapshot
 
     def _read_via_reconciler(self, uri: str) -> WorkspaceFileResourceSnapshot:
-        """经 SourceReconciler 稳定读取并转换为本 registry 的快照类型。
-
-        来源文件尚未创建时保持历史语义:空内容、无 revision、available=True。
-        其余读取失败由 reconciler 保留上一份 valid revision 并标记 unavailable;
-        本层不二次加工，也不调用 reader 以外的读取路径。
-        """
-        path = self._paths_by_uri[uri]
-        if not path.exists():
-            return WorkspaceFileResourceSnapshot(
-                uri=uri,
-                revision=None,
-                content="",
-                available=True,
-            )
+        """消费原来源 owner 的已观察事实；可选缺失与空文件保持独立 revision。"""
         revision = self._reconciler.reconcile(uri)
         return WorkspaceFileResourceSnapshot(
             uri=uri,
@@ -186,6 +175,7 @@ class WorkspaceFileResourceRegistry:
             content=revision.content,
             available=revision.available,
             error=revision.error,
+            exists=revision.exists,
         )
 
     def _allowed_root_candidates(self) -> tuple[Path, ...]:

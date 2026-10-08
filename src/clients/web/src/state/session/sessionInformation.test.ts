@@ -29,9 +29,7 @@ function information(): SessionInformationSnapshot {
     workspace: {
       workspace_id: "ws_local",
       name: "project",
-      root_path: "/workspace/project",
     },
-    storage_path: "/workspace/project/.boxteam/sessions/项目--12345678/会话--87654321",
     execution: {
       job_id: null,
       status: "idle",
@@ -68,6 +66,7 @@ function gatewayWorkspace(
 ): GatewayWorkspace {
   return {
     workspace_id: "gateway_workspace",
+    backend_workspace_id: "ws_local",
     name: "project",
     root_path: "/workspace/project/",
     backend_url: "http://127.0.0.1:41001",
@@ -117,6 +116,9 @@ describe("通用会话信息", () => {
     expect(JSON.parse(text).kind).toBe(SESSION_INFORMATION_KIND);
     expect(text).not.toContain('"host"');
     expect(text).not.toContain('"ssh"');
+    expect(text).not.toContain("/workspace/project");
+    expect(text).not.toContain("backend_url");
+    expect(text).not.toContain("storage_path");
     expect(text).toContain('"connection_error": null');
     expect(text).toContain('"historical_omitted": true');
     expect(text).not.toContain('"child_session_ids"');
@@ -132,9 +134,11 @@ describe("通用会话信息", () => {
       throw new Error("远程工作区没有生成 remote_gateway connection");
     }
     expect(dump.workspace.connection.gateway_id).toBe("gateway_dev");
-    expect(dump.workspace.connection.gateway_proxy_url).toBe(
-      "http://127.0.0.1:41001",
-    );
+    const text = formatSessionInformationDump(dump);
+    expect(text).not.toContain("http://127.0.0.1:41001");
+    expect(text).not.toContain("/workspace/project");
+    expect(text).not.toContain("gateway_connection_id");
+    expect(text).not.toContain("storage_path");
   });
 
   test("远程 Gateway 权威字段缺失时明确失败", () => {
@@ -152,6 +156,14 @@ describe("通用会话信息", () => {
     expect(() =>
       buildSessionInformationDump(mismatched, gatewayWorkspace("local")),
     ).toThrow("会话信息中的工作区 ID 不一致");
+  });
+
+  test("Gateway route 必须绑定相同后端工作区身份", () => {
+    const mismatched = gatewayWorkspace("local");
+    mismatched.backend_workspace_id = "other-workspace";
+    expect(() => buildSessionInformationDump(information(), mismatched)).toThrow(
+      "Gateway 与工作区后端 ID 不一致",
+    );
   });
 
   test("粘贴纯会话 ID 时直接返回 ID", () => {

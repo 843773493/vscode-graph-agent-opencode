@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
 from app.abstractions.session_context import SessionContextRevisionChangedError
-from app.services.infrastructure.resource_platform.virtual_resources.grammar import (
+from app.core.resource_uri import (
     parse_resource_uri,
     resource_display_uri,
 )
@@ -34,6 +34,7 @@ class ParsedSessionContextResource:
     kind: Literal["session", "workspace_sessions", "other"]
     session_id: str | None
     scope_id: str
+    gateway_authority: str | None
 
 
 def parse_session_context_ref(
@@ -41,9 +42,10 @@ def parse_session_context_ref(
     resource_identity: str,
     uri: str,
     scope: str,
+    local_gateway_id: str | None = None,
 ) -> ParsedSessionContextResource:
     """用唯一 URI grammar 解析会话上下文引用，不解析 fragment 或私有语法。"""
-    parsed = parse_resource_uri(uri)
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
     if scope != parsed.scope:
         raise ResourceUriResolveError(
             "scope_mismatch",
@@ -70,33 +72,43 @@ def parse_session_context_ref(
         kind=kind,
         session_id=session_id,
         scope_id=parsed.scope_id,
+        gateway_authority=parsed.gateway_authority,
     )
 
 
-def session_resource_uri(workspace_id: str, session_id: str) -> str:
+def session_resource_uri(
+    workspace_id: str, session_id: str, *, gateway_authority: str | None = None,
+) -> str:
     return resource_display_uri(
         scope="workspace",
         scope_id=workspace_id,
         kind="session",
         tail_segments=(session_id,),
+        gateway_authority=gateway_authority,
     )
 
 
-def workspace_session_inventory_uri(workspace_id: str) -> str:
+def workspace_session_inventory_uri(
+    workspace_id: str, *, gateway_authority: str | None = None,
+) -> str:
     return resource_display_uri(
         scope="workspace",
         scope_id=workspace_id,
         kind="session",
         tail_segments=("inventory",),
+        gateway_authority=gateway_authority,
     )
 
 
-def gateway_session_inventory_uri(gateway_id: str) -> str:
+def gateway_session_inventory_uri(
+    gateway_id: str, *, gateway_authority: str | None = None,
+) -> str:
     return resource_display_uri(
         scope="gateway",
         scope_id=gateway_id,
         kind="session",
         tail_segments=("inventory",),
+        gateway_authority=gateway_authority,
     )
 
 
