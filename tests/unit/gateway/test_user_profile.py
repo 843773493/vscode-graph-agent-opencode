@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from app.gateway.config import ConfiguredTheme, GatewayConfig
+from app.gateway.control import user_profile as user_profile_module
 from app.gateway.control.user_profile import UserProfileStore
+
+
+@pytest.fixture
+def user_profile_store(tmp_path: Path) -> UserProfileStore:
+    store = UserProfileStore(gateway_root=tmp_path / "gateway")
+    store.ensure_user(user_id="user-a", display_name="用户 A")
+    return store
 
 
 def test_user_profile_isolated_and_gitignored_runtime_data(tmp_path):
@@ -85,3 +94,129 @@ def test_user_profile_ignores_removed_global_ui_settings_file(tmp_path):
     assert settings.theme.theme_id is None
     assert legacy_path.is_file()
     assert not (gateway_root / "web_ui_settings.json.migrated.bak").exists()
+
+
+def test_user_profile_write_preserves_primary_error_when_temp_cleanup_fails(
+    user_profile_store: UserProfileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    original_bytes = profile_path.read_bytes()
+    real_unlink = Path.unlink
+    replace_error = OSError("原子替换失败")
+    cleanup_error = OSError("临时文件清理失败")
+    temporary_paths: list[Path] = []
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        temporary_paths.append(source)
+        raise replace_error
+
+    def fail_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path in temporary_paths:
+            raise cleanup_error
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(user_profile_module.os, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    try:
+        with pytest.raises(OSError) as caught:
+            user_profile_store._write_profile(
+                user_id="user-a",
+                payload={"config_version": 1, "display_name": "新用户"},
+            )
+
+        assert caught.value is replace_error
+        assert caught.value.__notes__ == [
+            (
+                "用户 profile 原子写入失败后临时文件清理失败: "
+                "OSError: 临时文件清理失败"
+            )
+        ]
+        assert profile_path.read_bytes() == original_bytes
+        assert len(temporary_paths) == 1
+        assert temporary_paths[0].is_file()
+    finally:
+        for temporary_path in profile_path.parent.glob(f".{profile_path.name}.*"):
+            real_unlink(temporary_path, missing_ok=True)
+
+
+def test_user_profile_write_keeps_primary_error_when_temp_cleanup_succeeds(
+    user_profile_store: UserProfileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    original_bytes = profile_path.read_bytes()
+    real_unlink = Path.unlink
+    replace_error = OSError("原子替换失败")
+    temporary_paths: list[Path] = []
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        temporary_paths.append(source)
+        raise replace_error
+
+    monkeypatch.setattr(user_profile_module.os, "replace", fail_replace)
+    try:
+        with pytest.raises(OSError) as caught:
+            user_profile_store._write_profile(
+                user_id="user-a",
+                payload={"config_version": 1, "display_name": "新用户"},
+            )
+
+        assert caught.value is replace_error
+        assert profile_path.read_bytes() == original_bytes
+        assert len(temporary_paths) == 1
+        assert not temporary_paths[0].exists()
+        assert list(profile_path.parent.glob(f".{profile_path.name}.*")) == []
+    finally:
+        for temporary_path in profile_path.parent.glob(f".{profile_path.name}.*"):
+            real_unlink(temporary_path, missing_ok=True)
+
+
+def test_user_profile_write_replaces_file_and_reads_new_body(
+    user_profile_store: UserProfileStore,
+) -> None:
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    payload = {
+        "config_version": 1,
+        "display_name": "更新后的用户",
+        "theme": {"theme_id": "blue"},
+    }
+
+    user_profile_store._write_profile(user_id="user-a", payload=payload)
+
+    assert user_profile_store.read_profile(user_id="user-a") == payload
+    assert not list(profile_path.parent.glob(f".{profile_path.name}.*"))
+
+
+def test_user_profile_write_reports_cleanup_error_after_commit(
+    user_profile_store: UserProfileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = user_profile_store.user_path("user-a") / "profile.jsonc"
+    original_bytes = profile_path.read_bytes()
+    real_unlink = Path.unlink
+    cleanup_error = OSError("提交后清理失败")
+    temporary_paths: list[Path] = []
+    payload = {"config_version": 1, "display_name": "已经提交"}
+
+    def fail_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path.parent == profile_path.parent and path.name.startswith(
+            f".{profile_path.name}."
+        ):
+            temporary_paths.append(path)
+            raise cleanup_error
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    try:
+        with pytest.raises(OSError) as caught:
+            user_profile_store._write_profile(user_id="user-a", payload=payload)
+
+        assert caught.value is cleanup_error
+        assert profile_path.read_bytes() != original_bytes
+        assert user_profile_store.read_profile(user_id="user-a") == payload
+        assert len(temporary_paths) == 1
+        assert not temporary_paths[0].exists()
+    finally:
+        for temporary_path in profile_path.parent.glob(f".{profile_path.name}.*"):
+            real_unlink(temporary_path, missing_ok=True)

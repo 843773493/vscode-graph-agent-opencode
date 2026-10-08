@@ -202,6 +202,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
         text=True,
     )
     temporary_path = Path(temporary_name)
+    primary_error: Exception | None = None
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             file.write(content)
@@ -210,8 +211,19 @@ def _atomic_write_text(path: Path, content: str) -> None:
         if os.name != "nt":
             temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
+    except Exception as error:
+        primary_error = error
+        raise
     finally:
-        temporary_path.unlink(missing_ok=True)
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                "用户 profile 原子写入失败后临时文件清理失败: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
 
 
 def _profile_theme_from_dict(
