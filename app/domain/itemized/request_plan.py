@@ -78,6 +78,16 @@ class SourceBinding:
         ) if (value := getattr(self, name)) is not None}
 
 
+def _copy_contribution_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _copy_contribution_value(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_copy_contribution_value(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_contribution_value(child) for child in value)
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ContextContribution:
     contribution_id: str
@@ -117,6 +127,19 @@ class ContextContribution:
     # 判定」，因此必须是 typed core 字段，不能由自由 metadata/extensions 的同名
     # key（含旧 replaceable_source flag）承载。默认 immutable 与迁移前语义一致。
     replacement_policy: ReplacementPolicy = ReplacementPolicy.IMMUTABLE
+    _body_snapshot: object = field(default=None, init=False, repr=False, compare=False)
+    _extensions_snapshot: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __getattribute__(self, name: str) -> object:
+        if name in {"body", "extensions"}:
+            carrier_name = "_body_snapshot" if name == "body" else "_extensions_snapshot"
+            try:
+                carrier = object.__getattribute__(self, carrier_name)
+            except AttributeError:
+                carrier = None
+            if carrier is not None:
+                return _copy_contribution_value(carrier)
+        return object.__getattribute__(self, name)
 
     def __post_init__(self) -> None:
         for name in ("contribution_id", "source_kind", "source_revision"):
@@ -214,10 +237,28 @@ class ContextContribution:
                 "ContextContribution.source_ordinal 只能是 registry 分配的非负整数"
             )
 
+        body = object.__getattribute__(self, "body")
+        extensions = object.__getattribute__(self, "extensions")
+        if body is not None:
+            canonical_json_bytes(body)
+        canonical_json_bytes(extensions)
+        object.__setattr__(
+            self,
+            "_body_snapshot",
+            _copy_contribution_value(body) if body is not None else None,
+        )
+        object.__setattr__(self, "_extensions_snapshot", _copy_contribution_value(extensions))
+        object.__setattr__(self, "body", None)
+        object.__setattr__(self, "extensions", {})
+
 
     def to_dict(self) -> dict[str, object]:
         """草稿与封存共享唯一字段投影；保护正文与 registry ordinal 不补写。"""
-        result = {entry.name: getattr(self, entry.name) for entry in fields(self)}
+        result = {
+            entry.name: getattr(self, entry.name)
+            for entry in fields(self)
+            if entry.init
+        }
         result["extensions"] = dict(self.extensions)
         result["source_binding"] = self.source_binding.to_dict() if self.source_binding is not None else None
         if self.protection != DetailProtection.PUBLIC:

@@ -294,13 +294,16 @@ class FederationChannelSession:
                     return
         except asyncio.CancelledError:
             raise
+        except FederationError as error:
+            await self._fail_closed(error, notify_peer=False)
         except Exception as error:  # noqa: BLE001 - 传输异常统一为显式 channel 失败
-            await self._fail_closed(
-                FederationError(
-                    FEDERATION_CHANNEL_CLOSED, f"channel 收帧失败: {error}"
-                ),
-                notify_peer=False,
+            channel_error = FederationError(
+                FEDERATION_CHANNEL_CLOSED,
+                f"channel 收帧失败: {error}",
+                detail={"cause_type": type(error).__name__},
             )
+            channel_error.__cause__ = error
+            await self._fail_closed(channel_error, notify_peer=False)
 
     def _dispatch_response(self, frame: FederationFrame) -> None:
         correlation_id = require_correlation_id(frame.payload)
