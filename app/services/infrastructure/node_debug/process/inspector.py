@@ -145,6 +145,7 @@ class NodeDebugInspector:
         socket = runtime.inspector.socket
         if socket is None:
             return
+        receive_error: RuntimeError | None = None
         try:
             async for raw_message in socket:
                 payload = json.loads(raw_message)
@@ -174,6 +175,9 @@ class NodeDebugInspector:
                         )
                     self._clear_stop_snapshot(runtime)
         except Exception as error:  # noqa: BLE001 - 接收循环必须将适配器故障写入状态
+            receive_error = RuntimeError(f"读取 Node Inspector 事件失败: {error}")
+            receive_error.__cause__ = error
+            receive_error.__suppress_context__ = True
             if not runtime.closing:
                 async with runtime.state_lock:
                     runtime.status = "failed"
@@ -183,7 +187,7 @@ class NodeDebugInspector:
                     )
                     self._clear_stop_snapshot(runtime)
         finally:
-            error = RuntimeError("Node Inspector WebSocket 已关闭")
+            error = receive_error or RuntimeError("Node Inspector WebSocket 已关闭")
             for future in tuple(runtime.inspector.pending_commands.values()):
                 if not future.done():
                     future.set_exception(error)
