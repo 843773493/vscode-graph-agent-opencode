@@ -504,4 +504,9 @@ class NodeDebugInspector:
     @classmethod
     def exception_message(cls, value: dict[str, object]) -> str:
         details = value.get("exception")
-        return cls.remote_description(details) or "表达式求值失败"
+        if description := cls.remote_description(details):
+            return description
+        if exception_value := cls.remote_value(details):
+            return exception_value
+        text = value.get("text")
+        return text if isinstance(text, str) and text else "表达式求值失败"
