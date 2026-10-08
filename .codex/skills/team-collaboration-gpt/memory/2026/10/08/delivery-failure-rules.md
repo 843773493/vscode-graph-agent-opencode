@@ -36,6 +36,12 @@
 
 ## 按业务检索的既有细则
 
+A05 新真实进程用例的 attempt004 漏配置必填 `supports_reasoning`，启动阶段失败；005 将既有冲突 409 写成 400（1 passed/1 failed，140.51s）；006 将原候选退出映射 502 写成 500（1 passed/1 failed/1 deselected，168.18s）。三份 raw/SHA 已核，耗时是整次测试耗时，不全算无效等待。原因是测试输入与异常期望未先核当前合同；修正新 fixture/断言，保完整成员、generation、恢复和隔离验证，不改生产码迎合测试。006 单成员/陈旧合同已通过，修正 502 期望后的 007 到达真实恢复断言，暴露下述生产故障；测试合同错配已解除，不据此宣布整个 change 通过。
+
+A05 attempt007 的真实 SIGKILL 恢复：新进程已按旧完整成员/generation 启动，但 controller 无条件取消旧 drain；目标已 ready，返回 409 后整组被误标 offline。由同 Sol 修唯一取消链，消费真实 lifecycle：draining 才 cancel，ready 与 accepting_jobs 同时成立则已恢复，其余状态显式失败。008 actual0、1 passed/2 deselected（88.64s），保 502、双成员健康、同恢复 PID 和旧 generation 的正式收据，raw/SHA 已核。这只证明该修正的真实恢复效果；随后同 owner 候选句柄/CAS/aux 清理闭包还在改变，相关核心须在最终生产组合重验。
+
+退役目录审计首报将 `out/tests/unit/gateway/runtime/` 测试镜像父目录误列为运行数据叶，还把本轮未执行的 `/proc` 未发现结论归给主线程。主检查子项为 `test_process_*` 等，拒绝删除此项；真实 `/proc` 又发现 3 个旧 E2E aux/backend 孤儿进程仍打开已删除日志/SQLite，按 uid、cwd、argv hash、start ticks 和单成员进程组核归属后，pidfd SIGTERM 均观测退出。报告要求撤回错误事实、保原版本并只列真实 run-* 叶；源代码、正式 artifacts 和独有补丁保留。清理效果以主 `retired-directory-cleanup/` 收据为准；不存在的观察不得写成已做，basename 和整树大小不能代替可删目录的内容证明。
+
 冻结参数须核真实绑定和发送结果：框架会按 structured-output strategy 改写或省略 `tool_choice`，adapter 还会强制 `stream/include/store`。直接抄 `ModelRequest` 字段曾在固定增量早审中漏掉这些事实；先修提取再接封存，不等完整 HTTP 验收才查。 Auto策略fixture还须核框架模型名兜底，profile=False未必选工具策略；按实际策略提供HTTP输出，不将错配fixture归生产回归。
 
 - **交付残缺、漏真实入口。** 手筛hunk曾漏签名、删除和Web caller。用[交付校验脚本](../../../../scripts/verify_delivery.py)从固定树严格重建，核blob/hash及候选外源码；调用清单包括API/UI、CLI/进程启动、恢复、协议、间接kwargs消费者及实际分发的resources/skills和提示模板。A04生产/API验收后才发现gateway-context技能仍教模型调用旧resource/expected_revision/locator；运行时说明也是直接caller，须随唯一工具schema迁齐，不能把它误当纯规划文档。同类必填签名一次迁完，核真实callee再跑代表入口；不存在的Saver属性曾阻断28项，旧签名曾让15项连续失败耗时299秒，不能加alias求绿。完整模型E2E前先核真实路由状态码、异步回执和各窗口可见控件；主测试误设enqueue200、误点扩展窗口隐藏会话树，曾到末端才暴露并重复整场景。迁移规划也核原输入/输出和正式用例：曾漏图片读取、文本补丁删除/移动，新增能力延期不能废除已有能力。可行动增量先交，未知及后续范围分开，不等全量调查才回报。主独占验收候选固定后合并通知一次；状态消息不新增实现前置，作者不重复承担已分配的测试独审。连续通知曾引出重复读测试、下一生产增量延迟，收窄后的效果待实际交付。
