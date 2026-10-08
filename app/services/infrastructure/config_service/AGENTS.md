@@ -25,13 +25,15 @@ mixin，由 `ConfigService` 多继承装配并共享同一 `self` 与 `__init__`
 
 # 不可修改内容
 
-- 不得改变对外契约：`ConfigService` 类名、构造签名、公开方法名与语义、模块导入路径
-  `app.services.infrastructure.config_service.ConfigService`，以及 `__init__.py` 对
-  `release_inline_config_uri_for_file` 的再导出，均 MUST 保持不变。
+- 保持 `ConfigService` 的公开配置语义和唯一 owner；按已授权的多工作区挂载合同，
+  可以迁移内部构造参数及全部调用方，为每个 mount 显式绑定自己的辅助服务地址与
+  candidate/generation/fencing token。不得让 sibling 消费进程级同一候选，也不得恢复
+  旧签名兼容。配置 CAS、promotion proof 与补偿仍由原配置 owner 执行。
 - 不得为兼容旧调用点保留转发方法、旧模块 shim 或双套实现；跨族协作必须走同一 `self`。
 - 不得在 `config_service_common.py` 之外重复定义 `logger`、`ConfigCandidateApplier`、
   `_SOURCE_LAYER_AUTHORITY` 或 `release_inline_config_uri_for_file`；其它族一律从本模块导入。
-- 不得静默改动搬迁方法的异常类型、错误消息或注释；搬迁必须逐字保留语义。
+- 纯结构搬迁不得夹带语义变更；已授权的 per-mount 合同调整须迁齐真实调用闭包，
+  验证目标成员与 sibling 的配置隔离及原成功语义。
 - 不得在本目录实现 `config/` 子包已承载的聚焦组件（快照模型、文件监听器、状态模型、
   事件游标族等），本包只组合并消费它们。
 

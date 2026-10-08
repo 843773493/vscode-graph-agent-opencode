@@ -2,7 +2,7 @@
 
 ## 1. 依赖与前置对齐
 
-- [ ] 1.1 确认「统一资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、URI grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。 **（未勾：owner 侧规范层已登记（见其 spec 的 scope/kind/拒绝码 requirement），但本项是**实施前置门**——在 owner 的 grammar 与拒绝码**代码**落地前不得进入本 change 第 3 组实施；属生产门，非规范层可定稿项。）**
+- [x] 1.1 确认「统一资源寻址」change 已登记 scope 闭集（`workspace`/`user`/`gateway`/`inline`；`memory` 已移出）、URI grammar、`kind` 闭集与拒绝码命名空间；未登记前不得进入第 3 组实施。 **（原四kind/grammar/resolve owner生产门已闭合；新增文件child合同仍由统一寻址第8组实施，不据此勾新增范围。）**
 - [x] 1.2 按 `add-unified-virtual-resource-addressing` 的 scope 闭集/`scope_id` 唯一表与 kind 闭集**具名引用**落地：scope 闭集 `workspace`/`user`/`gateway`/`inline`、`scope_id` 由真实身份推导（取值规则一律引用该 change，本 change 不复述）、保留 `resources` 固定段、`scope_id` 对所有 scope 必填、`memory` 非 URI 且入口拒绝、会话上下文 kind=`session` / config 来源 kind=`config`；`builtin`→`inline`（含 layer `bundled`→`inline`）改名归该 owner change。**段序、scope 名、scope_id 语义、kind 与拒绝码定义均归该 owner change，本 change 只引用、MUST NOT 复述或另立。** **（规范层已定稿：spec「scope 必须取自闭合集」与「URI 语法形态统一」正文已改为对 owner requirement 的具名引用，不再复述取值表。）**
 - [x] 1.3 与 itemized rollout context 对齐 `assembly_ref` 的表示并确认不改变结构化方向：`assembly_ref` 使用 `ResourceIdentity`，具名引用「统一资源寻址」的 requirement「identity 必须独立于 URI 且不跨 scope 混同」，不另造专用 ref 类型。**（规范裁定已完成；资源身份字段的生产建模、转换与接线仍属未完成实现工作，不由本项勾选表示。）**
 
@@ -15,25 +15,25 @@
 
 ## 3. 视图与修订的结构化迁移
 
-- [ ] 3.1 将原 fragment 表达的信息迁移为会话上下文解析与入口的结构化字段：`information` → `view=information`；`record={index}` → `view=records` + `record_index`；`assembly={id}` → `view=assembly` + `assembly_ref: ResourceIdentity`。新入口拒绝 fragment，不保留旧字符串解析兼容分支。**本地生产入口已实现：中央 grammar、结构化 view/record_index/ResourceIdentity assembly_ref 已被 API 与工具消费；固定1c20只读对表及主线程14项边界探针通过。保持未勾，待客户端测试构造迁移与真实入口验收闭合；联邦解析由第4组继续。**
-- [ ] 3.2 移植既有视图与资源种类兼容性校验规则集，并要求未登记 view 显式失败、已登记但与资源 kind 不兼容的 view 以 owner 已登记的 `unsupported_view` 显式失败，均不得降级为默认视图。**本地生产规则已实现：未知 view 明确拒绝，kind/view不匹配使用统一 owner 的 unsupported_view；固定1c20调用链与主线程边界探针已核。保持未勾至完整入口验收，不沿用“未实现”诊断。**
-- [ ] 3.3 保留可重读修订绑定能力：`expected_revision` 不匹配时返回显式修订变更错误；游标继续绑定资源 + revision + operation，在固定修订上推进分页，并在 resource/revision/operation 不匹配时显式失败。
-- [ ] 3.4 断言 revision 只存在于结构化字段：对全部会话上下文路径做检查，确认生成的 URI 字符串在任何情况下都不含 revision/hash/snapshot 引用。
+- [x] 3.1 将原 fragment 表达的信息迁移为会话上下文解析与入口的结构化字段：`information` → `view=information`；`record={index}` → `view=records` + `record_index`；`assembly={id}` → `view=assembly` + `assembly_ref: ResourceIdentity`。新入口拒绝 fragment，不保留旧字符串解析兼容分支。**（A04完整调用方迁齐，032真实三节点入口、035直接fixture、038前端合同通过；不替代未实施文件工具。）**
+- [x] 3.2 移植既有视图与资源种类兼容性校验规则集，并要求未登记 view 显式失败、已登记但与资源 kind 不兼容的 view 以 owner 已登记的 `unsupported_view` 显式失败，均不得降级为默认视图。**（A04 028/029拒绝边界与032真实入口通过，未知view与unsupported_view保持独立拒绝，不降级。）**
+- [x] 3.3 保留可重读修订绑定能力：`expected_revision` 不匹配时返回显式修订变更错误；游标继续绑定资源 + revision + operation，在固定修订上推进分页，并在 resource/revision/operation 不匹配时显式失败。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 3.4 断言 revision 只存在于结构化字段：对全部会话上下文路径做检查，确认生成的 URI 字符串在任何情况下都不含 revision/hash/snapshot 引用。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 
 ## 4. 星型解析 / star-topology resolution 接入
 
-- [ ] 4.1 实现唯一解析顺序：本地 parse（fail-closed）→ 本进程解析 → hub 可直接解析其直接 spoke；spoke 经唯一 hub 做一次有界 transit（携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）。覆盖既有单会话 read、远端工作区/Gateway inventory 与 search 的正例；同一 read grant owner 绑定真实 ResourceIdentity/URI/scope 和查询字段，由目标端既有 owner 执行，不伪造 Session 目标、不回退当前激活工作区。集中验证错误目标类型、未共享、签名/请求字段不匹配及原 deadline/hop 边界；send/wait/reply 不接受上下文清单目标。
-- [ ] 4.2 把 `max_transit_gateways`/`max_gateway_hops`/deadline 等上界实现为**显式策略常量**，禁止散落魔法数字。
-- [ ] 4.3 实现 fail-closed 拒绝：对端不可达、资源未共享、资源未找到一律返回结构化拒绝码；禁止猜测路径、禁止返回虚假默认值。
-- [ ] 4.4 约束跨边界载荷只含资源身份、URI、revision 与内容；断言 real path 不跨 gateway 边界。直接下线唯一 information owner/DTO 的 workspace.root_path、storage_path，迁齐 API/proto/生成类型/前端与测试实际 caller；read information、search session_information 及持久观察输出同源，保身份/名称/诊断状态，不在中继过滤、不把验收缩为仅 envelope，也不造 files URI 或兼容字段。
-- [ ] 4.5 落地「locator 是输入不是输出」不变量：断言解析命中的响应只含稳定身份与内容，不含 real path、provider locator 或任何解析 locator。
+- [x] 4.1 实现唯一解析顺序：本地 parse（fail-closed）→ 本进程解析 → hub 可直接解析其直接 spoke；spoke 经唯一 hub 做一次有界 transit（携带 visited set、`max_transit_gateways=1`、`max_gateway_hops=2`、总 deadline）。覆盖既有单会话 read、远端工作区/Gateway inventory 与 search 的正例；同一 read grant owner 绑定真实 ResourceIdentity/URI/scope 和查询字段，由目标端既有 owner 执行，不伪造 Session 目标、不回退当前激活工作区。集中验证错误目标类型、未共享、签名/请求字段不匹配及原 deadline/hop 边界；send/wait/reply 不接受上下文清单目标。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 4.2 把 `max_transit_gateways`/`max_gateway_hops`/deadline 等上界实现为**显式策略常量**，禁止散落魔法数字。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 4.3 实现 fail-closed 拒绝：对端不可达、资源未共享、资源未找到一律返回结构化拒绝码；禁止猜测路径、禁止返回虚假默认值。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 4.4 约束跨边界载荷只含资源身份、URI、revision 与内容；断言 real path 不跨 gateway 边界。直接下线唯一 information owner/DTO 的 workspace.root_path、storage_path，迁齐 API/proto/生成类型/前端与测试实际 caller；read information、search session_information 及持久观察输出同源，保身份/名称/诊断状态，不在中继过滤、不把验收缩为仅 envelope，也不造 files URI 或兼容字段。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 4.5 落地「locator 是输入不是输出」不变量：断言解析命中的响应只含稳定身份与内容，不含 real path、provider locator 或任何解析 locator。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 
 ## 5. 入口破坏与「新写字段」（不是存量数据迁移）
 
 - [x] 5.1 让入口停止接受旧式上下文 URI：对含身份/领域段 `%` 编码、`#fragment`、`memory` 两点式或未登记 scope 自有正则语法的字符串显式拒绝，并在错误信息中指向结构化字段表示。 **（规范层已定稿：spec「旧式上下文 URI 只能被入口拒绝」的 scenario「旧式 fragment 形态被拒绝」。）**
 - [ ] 5.2 记录并复核**零存量**取证基线（见 design D5 与 spec「旧式上下文 URI 只能被入口拒绝」）：旧式上下文 URI 无任何持久化实例，故 MUST NOT 构造扫描/规范化/失效的历史数据迁移脚本。
-- [ ] 5.3 新写字段切换：让确需资源定位的既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri` 与 `context_source_control_states`（来源追踪事实），不为不需定位的状态增加冗余URI列。内部聚合的必填nullable display_uri引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」，activation读写/serde/fork/detail/projection在同一闭包迁齐；不得保留旧写入形态或兼容读写双轨。
-- [ ] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。
+- [x] 5.3 新写字段切换：让确需资源定位的既有持久化挂点按 identity + URI 的新格式**新写入**并在读路径切换——`resource_activation_bindings.display_uri` 与 `context_source_control_states`（来源追踪事实），不为不需定位的状态增加冗余URI列。内部聚合的必填nullable display_uri引用统一寻址owner requirement「内部语义聚合资源不得伪造 URI」，activation读写/serde/fork/detail/projection在同一闭包迁齐；不得保留旧写入形态或兼容读写双轨。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
+- [x] 5.4 移除旧的会话上下文自有正则与 `#selector` 解析实现，物理下线，不留兼容层或别名。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 
 ## 5A. 配置来源真实路径持久化的迁移（正名出处：`add-unified-virtual-resource-addressing`）
 
@@ -53,13 +53,13 @@
 
 - [x] 6.1 更新 `openspec/changes/add-itemized-rollout-context/specs/itemized-rollout-context/spec.md` 的 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」：声明语法与解析以本 change 为准，删除本地自有的 URI 形态定义。该收敛已由 `e8e65b97` 落地，本任务只做核验，按 requirement 名定位、不使用裸行号。 **（规范层已核验：该 requirement「跨 Session 协作必须只面向目标 main thread 且不共享协作状态」现逐字声明「会话上下文资源引用的 URI 语法、作用域/scope、网关授权段/gateway authority 与解析 MUST 以 `migrate-session-context-resource-uri` change 为准；本 change MUST NOT 自行定义会话上下文 URI 形态」，与本 change 一致。）**
 - [x] 6.2 更新同 change 的 `design.md` 小节「跨 Session 地址与无共享状态协作」与 `tasks.md` 任务 8.10，使其会话上下文寻址描述引用本 change，不再并列定义第二套 URI 语法。该收敛同样已由 `e8e65b97` 落地，按小节名与任务号定位、不使用裸行号。 **（规范层已核验：`design.md` 该小节逐字声明其 URI 形态与解析由本 change 拥有；`tasks.md` 8.10 逐字声明「以 `migrate-session-context-resource-uri` 为准、只消费解析结果、不得自行定义会话上下文 URI 形态」。）**
-- [ ] 6.3 运行 `openspec validate add-itemized-rollout-context --strict` 与 `openspec validate migrate-session-context-resource-uri --strict`，确认两 change 均通过且不存在互相矛盾的 URI 定义。 **（未勾：这是实现期/归档前的**复核命令**，保持未勾以便在实施与归档时重跑；两 change 的规范层当前均通过 `--strict`，见 7.3。）**
+- [x] 6.3 运行 `openspec validate add-itemized-rollout-context --strict` 与 `openspec validate migrate-session-context-resource-uri --strict`，确认两 change 均通过且不存在互相矛盾的 URI 定义。 **（A04主最终strict --all实际41passed/0failed，包含两change；原raw保留。）**
 
 ## 7. 命名与校验收口
 
 - [x] 7.1 全仓校验命名一致性：只允许 `资源身份 / ResourceIdentity`、`资源 URI`、`真实路径 / real path`、`作用域 / scope`、`网关授权段 / gateway authority`、`三层分离 / three-layer separation`、`拒绝码 / rejection code`、`星型解析 / star-topology resolution`；禁止 virtual url / VURI 等同义异名。 **（规范层已核验：本 change 三个 `.md` 中此类禁用词仅出现在显式禁用条款；实现期对全仓再复核属实施项。）**
 - [x] 7.2 确认本 change 未自造拒绝码、未改动 URI 语法本体、固定段序与 `kind` 闭集；所有新增拒绝场景均引用「统一资源寻址」change 的登记结果。 **（规范层已定稿：spec「URI 语法形态统一」正文现只具名引用 owner，不再复述模板与段序。）**
-- [ ] 7.3 运行 `openspec validate migrate-session-context-resource-uri --strict`，要求 0 failed。
+- [x] 7.3 运行 `openspec validate migrate-session-context-resource-uri --strict`，要求 0 failed。 **（A04原授权源码闭包已集成c6c7b7af；具名验收与固定独审见下方收据，不包含未授权目录/文件工具。）**
 
 ## 8. 已由 owner 裁定（规范定稿，不代表生产实现完成）
 
@@ -73,3 +73,5 @@
 
 - [ ] 9.1 让send/read/wait共用已有target-main解析owner；裸Session ID和完整会话URI归一到同一稳定Gateway/workspace/Session/main-thread target，再冻结目标，不因激活工作区或channel重连改投。复用已有main-thread endpoint，不新增同义接口或文件工具目标状态机。
 - [ ] 9.2 保留各业务Job、Turn、通信ID selector的原合同，验证三入口对同一目标一致、歧义/不可达显式失败，read/wait不物化runtime；durable acceptance/observation仍由itemized8.10闭合，不因URI规范化完成而勾通信恢复。
+
+A04完整证据入口：`out/tests/temp/2026/10/04/024121-team-execution/coordinator/artifacts/sol-efficiency-trial/addressing-existing-source-bulk-dispatch/ROOT-full-final-candidate/`；105源码＋11主文档tree8215be15严格重建、两独审findings=[]并串行集成。作者manifest引用39具名attempt，028/029授权/loopback、032真实三节点受控Provider、031/037真实信息页/生命周期、035直接68项、038合同16项及039 Web build actual0。033/034原失败由具名fixture修订闭合，其余未变绿灯按依赖复用，不相加重叠pass；全局strict41/0。外部Provider quota与补充C1端口仍UNMET，原100条Ruff诊断无新增，SSE生成后续阶段未认证失败原子性。5.2历史取证复核与9.1/9.2三入口完整同目标验收保持未勾，不能由A04 read/search通过自动推断。
