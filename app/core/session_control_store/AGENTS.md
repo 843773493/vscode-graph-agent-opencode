@@ -2,8 +2,7 @@
 
 `app/core/session_control_store/` 是 per-session `session-control.sqlite` 基础设施
 `SessionControlStore` 的唯一实现点（原先的 `session_control_store.py` 单文件已拆分入
-本包）。facade 落在本包 `__init__.py`，只保留 `SessionControlStore` 的类声明（四个既有
-mixin + 五个本包 mixin）、连接生命周期方法（`__init__`/`connection`/`close`/
+本包）。facade 落在本包 `__init__.py`，只保留 `SessionControlStore` 的类声明（装配各垂直方法族）、连接生命周期方法（`__init__`/`connection`/`close`/
 `_ensure_open`/`_begin_immediate`/`_write_transaction`/`_connect`）与模块级公开符号的
 再导出；其余方法按垂直链路逐字搬迁到同包各 mixin，由 `SessionControlStore` 多继承装配。
 
@@ -11,7 +10,7 @@ mixin + 五个本包 mixin）、连接生命周期方法（`__init__`/`connectio
 （`thread_creation_publish.py`）、初始 execution intent（`execution_intent.py`）、
 collaboration 成员账本（`collaboration.py`）、当前 schema 初始化
 （`_schema.py`）、共享 SQL 常量 `sql.py`，以及稳定的 `ThreadGraphBindingRecord`
-值对象（`contracts.py`）。thread catalog/fence、operation lease、
+值对象（`contracts.py`）。`background_work.py` 承载精确Thread的版本化后台任务、领取token和checkpoint，`background_mailbox.py`承载同一Thread的持久消息、去重和消费回执；两族仍由本Store同一事务入口读写。thread catalog/fence、operation lease、
 owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承载，不在本包重复实现。
 
 # 可修改内容
@@ -22,6 +21,7 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
 - 可以维护 `sql.py` 中收敛同语义重复的 SQL 常量；新增共享常量时落在该模块，不在各族复制。
 - 可以维护 `contracts.py` 中跨 catalog writer/reader 共用的纯行值对象；不得在这里新增 GraphBinding 的第二份持久化 authority。
 - 可以维护随本包落地的四段式 `AGENTS.md`。
+- 可以维护后台任务与邮箱方法族的typed记录、DDL和读写，沿原SessionControlStore唯一owner；运行时registry只保存句柄/状态镜像，不能新增第二持久恢复权威。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/` 下。
 
 # 不可修改内容
@@ -37,6 +37,7 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
   的 DDL/读写；这些分别归 `session_control_thread_catalog/`、`session_control_operation_lease/`、
   `session_control_thread_owner_binding/`、`session_control_communication_ledger/`。
 - 不得静默吞掉不一致：库被外部改动、record/intent 状态冲突、CAS 失败必须直接抛错。
+- 不得恢复`background_tasks.json`或无持久owner注入的内存emit旁路；后台任务/邮箱必须精确Thread归属，agent_id仅selector，不推导main thread。
 
 # 规范
 
@@ -47,6 +48,7 @@ owner binding 与跨 Session 通信 ledger 各自已在同名兄弟子包中承�
   `_begin_immediate()` 与 `_write_transaction()`；不得假设其它族的私有方法存在，跨族调用须
   经由定义该方法的 mixin 提供的公开/受保护接口。
 - 表 DDL 与列清单常量的唯一定义点在其所属族模块；`_schema.py` 只编排建表顺序，不复制 DDL。GraphBinding 的唯一运行时 authority 是 thread_catalog 四字段，旧 JSON 不读、不迁移。
+- 任务版本化恢复描述和首次checkpoint先提交再执行；time emitter输出消息与任务checkpoint在本Store同一写事务提交。外部执行不得持有写事务或lifecycle gate；未知外部效果保`reconcile_required`，不能盲重放。任务活跃lease和迟到callback归既有residency/generation owner，本包不复制graph或idle策略。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动
   或语义冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
 - 修改本目录后运行 `uv run ruff check app/core/session_control_store/` 与带进程外保护地跑
