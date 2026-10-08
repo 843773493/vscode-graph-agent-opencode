@@ -143,6 +143,7 @@ class UserViewStateStore:
             raise ValueError("视图投影版本必须大于 0")
         updated_at = utc_now_text()
         connection = self._state.connection()
+        primary_error: Exception | None = None
         try:
             connection.execute("BEGIN IMMEDIATE")
             user_id = self._assert_active_lease(connection, context)
@@ -186,11 +187,26 @@ class UserViewStateStore:
                 raise RuntimeError("用户视图状态写入后无法读取")
             connection.execute("COMMIT")
             return self._record(row)
-        except Exception:
-            connection.rollback()
+        except Exception as error:
+            primary_error = error
+            try:
+                connection.rollback()
+            except Exception as cleanup_error:  # noqa: BLE001
+                error.add_note(
+                    "用户视图状态写入失败后事务回滚失败: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
             raise
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except Exception as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    "用户视图状态写入失败后连接关闭失败: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
 
     def cleanup_expired(self) -> int:
         """删除超过保留窗口的视图状态行，返回删除条数。
