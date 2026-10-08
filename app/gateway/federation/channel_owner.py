@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -125,10 +126,53 @@ class FederationChannelOwner:
                 logger.exception("联邦 spoke channel 无法连接: peer=%s", request.expected_peer_gateway_id)
             finally:
                 if session is not None:
-                    self._service.unregister_channel(session.channel_instance_id)
                     self._sessions.pop(request.connection_id, None)
-                    await session.close()
-                    await session.join()
+                    active_error = sys.exception()
+                    cancellation_error = (
+                        active_error
+                        if isinstance(active_error, asyncio.CancelledError)
+                        else None
+                    )
+                    cleanup_error: BaseException | None = None
+                    try:
+                        self._service.unregister_channel(session.channel_instance_id)
+                    except BaseException as error:  # noqa: BLE001 - 后续仍须关闭并 join 已取得的 session
+                        if isinstance(error, asyncio.CancelledError):
+                            cancellation_error = cancellation_error or error
+                        else:
+                            cleanup_error = error
+                    for action, cleanup in (
+                        ("关闭联邦 channel", session.close),
+                        ("等待联邦 channel 任务结束", session.join),
+                    ):
+                        try:
+                            await cleanup()
+                        except BaseException as error:  # noqa: BLE001 - 一项清理失败后仍执行后续清理
+                            if isinstance(error, asyncio.CancelledError):
+                                cancellation_error = cancellation_error or error
+                            elif cleanup_error is None:
+                                cleanup_error = error
+                            else:
+                                cleanup_error.add_note(
+                                    f"{action}也失败：{type(error).__name__}: {error}"
+                                )
+                    if cleanup_error is not None:
+                        self._failure = cleanup_error
+                        if active_error is not None:
+                            active_error.add_note(
+                                "清理已取得的联邦 channel 时失败："
+                                f"{type(cleanup_error).__name__}: {cleanup_error}"
+                            )
+                        elif cancellation_error is not None:
+                            cancellation_error.add_note(
+                                "取消时联邦 channel 清理也失败："
+                                f"{type(cleanup_error).__name__}: {cleanup_error}"
+                            )
+                            raise cancellation_error
+                        else:
+                            raise cleanup_error
+                    elif active_error is None and cancellation_error is not None:
+                        raise cancellation_error
             await asyncio.sleep(self._reconnect_seconds)
 
     def assert_healthy(self) -> None:
