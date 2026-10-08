@@ -116,6 +116,37 @@ async def test_malformed_frame_fails_channel_with_protocol_code() -> None:
     await session.close()
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"method": "federation.status", "request": {}},
+        {"correlation_id": "", "method": "federation.status", "request": {}},
+    ],
+    ids=["missing-correlation-id", "empty-correlation-id"],
+)
+@pytest.mark.asyncio
+async def test_request_without_correlation_id_fails_channel(
+    payload: dict[str, object],
+) -> None:
+    transport = _MemoryTransport()
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    import json
+
+    await transport.incoming.put(
+        json.dumps({"frame_type": "request", "payload": payload})
+    )
+
+    reason = await asyncio.wait_for(session.wait_closed(), timeout=5)
+
+    assert reason is not None
+    assert reason.code == "federation-malformed-frame"
+    assert transport.closed is not None
+    assert transport.closed[0] == 1002
+    assert transport.sent == []
+    await session.join()
+
+
 @pytest.mark.asyncio
 async def test_close_is_idempotent() -> None:
     transport = _MemoryTransport()

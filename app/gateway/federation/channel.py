@@ -274,7 +274,14 @@ class FederationChannelSession:
                         await self._fail_closed(error, notify_peer=False)
                         return
                 elif frame.frame_type == FRAME_REQUEST:
-                    task = asyncio.create_task(self._serve_request(frame))
+                    try:
+                        correlation_id = require_correlation_id(frame.payload)
+                    except FederationError as error:
+                        await self._fail_closed(error, notify_peer=False)
+                        return
+                    task = asyncio.create_task(
+                        self._serve_request(frame, correlation_id)
+                    )
                     self._tasks.add(task)
                     task.add_done_callback(self._tasks.discard)
                 elif frame.frame_type == FRAME_PING:
@@ -338,8 +345,9 @@ class FederationChannelSession:
             )
         )
 
-    async def _serve_request(self, frame: FederationFrame) -> None:
-        correlation_id = require_correlation_id(frame.payload)
+    async def _serve_request(
+        self, frame: FederationFrame, correlation_id: str
+    ) -> None:
         try:
             method = require_str(frame.payload, "method")
             request = require_mapping(frame.payload, "request")
