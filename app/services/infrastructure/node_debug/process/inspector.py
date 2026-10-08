@@ -111,13 +111,13 @@ class NodeDebugInspector:
                 asyncio.get_running_loop().create_future()
             )
             runtime.inspector.pending_commands[command_id] = future
-            await socket.send(
-                json.dumps(
-                    {"id": command_id, "method": method, "params": params or {}},
-                    ensure_ascii=False,
-                )
-            )
             try:
+                await socket.send(
+                    json.dumps(
+                        {"id": command_id, "method": method, "params": params or {}},
+                        ensure_ascii=False,
+                    )
+                )
                 try:
                     response = await asyncio.wait_for(
                         future,

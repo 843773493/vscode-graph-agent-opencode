@@ -40,6 +40,19 @@ def _runtime() -> NodeDebugRuntime:
     return runtime
 
 
+def _runtime_at(tmp_path: Path) -> NodeDebugRuntime:
+    runtime = NodeDebugRuntime(
+        session_id="ses_019bf141964978208ce9100774167f90",
+        thread_id=TEST_THREAD_ID,
+        configuration_id="dbgcfg_" + "1" * 32,
+        workspace_root=tmp_path,
+        script_path=tmp_path / "entry.mjs",
+        relative_script_path="entry.mjs",
+        command_timeout_seconds=0.05,
+    )
+    return runtime
+
+
 def _inspector() -> NodeDebugInspector:
     return NodeDebugInspector(
         workspace_root=Path("/tmp"),
@@ -58,6 +71,51 @@ async def test_command_timeout_raises_diagnosable_runtime_error() -> None:
     assert "Debugger.evaluateOnCallFrame" in message
     assert "超时" in message
     # 超时上报后不得残留待回包命令。
+    assert runtime.inspector.pending_commands == {}
+
+
+@pytest.mark.asyncio
+async def test_send_failure_clears_pending_command_and_preserves_exception(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_at(tmp_path)
+    original = OSError("synthetic send failure")
+
+    class FailingSocket:
+        async def send(self, message: str) -> None:
+            del message
+            raise original
+
+    runtime.inspector.socket = FailingSocket()  # type: ignore[assignment]
+
+    with pytest.raises(OSError) as caught:
+        await _inspector().command(runtime, "Runtime.enable")
+
+    assert caught.value is original
+    assert runtime.inspector.pending_commands == {}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_send_clears_pending_command(tmp_path: Path) -> None:
+    runtime = _runtime_at(tmp_path)
+    entered_send = asyncio.Event()
+
+    class BlockedSocket:
+        async def send(self, message: str) -> None:
+            del message
+            entered_send.set()
+            await asyncio.Event().wait()
+
+    runtime.inspector.socket = BlockedSocket()  # type: ignore[assignment]
+    command = asyncio.create_task(
+        _inspector().command(runtime, "Runtime.enable")
+    )
+    await asyncio.wait_for(entered_send.wait(), timeout=1)
+    command.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await command
+
     assert runtime.inspector.pending_commands == {}
 
 
