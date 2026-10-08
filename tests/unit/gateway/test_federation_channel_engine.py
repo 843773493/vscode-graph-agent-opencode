@@ -41,6 +41,16 @@ class _MemoryTransport:
         self.closed = (code, reason)
 
 
+class _FailingSendTransport(_MemoryTransport):
+    def __init__(self, send_error: Exception) -> None:
+        super().__init__()
+        self.send_error = send_error
+
+    async def send_text(self, message: str) -> None:
+        del message
+        raise self.send_error
+
+
 class _BlockingCloseTransport(_MemoryTransport):
     def __init__(self) -> None:
         super().__init__()
@@ -102,6 +112,36 @@ async def test_heartbeat_timeout_closes_channel_explicitly() -> None:
     assert reason.code == FEDERATION_CHANNEL_HEARTBEAT_TIMEOUT
     assert transport.closed is not None
     assert transport.closed[0] == 1011
+
+
+@pytest.mark.parametrize(
+    "send_error",
+    [OSError("socket send failed"), TypeError("transport message invalid")],
+    ids=["socket-error", "local-type-error"],
+)
+@pytest.mark.asyncio
+async def test_heartbeat_send_failure_preserves_original_cause(
+    send_error: Exception,
+) -> None:
+    transport = _FailingSendTransport(send_error)
+    session = _session(
+        transport,
+        heartbeat_interval_seconds=0.01,
+        heartbeat_timeout_seconds=30,
+    )
+    session.start()
+
+    try:
+        reason = await asyncio.wait_for(session.wait_closed(), timeout=5)
+
+        assert reason is not None
+        assert reason.code == FEDERATION_CHANNEL_CLOSED
+        assert reason.message == f"channel 心跳发送失败: {send_error}"
+        assert reason.detail == {"cause_type": type(send_error).__name__}
+        assert reason.__cause__ is send_error
+    finally:
+        await session.close()
+        await session.join()
 
 
 @pytest.mark.asyncio

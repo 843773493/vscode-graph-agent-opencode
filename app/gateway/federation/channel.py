@@ -416,11 +416,15 @@ class FederationChannelSession:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - 心跳失败等价于 channel 断开
+        except Exception as error:  # noqa: BLE001 - 心跳发送错误须保留原始原因
+            channel_error = FederationError(
+                FEDERATION_CHANNEL_CLOSED,
+                f"channel 心跳发送失败: {error}",
+                detail={"cause_type": type(error).__name__},
+            )
+            channel_error.__cause__ = error
             await self._fail_closed(
-                FederationError(
-                    FEDERATION_CHANNEL_CLOSED, "channel 心跳发送失败"
-                ),
+                channel_error,
                 notify_peer=False,
             )
 
