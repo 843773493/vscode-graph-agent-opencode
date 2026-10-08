@@ -121,6 +121,7 @@ class FederationChannelSession:
         self._closing = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed_reason: FederationError | None = None
+        self._transport_close_task: asyncio.Task[None] | None = None
 
     @property
     def channel_instance_id(self) -> str:
@@ -152,6 +153,8 @@ class FederationChannelSession:
 
     async def wait_closed(self) -> FederationError | None:
         await self._closing.wait()
+        if self._transport_close_task is not None:
+            await asyncio.shield(self._transport_close_task)
         return self._closed_reason
 
     async def join(self) -> None:
@@ -230,6 +233,8 @@ class FederationChannelSession:
         notify_peer: bool,
     ) -> None:
         if self._closing.is_set():
+            if self._transport_close_task is not None:
+                await asyncio.shield(self._transport_close_task)
             return
         self._closed_reason = error
         self._closing.set()
@@ -237,6 +242,13 @@ class FederationChannelSession:
             if not future.done():
                 future.set_exception(error)
         self._pending.clear()
+        self._transport_close_task = asyncio.create_task(
+            self._close_transport(error)
+        )
+        await asyncio.shield(self._transport_close_task)
+        del notify_peer
+
+    async def _close_transport(self, error: FederationError) -> None:
         try:
             await self.transport.close(
                 code=close_code_for(error),
@@ -248,7 +260,6 @@ class FederationChannelSession:
                 self.channel_instance_id,
                 close_error,
             )
-        del notify_peer
 
     async def _receive_loop(self) -> None:
         try:

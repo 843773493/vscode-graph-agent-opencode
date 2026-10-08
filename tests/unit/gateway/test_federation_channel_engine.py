@@ -15,6 +15,7 @@ from app.gateway.federation.channel import (
     FederationChannelSession,
 )
 from app.gateway.federation.errors import (
+    FEDERATION_CHANNEL_CLOSED,
     FEDERATION_CHANNEL_HEARTBEAT_TIMEOUT,
     FEDERATION_DEADLINE_EXCEEDED,
     FederationError,
@@ -38,6 +39,25 @@ class _MemoryTransport:
 
     async def close(self, *, code: int, reason: str) -> None:
         self.closed = (code, reason)
+
+
+class _BlockingCloseTransport(_MemoryTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+        self.close_calls = 0
+        self.close_cancelled = False
+
+    async def close(self, *, code: int, reason: str) -> None:
+        self.close_calls += 1
+        self.close_started.set()
+        try:
+            await self.release_close.wait()
+        except asyncio.CancelledError:
+            self.close_cancelled = True
+            raise
+        await super().close(code=code, reason=reason)
 
 
 class _Handler:
@@ -114,6 +134,48 @@ async def test_malformed_frame_fails_channel_with_protocol_code() -> None:
     assert transport.closed is not None
     assert transport.closed[0] == 1002
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_join_and_concurrent_close_wait_for_transport_close() -> None:
+    transport = _BlockingCloseTransport()
+    session = _session(transport, heartbeat_interval_seconds=30)
+    session.start()
+    await transport.incoming.put("not-json")
+    await asyncio.wait_for(transport.close_started.wait(), timeout=5)
+    receiver = next(
+        task for task in session._tasks if task.get_name() == "federation-receive"
+    )
+
+    concurrent_close = asyncio.create_task(session.close())
+    join = asyncio.create_task(session.join())
+    await asyncio.sleep(0)
+
+    assert not concurrent_close.done()
+    assert not join.done()
+    assert not receiver.cancelled()
+    assert not transport.close_cancelled
+    assert transport.close_calls == 1
+    assert transport.closed is None
+    with pytest.raises(FederationError) as caught:
+        await session.request(method="federation.status", request={})
+    assert caught.value.code == FEDERATION_CHANNEL_CLOSED
+    assert transport.sent == []
+
+    concurrent_close.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await concurrent_close
+    assert not transport.close_cancelled
+    assert not join.done()
+
+    transport.release_close.set()
+    await asyncio.wait_for(join, timeout=5)
+
+    assert transport.closed is not None
+    assert transport.closed[0] == 1002
+    assert "federation-malformed-frame" in transport.closed[1]
+    assert not transport.close_cancelled
+    assert transport.close_calls == 1
 
 
 @pytest.mark.parametrize(
