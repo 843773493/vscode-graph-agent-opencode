@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def read_json_object(path: Path, *, default: dict[str, object]) -> dict[str, object]:
@@ -22,6 +25,7 @@ def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
         dir=path.parent,
     )
     temporary_path = Path(temporary_name)
+    write_error: Exception | None = None
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             json.dump(payload, file, ensure_ascii=False, indent=2)
@@ -32,5 +36,21 @@ def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
         if os.name != "nt":
             temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
+    except Exception as error:
+        write_error = error
+        raise
     finally:
-        temporary_path.unlink(missing_ok=True)
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except Exception as cleanup_error:
+            if write_error is None:
+                raise
+            write_error.add_note(
+                f"临时文件清理失败: {temporary_path}: {cleanup_error!r}"
+            )
+            logger.warning(
+                "Gateway JSON 写入失败后的临时文件清理也失败: path=%s, error=%s",
+                temporary_path,
+                cleanup_error,
+                exc_info=cleanup_error,
+            )
