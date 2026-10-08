@@ -112,22 +112,25 @@ class SessionControlStore(
     lease（2.3-E）/ 跨 Session 通信 outbox+inbox ledger（D5）。
 
     构造时创建 database_path 父目录并幂等建表；``user_version`` 只接受
-    全新库0与当前版本9。旧生成数据在任何 journal/WAL 设置前显式拒绝，
+    全新库0与当前版本11。旧生成数据在任何 journal/WAL 设置前显式拒绝，
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 9
+    SCHEMA_VERSION = 11
 
-    def __init__(self, database_path: Path) -> None:
+    def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):
             raise TypeError(f"database_path 必须是 Path: {database_path!r}")
         self.database_path = database_path.expanduser().resolve()
         validate_sqlite_path_budget(self.database_path)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = read_only
+        if not read_only:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._closed = False
         self._connection = self._connect()
         try:
-            self._initialize()
+            if not read_only:
+                self._initialize()
         except BaseException:
             self._connection.close()
             self._closed = True
@@ -168,6 +171,8 @@ class SessionControlStore(
         within a transaction"（详见 ``_write_transaction``）。
         """
         self._ensure_open()
+        if self._read_only:
+            raise RuntimeError("只读 operation replay 控制库禁止写事务")
         if self._connection.in_transaction:
             raise RuntimeError(
                 "session control 写事务嵌套：_begin_immediate 不可重入"
@@ -208,13 +213,14 @@ class SessionControlStore(
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
-            self.database_path,
+            self.database_path.as_uri() + "?mode=ro" if self._read_only else self.database_path,
+            uri=self._read_only,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             isolation_level=None,
             check_same_thread=False,
         )
         current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if current not in (0, self.SCHEMA_VERSION):
+        if current not in ((self.SCHEMA_VERSION,) if self._read_only else (0, self.SCHEMA_VERSION)):
             connection.close()
             raise RuntimeError(
                 "session control schema 版本不受支持，fail-closed 拒绝打开（旧生成数据不迁移）: "
@@ -235,6 +241,9 @@ class SessionControlStore(
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        if self._read_only:
+            connection.execute("PRAGMA query_only = ON")
+            return connection
         journal_mode = str(
             connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         )

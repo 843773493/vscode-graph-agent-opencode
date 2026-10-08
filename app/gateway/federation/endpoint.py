@@ -10,8 +10,9 @@ WebSocket 必须先 ``accept`` 才能发送 close 帧，因此本模块先接受
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -57,7 +58,7 @@ class FederationChannelServer:
     credential_store: FederationCredentialStore
     handler: FederationRequestHandler
     local_role: Literal["hub", "spoke"]
-    on_channel_ready: Callable[[FederationChannelSession], None]
+    on_channel_ready: Callable[[FederationChannelSession], Awaitable[None]]
     on_channel_closed: Callable[[str], None]
 
 
@@ -81,10 +82,10 @@ async def serve_federation_channel(
         )
         await websocket.close(code=1008, reason=f"{error.code}: {error.message}"[:120])
         return
-    server.on_channel_ready(session)
-    session.start()
     try:
-        reason = await session.join()
+        await server.on_channel_ready(session)
+        session.start()
+        reason = await session.wait_closed()
         if reason is not None:
             logger.warning(
                 "联邦 channel 关闭: channel=%s, code=%s, reason=%s",
@@ -92,7 +93,12 @@ async def serve_federation_channel(
                 reason.code,
                 reason.message,
             )
+    except FederationError as error:
+        logger.warning("联邦 channel 登记/运行失败: code=%s, reason=%s", error.code, error.message)
+        await session.close(error)
     finally:
+        await session.close()
+        await session.join()
         server.on_channel_closed(session.channel_instance_id)
 
 
@@ -143,6 +149,7 @@ async def _perform_server_handshake(
         channel_epoch=channel_epoch,
         local_gateway_id=server.local_gateway_id,
         peer=peer,
+        credential_digest=hashlib.sha256(credential.token.encode()).hexdigest(),
         local_role=server.local_role,
     )
     await transport.send_text(

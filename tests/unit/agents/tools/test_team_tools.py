@@ -16,7 +16,7 @@ class _UnusedTeamService:
     pass
 
 
-def test_agent_collaboration_group_collects_cross_session_tools():
+def test_agent_collaboration_group_collects_cross_session_tools(communication_probe, ):
     tools = build_agent_collaboration_tools(
         session_id="ses_current",
         agent_id="default",
@@ -28,7 +28,7 @@ def test_agent_collaboration_group_collects_cross_session_tools():
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
         invocation_context=ToolInvocationContext(),
-        communication_binding_lookup=MagicMock(),
+        session_communication_service=communication_probe,
         include_team_tools=True,
     )
 

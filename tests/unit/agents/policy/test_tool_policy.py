@@ -145,7 +145,7 @@ def test_capability_restriction_cannot_be_overridden_by_runtime_state() -> None:
 
 
 @pytest.mark.usefixtures("workspace_scope")
-def test_policy_default_names_match_actual_agent_graph_tools(
+def test_policy_default_names_match_actual_agent_graph_tools(communication_probe,
     tmp_path: Path,
 ) -> None:
     invocation_context = ToolInvocationContext()
@@ -164,7 +164,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         terminal_resource_owner=MagicMock(),
         invocation_context=invocation_context,
         workspace_root=tmp_path,
-        communication_binding_lookup=MagicMock(),
+        session_communication_service=communication_probe,
         include_team_tools=True,
     )
     model = FakeListChatModel(responses=["ok"])

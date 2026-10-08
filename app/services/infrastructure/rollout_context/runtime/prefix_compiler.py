@@ -299,12 +299,17 @@ def compile_prefix_context(
         prefix_state=state, root=root, tool_set=tool_set,
         previous_assembly_id=previous.assembly_id if previous is not None else None,
         source_revisions=(
+            # tracked rebuild 提交冻结 control CAS；activation 来源只在
+            # revision 真正变化时推进 applied，完整帧已由新 epoch 独立封存。
             tuple(AppliedSourceRevision(
                 source.descriptor.source_id, source.revision,
                 f"source-rebuild:{transition.transition_id}:{source.descriptor.source_id}",
                 source.applied_revision,
                 expected_control_revision=source.expected_control_revision,
-            ) for source in batch.sources)
+            ) for source in batch.sources if (
+                source.expected_control_revision is not None
+                or source.revision != source.applied_revision
+            ))
             if transition is not None else tuple(AppliedSourceRevision(
                 delta.source_id, delta.revision,
                 f"source-seal:{delta.source_id}:{delta.revision}:{delta.kind}",

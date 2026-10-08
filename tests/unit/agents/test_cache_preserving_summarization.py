@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -38,6 +39,8 @@ from app.core.model_delta_context import (
     reset_current_model_delta_sink,
     set_current_model_delta_sink,
 )
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     prefix_has_open_tool_group,
 )
@@ -49,6 +52,9 @@ from app.services.orchestration.message_stream_runtime import MessageStreamRunti
 
 class _SummarizationBoundaryStub:
     """纯分区测试不需要构建真实模型。"""
+
+
+_PREFLIGHT_OWNER = MutationIntentOwner("ses_preflight", "thr_preflight")
 
 
 def _conversation(pair_count: int) -> list[HumanMessage | AIMessage]:
@@ -76,6 +82,7 @@ class _ScriptedPreflight:
     def safe_compaction_prefix_cutoffs(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str,
         state_messages: object,
@@ -84,6 +91,7 @@ class _ScriptedPreflight:
         self.calls.append(
             {
                 "session_id": session_id,
+                "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "cutoff_indexes": list(cutoff_indexes),  # type: ignore[arg-type]
             }
@@ -100,11 +108,16 @@ class _InMemoryPreflight:
     def safe_compaction_prefix_cutoffs(
         self,
         session_id: str,
+        thread_id: str,
         *,
         checkpoint_ns: str,
         state_messages: object,
         cutoff_indexes: object,
     ) -> frozenset[int]:
+        assert (session_id, thread_id) == (
+            _PREFLIGHT_OWNER.session_id,
+            _PREFLIGHT_OWNER.thread_id,
+        )
         return frozenset(
             index
             for index in cutoff_indexes  # type: ignore[arg-type]
@@ -112,10 +125,17 @@ class _InMemoryPreflight:
         )
 
 
-def _stub_runtime() -> SimpleNamespace:
-    return SimpleNamespace(
-        execution_info=SimpleNamespace(thread_id="ses_preflight", checkpoint_ns="")
-    )
+@pytest.fixture
+def preflight_runtime() -> Iterator[SimpleNamespace]:
+    """运行时 thread 与显式会话 owner 分别注入，不能用 session 冒充 thread。"""
+    with session_thread_owner_scope(
+        _PREFLIGHT_OWNER, langgraph_thread_id=_PREFLIGHT_OWNER.thread_id
+    ):
+        yield SimpleNamespace(
+            execution_info=SimpleNamespace(
+                thread_id=_PREFLIGHT_OWNER.thread_id, checkpoint_ns=""
+            )
+        )
 
 
 def _preflight_conversation() -> list[AnyMessage]:
@@ -945,7 +965,9 @@ def test_safe_cutoff_keeps_tool_call_and_result_together() -> None:
     assert cutoff == 1
 
 
-def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments() -> None:
+def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments(
+    preflight_runtime: SimpleNamespace,
+) -> None:
     tool_ai = AIMessage(
         content="",
         tool_calls=[
@@ -994,7 +1016,7 @@ def test_prepare_compaction_never_rewrites_stable_prefix_tool_arguments() -> Non
             CachePreservingSummarizationMiddleware._preflight_partition_boundaries
         )
 
-    request = ModelRequest(model=None, messages=messages, runtime=_stub_runtime())
+    request = ModelRequest(model=None, messages=messages, runtime=preflight_runtime)
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _PrepareStub(),  # type: ignore[arg-type]
         request,
@@ -1051,10 +1073,6 @@ def test_compact_tool_schedules_emergency_replacement_when_regular_cutoff_is_zer
         def _determine_cutoff_index(_: list) -> int:
             return 0
 
-        @staticmethod
-        def _find_safe_cutoff_point(_: list, target: int) -> int:
-            return target
-
     middleware = object.__new__(CachePreservingSummarizationToolMiddleware)
     middleware._summarization = _SummarizationStub()  # type: ignore[attr-defined]
     middleware._is_eligible_for_compaction = lambda _: True  # type: ignore[method-assign]
@@ -1077,10 +1095,6 @@ async def test_http_compaction_check_uses_emergency_replacement_partition() -> N
         @staticmethod
         def _determine_cutoff_index(_: list) -> int:
             return 0
-
-        @staticmethod
-        def _find_safe_cutoff_point(_: list, target: int) -> int:
-            return target
 
     compactor = object.__new__(AgentSummarizationCompactor)
     compactor._build_summarization = lambda _: _SummarizationStub()  # type: ignore[method-assign]
@@ -1338,7 +1352,9 @@ async def test_forced_compaction_async_summary_failure_falls_back_to_original_co
     assert response.command.update["_force_cache_compaction"] is False
 
 
-def test_prepare_preserves_complete_api_round_without_new_human_boundary() -> None:
+def test_prepare_preserves_complete_api_round_without_new_human_boundary(
+    preflight_runtime: SimpleNamespace,
+) -> None:
     messages = _single_human_tool_rounds()
 
     class _PrepareStub:
@@ -1368,7 +1384,7 @@ def test_prepare_preserves_complete_api_round_without_new_human_boundary() -> No
 
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _PrepareStub(),  # type: ignore[arg-type]
-        ModelRequest(model=None, messages=messages, runtime=_stub_runtime()),
+        ModelRequest(model=None, messages=messages, runtime=preflight_runtime),
     )
 
     assert prepared is not None
@@ -1461,7 +1477,8 @@ async def test_async_compaction_uses_context_activity_handler() -> None:
     assert started_payload["detail"]["summarized_message_count"] == 2
 
 
-def _emergency_replacement_partition() -> tuple[
+@pytest.fixture
+def emergency_replacement_partition(preflight_runtime: SimpleNamespace) -> tuple[
     list[HumanMessage | AIMessage],
     CachePreservingPartition,
 ]:
@@ -1492,13 +1509,9 @@ def _emergency_replacement_partition() -> tuple[
         def _determine_cutoff_index(_: list) -> int:
             return 0
 
-        @staticmethod
-        def _find_safe_cutoff_point(_: list, target: int) -> int:
-            return target
-
     prepared = CachePreservingSummarizationMiddleware._prepare_cache_compaction(
         _EmergencyPrepareStub(),  # type: ignore[arg-type]
-        ModelRequest(model=None, messages=messages, runtime=_stub_runtime()),
+        ModelRequest(model=None, messages=messages, runtime=preflight_runtime),
     )
     assert prepared is not None
     _, partition = prepared
@@ -1509,8 +1522,12 @@ def _emergency_replacement_partition() -> tuple[
     return messages, partition
 
 
-def test_cache_replacement_sync_overflow_reaches_minimal_fallback() -> None:
-    messages, partition = _emergency_replacement_partition()
+def test_cache_replacement_sync_overflow_reaches_minimal_fallback(
+    emergency_replacement_partition: tuple[
+        list[HumanMessage | AIMessage], CachePreservingPartition
+    ],
+) -> None:
+    messages, partition = emergency_replacement_partition
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
     request = ModelRequest(
         model=None,
@@ -1549,8 +1566,12 @@ def test_cache_replacement_sync_overflow_reaches_minimal_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cache_replacement_async_overflow_reaches_minimal_fallback() -> None:
-    _, partition = _emergency_replacement_partition()
+async def test_cache_replacement_async_overflow_reaches_minimal_fallback(
+    emergency_replacement_partition: tuple[
+        list[HumanMessage | AIMessage], CachePreservingPartition
+    ],
+) -> None:
+    _, partition = emergency_replacement_partition
     middleware = object.__new__(CachePreservingSummarizationMiddleware)
     request = ModelRequest(
         model=None,
@@ -1577,7 +1598,9 @@ async def test_cache_replacement_async_overflow_reaches_minimal_fallback() -> No
     assert observed[-1].system_message != request.system_message
 
 
-def test_replacement_rolls_existing_cache_prefix_and_summary_together() -> None:
+def test_replacement_rolls_existing_cache_prefix_and_summary_together(
+    preflight_runtime: SimpleNamespace,
+) -> None:
     raw_messages = _conversation(5)
     old_summary = HumanMessage(content="旧摘要")
     old_event = {
@@ -1629,7 +1652,7 @@ def test_replacement_rolls_existing_cache_prefix_and_summary_together() -> None:
             model=None,
             messages=raw_messages,
             state={"_summarization_event": old_event},
-            runtime=_stub_runtime(),
+            runtime=preflight_runtime,
         ),
     )
     assert prepared is not None
@@ -1701,7 +1724,9 @@ def test_encrypted_reasoning_block_survives_prefix_and_tail_projection() -> None
     )
 
 
-def test_preflight_conflict_blocks_summary_offload_and_transition() -> None:
+def test_preflight_conflict_blocks_summary_offload_and_transition(
+    preflight_runtime: SimpleNamespace,
+) -> None:
     messages = _preflight_conversation()
     port = _ScriptedPreflight(safe_cutoff_indexes=frozenset())
     offloaded: list[object] = []
@@ -1716,7 +1741,7 @@ def test_preflight_conflict_blocks_summary_offload_and_transition() -> None:
         model=None,
         messages=messages,
         state={},
-        runtime=_stub_runtime(),
+        runtime=preflight_runtime,
     )
 
     with pytest.raises(ToolProtocolBoundaryConflict):
@@ -1725,9 +1750,16 @@ def test_preflight_conflict_blocks_summary_offload_and_transition() -> None:
     assert offloaded == []
     assert handler_calls == []
     assert port.calls
+    assert all(
+        (call["session_id"], call["thread_id"])
+        == (_PREFLIGHT_OWNER.session_id, _PREFLIGHT_OWNER.thread_id)
+        for call in port.calls
+    )
 
 
-def test_preflight_closed_boundary_runs_summary_offload_and_transition() -> None:
+def test_preflight_closed_boundary_runs_summary_offload_and_transition(
+    preflight_runtime: SimpleNamespace,
+) -> None:
     messages = _preflight_conversation()
     port = _ScriptedPreflight()
     offloaded: list[object] = []
@@ -1747,7 +1779,7 @@ def test_preflight_closed_boundary_runs_summary_offload_and_transition() -> None
         model=None,
         messages=messages,
         state={},
-        runtime=_stub_runtime(),
+        runtime=preflight_runtime,
     )
 
     result = middleware.wrap_model_call(request, handler)
@@ -1760,4 +1792,9 @@ def test_preflight_closed_boundary_runs_summary_offload_and_transition() -> None
     assert len(offloaded) == 1
     assert offloaded[0] == messages[4:7]
     assert len(port.calls) == 2
+    assert all(
+        (call["session_id"], call["thread_id"])
+        == (_PREFLIGHT_OWNER.session_id, _PREFLIGHT_OWNER.thread_id)
+        for call in port.calls
+    )
     assert len(handler_calls) >= 2

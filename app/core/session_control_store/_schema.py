@@ -11,6 +11,12 @@ from app.core.session_control_communication_ledger.communication_ledger import (
     COMMUNICATION_OUTBOX_TABLE_DDL,
     IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL,
 )
+from app.core.session_control_communication_ledger.observations import (
+    REMOTE_OBSERVATION_EXPIRY_DDL,
+    REMOTE_OBSERVATION_KEY_DDL,
+    REMOTE_OBSERVATION_PAGES_DDL,
+    REMOTE_OBSERVATIONS_DDL,
+)
 from app.core.session_control_operation_lease.operation_lease import (
     IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL,
     SESSION_OPERATION_LEASES_TABLE_DDL,
@@ -67,6 +73,10 @@ class SchemaInitMixin:
             self._connection.execute(THREAD_OWNER_BINDINGS_TABLE_DDL)
             self._connection.execute(COMMUNICATION_OUTBOX_TABLE_DDL)
             self._connection.execute(COMMUNICATION_INBOX_TABLE_DDL)
+            self._connection.execute(REMOTE_OBSERVATIONS_DDL)
+            self._connection.execute(REMOTE_OBSERVATION_PAGES_DDL)
+            self._connection.execute(REMOTE_OBSERVATION_KEY_DDL)
+            self._connection.execute(REMOTE_OBSERVATION_EXPIRY_DDL)
             self._connection.execute(IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL)
             if current != self.SCHEMA_VERSION:
                 self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")

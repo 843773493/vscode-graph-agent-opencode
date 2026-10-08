@@ -157,7 +157,9 @@ def _validate_activation_guidance(
         raise ItemSchemaError("context-source-seal-conflict: guidance 正文/revision 与冻结 activation 不一致")
     previous_revision = previous_frames[-1].item_ref.source_revision if previous_frames else None
     applied = tuple(source for source in binding.source_revisions if source.source_id == MCP_GUIDANCE_SOURCE_ID)
-    required = previous_revision != expected_revision or binding.prefix.consumed_transition is not None
+    # 新 epoch 复用相同 activation revision 时仍校验完整指引帧，
+    # 但它没有推进来源 revision，不得伪造一份重复 applied 回执。
+    required = previous_revision != expected_revision
     if len(applied) != int(required) or any(
         source.revision != expected_revision or source.previous_revision != previous_revision
         or source.expected_control_revision is not None

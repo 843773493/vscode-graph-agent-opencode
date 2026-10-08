@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
@@ -83,9 +83,9 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_session_target_resolver(self) -> SessionTargetResolverProtocol: ...
 
-    def get_session_message_delivery_service(
+    def get_session_communication_service(
         self,
-    ) -> SessionMessageDeliveryProtocol: ...
+    ) -> SessionCommunicationProtocol: ...
 
     def get_mcp_tools(self) -> list[BaseTool]: ...
 
@@ -153,8 +153,8 @@ def build_session_agent_runtime(
             dependency_provider.get_workspace_session_context_client()
         ),
         session_target_resolver=dependency_provider.get_session_target_resolver(),
-        session_message_delivery_service=(
-            dependency_provider.get_session_message_delivery_service()
+        session_communication_service=(
+            dependency_provider.get_session_communication_service()
         ),
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,

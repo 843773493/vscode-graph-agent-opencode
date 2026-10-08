@@ -82,7 +82,7 @@ async def run_agent_with_retries(
     parent_session_id: str | None,
     delegated_report_allowed_kinds: frozenset[str],
     requires_session_question_reply: bool,
-    question_sender_session_id: str | None,
+    question_source: GlobalThreadAddress | None,
     question_communication_id: str | None,
 ) -> StepAgentRetryResult:
 
@@ -172,7 +172,6 @@ async def run_agent_with_retries(
             requires_session_question_reply
             and not _has_valid_session_question_reply(
                 successful_tool_calls,
-                sender_session_id=question_sender_session_id,
                 communication_id=question_communication_id,
             )
         )
@@ -270,20 +269,23 @@ async def run_agent_with_retries(
             continue
 
         if final_text and missing_session_question_reply:
+            if question_source is None:
+                raise RuntimeError("跨会话回复缺少受信 source 地址")
+            question_target_ref = session_resource_uri(question_source.workspace_id, question_source.session_id)
             delegated_report_retries += 1
             if delegated_report_retries > DELEGATED_REPORT_RETRY_LIMIT:
                 raise RuntimeError(
                     "Agent 收到跨会话问题后返回了普通文本，但没有通过 "
                     "send_message_to_session 定向回复。"
                     f" session_id={session_id} job_id={job_id} "
-                    f"sender_session_id={question_sender_session_id} "
+                    f"source={question_source} "
                     f"communication_id={question_communication_id} "
                     f"retry_limit={DELEGATED_REPORT_RETRY_LIMIT}"
                 )
             reminder = (
                 "你正在回答另一个 Agent 的跨会话问题，普通最终文本不会送达提问方。"
                 "必须调用 send_message_to_session："
-                f"target_session_id={question_sender_session_id}，"
+                f"target_session_id={question_target_ref}，"
                 "kind=reply，"
                 f"reply_to_communication_id={question_communication_id}。"
                 f"这是第 {delegated_report_retries} 次通信恢复。"
@@ -306,7 +308,7 @@ async def run_agent_with_retries(
                     metadata={
                         "source": "session_question_reply_retry",
                         "attempt": delegated_report_retries,
-                        "sender_session_id": question_sender_session_id,
+                        "source_address": {"gateway_id": question_source.gateway_id, "workspace_id": question_source.workspace_id, "session_id": question_source.session_id, "thread_id": question_source.thread_id},
                         "communication_id": question_communication_id,
                     },
                 )
@@ -358,3 +360,5 @@ async def run_agent_with_retries(
 
 
 __all__ = ["StepAgentRetryResult", "run_agent_with_retries"]
+from app.services.business.communication.addresses import GlobalThreadAddress
+from app.services.business.session_context_resource import session_resource_uri

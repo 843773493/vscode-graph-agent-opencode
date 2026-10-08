@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.rpc import FederationRpcService
@@ -36,6 +38,9 @@ def _service(tmp_path: Path) -> FederationRpcService:
         signing_key=load_or_create_signing_key(root),
         catalog=WorkspaceCatalogPort(),
         session_main=WorkspaceSessionMainPort(),
+        credential_store=FederationCredentialStore(
+            storage_path=root / "credentials/federation.json"
+        ),
         spoke_directory=None,
     )
 
@@ -47,7 +52,7 @@ def _local_target(workspace_id: str, backend_url: str, root: Path) -> WorkspaceT
         root_path=str(root),
         backend_url=backend_url,
         connection_kind="local",
-        backend_workspace_id="00000000-0000-4000-8000-000000000001",
+        backend_workspace_id=_backend_id(workspace_id),
     )
 
 
@@ -58,6 +63,10 @@ def _catalog_ids(service: FederationRpcService) -> dict[str, str]:
         workspace_id: backend_url
         for workspace_id, (backend_url, _) in port._backend_endpoints.items()
     }
+
+
+def _backend_id(route_id: str) -> str:
+    return str(uuid5(NAMESPACE_URL, "federation-port-refresh:" + route_id))
 
 
 def _session_main_ids(service: FederationRpcService) -> dict[str, str]:
@@ -83,7 +92,9 @@ def test_commit_observer_tracks_added_and_removed_workspaces(tmp_path: Path) -> 
         activate=False,
     )
     assert _catalog_ids(service) == {"gw_one": "http://127.0.0.1:41100"}
-    assert _session_main_ids(service) == {"gw_one": "http://127.0.0.1:41100"}
+    assert _session_main_ids(service) == {
+        _backend_id("gw_one"): "http://127.0.0.1:41100"
+    }
 
     registry.upsert(
         _local_target("gw_two", "http://127.0.0.1:41101", tmp_path / "two"),
@@ -96,7 +107,9 @@ def test_commit_observer_tracks_added_and_removed_workspaces(tmp_path: Path) -> 
 
     registry.remove("gw_one")
     assert _catalog_ids(service) == {"gw_two": "http://127.0.0.1:41101"}
-    assert _session_main_ids(service) == {"gw_two": "http://127.0.0.1:41101"}
+    assert _session_main_ids(service) == {
+        _backend_id("gw_two"): "http://127.0.0.1:41101"
+    }
 
 
 def test_remote_projection_workspaces_are_not_projected(tmp_path: Path) -> None:

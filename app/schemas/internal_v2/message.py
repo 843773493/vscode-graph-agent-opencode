@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field
 
 from .attachment import AttachmentRef
 from .common import MessageRole, RunMode, TimestampedDTO
@@ -38,18 +38,6 @@ class MessageRunRequest(BaseModel):
 
     message: MessageCreateRequest
     run: RunOptions
-
-
-class SessionMessageDispatchRequest(BaseModel):
-    """Gateway 代理的跨会话消息派发请求。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    content: str = Field(min_length=1)
-    metadata: dict[str, object] = Field(default_factory=dict)
-    simulate_user: StrictBool = False
-    delivery_policy: DeliveryPolicy = "after_turn"
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class MessageRunAccepted(BaseModel):

@@ -5,15 +5,19 @@ from __future__ import annotations
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from langchain_core.tools import BaseTool, StructuredTool
+from langgraph.checkpoint.base import empty_checkpoint
 from pydantic import Field, create_model
 
+from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
@@ -34,6 +38,9 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.infrastructure.rollout_context.checkpoint.seal import (
+    preparation as seal_preparation,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
@@ -213,10 +220,9 @@ async def test_empty_catalog_keeps_explicit_lineage_and_custom_typed_members(cat
         await owner.shutdown()
 
 
-async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
-    catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire, monkeypatch,
-):
-    _owner, factory, registry, _scope = catalog_runtime
+@pytest.fixture
+def guidance_prepare(catalog_runtime, registry_db, frozen_provider_activation, frozen_provider_wire):
+    _owner, _factory, registry, _scope = catalog_runtime
     saver, session, _connection, accepted = registry_db
     thread = saver._storage.main_thread_id(session)
     admission = saver.execution_admission(
@@ -247,7 +253,16 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
             )
         return result, activation["activation_snapshot"]
 
-    first, before = prepare("owner-guidance-first")
+    return prepare
+
+
+async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
+    catalog_runtime, registry_db, guidance_prepare, monkeypatch,
+):
+    _owner, factory, registry, _scope = catalog_runtime
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    first, before = guidance_prepare("owner-guidance-first")
     parent = next(binding for binding in before.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     original_body = saver.read_resource_activation_payload(before, parent)
     original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
@@ -267,7 +282,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
     factory.session.minimum = 5
     factory.changed()
     await drain_pending_relists(_owner)
-    second, after = prepare("owner-guidance-schema-only")
+    second, after = guidance_prepare("owner-guidance-schema-only")
     changed = next(binding for binding in after.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
     assert parent.revision == changed.revision
     assert parent.content_hash == changed.content_hash
@@ -284,7 +299,7 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
 
     with monkeypatch.context() as patch:
         patch.setattr(registry, "capture", forbid_live_capture)
-        retry, restored_activation = prepare("owner-guidance-first")
+        retry, restored_activation = guidance_prepare("owner-guidance-first")
     assert retry["messages"] == first["messages"]
     assert restored_activation == before
     with RolloutCheckpointSaver(saver._storage.sessions_dir) as restarted:
@@ -295,3 +310,65 @@ async def test_owner_freeze_seal_and_restart_use_exact_guidance_and_members(
         ref = next(binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
         assert ref.members == changed.members
         assert restarted.read_resource_activation_payload(restored, ref) == original_body
+
+
+@pytest.mark.parametrize("invalid", ["missing_receipt", "changed_content"])
+async def test_guidance_seal_rejects_invalid_receipt_or_body_atomically(
+    catalog_runtime, registry_db, guidance_prepare, monkeypatch, invalid,
+):
+    owner, factory, _registry, _scope = catalog_runtime
+    saver, session, connection, accepted = registry_db
+    thread = saver._storage.main_thread_id(session)
+    first, _activation = guidance_prepare("guidance-guard-first")
+    original = saver.get_context_assembly(session, thread, assembly_id=first["assembly_id"])
+    original_bytes = canonical_json_bytes(original.to_dict())
+    counts = tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                   for table in ("context_assemblies", "context_assembly_selections", "resource_activation_assembly_bindings"))
+    if invalid == "missing_receipt":
+        factory.session.description = "实际推进的 MCP 指引正文"
+        factory.changed()
+        await drain_pending_relists(owner)
+    else:
+        admission = saver.execution_admission(
+            session, thread_id=thread, execution_id=accepted["initial_execution_id"],
+        )
+        checkpoint = empty_checkpoint()
+        checkpoint["id"] = "guidance-guard-checkpoint"
+        checkpoint["channel_values"] = {"messages": []}
+        checkpoint["channel_versions"] = {"messages": "1"}
+        with (
+            session_thread_owner_scope(MutationIntentOwner(session, thread), langgraph_thread_id=thread),
+            execution_admission_scope(admission, langgraph_thread_id=thread),
+        ):
+            config = saver.put(build_checkpoint_config(thread), checkpoint, {"source": "loop"}, {"messages": "1"})
+            saver.rewind(config, checkpoint_id=checkpoint["id"])
+
+    compile_prefix = seal_preparation.compile_prefix_context
+
+    def corrupt_preparation(*args, **kwargs):
+        plan, preparation = compile_prefix(*args, **kwargs)
+        if invalid == "missing_receipt":
+            preparation = replace(preparation, source_revisions=tuple(
+                source for source in preparation.source_revisions if source.source_id != MCP_GUIDANCE_SOURCE_ID
+            ))
+        else:
+            assert preparation.transition is not None
+            preparation = replace(preparation, prefix_state=replace(preparation.prefix_state, frames=tuple(
+                replace(frame, content="同 revision 的伪造指引正文")
+                if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID else frame
+                for frame in preparation.prefix_state.frames
+            )))
+        return plan, preparation
+
+    monkeypatch.setattr(seal_preparation, "compile_prefix_context", corrupt_preparation)
+    if invalid == "missing_receipt":
+        with pytest.raises(ItemSchemaError, match="guidance applied revision"):
+            guidance_prepare("guidance-guard-invalid:" + invalid)
+    else:
+        with pytest.raises(ValueError, match="source-mismatch: source wire frame 与 sealed 正文不一致"):
+            guidance_prepare("guidance-guard-invalid:" + invalid)
+    assert tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                 for table in ("context_assemblies", "context_assembly_selections", "resource_activation_assembly_bindings")) == counts
+    assert canonical_json_bytes(saver.get_context_assembly(session, thread, assembly_id=original.assembly_id).to_dict()) == original_bytes
+    assert connection.execute("SELECT COUNT(*) FROM context_source_control_states WHERE source_id=?",
+                              (MCP_GUIDANCE_SOURCE_ID,)).fetchone() == (0,)

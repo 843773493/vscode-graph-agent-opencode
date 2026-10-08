@@ -40,6 +40,10 @@ from app.gateway.credentials import (
     FederationCredentialStore,
     load_or_create_gateway_id,
 )
+from app.gateway.federation.channel_owner import (
+    FederationChannelOwner,
+    registered_spokes,
+)
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.rpc import FederationRpcService
@@ -48,6 +52,7 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.federation.workspace_port import (
+    FederationSpokeDirectory,
     WorkspaceCatalogPort,
     WorkspaceSessionMainPort,
 )
@@ -174,7 +179,13 @@ async def lifespan(app: FastAPI):
         signing_key=load_or_create_signing_key(_gateway_root()),
         catalog=WorkspaceCatalogPort(),
         session_main=WorkspaceSessionMainPort(),
-        spoke_directory=None,
+        credential_store=app.state.federation_credential_store,
+        spoke_directory=FederationSpokeDirectory(provider=lambda: registered_spokes(registry)),
+    )
+    app.state.federation_channel_owner = FederationChannelOwner(
+        registry=registry, credentials=app.state.federation_credential_store,
+        gateway_root=_gateway_root(), service=app.state.federation_rpc_service,
+        reconnect_seconds=gateway_config.gateway_process_health_poll_interval_seconds,
     )
     # 工作区注册/注销必须让联邦只读端口随之更新；接在 registry 的单点 commit
     # 观察者上，任一注册/注销入口（新建、删除、远程投影、配置 batch）都立即生效。
@@ -354,6 +365,7 @@ async def lifespan(app: FastAPI):
     pending = None
     pending_promotion_committed = False
     try:
+        await app.state.federation_channel_owner.start()
         await gateway_config_reload.start()
         await app.state.session_generator_coordinator.start()
         coordinator_started = True
@@ -676,9 +688,14 @@ async def lifespan(app: FastAPI):
             logger.info("Gateway 正在停止会话生成协调器")
             await app.state.session_generator_coordinator.stop()
         logger.info("Gateway 正在关闭 HTTP 连接池")
+        shutdown_errors: list[Exception] = []
+        try:
+            await app.state.federation_channel_owner.stop()
+        except Exception as error:
+            shutdown_errors.append(error)
+            logger.exception("Gateway 关闭联邦 channel 失败")
         await app.state.http_client.aclose()
         await app.state.streaming_http_client.aclose()
-        shutdown_errors: list[Exception] = []
         logger.info("Gateway 正在关闭 SSH 端口转发")
         try:
             await app.state.port_forward_manager.close()

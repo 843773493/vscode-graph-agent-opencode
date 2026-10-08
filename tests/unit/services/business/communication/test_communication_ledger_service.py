@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.identifier import create_uuid_hex
 from app.core.session_control_store import (
@@ -25,6 +24,7 @@ from app.services.business.communication.admission import (
     CommunicationSendRequest,
 )
 from app.services.business.communication.ledger import CommunicationLedgerService
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 DEFAULT_CREATED_AT = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
 
@@ -44,7 +44,7 @@ class SessionHarness:
         self.facade = CommunicationLedgerService(
             session_id=self.session_id,
             store=self.store,
-            gate=self.gate,
+            write_admission=self.gate.exclusive,
         )
 
     def address(self) -> GlobalThreadAddress:
@@ -91,7 +91,7 @@ async def test_admit_outgoing_send_creates_lease_and_outbox(
     request = make_send_request(harness_a.address(), harness_b.address())
     decision = await harness_a.facade.admit_outgoing_send(
         request=request, communication_id=f"comm_{uuid.uuid4().hex}"
-    )
+    , request_id="req-communication-test", target_ref="fixture-target")
     assert decision.is_duplicate is False
     leases = harness_a.store.list_non_terminal_leases()
     assert any(
@@ -116,10 +116,10 @@ async def test_admit_outgoing_send_duplicate_keeps_lease_token(
     communication_id = f"comm_{uuid.uuid4().hex}"
     first = await harness_a.facade.admit_outgoing_send(
         request=request, communication_id=communication_id
-    )
+    , request_id="req-communication-test", target_ref="fixture-target")
     second = await harness_a.facade.admit_outgoing_send(
         request=request, communication_id=communication_id
-    )
+    , request_id="req-communication-test", target_ref="fixture-target")
     assert first.is_duplicate is False
     assert second.is_duplicate is True
     assert second.communication_id == first.communication_id
@@ -138,7 +138,7 @@ async def test_admit_outgoing_send_payload_drift_conflicts(
     communication_id = f"comm_{uuid.uuid4().hex}"
     await harness_a.facade.admit_outgoing_send(
         request=request, communication_id=communication_id
-    )
+    , request_id="req-communication-test", target_ref="fixture-target")
     drifted = CommunicationSendRequest(
         source=request.source,
         target_binding=request.target_binding,
@@ -148,7 +148,7 @@ async def test_admit_outgoing_send_payload_drift_conflicts(
     with pytest.raises(RuntimeError, match="preimage"):
         await harness_a.facade.admit_outgoing_send(
             request=drifted, communication_id=communication_id
-        )
+        , request_id="req-communication-test", target_ref="fixture-target")
 
 
 async def test_accept_incoming_send_creates_target_lease_and_inbox(
@@ -162,7 +162,7 @@ async def test_accept_incoming_send_creates_target_lease_and_inbox(
         source=harness_a.address(),
         target=harness_b.address(),
         payload=payload,
-    )
+     request_id="req-communication-test")
     assert inbox.state == "target_accepted"
     admission_id, wakeup_key = derive_communication_admission_identity(
         communication_id, inbox.payload_hash
@@ -188,13 +188,13 @@ async def test_accept_incoming_send_duplicate_is_idempotent(
         source=harness_a.address(),
         target=harness_b.address(),
         payload=payload,
-    )
+     request_id="req-communication-test")
     second = await harness_b.facade.accept_incoming_send(
         communication_id=communication_id,
         source=harness_a.address(),
         target=harness_b.address(),
         payload=payload,
-    )
+     request_id="req-communication-test")
     assert second.communication_id == first.communication_id
     assert second.admission_id == first.admission_id
     assert second.state == "target_accepted"
@@ -210,7 +210,7 @@ async def test_accept_rejects_foreign_target_session(
             source=harness_b.address(),
             target=harness_b.address(),
             payload=CommunicationPayload(content="x"),
-        )
+         request_id="req-communication-test")
 
 
 async def test_deleting_gate_rejects_new_admission(
@@ -222,7 +222,7 @@ async def test_deleting_gate_rejects_new_admission(
         await harness_a.facade.admit_outgoing_send(
             request=make_send_request(harness_a.address(), harness_b.address()),
             communication_id=f"comm_{uuid.uuid4().hex}",
-        )
+         request_id="req-communication-test", target_ref="fixture-target")
 
 
 async def test_reply_round_trip_and_forgery_rejected(
@@ -233,13 +233,13 @@ async def test_reply_round_trip_and_forgery_rejected(
     await harness_a.facade.admit_outgoing_send(
         request=make_send_request(harness_a.address(), harness_b.address()),
         communication_id=question_id,
-    )
+     request_id="req-communication-test", target_ref="fixture-target")
     await harness_b.facade.accept_incoming_send(
         communication_id=question_id,
         source=harness_a.address(),
         target=harness_b.address(),
         payload=CommunicationPayload(content="周报数据"),
-    )
+     request_id="req-communication-test")
     reply_id = f"comm_{uuid.uuid4().hex}"
     await harness_b.facade.admit_outgoing_send(
         request=CommunicationSendRequest(
@@ -255,7 +255,7 @@ async def test_reply_round_trip_and_forgery_rejected(
             ),
         ),
         communication_id=reply_id,
-    )
+     request_id="req-communication-test", target_ref="fixture-target")
     accepted = await harness_a.facade.accept_incoming_send(
         communication_id=reply_id,
         source=harness_b.address(),
@@ -263,7 +263,7 @@ async def test_reply_round_trip_and_forgery_rejected(
         payload=CommunicationPayload(
             content="回复", kind="reply", reply_to_communication_id=question_id
         ),
-    )
+     request_id="req-communication-test")
     assert accepted.state == "target_accepted"
     # 伪造：reply_to 指向本库不存在的 outbox → fail closed
     forged_id = f"comm_{uuid.uuid4().hex}"
@@ -277,4 +277,4 @@ async def test_reply_round_trip_and_forgery_rejected(
                 kind="reply",
                 reply_to_communication_id=f"comm_{uuid.uuid4().hex}",
             ),
-        )
+         request_id="req-communication-test")

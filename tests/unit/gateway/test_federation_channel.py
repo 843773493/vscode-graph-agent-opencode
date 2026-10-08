@@ -12,6 +12,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Self
 
@@ -22,6 +23,7 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from app.core.trace_middleware import reset_current_request_id, set_current_request_id
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.dialer import HubDialRequest, dial_spoke_channel
 from app.gateway.federation.errors import (
@@ -72,11 +74,23 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.runtime.process import allocate_local_port_in_range
+from app.services.business.session_context_resource import (
+    session_resource_identity,
+    session_resource_uri,
+)
+from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, TARGET_THREAD
 
 pytestmark = pytest.mark.contract
 
 PORT_RANGE = (8790, 8799)
 CHAIN = ("gateway_origin", "gateway_hub", "gateway_spoke")
+
+
+@pytest.fixture(autouse=True)
+def request_scope():
+    token = set_current_request_id("req_test")
+    yield
+    reset_current_request_id(token)
 
 
 class _Catalog:
@@ -92,22 +106,32 @@ class _SessionMain:
         self,
         mapping: dict[tuple[str, str, str], str],
         *,
-        delay_seconds: float = 0.0,
+        execute_delay_seconds: float = 0.0,
     ) -> None:
         self.mapping = mapping
-        self.delay_seconds = delay_seconds
+        self.execute_delay_seconds = execute_delay_seconds
+        self.execute_entered = asyncio.Event()
 
     async def resolve_main_thread(
         self, *, gateway_id: str, workspace_id: str, session_id: str
     ) -> str:
-        if self.delay_seconds:
-            await asyncio.sleep(self.delay_seconds)
         key = (gateway_id, workspace_id, session_id)
         if key not in self.mapping:
             raise FederationError(
                 FEDERATION_TARGET_NOT_RESOLVABLE, "没有该 target 的 main thread"
             )
         return self.mapping[key]
+
+    async def execute(self, *, operation, target, body, origin, timeout):
+        self.execute_entered.set()
+        if self.execute_delay_seconds:
+            await asyncio.sleep(self.execute_delay_seconds)
+        raise AssertionError("本 channel 拒绝路径测试不应进入业务执行")
+
+
+@pytest.fixture
+def blocked_main() -> _SessionMain:
+    return _SessionMain({}, execute_delay_seconds=30.0)
 
 
 class _SpokeDirectory:
@@ -165,6 +189,7 @@ async def _start_gateway(
         signing_key=load_or_create_signing_key(root),
         catalog=catalog,
         session_main=session_main,
+        credential_store=credential_store,
         spoke_directory=_SpokeDirectory(spokes) if role == "hub" else None,
     )
     app = FastAPI()
@@ -194,6 +219,7 @@ async def _start_gateway(
     try:
         yield gateway
     finally:
+        await service.close_channels()
         server.should_exit = True
         await asyncio.wait_for(task, timeout=10)
         control.close()
@@ -291,6 +317,7 @@ def _signed_grant(
     lifetime_seconds: float = 30.0,
     target: GrantTarget | None = None,
     operation: str | None = None,
+    request_preimage: dict[str, object],
 ) -> dict[str, object]:
     """用 ``signer_root`` 的私钥签发 grant（issuer 恒为受信 hub id）。"""
 
@@ -301,7 +328,8 @@ def _signed_grant(
         origin_gateway_id=origin,
         audience_gateway_id=audience,
         transit_path=transit_path,
-        request_id="req_test",
+        request_id=request_preimage["request_id"],
+        request_preimage=request_preimage,
         principal_ref=principal_ref_for_gateway(origin),
         lifetime_seconds=lifetime_seconds,
         target=target,
@@ -309,7 +337,9 @@ def _signed_grant(
     ).encode()
 
 
-def _expired_grant(*, signer_root: Path) -> dict[str, object]:
+def _expired_grant(
+    *, signer_root: Path, request_preimage: dict[str, object]
+) -> dict[str, object]:
     """构造签名正确但已过期的 grant。"""
 
     import base64
@@ -323,7 +353,8 @@ def _expired_grant(*, signer_root: Path) -> dict[str, object]:
         origin_gateway_id="gateway_origin",
         audience_gateway_id="gateway_spoke",
         transit_path=CHAIN,
-        request_id="req_expired",
+        request_id=request_preimage["request_id"],
+        request_preimage=request_preimage,
         principal_ref=principal_ref_for_gateway("gateway_origin"),
         lifetime_seconds=30.0,
         now=datetime.now(UTC) - timedelta(seconds=120),
@@ -343,20 +374,37 @@ def _expired_grant(*, signer_root: Path) -> dict[str, object]:
 
 def _discovery_request(
     *,
-    grant: dict[str, object],
-    session_id: str = "ses_target",
+    signer_root: Path,
+    origin: str = "gateway_origin",
+    audience: str = "gateway_spoke",
+    transit_path: tuple[str, ...] = CHAIN,
+    session_id: str = "ses_019b9dffc29a779e8564d196f78bb0a6",
     nonce: str = "n",
     visited: tuple[str, ...] = ("gateway_origin", "gateway_hub"),
+    max_gateway_hops: int = MAX_GATEWAY_HOPS,
+    expired: bool = False,
 ) -> dict[str, object]:
-    return {
-        "grant": grant,
+    request = {
+        "request_id": "req_test",
         "session_id": session_id,
         "nonce": nonce,
         # visited 是「已走过的完整路径」；receiver 侧再拼接自身后必须等于 grant path。
         "visited": list(visited),
         "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
-        "max_gateway_hops": MAX_GATEWAY_HOPS,
+        "max_gateway_hops": max_gateway_hops,
     }
+    grant = (
+        _expired_grant(signer_root=signer_root, request_preimage=request)
+        if expired
+        else _signed_grant(
+            signer_root=signer_root,
+            origin=origin,
+            audience=audience,
+            transit_path=transit_path,
+            request_preimage=request,
+        )
+    )
+    return {**request, "grant": grant}
 
 
 @asynccontextmanager
@@ -412,7 +460,7 @@ async def test_unknown_method_returns_explicit_error(tmp_path: Path) -> None:
                 {
                     "correlation_id": "cor_x",
                     "method": "federation.nonexistent",
-                    "request": {},
+                    "request": {"request_id": "req_test"},
                 },
             )
             error = await client.recv_error()
@@ -478,8 +526,22 @@ async def test_hello_gateway_id_mismatch_is_closed_with_1008(tmp_path: Path) -> 
 async def test_valid_grant_returns_bounded_discovery_match(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
@@ -490,12 +552,10 @@ async def test_valid_grant_returns_bounded_discovery_match(tmp_path: Path) -> No
                     "correlation_id": "cor_ok",
                     "method": METHOD_DISCOVERY,
                     "request": _discovery_request(
-                        grant=_signed_grant(
-                            signer_root=hub_root,
-                            origin="gateway_origin",
-                            audience="gateway_spoke",
-                            transit_path=CHAIN,
-                        )
+                        signer_root=hub_root,
+                        origin="gateway_origin",
+                        audience="gateway_spoke",
+                        transit_path=CHAIN,
                     ),
                 },
             )
@@ -503,8 +563,10 @@ async def test_valid_grant_returns_bounded_discovery_match(tmp_path: Path) -> No
             assert result["matches"] == [
                 {
                     "gateway_id": "gateway_spoke",
-                    "workspace_id": "ws_a",
-                    "session_id": "ses_target",
+                    "workspace_id": "22222222-2222-4222-8222-222222222222",
+                    "session_id": "ses_019b9dffc29a779e8564d196f78bb0a6",
+                    "thread_id": TARGET_THREAD,
+                    "main_thread_id": TARGET_THREAD,
                 }
             ]
             assert result["ambiguity_count"] == 1
@@ -516,22 +578,34 @@ async def test_declared_path_must_match_grant_path(tmp_path: Path) -> None:
 
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
         request = _discovery_request(
-            grant=_signed_grant(
-                signer_root=hub_root,
-                origin="gateway_origin",
-                audience="gateway_spoke",
-                transit_path=CHAIN,
-            ),
+            signer_root=hub_root,
+            origin="gateway_origin",
+            audience="gateway_spoke",
+            transit_path=CHAIN,
             nonce=new_origin_nonce(),
         )
         # 声明少一个 Gateway：拼自身后与 grant 的 3 段路径不等。
-        request["visited"] = ["gateway_hub"]
+        request = _discovery_request(signer_root=hub_root, visited=("gateway_hub",))
         async with client:
             await client.send(
                 FRAME_REQUEST,
@@ -550,21 +624,35 @@ async def test_declared_path_must_match_grant_path(tmp_path: Path) -> None:
 async def test_discovery_hop_limit_is_rejected_loudly(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
         request = _discovery_request(
-            grant=_signed_grant(
-                signer_root=hub_root,
-                origin="gateway_origin",
-                audience="gateway_spoke",
-                transit_path=CHAIN,
-            ),
+            signer_root=hub_root,
+            origin="gateway_origin",
+            audience="gateway_spoke",
+            transit_path=CHAIN,
             nonce=new_origin_nonce(),
         )
-        request["max_gateway_hops"] = MAX_GATEWAY_HOPS + 1
+        request = _discovery_request(
+            signer_root=hub_root, max_gateway_hops=MAX_GATEWAY_HOPS + 1
+        )
         async with client:
             await client.send(
                 FRAME_REQUEST,
@@ -583,22 +671,36 @@ async def test_discovery_hop_limit_is_rejected_loudly(tmp_path: Path) -> None:
 async def test_visited_set_recursion_is_rejected(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
         request = _discovery_request(
-            grant=_signed_grant(
-                signer_root=hub_root,
-                origin="gateway_origin",
-                audience="gateway_spoke",
-                transit_path=CHAIN,
-            ),
+            signer_root=hub_root,
+            origin="gateway_origin",
+            audience="gateway_spoke",
+            transit_path=CHAIN,
             nonce=new_origin_nonce(),
         )
         # 本 Gateway 已在 visited 中 → 递归，必须拒绝。
-        request["visited"] = ["gateway_hub", "gateway_spoke"]
+        request = _discovery_request(
+            signer_root=hub_root, visited=("gateway_hub", "gateway_spoke")
+        )
         async with client:
             await client.send(
                 FRAME_REQUEST,
@@ -616,8 +718,22 @@ async def test_visited_set_recursion_is_rejected(tmp_path: Path) -> None:
 async def test_expired_grant_is_rejected(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
@@ -627,9 +743,7 @@ async def test_expired_grant_is_rejected(tmp_path: Path) -> None:
                 {
                     "correlation_id": "cor_exp",
                     "method": METHOD_DISCOVERY,
-                    "request": _discovery_request(
-                        grant=_expired_grant(signer_root=hub_root)
-                    ),
+                    "request": _discovery_request(signer_root=hub_root, expired=True),
                 },
             )
             error = await client.recv_error()
@@ -642,8 +756,22 @@ async def test_forged_grant_is_rejected_by_signature(tmp_path: Path) -> None:
     attacker_root.mkdir(parents=True)
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, _hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
@@ -654,12 +782,10 @@ async def test_forged_grant_is_rejected_by_signature(tmp_path: Path) -> None:
                     "correlation_id": "cor_forge",
                     "method": METHOD_DISCOVERY,
                     "request": _discovery_request(
-                        grant=_signed_grant(
-                            signer_root=attacker_root,
-                            origin="gateway_origin",
-                            audience="gateway_spoke",
-                            transit_path=CHAIN,
-                        )
+                        signer_root=attacker_root,
+                        origin="gateway_origin",
+                        audience="gateway_spoke",
+                        transit_path=CHAIN,
                     ),
                 },
             )
@@ -671,29 +797,49 @@ async def test_forged_grant_is_rejected_by_signature(tmp_path: Path) -> None:
 async def test_grant_replay_is_rejected(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
     ) as (spoke, hub, hub_root):
         client = await _open_raw(gateway=spoke, hub=hub, token=_issue(spoke, hub=hub))
         request = _discovery_request(
-            grant=_signed_grant(
-                signer_root=hub_root,
-                origin="gateway_origin",
-                audience="gateway_spoke",
-                transit_path=CHAIN,
-            ),
+            signer_root=hub_root,
+            origin="gateway_origin",
+            audience="gateway_spoke",
+            transit_path=CHAIN,
             nonce="fixed-nonce",
         )
         async with client:
             await client.send(
                 FRAME_REQUEST,
-                {"correlation_id": "cor_1", "method": METHOD_DISCOVERY, "request": request},
+                {
+                    "correlation_id": "cor_1",
+                    "method": METHOD_DISCOVERY,
+                    "request": request,
+                },
             )
             assert (await client.recv())["payload"]["ok"] is True
             await client.send(
                 FRAME_REQUEST,
-                {"correlation_id": "cor_2", "method": METHOD_DISCOVERY, "request": request},
+                {
+                    "correlation_id": "cor_2",
+                    "method": METHOD_DISCOVERY,
+                    "request": request,
+                },
             )
             error = await client.recv_error()
             assert error["code"] == FEDERATION_GRANT_REPLAY
@@ -703,8 +849,22 @@ async def test_grant_replay_is_rejected(tmp_path: Path) -> None:
 async def test_hardening_without_rules_denies_core_capability(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
         policy_payload={"hardening_enabled": True, "rules": []},
     ) as (spoke, hub, hub_root):
@@ -716,12 +876,10 @@ async def test_hardening_without_rules_denies_core_capability(tmp_path: Path) ->
                     "correlation_id": "cor_hard",
                     "method": METHOD_DISCOVERY,
                     "request": _discovery_request(
-                        grant=_signed_grant(
-                            signer_root=hub_root,
-                            origin="gateway_origin",
-                            audience="gateway_spoke",
-                            transit_path=CHAIN,
-                        )
+                        signer_root=hub_root,
+                        origin="gateway_origin",
+                        audience="gateway_spoke",
+                        transit_path=CHAIN,
                     ),
                 },
             )
@@ -733,8 +891,22 @@ async def test_hardening_without_rules_denies_core_capability(tmp_path: Path) ->
 async def test_deny_rule_returns_authorization_revoked(tmp_path: Path) -> None:
     async with _spoke_with_hub(
         tmp_path,
-        catalog=_Catalog({"ses_target": ("ws_a",)}),
-        session_main=_SessionMain({}),
+        catalog=_Catalog(
+            {
+                "ses_019b9dffc29a779e8564d196f78bb0a6": (
+                    "22222222-2222-4222-8222-222222222222",
+                )
+            }
+        ),
+        session_main=_SessionMain(
+            {
+                (
+                    "gateway_spoke",
+                    "22222222-2222-4222-8222-222222222222",
+                    "ses_019b9dffc29a779e8564d196f78bb0a6",
+                ): TARGET_THREAD
+            }
+        ),
         role="spoke",
         policy_payload={"rules": [{"capability": "discovery", "effect": "deny"}]},
     ) as (spoke, hub, hub_root):
@@ -746,12 +918,10 @@ async def test_deny_rule_returns_authorization_revoked(tmp_path: Path) -> None:
                     "correlation_id": "cor_rev",
                     "method": METHOD_DISCOVERY,
                     "request": _discovery_request(
-                        grant=_signed_grant(
-                            signer_root=hub_root,
-                            origin="gateway_origin",
-                            audience="gateway_spoke",
-                            transit_path=CHAIN,
-                        )
+                        signer_root=hub_root,
+                        origin="gateway_origin",
+                        audience="gateway_spoke",
+                        transit_path=CHAIN,
                     ),
                 },
             )
@@ -761,14 +931,16 @@ async def test_deny_rule_returns_authorization_revoked(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_peer_disconnect_fails_in_flight_request(tmp_path: Path) -> None:
+async def test_peer_disconnect_fails_in_flight_request(
+    tmp_path: Path, blocked_main: _SessionMain
+) -> None:
     """对端在请求在途时断开：in-flight 请求必须以 channel-closed 显式失败。"""
 
     async with _start_gateway(
         gateway_id="gateway_spoke_a",
         tmp_path=tmp_path,
         catalog=_Catalog({}),
-        session_main=_SessionMain({}, delay_seconds=30.0),
+        session_main=blocked_main,
         role="spoke",
     ) as spoke:
         hub_root = tmp_path / "hub_dialer"
@@ -780,7 +952,9 @@ async def test_peer_disconnect_fails_in_flight_request(tmp_path: Path) -> None:
             catalog=_Catalog({}),
             session_main=_SessionMain({}),
             role="hub",
-            spokes=(FederationSpoke(gateway_id="gateway_spoke_a", connection_id="rgw"),),
+            spokes=(
+                FederationSpoke(gateway_id="gateway_spoke_a", connection_id="rgw"),
+            ),
         ) as hub_gateway:
             session = await dial_spoke_channel(
                 request=HubDialRequest(
@@ -796,9 +970,48 @@ async def test_peer_disconnect_fails_in_flight_request(tmp_path: Path) -> None:
             )
             target = GrantTarget(
                 gateway_id="gateway_spoke_a",
-                workspace_id="ws_a",
-                session_id="ses_target",
+                workspace_id="22222222-2222-4222-8222-222222222222",
+                session_id="ses_019b9dffc29a779e8564d196f78bb0a6",
             )
+            request = {
+                "request_id": "req_test",
+                "operation": "read",
+                "target": target.to_payload(),
+                "visited": ["gateway_origin", "gateway_hub"],
+                "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
+                "max_gateway_hops": MAX_GATEWAY_HOPS,
+                "body": {
+                    "observation_id": "obs_disconnect",
+                    "source_call_id": "cop_disconnect",
+                    "page_identity": "page-0",
+                    "page_ordinal": 0,
+                    "expires_at": (
+                            datetime.now(UTC) + timedelta(minutes=5)
+                        ).isoformat(),
+                    "operation": "read",
+                    "source": {
+                        "gateway_id": "gateway_origin",
+                        "workspace_id": "11111111-1111-4111-8111-111111111111",
+                        "session_id": SOURCE_SESSION,
+                        "thread_id": SOURCE_THREAD,
+                    },
+                    "target": {**target.to_payload(), "thread_id": TARGET_THREAD},
+                    "query": {
+                        "read": {
+                            "resource_identity": str(
+                                session_resource_identity(
+                                    target.workspace_id, target.session_id
+                                )
+                            ),
+                            "uri": session_resource_uri(
+                                target.workspace_id, target.session_id
+                            ),
+                            "scope": "workspace",
+                            "view": "messages",
+                        },
+                    },
+                },
+            }
             grant = _signed_grant(
                 signer_root=hub_root,
                 origin="gateway_origin",
@@ -807,23 +1020,17 @@ async def test_peer_disconnect_fails_in_flight_request(tmp_path: Path) -> None:
                 kind="operation",
                 target=target,
                 operation="read",
+                request_preimage=request,
             )
             pending = asyncio.create_task(
                 session.request(
                     method=METHOD_RELAY,
-                    request={
-                        "grant": grant,
-                        "operation": "read",
-                        "target": target.to_payload(),
-                        "visited": ["gateway_origin", "gateway_hub"],
-                        "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
-                        "max_gateway_hops": MAX_GATEWAY_HOPS,
-                    },
+                    request={**request, "grant": grant},
                     timeout=25.0,
                 )
             )
-            # 目标解析被挂住（30s delay），此时对端中途断开。
-            await asyncio.sleep(1.0)
+            # 确认冻结地址的冷观察已在途执行，再断开真实 channel。
+            await asyncio.wait_for(blocked_main.execute_entered.wait(), timeout=3)
             spoke.server.should_exit = True
             with pytest.raises(FederationError) as error:
                 await asyncio.wait_for(pending, timeout=25)

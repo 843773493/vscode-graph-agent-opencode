@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core.background_message_bus import BackgroundMessageBus
+from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.schemas.internal_v2.common import JobStatus
@@ -234,3 +235,22 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     assert await message_bus.list_messages(active_session_id, "default") == [
         active_message
     ]
+
+
+async def test_missing_session_guard_rejects_before_preparation(
+    admission_harness: _AdmissionHarness,
+) -> None:
+    missing = "ses_019b9dffc29a779e8564d196f78bb0a6"
+    with pytest.raises(NotFoundError, match="Session .* not found"):
+        admission_harness.session_service.assert_session_active(missing)
+    preparation_calls = []
+
+    async def prepare() -> str:
+        preparation_calls.append(missing)
+        return "prepared"
+
+    with pytest.raises(NotFoundError, match="Session .* not found"):
+        await admission_harness.job_service.run_session_preparation(missing, prepare)
+    assert preparation_calls == []
+    assert admission_harness.job_service._session_preparations == {}
+    assert admission_harness.job_service._jobs == {}

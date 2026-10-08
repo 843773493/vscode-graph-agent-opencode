@@ -148,7 +148,11 @@ class SessionService:
 
     def assert_session_active(self, session_id: str) -> None:
         """拒绝删除中的 owner 进入新业务准入，目录与清理读取仍可见。"""
-        self._assert_session_node_active(self._path_resolver.get_node(session_id))
+        try:
+            node = self._path_resolver.get_node(session_id)
+        except KeyError as error:
+            raise NotFoundError(f"Session {session_id} not found") from error
+        self._assert_session_node_active(node)
 
     @asynccontextmanager
     async def session_write_admission(self, session_id: str) -> AsyncIterator[None]:

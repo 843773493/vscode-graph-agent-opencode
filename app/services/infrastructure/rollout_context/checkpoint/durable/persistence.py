@@ -439,6 +439,41 @@ class RolloutCheckpointPersistenceMixin:
                     timestamp,
                     view_kind=view_kind,
                 )
+                # canonical history 保留两个 sink 的全部事实；LangGraph messages
+                # channel 只冻结本次提供的消息和声明的父 channel，不能夹带尚未
+                # 进入 checkpoint 的 stream result。两种 selection 均由同一
+                # context view owner 提交，不从 Turn 的物理全量记录重建执行状态。
+                parent_messages_view = None
+                messages_sequences = visible_sequences
+                if parent is not None and view_kind == "checkpoint":
+                    parent_channel = connection.execute(
+                        "SELECT context_view_id FROM checkpoint_channels "
+                        "WHERE checkpoint_id = ? AND channel_name = 'messages'",
+                        (parent[0],),
+                    ).fetchone()
+                    if parent_channel is None:
+                        raise RuntimeError("父 checkpoint 缺少 messages channel selection")
+                    parent_messages_view = self._require_checkpoint_messages_view(
+                        connection, checkpoint_id=strict_text(parent[0], field="checkpoints.checkpoint_id"),
+                        history_view_id=strict_text(parent[6], field="checkpoints.view_id"),
+                        branch_id=strict_text(parent[7], field="checkpoints.branch_id"),
+                        messages_view_id=strict_text(parent_channel[0], field="checkpoint_channels.context_view_id"),
+                    )
+                    if parent[7] != active_branch:
+                        if active_view_id is None:
+                            raise RuntimeError("跨分支 checkpoint 缺少权威 active view selection")
+                        # rewind 后只保留父 channel 中仍被当前分支选中的前缀；
+                        # 本次写入可以是 delta，不能丢掉前缀或带回已移除消息。
+                        selected = set(self._view_message_sequences_from_connection(connection, active_view_id))
+                        messages_sequences = [
+                            sequence for sequence in self._view_message_sequences_from_connection(connection, parent_messages_view)
+                            if sequence in selected
+                        ] + visible_sequences
+                        parent_messages_view = None
+                messages_view_id = self._create_view(
+                    connection, active_branch, parent_messages_view, messages_sequences,
+                    timestamp, view_kind="checkpoint_messages",
+                )
                 (
                     versions_seen_type,
                     versions_seen_blob,
@@ -477,7 +512,7 @@ class RolloutCheckpointPersistenceMixin:
                     ),
                 )
                 self._insert_checkpoint_channels(
-                    connection, checkpoint_id, checkpoint, view_id, timestamp
+                    connection, checkpoint_id, checkpoint, messages_view_id, timestamp
                 )
                 self._capture_checkpoint_context_sources(
                     connection,
@@ -513,13 +548,13 @@ class RolloutCheckpointPersistenceMixin:
                     timestamp,
                 )
                 view_cursor = connection.execute(
-                    "UPDATE context_views SET control_sequence = ? WHERE view_id = ?",
-                    (control_sequence, view_id),
+                    "UPDATE context_views SET control_sequence = ? WHERE view_id IN (?, ?)",
+                    (control_sequence, view_id, messages_view_id),
                 )
-                if view_cursor.rowcount != 1:
+                if view_cursor.rowcount != 2:
                     raise RuntimeError(
                         "checkpoint view control_sequence 更新行数异常: "
-                        f"view_id={view_id}, rowcount={view_cursor.rowcount}"
+                        f"view_id={view_id}, messages_view_id={messages_view_id}, rowcount={view_cursor.rowcount}"
                     )
                 if new_jsonl_records:
                     commit_cursor = connection.execute(

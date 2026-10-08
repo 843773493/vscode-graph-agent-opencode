@@ -48,6 +48,10 @@ class OutboxWritesMixin:
         kind: str,
         reply_to_communication_id: str | None,
         payload_hash: str,
+        content: str,
+        delivery_policy: str,
+        request_id: str,
+        target_ref: str,
     ) -> tuple[CommunicationOutboxRecord, bool]:
         """create-or-get source outbox（gate 内短事务调用）。
 
@@ -104,6 +108,7 @@ class OutboxWritesMixin:
             "kind": kind,
             "reply_to_communication_id": reply_to_communication_id,
             "payload_hash": payload_hash,
+            "content": content, "delivery_policy": delivery_policy, "target_ref": target_ref,
         }
         with self._write_transaction() as connection:
             existing_by_operation = _fetch_outbox_row_by_operation(
@@ -155,6 +160,7 @@ class OutboxWritesMixin:
                         "target_gateway_id": target_gateway_id,
                         "target_workspace_id": target_workspace_id,
                         "target_thread_id": target_thread_id,
+                        "target_session_id": target_session_id,
                     },
                     session_id=session_id,
                     reply_to_communication_id=str(reply_to_communication_id),
@@ -166,7 +172,7 @@ class OutboxWritesMixin:
             now_text = datetime.now(UTC).isoformat()
             connection.execute(
                 f"INSERT INTO communication_outbox ({_COMMUNICATION_OUTBOX_COLUMNS}) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                 "'accepted', NULL, NULL, ?, ?)",
                 (
                     send_operation_id,
@@ -182,6 +188,7 @@ class OutboxWritesMixin:
                     kind,
                     reply_to_communication_id,
                     payload_hash,
+                    content, delivery_policy, request_id, target_ref,
                     now_text,
                     now_text,
                 ),
@@ -328,3 +335,12 @@ class OutboxWritesMixin:
                 )
             return _communication_outbox_from_row(updated)
 
+
+    def drain_communication_outboxes(self) -> None:
+        """删除 owner 已持 gate；保留原 receipt/身份，把全部未终态发送明确取消。"""
+        with self._write_transaction() as connection:
+            connection.execute(
+                "UPDATE communication_outbox SET state='cancelled',abort_reason='source-deleted',updated_at=? "
+                "WHERE state NOT IN ('terminal','failed','cancelled')",
+                (datetime.now(UTC).isoformat(),),
+            )

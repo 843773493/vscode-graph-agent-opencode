@@ -12,10 +12,6 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_message import (
-    SessionMessageDeliveryProtocol,
-    SessionMessageTransportProtocol,
-)
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_resources import (
     BackgroundTaskRegistryProtocol,
@@ -39,8 +35,6 @@ __all__ = [
     "JobServiceProtocol",
     "JobStepExecutor",
     "SessionContextQueryProtocol",
-    "SessionMessageDeliveryProtocol",
-    "SessionMessageTransportProtocol",
     "SessionOrchestratorProtocol",
     "SessionResourceMessageProtocol",
     "SessionSubagentProtocol",

@@ -14,13 +14,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.session_target import SessionTargetResolverProtocol
 from app.abstractions.team import TeamCoordinationProtocol
@@ -80,7 +80,6 @@ from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )
-from app.agents.tools.session_wait import CommunicationWaitBindingLookupPort
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
@@ -136,9 +135,6 @@ from app.services.infrastructure.rollout_context.storage.resource_activation_com
     ResourceActivationStoreError,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from app.services.orchestration.communication.binding_lookup import (
-    SessionControlStoreWaitBindingLookup,
-)
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
@@ -415,8 +411,7 @@ def create_my_deep_agent(
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
     | None = None,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
-    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
-    communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
+    session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
     tool_timeout_seconds: float | None = None,
@@ -589,11 +584,6 @@ def create_my_deep_agent(
             raise RuntimeError(
                 "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
             )
-        if communication_binding_lookup is None:
-            raise RuntimeError(
-                "create_my_deep_agent 构建默认工具集时需要显式传入 communication "
-                "binding lookup（wait_for_session 的跨会话执行绑定解析）"
-            )
         visible_tools = build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
@@ -612,8 +602,7 @@ def create_my_deep_agent(
             terminal_resource_owner=terminal_resource_owner,
             invocation_context=tool_invocation_context,
             workspace_root=workspace_root,
-            session_message_delivery_service=session_message_delivery_service,
-            communication_binding_lookup=communication_binding_lookup,
+            session_communication_service=session_communication_service,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,
         )
@@ -630,6 +619,7 @@ def create_my_deep_agent(
             session_context_query_service=session_context_query_service,
             workspace_session_context_client=workspace_session_context_client,
             session_target_resolver=session_target_resolver,
+            session_communication_service=session_communication_service,
             session_orchestrator=session_orchestrator,
             config_service=config_service,
             terminal_resource_owner=terminal_resource_owner,
@@ -949,7 +939,7 @@ def create_runtime_deep_agent_for_session(
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
     | None = None,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
-    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
+    session_communication_service: SessionCommunicationProtocol | None = None,
     mcp_tools: Sequence[BaseTool] | None = None,
     mcp_catalog_owner: McpCatalogOwner | None = None,
     name: str | None = None,
@@ -1000,9 +990,6 @@ def create_runtime_deep_agent_for_session(
         )
 
     model = override_model if override_model is not None else runtime["model"]
-    communication_binding_lookup = SessionControlStoreWaitBindingLookup(
-        path_resolver=session_service.path_resolver,
-    )
 
     # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
     binding = (
@@ -1050,8 +1037,7 @@ def create_runtime_deep_agent_for_session(
         session_context_query_service=session_context_query_service,
         workspace_session_context_client=workspace_session_context_client,
         session_target_resolver=session_target_resolver,
-        session_message_delivery_service=session_message_delivery_service,
-        communication_binding_lookup=communication_binding_lookup,
+        session_communication_service=session_communication_service,
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,
         tool_timeout_seconds=tool_timeout_seconds,

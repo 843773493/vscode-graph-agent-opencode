@@ -8,6 +8,7 @@ grant 与 `permissions.federation` 策略快照。
 ## 可修改内容
 
 - `ws://.../api/gateway/federation/channel` 的握手、心跳、断线语义与 RPC 分发。
+- 复用现有 registry 的 SSH 隧道、凭据及 peer/channel 生命周期，在 Gateway 组合根接通 hub/spoke 目录与长期 channel；工作区请求仍透明转发给目标 backend 的业务 owner。
 - grant 签发/校验、transit 上限、first-use replay registry、channel 注册表与
   短 TTL route hint。
 - `permissions.federation` 默认值与原子热发布快照。

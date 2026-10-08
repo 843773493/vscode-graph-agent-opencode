@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
 import uuid
+from contextlib import closing
 from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,8 +79,8 @@ def test_initialize_creates_tables_and_sets_user_version(tmp_path: Path) -> None
     created = SessionControlStore(target)
     try:
         version = int(created.connection.execute("PRAGMA user_version").fetchone()[0])
-        # fresh schema 9 不再维护 SessionControl 的第二套 ToolSet 镜像。
-        assert version == SessionControlStore.SCHEMA_VERSION == 9
+        # fresh schema 11 不再维护 SessionControl 的第二套 ToolSet 镜像。
+        assert version == SessionControlStore.SCHEMA_VERSION == 11
         tables = {
             str(row[0])
             for row in created.connection.execute(
@@ -173,7 +176,7 @@ def test_initialize_is_idempotent_on_reopen(tmp_path: Path) -> None:
         assert str(row["kind"]) == "main"
         version = int(second.connection.execute("PRAGMA user_version").fetchone()[0])
         # 当前 schema 重开保持完整 GraphBinding，不升级旧生成数据。
-        assert version == 9
+        assert version == 11
     finally:
         second.close()
 
@@ -191,7 +194,7 @@ def _assert_unsupported_schema_unchanged(target: Path, version: int) -> None:
     """拒绝旧库时不改数据库字节，也不产生 journal/WAL/shm 副作用。"""
     paths = tuple(target.with_name(target.name + suffix) for suffix in ("", "-journal", "-wal", "-shm"))
     before = {path.name: path.read_bytes() for path in paths if path.exists()}
-    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=9"):
+    with pytest.raises(RuntimeError, match=rf"schema 版本不受支持.*user_version={version}, supported=11"):
         SessionControlStore(target)
     after = {path.name: path.read_bytes() for path in paths if path.exists()}
     assert after == before
@@ -203,11 +206,11 @@ def test_unknown_user_version_fails_closed(tmp_path: Path) -> None:
     created.close()
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 10")
+        outside.execute("PRAGMA user_version = 12")
         outside.commit()
     finally:
         outside.close()
-    _assert_unsupported_schema_unchanged(target, 10)
+    _assert_unsupported_schema_unchanged(target, 12)
 
 
 def test_v6_database_is_rejected_without_creating_missing_tables(tmp_path: Path) -> None:
@@ -749,9 +752,9 @@ def test_v1_database_repeated_rejection_is_byte_preserving(tmp_path: Path) -> No
     _assert_unsupported_schema_unchanged(target, 1)
 
 
-@pytest.mark.parametrize("version", range(1, 9))
+@pytest.mark.parametrize("version", range(1, 11))
 def test_old_generated_schema_versions_reject_before_wal_and_keep_bytes(tmp_path: Path, version: int) -> None:
-    """所有旧生成版本 1–8 都在初始化与 journal/WAL 设置前拒绝。"""
+    """所有旧生成版本 1–9 都在初始化与 journal/WAL 设置前拒绝。"""
     target = tmp_path / "session-control.sqlite"
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
@@ -773,7 +776,7 @@ def test_current_schema_with_missing_graph_binding_columns_fails_closed(tmp_path
     build_v1_database(target, make_thread_id())
     outside = sqlite3.connect(target)
     try:
-        outside.execute("PRAGMA user_version = 9")
+        outside.execute("PRAGMA user_version = 11")
         outside.commit()
     finally:
         outside.close()
@@ -2893,6 +2896,8 @@ def outbox_kwargs(communication_id: str, **over: object) -> dict[str, object]:
         "kind": "progress",
         "reply_to_communication_id": None,
         "payload_hash": make_payload_hash(),
+        "content": "fixture content", "delivery_policy": "after_turn", "request_id": "req-communication-test",
+        "target_ref": "fixture-target",
     }
     kwargs.update(over)
     return kwargs
@@ -3239,6 +3244,8 @@ def inbox_kwargs(
         "kind": "progress",
         "reply_to_communication_id": None,
         "payload_hash": make_payload_hash(),
+        "content": "fixture content", "delivery_policy": "after_turn", "request_id": "req-communication-test",
+        "target_gateway_id": "gw_b", "target_workspace_id": "ws_b",
     }
     kwargs.update(over)
     return kwargs
@@ -3356,18 +3363,18 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
                 turn_id=None,
                 claim_owner="w1",
                 claim_generation=1,
-            )
+             execution_id="exec-communication-test")
         store.claim_communication_inbox_admission(
             communication_id, claim_owner="w1", claim_generation=1
         )
-        with pytest.raises(ValueError, match="job_id 形态非法"):
+        with pytest.raises(ValueError, match="job_id 必须是 1-256"):
             store.mark_communication_inbox_execution_bound(
                 communication_id,
-                job_id="nope",
+                job_id="",
                 turn_id=None,
                 claim_owner="w1",
                 claim_generation=1,
-            )
+             execution_id="exec-communication-test")
         with pytest.raises(RuntimeError, match="claim 与当前持有 claim 不一致"):
             store.mark_communication_inbox_execution_bound(
                 communication_id,
@@ -3375,14 +3382,14 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
                 turn_id=None,
                 claim_owner="w9",
                 claim_generation=1,
-            )
+             execution_id="exec-communication-test")
         bound = store.mark_communication_inbox_execution_bound(
             communication_id,
             job_id=job_id,
             turn_id="turn-1",
             claim_owner="w1",
             claim_generation=1,
-        )
+         execution_id="exec-communication-test")
         assert bound.state == "execution_bound"
         assert bound.job_id == job_id
         assert bound.turn_id == "turn-1"
@@ -3392,7 +3399,7 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
             turn_id="turn-1",
             claim_owner="w1",
             claim_generation=1,
-        )
+         execution_id="exec-communication-test")
         assert repeated.turn_id == "turn-1"
         with pytest.raises(RuntimeError, match="identity 漂移"):
             store.mark_communication_inbox_execution_bound(
@@ -3401,7 +3408,7 @@ def test_inbox_mark_bound_and_record_failure(tmp_path: Path) -> None:
                 turn_id="turn-2",
                 claim_owner="w1",
                 claim_generation=1,
-            )
+             execution_id="exec-communication-test")
         # 失败记录：state 保持 target_accepted、untouched 的 claim 校验
         fresh, _ = store.create_or_get_communication_inbox(
             **inbox_kwargs(make_comm_id(), main_thread_id)
@@ -3461,7 +3468,7 @@ def test_inbox_listing_and_get_fail_closed(tmp_path: Path) -> None:
             turn_id=None,
             claim_owner="w1",
             claim_generation=1,
-        )
+         execution_id="exec-communication-test")
         listed = store.list_target_accepted_communication_inboxes()
         assert {item.communication_id for item in listed} == {
             records[0].communication_id,
@@ -3530,27 +3537,29 @@ def test_outbox_reply_causal_direction_is_enforced_by_endpoints(
             main_thread_id, DEFAULT_CREATED_AT, TEST_THREAD_GRAPH_BINDING
         )
         peer_thread_id = make_thread_id()
+        peer_session_id = make_session_id()
         forward_id = make_comm_id()
         store.create_or_get_communication_inbox(
             session_id=session_id,
             communication_id=forward_id,
             source_gateway_id="gw_peer",
             source_workspace_id="ws_peer",
-            source_session_id=make_session_id(),
+            source_session_id=peer_session_id,
             source_thread_id=peer_thread_id,
             target_thread_id=main_thread_id,
             kind="progress",
             reply_to_communication_id=None,
             payload_hash=make_payload_hash("forward"),
-        )
+         content="fixture content", delivery_policy="after_turn", request_id="req-communication-test", target_gateway_id="gw_b", target_workspace_id="ws_b")
         reply_base = outbox_kwargs(make_comm_id())
         reply_base.update(
             session_id=session_id,
-            source_gateway_id="gw_peer",
-            source_workspace_id="ws_peer",
+            source_gateway_id="gw_b",
+            source_workspace_id="ws_b",
             source_thread_id=main_thread_id,
             target_gateway_id="gw_peer",
             target_workspace_id="ws_peer",
+            target_session_id=peer_session_id,
             target_thread_id=peer_thread_id,
             kind="reply",
             reply_to_communication_id=forward_id,
@@ -3615,7 +3624,7 @@ def test_inbox_reply_causal_direction_is_enforced_by_endpoints(
             kind="progress",
             reply_to_communication_id=None,
             payload_hash=make_payload_hash("forward"),
-        )
+         content="fixture content", delivery_policy="after_turn", request_id="req-communication-test", target_ref="fixture-target")
         reply_base = inbox_kwargs(make_comm_id(), main_thread_id)
         reply_base.update(
             session_id=session_id,
@@ -3623,6 +3632,8 @@ def test_inbox_reply_causal_direction_is_enforced_by_endpoints(
             source_workspace_id="ws_b",
             source_session_id=source_session_id,
             source_thread_id=peer_thread_id,
+            target_gateway_id="gw_a",
+            target_workspace_id="ws_a",
             target_thread_id=main_thread_id,
             kind="reply",
             reply_to_communication_id=forward_id,
@@ -3951,7 +3962,7 @@ def test_owner_binding_rejects_retired_toolset_update_parameters(
 
 
 def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -> None:
-    """原有空 SQLite 文件与不存在的 fresh 文件都可初始化 schema 9。"""
+    """原有空 SQLite 文件与不存在的 fresh 文件都可初始化 schema 11。"""
     target = tmp_path / "session-control.sqlite"
     empty = sqlite3.connect(target)
     try:
@@ -3961,7 +3972,7 @@ def test_empty_existing_v0_database_initializes_current_schema(tmp_path: Path) -
         empty.close()
     created = SessionControlStore(target)
     try:
-        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert created.connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert created.connection.execute("SELECT name FROM sqlite_schema WHERE name = 'thread_catalog'").fetchone() is not None
     finally:
         created.close()
@@ -4010,3 +4021,172 @@ def test_nonempty_v0_database_rejects_before_journal_or_ddl_and_keeps_bytes(
         ).fetchall() == before_rows
     finally:
         outside.close()
+
+
+def test_remote_page_database_unique_ordinal_and_call(store: SessionControlStore) -> None:
+    from app.core.session_control_communication_ledger.observations import (
+        RemoteObservationError,
+    )
+    store.admit_remote_observation("obs_constraint", side="target", request={"fixed": True}, expires_at=JUNE_2.isoformat())
+    store.admit_remote_page("obs_constraint", side="target", page_identity="call-one", page_ordinal=0, request={"cursor": None})
+    with pytest.raises(RemoteObservationError, match="read-snapshot-mismatch"):
+        store.admit_remote_page("obs_constraint", side="target", page_identity="call-two", page_ordinal=0, request={"cursor": None})
+    with pytest.raises(RemoteObservationError, match="read-snapshot-mismatch"):
+        store.admit_remote_page("obs_constraint", side="target", page_identity="call-one", page_ordinal=1, request={"cursor": "different"})
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        raw_execute(store, "INSERT INTO remote_observation_pages VALUES(?,?,?,?,?,NULL,NULL)", ("obs_constraint", "target", "call-two", 0, "{}"))
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        raw_execute(store, "INSERT INTO remote_observation_pages VALUES(?,?,?,?,?,NULL,NULL)", ("obs_constraint", "target", "call-one", 1, "{}"))
+    assert len(store.list_remote_pages("obs_constraint", side="target")) == 1
+
+
+def test_operation_replay_store_is_read_only_without_initialization(tmp_path: Path) -> None:
+    target = tmp_path / "session-control.sqlite"
+    writer = SessionControlStore(target)
+    writer.admit_remote_observation("obs_readonly", side="source", request={"fixed": True}, expires_at=JUNE_2.isoformat())
+    writer.close()
+    before = target.read_bytes()
+    reader = SessionControlStore(target, read_only=True)
+    try:
+        assert reader.get_remote_observation("obs_readonly", side="source").request == {"fixed": True}
+        with pytest.raises(RuntimeError, match="只读 operation replay"):
+            reader.delete_remote_observation("obs_readonly", side="source")
+    finally:
+        reader.close()
+    assert target.read_bytes() == before
+    missing = tmp_path / "never-created" / "session-control.sqlite"
+    with pytest.raises(sqlite3.OperationalError):
+        SessionControlStore(missing, read_only=True)
+    assert not missing.parent.exists()
+
+
+@pytest.fixture
+def observation_gc_store(store: SessionControlStore) -> SessionControlStore:
+    """两端和无关 lease 同库，验证只清理原 observation 的精确闭包。"""
+    store.initialize_fence()
+    for side in ("source", "target"):
+        store.admit_remote_observation("obs_atomic_gc", side=side, request={"frozen": side}, expires_at=JUNE_2.isoformat())
+        store.admit_remote_page("obs_atomic_gc", side=side, page_identity="page_atomic_gc", page_ordinal=0, request={"original": side})
+        store.commit_remote_page("obs_atomic_gc", side=side, page_identity="page_atomic_gc", result={"status": "completed"})
+        for identity in (side + "-observation|obs_atomic_gc", side + "-page|page_atomic_gc"):
+            lease = store.create_or_get_lease(operation_kind="remote_observation", operation_identity=identity, preimage_hash="a" * 64)
+            store.mark_lease_settling(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+            store.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="completed")
+    store.create_or_get_lease(operation_kind="execution", operation_identity="unrelated-owner", preimage_hash="b" * 64)
+    return store
+
+
+def _observation_gc_counts(store: SessionControlStore) -> tuple[int, int, int, int]:
+    return (
+        store.connection.execute("SELECT count(*) FROM remote_observations").fetchone()[0],
+        store.connection.execute("SELECT count(*) FROM remote_observation_pages").fetchone()[0],
+        store.connection.execute("SELECT count(*) FROM session_operation_leases WHERE operation_kind='remote_observation'").fetchone()[0],
+        store.connection.execute("SELECT count(*) FROM session_operation_leases WHERE operation_identity='unrelated-owner' AND state='active'").fetchone()[0],
+    )
+
+
+def test_observation_gc_atomically_clears_only_original_side(observation_gc_store: SessionControlStore) -> None:
+    store = observation_gc_store
+    assert _observation_gc_counts(store) == (2, 2, 4, 1)
+    store.delete_remote_observation("obs_atomic_gc", side="source")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (1, 1, 2, 1)
+        assert reopened.get_remote_observation("obs_atomic_gc", side="target").request == {"frozen": "target"}
+        reopened.delete_remote_observation("obs_atomic_gc", side="source")
+        reopened.delete_remote_observation("obs_atomic_gc", side="target")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (0, 0, 0, 1)
+
+
+@pytest.mark.parametrize("stage", ["lease", "observation", "page"])
+def test_observation_gc_failure_rolls_back_all_rows_after_reopen(
+    observation_gc_store: SessionControlStore, stage: str,
+) -> None:
+    store = observation_gc_store
+    table = {"lease": "session_operation_leases", "observation": "remote_observations", "page": "remote_observation_pages"}[stage]
+    when = "WHEN OLD.operation_identity='source-page|page_atomic_gc'" if stage == "lease" else "WHEN OLD.side='source'"
+    store.connection.execute(f"CREATE TRIGGER fail_atomic_gc BEFORE DELETE ON {table} {when} BEGIN SELECT RAISE(ABORT, 'injected-atomic-gc'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="injected-atomic-gc"):
+        store.delete_remote_observation("obs_atomic_gc", side="source")
+    assert not store.connection.in_transaction
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (2, 2, 4, 1)
+        assert reopened.get_remote_page("obs_atomic_gc", side="source", page_identity="page_atomic_gc").result == {"status": "completed"}
+        reopened.connection.execute("DROP TRIGGER fail_atomic_gc")
+        reopened.delete_remote_observation("obs_atomic_gc", side="source")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (1, 1, 2, 1)
+
+
+@pytest.mark.parametrize("violation", ["active", "settling", "missing", "wrong-kind"])
+def test_observation_gc_refuses_incomplete_or_wrong_lease_without_partial_delete(
+    observation_gc_store: SessionControlStore, violation: str,
+) -> None:
+    store = observation_gc_store
+    identity = "source-page|page_atomic_gc"
+    if violation == "missing":
+        store.connection.execute("DELETE FROM session_operation_leases WHERE operation_identity=?", (identity,))
+    elif violation == "wrong-kind":
+        store.connection.execute("UPDATE session_operation_leases SET operation_kind='execution' WHERE operation_identity=?", (identity,))
+    else:
+        store.connection.execute("UPDATE session_operation_leases SET state=? WHERE operation_identity=?", (violation, identity))
+    before = _observation_gc_counts(store)
+    with pytest.raises(RuntimeError, match="必须存在、匹配原 kind 且全部终态"):
+        store.delete_remote_observation("obs_atomic_gc", side="source")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == before
+        assert reopened.get_remote_observation("obs_atomic_gc", side="source") is not None
+        assert reopened.find_lease_by_operation("source-observation|obs_atomic_gc") is not None
+
+
+
+@pytest.mark.parametrize("older_generation", ["completed", "active", "settling", "wrong-kind"])
+def test_observation_gc_checks_all_generations_before_deleting_any_lease(
+    observation_gc_store: SessionControlStore, older_generation: str,
+) -> None:
+    """最新代已完成时，原 identity 的旧代也必须匹配 kind 且终态。"""
+    store = observation_gc_store
+    identity = "source-page|page_atomic_gc"
+    store.connection.execute(
+        "INSERT INTO session_operation_leases SELECT 'lease_newest_atomic_gc', operation_kind, operation_identity, preimage_hash, captured_lifecycle_generation+1, holder_generation, fencing_token, state, revision, recovery_ref, created_at, updated_at FROM session_operation_leases WHERE operation_identity=?",
+        (identity,),
+    )
+    column, value = ("operation_kind", "execution") if older_generation == "wrong-kind" else ("state", older_generation)
+    store.connection.execute(f"UPDATE session_operation_leases SET {column}=? WHERE operation_identity=? AND captured_lifecycle_generation=1", (value, identity))
+    assert store.find_lease_by_operation(identity).state == "completed"
+    before = store.connection.execute("SELECT * FROM session_operation_leases ORDER BY lease_id").fetchall()
+    if older_generation == "completed":
+        store.delete_remote_observation("obs_atomic_gc", side="source")
+    else:
+        with pytest.raises(RuntimeError, match="必须存在、匹配原 kind 且全部终态"):
+            store.delete_remote_observation("obs_atomic_gc", side="source")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        if older_generation == "completed":
+            assert _observation_gc_counts(reopened) == (1, 1, 2, 1)
+        else:
+            assert reopened.connection.execute("SELECT * FROM session_operation_leases ORDER BY lease_id").fetchall() == before
+            assert reopened.get_remote_observation("obs_atomic_gc", side="source") is not None
+
+
+def test_observation_gc_process_exit_before_commit_retains_complete_rows(
+    observation_gc_store: SessionControlStore,
+) -> None:
+    """实际子进程在第二条 lease 删除时退出，SQLite 重开后不能产生孤儿。"""
+    store = observation_gc_store
+    script = """
+import os, sys
+from pathlib import Path
+from app.core.session_control_store import SessionControlStore
+store = SessionControlStore(Path(sys.argv[1]))
+store.connection.create_function("crash_gc", 0, lambda: os._exit(73))
+store.connection.execute("CREATE TEMP TRIGGER gc_crash BEFORE DELETE ON session_operation_leases WHEN OLD.operation_identity='source-page|page_atomic_gc' BEGIN SELECT crash_gc(); END")
+store.delete_remote_observation("obs_atomic_gc", side="source")
+"""
+    interrupted = subprocess.run([sys.executable, "-c", script, str(store.database_path)], timeout=15, check=False, capture_output=True, text=True)
+    assert interrupted.returncode == 73, interrupted.stderr
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (2, 2, 4, 1)
+        assert reopened.get_remote_page("obs_atomic_gc", side="source", page_identity="page_atomic_gc").result == {"status": "completed"}
+        reopened.delete_remote_observation("obs_atomic_gc", side="source")
+    with closing(SessionControlStore(store.database_path)) as reopened:
+        assert _observation_gc_counts(reopened) == (1, 1, 2, 1)

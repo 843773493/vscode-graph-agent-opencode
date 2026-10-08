@@ -73,12 +73,11 @@ def has_valid_delegated_report(
 def has_valid_session_question_reply(
     successful_tool_calls: list[SuccessfulToolCall],
     *,
-    sender_session_id: str,
     communication_id: str,
 ) -> bool:
     return any(
         call.tool_name == "send_message_to_session"
-        and call.tool_args.get("target_session_id") == sender_session_id
+        # 成功的 reply 已由通信 ledger 证明完整反向地址；模型 target 不是身份事实。
         and call.tool_args.get("kind", "result") == "reply"
         and call.tool_args.get("reply_to_communication_id") == communication_id
         for call in successful_tool_calls

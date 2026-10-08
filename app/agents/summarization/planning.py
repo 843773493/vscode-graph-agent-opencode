@@ -12,6 +12,7 @@ from collections.abc import (
 
 # TODO: DeepAgents 暴露公共的压缩扩展基类后，改用公共 API，避免依赖私有实现类。
 from deepagents.middleware.summarization import _DeepAgentsSummarizationMiddleware
+from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain_core.messages import (
     AnyMessage,
     HumanMessage,
@@ -133,7 +134,8 @@ def build_safe_compaction_partition(
     if replacement_required:
         if len(effective_messages) <= 1:
             return None
-        summarize_end = summarization._find_safe_cutoff_point(
+        # TODO: LangChain 提供公共安全切点 API 后替换这个私有静态入口。
+        summarize_end = SummarizationMiddleware._find_safe_cutoff_point(
             effective_messages,
             len(effective_messages) - 1,
         )

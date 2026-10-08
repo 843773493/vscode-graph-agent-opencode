@@ -40,6 +40,6 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(gateway_control_router)
     app.include_router(device_connections_router)
     app.include_router(port_forwards_router)
+    app.include_router(federation_router)
     app.include_router(auxiliary_proxy_router)
     app.include_router(workspace_proxy_router)
-    app.include_router(federation_router)

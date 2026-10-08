@@ -15,14 +15,14 @@ inbox，按 admission_id/wakeup key 幂等 admit。本 worker：
   target_accepted 可恢复，本轮结束显式抛 InboxAdmissionError，绝不
   静默吞掉。
 
-真实 binder（JobService create-or-get by admission_id + preimage hash）
-属后续 send tool 接线切片；本模块不提供默认 binder，也不注册任何会
-启动真实 Job 的实现。
+生产 binder 经 RuntimeSourceDispatcher 的唯一 source/wakeup/admission 链路建立 binding；
+本模块只领取与 CAS，不提供默认 binder。
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -31,6 +31,7 @@ from app.core.session_control_store import (
     CommunicationInboxRecord,
     SessionControlStore,
 )
+from app.services.business.communication.ledger import CommunicationLedgerService
 
 __all__ = [
     "InboxAdmissionAttempt",
@@ -58,6 +59,7 @@ class InboxExecutionBinding:
     """binder 成功返回：实际建立的 job/turn 绑定。"""
 
     job_id: str
+    execution_id: str
     turn_id: str | None
 
 
@@ -67,7 +69,7 @@ class InboxAdmissionBinder(Protocol):
     失败直接抛异常；worker 负责记录 last_error 并显式暴露。
     """
 
-    def __call__(self, target: InboxAdmissionTarget) -> InboxExecutionBinding: ...
+    async def __call__(self, target: InboxAdmissionTarget) -> InboxExecutionBinding: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +103,7 @@ class InboxAdmissionError(RuntimeError):
 class InboxAdmissionWorker:
     """单一 target_accepted inbox 恢复 worker（显式生命周期）。
 
-    - start()：显式启动；缺 binder 明确报告 unavailable，不消费任何
-      inbox、不把任何 inbox 标成 bound。
+    - start()：显式启动，binder 必须由组合根注入。
     - stop()：显式关闭；幂等 no-op。
     - admit_pending_once()：单轮消费全部 target_accepted inbox。
     """
@@ -111,32 +112,27 @@ class InboxAdmissionWorker:
         self,
         *,
         store: SessionControlStore,
+        session_id: str,
+        write_admission: Callable[[str], AbstractAsyncContextManager[None]],
         claim_owner: str,
+        binder: InboxAdmissionBinder,
         claim_generation: int = 1,
-        binder: InboxAdmissionBinder | None = None,
     ) -> None:
         if not isinstance(store, SessionControlStore):
             raise TypeError(f"store 必须是 SessionControlStore: {store!r}")
         validate_claim_fields(claim_owner, claim_generation)
+        if not callable(binder):
+            raise TypeError("InboxAdmissionWorker 必须注入可调用的 binder")
         self._store = store
+        self._session_id = session_id
+        self._write_admission = write_admission
         self._claim_owner = claim_owner
         self._claim_generation = claim_generation
         self._binder = binder
         self._started = False
 
-    @property
-    def binder_available(self) -> bool:
-        """是否已注入 binder（缺省 None：真实 Job binder 接线前的形态）。"""
-        return self._binder is not None
-
     def start(self) -> None:
-        """显式启动；缺 binder 明确报告 unavailable，不产生任何状态变更。"""
-        if self._binder is None:
-            raise RuntimeError(
-                "InboxAdmissionWorker 缺少 binder，启动 unavailable（真实 "
-                "Job binder 属后续 send tool 接线切片）；未把任何 inbox "
-                "标成 bound"
-            )
+        """显式启动；重复启动直接报告生命周期错误。"""
         if self._started:
             raise RuntimeError("InboxAdmissionWorker 已启动")
         self._started = True
@@ -145,7 +141,7 @@ class InboxAdmissionWorker:
         """显式关闭；重复关闭是幂等 no-op。"""
         self._started = False
 
-    def admit_pending_once(self) -> tuple[InboxAdmissionAttempt, ...]:
+    async def admit_pending_once(self) -> tuple[InboxAdmissionAttempt, ...]:
         """单轮消费全部 target_accepted inbox；失败在轮末显式抛出。
 
         逐条流程：claim（冲突按并发契约分类跳过）→ binder →
@@ -155,15 +151,11 @@ class InboxAdmissionWorker:
         """
         if not self._started:
             raise RuntimeError("InboxAdmissionWorker 未启动（必须先 start()）")
-        if self._binder is None:
-            raise RuntimeError(
-                "InboxAdmissionWorker 缺少 binder，unavailable：不消费任何 inbox"
-            )
         binder = self._binder
         attempts: list[InboxAdmissionAttempt] = []
         failures: list[str] = []
         for inbox in self._store.list_target_accepted_communication_inboxes():
-            attempt = self._consume_one(inbox, binder)
+            attempt = await self._consume_one(inbox, binder)
             attempts.append(attempt)
             if attempt.error is not None:
                 failures.append(f"{inbox.communication_id}: {attempt.error}")
@@ -171,7 +163,7 @@ class InboxAdmissionWorker:
             raise InboxAdmissionError(failures)
         return tuple(attempts)
 
-    def _consume_one(
+    async def _consume_one(
         self,
         inbox: CommunicationInboxRecord,
         binder: InboxAdmissionBinder,
@@ -179,11 +171,15 @@ class InboxAdmissionWorker:
         """消费单条 inbox；claim 冲突按并发契约分类，binder 失败记录。"""
         communication_id = inbox.communication_id
         try:
-            self._store.claim_communication_inbox_admission(
-                communication_id,
-                claim_owner=self._claim_owner,
-                claim_generation=self._claim_generation,
-            )
+            async with self._write_admission(self._session_id):
+                self._store.claim_communication_inbox_admission(
+                    communication_id,
+                    claim_owner=self._claim_owner,
+                    claim_generation=self._claim_generation,
+                )
+                lease = self._store.find_lease_by_operation("communication-target|" + communication_id)
+                if lease is None or lease.state not in {"settling", "completed"}:
+                    raise RuntimeError("通信 inbox 缺少可恢复的原 lifecycle lease")
         except RuntimeError:
             current = self._store.get_communication_inbox(communication_id)
             if current.state == "execution_bound":
@@ -202,45 +198,52 @@ class InboxAdmissionWorker:
                 )
             raise
         try:
-            binding = binder(InboxAdmissionTarget(inbox=inbox))
+            binding = await binder(InboxAdmissionTarget(inbox=inbox))
         except Exception as error:  # noqa: BLE001 —— 记录后显式暴露
-            return self._record_failure(
+            return await self._record_failure(
                 communication_id, f"{type(error).__name__}: {error}"
             )
         if not isinstance(binding, InboxExecutionBinding):
-            return self._record_failure(
+            return await self._record_failure(
                 communication_id,
                 f"binder 返回类型非法: {type(binding).__name__}",
             )
         try:
-            bound = self._store.mark_communication_inbox_execution_bound(
-                communication_id,
-                job_id=binding.job_id,
-                turn_id=binding.turn_id,
-                claim_owner=self._claim_owner,
-                claim_generation=self._claim_generation,
-            )
+            async with self._write_admission(self._session_id):
+                current_lease = self._store.get_lease(lease.lease_id)
+                if current_lease.fencing_token != lease.fencing_token or current_lease.state not in {"settling", "completed"}:
+                    raise RuntimeError("通信 binding callback 的原 lifecycle lease 已失效")
+                bound = self._store.mark_communication_inbox_execution_bound(
+                    communication_id,
+                    job_id=binding.job_id,
+                    execution_id=binding.execution_id,
+                    turn_id=binding.turn_id,
+                    claim_owner=self._claim_owner,
+                    claim_generation=self._claim_generation,
+                )
+                CommunicationLedgerService(session_id=self._session_id, store=self._store, write_admission=self._write_admission).complete_lease(lease)
         except (ValueError, RuntimeError, KeyError) as error:
-            return self._record_failure(communication_id, f"{error}")
+            return await self._record_failure(communication_id, f"{error}")
         return InboxAdmissionAttempt(
             communication_id=communication_id,
             outcome="bound",
             bound_inbox=bound,
         )
 
-    def _record_failure(
+    async def _record_failure(
         self,
         communication_id: str,
         message: str,
     ) -> InboxAdmissionAttempt:
         """记录 last_error 并保持 target_accepted 可恢复；返回失败 attempt。"""
         try:
-            self._store.record_communication_inbox_admission_failure(
-                communication_id,
-                claim_owner=self._claim_owner,
-                claim_generation=self._claim_generation,
-                last_error=message,
-            )
+            async with self._write_admission(self._session_id):
+                self._store.record_communication_inbox_admission_failure(
+                    communication_id,
+                    claim_owner=self._claim_owner,
+                    claim_generation=self._claim_generation,
+                    last_error=message,
+                )
         except (RuntimeError, KeyError) as record_error:
             message = f"{message}（record failure 本身失败: {record_error}）"
         return InboxAdmissionAttempt(

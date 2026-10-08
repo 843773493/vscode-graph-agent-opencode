@@ -10,11 +10,13 @@ from typing import Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
+from langgraph.checkpoint.base import CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_event_bus import EventType
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
@@ -29,6 +31,9 @@ from app.services.business.job.lifecycle import (
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
+)
 
 CONTEXT_ONLY_NOTICE = "已移除目标消息及其后的会话上下文；工作区文件修改不会被撤销。"
 
@@ -56,7 +61,7 @@ class SessionTurnReplayService:
     def __init__(
         self,
         *,
-        checkpointer: BaseCheckpointSaver,
+        checkpointer: RolloutCheckpointSaver,
         message_service: MessageService,
         session_service: SessionService,
         job_service: JobServiceProtocol,
@@ -84,8 +89,6 @@ class SessionTurnReplayService:
         session_id: str,
         target_message_id: str,
         request: MessageReplayRequest,
-        *,
-        target_turn_id: str | None = None,
     ) -> MessageReplayAccepted:
         if not request.acknowledge_context_only:
             raise ValueError(
@@ -114,6 +117,9 @@ class SessionTurnReplayService:
             target = visible_messages[target_index]
             if target.role != MessageRole.user:
                 raise ValueError("轮次操作只能以用户消息为目标")
+            target_turn_id = target.metadata.get("turn_id")
+            if not isinstance(target_turn_id, str) or not target_turn_id:
+                raise RuntimeError(f"目标用户消息缺少权威 Turn identity: message_id={target_message_id}")
 
             await self._validate_action(
                 session_id=session_id,
@@ -135,12 +141,17 @@ class SessionTurnReplayService:
                     },
                 ),
             )
-            removed_message_count = await self._append_replay_checkpoint(
+            owner = MutationIntentOwner(
                 session_id=session_id,
-                target_message_id=target_message_id,
-                target_turn_id=target_turn_id,
-                action=request.action,
+                thread_id=await self._session_service.resolve_main_thread(session_id),
             )
+            with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+                removed_message_count = await self._append_replay_checkpoint(
+                    owner=owner,
+                    target_message_id=target_message_id,
+                    target_turn_id=target_turn_id,
+                    action=request.action,
+                )
             accepted = await self._dispatcher.dispatch_prepared_message(
                 session_id,
                 replacement,
@@ -181,7 +192,6 @@ class SessionTurnReplayService:
             session_id,
             target.message_id,
             request,
-            target_turn_id=turn_id,
         )
 
     async def _assert_session_idle(self, session_id: str) -> None:
@@ -280,13 +290,13 @@ class SessionTurnReplayService:
     async def _append_replay_checkpoint(
         self,
         *,
-        session_id: str,
+        owner: MutationIntentOwner,
         target_message_id: str,
-        target_turn_id: str | None,
+        target_turn_id: str,
         action: str,
     ) -> int:
         latest = await self._checkpointer.aget_tuple(
-            build_checkpoint_config(session_id)
+            build_checkpoint_config(owner.thread_id)
         )
         if latest is None:
             raise ValueError("当前会话没有可回退的 checkpoint")
@@ -312,55 +322,27 @@ class SessionTurnReplayService:
             None,
         )
 
-        if target_turn_id is not None:
-            materialize = getattr(
-                self._checkpointer,
-                "amaterialize_turn_anchor",
-                None,
+        # 消息入口与 Turn 入口共用 canonical anchor；固定 checkpoint 的
+        # messages channel 可以为空，不能据此推断历史 selection 的截断点。
+        anchor, base_messages = await self._checkpointer.amaterialize_turn_anchor(
+            latest.config,
+            turn_id=target_turn_id,
+            anchor_mode="before",
+        )
+        # 框架非消息状态取输入前的冻结 header；rewind 仍使用 canonical
+        # 来源 checkpoint，不能把 source/activation snapshot 一并退回。
+        base = await self._checkpointer.aget_tuple(
+            build_checkpoint_config(
+                owner.thread_id, checkpoint_id=anchor.state_header_checkpoint_id
             )
-            rewind_to_turn = getattr(self._checkpointer, "arewind_to_turn", None)
-            if not callable(materialize) or not callable(rewind_to_turn):
-                raise RuntimeError("当前 checkpoint saver 不支持 Turn replay")
-            _anchor, base_messages = await materialize(
-                latest.config,
-                turn_id=target_turn_id,
-                anchor_mode="before",
-            )
-            active_config = await rewind_to_turn(
-                latest.config,
-                turn_id=target_turn_id,
-                anchor_mode="before",
-            )
-            base = await self._checkpointer.aget_tuple(
-                build_checkpoint_config(session_id)
-            )
-            if base is None:
-                raise RuntimeError("Turn rewind 后无法读取 active checkpoint")
-        else:
-            base, base_messages = await self._checkpoint_before_message(
-                latest=latest,
-                target_message_id=target_message_id,
-            )
-
-            active_config = latest.config
-            rewind = getattr(self._checkpointer, "arewind", None)
-            base_checkpoint_id = base.checkpoint.get("id")
-            if callable(rewind) and isinstance(base_checkpoint_id, str):
-                source_anchor = (
-                    target_message_id
-                    if self._message_index(
-                        self._checkpoint_messages(base),
-                        target_message_id,
-                    )
-                    >= 0
-                    else None
-                )
-                active_config = await rewind(
-                    latest.config,
-                    checkpoint_id=base_checkpoint_id,
-                    source_anchor=source_anchor,
-                    anchor_mode="before",
-                )
+        )
+        if base is None:
+            raise RuntimeError("Turn replay 无法读取截断前的冻结状态 header")
+        active_config = await self._checkpointer.arewind_to_turn(
+            latest.config,
+            turn_id=target_turn_id,
+            anchor_mode="before",
+        )
 
         checkpoint = deepcopy(base.checkpoint)
         channel_values = checkpoint.get("channel_values")
@@ -407,34 +389,6 @@ class SessionTurnReplayService:
             for message in latest_messages[target_raw_index:]
             if self._is_visible_message(message)
         )
-
-    async def _checkpoint_before_message(
-        self,
-        *,
-        latest: CheckpointTuple,
-        target_message_id: str,
-    ) -> tuple[CheckpointTuple, list[object]]:
-        checkpoint = latest
-        while True:
-            checkpoint_messages = self._checkpoint_messages(checkpoint)
-            target_index = self._message_index(checkpoint_messages, target_message_id)
-            if target_index < 0:
-                raise ValueError(
-                    "当前 checkpoint 父链在定位目标消息前已失去该消息: "
-                    f"message_id={target_message_id}"
-                )
-            if checkpoint.parent_config is None:
-                return checkpoint, checkpoint_messages[:target_index]
-            parent = await self._checkpointer.aget_tuple(checkpoint.parent_config)
-            if parent is None:
-                # 首个真实 checkpoint 可能继承 LangGraph 尚未落盘的内存
-                # 初始 checkpoint。当前 checkpoint 已经包含目标消息前的完整
-                # 快照，此时直接使用它的前缀即可，不应让 replay 变成 500。
-                return checkpoint, checkpoint_messages[:target_index]
-            parent_messages = self._checkpoint_messages(parent)
-            if self._message_index(parent_messages, target_message_id) < 0:
-                return parent, parent_messages
-            checkpoint = parent
 
     @staticmethod
     def _checkpoint_messages(checkpoint: CheckpointTuple) -> list[object]:

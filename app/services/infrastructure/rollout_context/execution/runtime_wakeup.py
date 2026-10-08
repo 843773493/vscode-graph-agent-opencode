@@ -171,6 +171,40 @@ class RuntimeWakeupStorageMixin:
             ),
         )
 
+    def cold_execution_observations(self, session_id: str, thread_id: str, *, job_ids: list[str] | None = None, turn_id: str | None = None) -> list[dict[str, str]]:
+        """只读 execution owner；不 initialize、不物化 Agent，不列举 JobService。"""
+        root = self.root(session_id, thread_id=thread_id)
+        if not (root / "index.sqlite").is_file():
+            return []
+        clauses = ["session_id=?", "thread_id=?"]
+        params: list[object] = [session_id, thread_id]
+        if job_ids is not None:
+            if not job_ids:
+                return []
+            clauses.append("job_id IN (" + ",".join("?" for _ in job_ids) + ")")
+            params.extend(job_ids)
+        if turn_id is not None:
+            clauses.append("turn_id=?")
+            params.append(turn_id)
+        with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+            self._require_v2_runtime(connection)
+            rows = connection.execute(
+                "SELECT job_id,execution_id,outcome,updated_at,last_model_call_id FROM executions WHERE " + " AND ".join(clauses) + " ORDER BY execution_ordinal DESC,attempt DESC,created_at DESC,execution_id", params,
+            ).fetchall()
+        if turn_id is not None:
+            rows = rows[:1]
+        states = {"pending": "pending", "running": "running", "completed": "completed", "completed_empty": "completed", "failed": "failed", "cancelled": "cancelled", "interrupted": "cancelled", "execution_lost": "failed"}
+        result = []
+        for job_id, execution_id, outcome, updated_at, last_model_call_id in rows:
+            if outcome == "unknown":
+                state = "pending" if last_model_call_id is None else "running"
+            else:
+                state = states.get(outcome)
+            if state is None:
+                raise RuntimeError(f"未知 execution wait outcome: {outcome!r}")
+            result.append({"job_id": job_id, "execution_id": execution_id, "state": state, "revision": f"{execution_id}:{outcome}:{updated_at}:{last_model_call_id}"})
+        return result
+
     def runtime_execution_outcome(self, session_id: str, thread_id: str, execution_id: str) -> str:
         with self._connect(thread_id, "", session_id=session_id, read_only=True) as connection:
             row = connection.execute(

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.context_compaction_adapter import AgentSummarizationCompactor
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionCompactResultDTO
 from app.services.business.session_service import SessionService
 
@@ -32,7 +33,10 @@ class ContextCompactionService:
     async def _compact_idle(self, session_id: str) -> SessionCompactResultDTO:
         async with self._session_service.session_write_admission(session_id):
             session = await self._session_service.get(session_id)
-            checkpoint = await self._checkpoint_store.load(session_id)
+            owner = MutationIntentOwner(
+                session_id, await self._session_service.resolve_main_thread(session_id),
+            )
+            checkpoint = await self._checkpoint_store.load(owner)
             if checkpoint is None:
                 return SessionCompactResultDTO(
                     session_id=session_id,

@@ -376,10 +376,13 @@ class StepRunner:
             and resolved_message_metadata.get("kind") == "question"
             and resolved_message_metadata.get("reply_required") is True
         )
-        question_sender_session_id = resolved_message_metadata.get("sender_session_id")
+        from app.services.business.communication.addresses import GlobalThreadAddress
+
+        source_address = resolved_message_metadata.get("source_address")
+        question_source = GlobalThreadAddress(**source_address) if requires_session_question_reply and isinstance(source_address, dict) else None
         question_communication_id = resolved_message_metadata.get("communication_id")
         if requires_session_question_reply and (
-            not isinstance(question_sender_session_id, str)
+            question_source is None
             or not isinstance(question_communication_id, str)
         ):
             raise RuntimeError(
@@ -664,7 +667,7 @@ class StepRunner:
                 parent_session_id=parent_session_id,
                 delegated_report_allowed_kinds=delegated_report_allowed_kinds,
                 requires_session_question_reply=requires_session_question_reply,
-                question_sender_session_id=question_sender_session_id,
+                question_source=question_source,
                 question_communication_id=question_communication_id,
             )
             final_text = retry_result.final_text

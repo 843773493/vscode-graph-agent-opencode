@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 
-from .records import CommunicationInboxRecord, _communication_inbox_from_row
+from .records import (
+    CommunicationInboxRecord,
+    CommunicationOutboxRecord,
+    _communication_inbox_from_row,
+    _communication_outbox_from_row,
+)
 from .schema import _COMMUNICATION_INBOX_COLUMNS, _COMMUNICATION_OUTBOX_COLUMNS
 
 
@@ -50,7 +56,10 @@ def _fetch_outbox_row_by_communication(
 _OUTBOX_REPLY_DIRECTION_FIELDS = (
     ("source_gateway_id", "target_gateway_id"),
     ("source_workspace_id", "target_workspace_id"),
+    ("source_session_id", "target_session_id"),
     ("source_thread_id", "target_thread_id"),
+    ("target_gateway_id", "source_gateway_id"),
+    ("target_workspace_id", "source_workspace_id"),
     ("session_id", "session_id"),
     ("target_thread_id", "source_thread_id"),
 )
@@ -60,6 +69,8 @@ _INBOX_REPLY_DIRECTION_FIELDS = (
     ("target_session_id", "source_session_id"),
     ("target_thread_id", "source_thread_id"),
     ("session_id", "session_id"),
+    ("source_gateway_id", "target_gateway_id"),
+    ("source_workspace_id", "target_workspace_id"),
     ("source_thread_id", "target_thread_id"),
 )
 
@@ -83,6 +94,16 @@ def _ensure_reply_direction(
 
 class ReadsMixin:
     """通信 ledger 只读路径:取行 helper 与状态索引/单条读取方法族。"""
+
+    def get_communication_outbox(self, send_operation_id: str) -> CommunicationOutboxRecord | None:
+        self._ensure_open()
+        row = _fetch_outbox_row_by_operation(self._connection, send_operation_id)
+        return None if row is None else _communication_outbox_from_row(row)
+
+    def list_pending_communication_outboxes(self) -> tuple[CommunicationOutboxRecord, ...]:
+        self._ensure_open()
+        rows = self._connection.execute(f"SELECT {_COMMUNICATION_OUTBOX_COLUMNS} FROM communication_outbox WHERE state IN ('accepted','routing') ORDER BY created_at,send_operation_id").fetchall()
+        return tuple(_communication_outbox_from_row(row) for row in rows)
 
     def list_target_accepted_communication_inboxes(
         self,
@@ -109,3 +130,12 @@ class ReadsMixin:
                 f"communication_id={communication_id!r}"
             )
         return _communication_inbox_from_row(row)
+
+    def communication_recovery_deadline(self) -> datetime | None:
+        """删除后的 receipt/binding 保留原终结时刻起一天；GC 不更新/延长期限。"""
+        self._ensure_open()
+        row = self._connection.execute(
+            "SELECT max(updated_at) FROM (SELECT updated_at FROM communication_outbox "
+            "UNION ALL SELECT updated_at FROM communication_inbox)"
+        ).fetchone()
+        return None if row[0] is None else datetime.fromisoformat(row[0]) + timedelta(days=1)

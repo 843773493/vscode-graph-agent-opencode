@@ -1124,6 +1124,12 @@ def test_replay_before_as_new_turn_seals_real_admission_and_reuses_after_restart
     old_root_bytes = canonical_json_bytes(old_root.to_dict())
     versions = case.checkpoint_versions()
     with case.scope():
+        anchor, prefix_messages = case.saver.materialize_turn_anchor(
+            case.config, turn_id=source_turn, anchor_mode="before",
+        )
+        assert anchor.checkpoint_id == "checkpoint-replay-before"
+        assert anchor.state_header_checkpoint_id == "checkpoint-first"
+        assert prefix_messages == []
         case.config = case.saver.rewind_to_turn(case.config, turn_id=source_turn, anchor_mode="before")
     (pending,) = case.pending_rows()
     assert pending[2:] == ("rewind", "pending", None)

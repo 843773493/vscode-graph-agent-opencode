@@ -88,18 +88,16 @@ class RolloutLangGraphCheckpointMixin:
             )
             if checkpoint_index is None:
                 return None
-            active_view_id = history_view_id if history_view_id is not None else (
-                self._storage.active_view_id(snapshot)
-                if get_checkpoint_id(config) is None
-                else None
-            )
+            # 固定 checkpoint 只读冻结 messages；最新执行状态还需包含权威
+            # acceptance 已提交的新用户根输入，不能混入其它 stream 结果。
             checkpoint = self._storage.load_checkpoint(
                 session_id,
                 thread_id,
                 checkpoint_ns,
                 checkpoint_index,
                 snapshot=snapshot,
-                context_view_id_override=active_view_id,
+                context_view_id_override=history_view_id,
+                include_accepted_inputs=get_checkpoint_id(config) is None and history_view_id is None,
             )
             return CheckpointTuple(
                 config={

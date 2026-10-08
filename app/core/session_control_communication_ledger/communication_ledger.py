@@ -23,6 +23,7 @@ from app.core.session_control_primitives import (
 )
 
 from .inbox_writes import InboxWritesMixin
+from .observations import CommunicationObservationMixin
 from .outbox_writes import OutboxWritesMixin
 from .reads import ReadsMixin
 from .records import (
@@ -51,6 +52,7 @@ class CommunicationLedgerMixin(
     OutboxWritesMixin,
     InboxWritesMixin,
     ReadsMixin,
+    CommunicationObservationMixin,
 ):
     """SessionControlStore 的跨 Session 通信 ledger 方法族。
 

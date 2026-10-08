@@ -250,28 +250,15 @@ def create_read_context_tool(context: CustomToolFactoryContext) -> BaseTool:
             backend_workspace_id=resource.scope_id,
             session_id=resource.session_id,
         )
-        target = await _resolve_session_target(
-            context,
-            session_id=resource.session_id,
-            backend_workspace_id=resource.scope_id,
-        )
-        if (
-            resource.scope_id == context.session_context_query_service.workspace_id
-            and target.workspace_id is None
-        ):
-            return await _result_json(
-                context.session_context_query_service.read_context(request)
-            )
-        if target.workspace_id is None:
-            raise ToolException(
-                "SessionTargetResolver 未返回远程 Gateway workspace 路由 ID"
-            )
-        return await _result_json(
-            context.workspace_session_context_client.read_context_in_workspace(
-                target.workspace_id,
-                request,
-            )
-        )
+        service = context.session_communication_service
+        binding = context.invocation_context.thread_binding
+        if service is None or binding is None or binding.session_id != context.session_id:
+            raise RuntimeError("Session read 缺少持久通信 owner 与精确 source thread")
+        return await _result_json(service.read(
+            session_id=binding.session_id, thread_id=binding.thread_id,
+            source_call_id=context.invocation_context.require_operation_id("read"),
+            source_call_created_at=context.invocation_context.require_operation_created_at(), request=request,
+        ))
 
     return StructuredTool.from_function(
         coroutine=read_context,

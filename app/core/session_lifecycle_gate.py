@@ -5,13 +5,16 @@
     NavigationTopologyGate → 至多一个 SessionLifecycleGate / SessionReadGuard
     → 至多一个 SQLite 写事务
 
-全部 gate 均为跨进程短时 fcntl.flock OS 锁：
+拓扑/Session gate 均为跨进程短时 fcntl.flock OS 锁：
 
 - topology 锁文件：<workspace .boxteam>/navigation/topology.lock；
 - session gate 锁文件：
   <workspace .boxteam>/navigation/session-lifecycle-gates/{session_id}.lock；
 - 锁文件只创建、从不删除或重建（锁 inode 不重建）；进程退出时由 OS
   自动释放；同进程经不同 fd 重复获取同一把锁同样互斥（不可重入）。
+
+OperationHolderGate 使用独立固定分片 OS 锁证明长操作 holder 存活；网络/等待
+仅持此锁，不持拓扑/Session gate。恢复任务在独立锁释放后才可换 lease token。
 
 通用 operation lease（SessionOperationLease）的字段集与状态闭集在
 本模块冻结（design.md「通用lease」）；持久化实现（schema、非终态索引、
@@ -25,10 +28,12 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from app.core.key_lock_pool import KEY_LOCK_SHARDS
 from app.core.session_catalog_store import validate_session_id
 
 
@@ -48,6 +53,7 @@ __all__ = [
     "SESSION_OPERATION_LEASE_TERMINAL_STATES",
     "NavigationMutationQueueOwnerGate",
     "NavigationTopologyGate",
+    "OperationHolderGate",
     "SessionDeletionPendingError",
     "SessionLifecycleGate",
     "SessionOperationLease",
@@ -136,15 +142,21 @@ class _CrossProcessFileLock:
     自动释放锁。锁文件只创建（O_CREAT），从不 unlink 或重建。
     """
 
-    def __init__(self, path: Path, *, exclusive: bool) -> None:
+    def __init__(self, path: Path, *, exclusive: bool, wait: bool = True) -> None:
         self._path = path
         self._exclusive = exclusive
+        self._wait = wait
         self._fd: int | None = None
 
     @property
     def path(self) -> Path:
         """锁文件绝对路径（诊断/测试用）。"""
         return self._path
+
+    @property
+    def acquired(self) -> bool:
+        """非阻塞探测是否已取得 OS 锁；成功持锁才可证明旧 holder 停止。"""
+        return self._fd is not None
 
     async def __aenter__(self) -> Self:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,6 +167,9 @@ class _CrossProcessFileLock:
                 try:
                     fcntl.flock(fd, mode | fcntl.LOCK_NB)
                 except BlockingIOError:
+                    if not self._wait:
+                        os.close(fd)
+                        return self
                     await asyncio.sleep(0.05)
                 else:
                     break
@@ -229,6 +244,28 @@ class NavigationMutationQueueOwnerGate:
     def exclusive(self) -> _CrossProcessFileLock:
         """取得 workspace 唯一 queue worker owner。"""
         return _CrossProcessFileLock(self._lock_path, exclusive=True)
+
+
+class OperationHolderGate:
+    """长操作 holder 的独立 OS 锁；不持有 Session gate 或业务状态。
+
+    固定分片仅限制锁 inode 数量，SQLite lease token 仍是唯一 durable fencing。
+    恢复方非阻塞取得同一分片后才可证明旧 holder 已停止；source/target 等嵌套
+    运行面须使用不同 namespace。锁文件只创建，不删除或重建。
+    """
+
+    def __init__(self, sessions_root: Path, *, namespace: str) -> None:
+        if not namespace.isidentifier():
+            raise ValueError(f"holder namespace 必须是标识符: {namespace!r}")
+        self._root = _navigation_root(sessions_root) / "operation-holder-gates"
+        self._namespace = namespace
+
+    def lock_for(self, key: str, *, wait: bool = True) -> _CrossProcessFileLock:
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"holder key 必须是非空字符串: {key!r}")
+        shard = zlib.crc32(key.encode("utf-8")) % KEY_LOCK_SHARDS
+        path = self._root / f"{self._namespace}-{shard:02d}.lock"
+        return _CrossProcessFileLock(path, exclusive=True, wait=wait)
 
 
 class SessionLifecycleGate:

@@ -61,6 +61,7 @@ def _session(transport: _MemoryTransport, **kwargs) -> FederationChannelSession:
             channel_epoch=1,
             local_gateway_id="gateway_local",
             peer=_peer(),
+            credential_digest="0" * 64,
         ),
         handler=_Handler(),
         **kwargs,

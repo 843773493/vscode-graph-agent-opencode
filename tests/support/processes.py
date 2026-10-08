@@ -198,6 +198,7 @@ def start_backend_process(
     port: int,
     log_name: str,
     debugpy_port: int | None = None,
+    asgi_app: str = "app.main:app",
     env_overrides: dict[str, str] | None = None,
     env_unset: Sequence[str] = (),
 ) -> BackendProcess:
@@ -256,7 +257,7 @@ def start_backend_process(
         [
             "-m",
             "uvicorn",
-            "app.main:app",
+            asgi_app,
             "--host",
             "127.0.0.1",
             "--port",

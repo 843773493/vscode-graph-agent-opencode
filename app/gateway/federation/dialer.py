@@ -10,6 +10,7 @@ hub 用既有 federation token 认证自己，发送 hello 并读取 welcome 完
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 
@@ -115,6 +116,7 @@ async def dial_spoke_channel(
                 channel_epoch=peer_epoch,
                 local_gateway_id=local_gateway_id,
                 peer=peer,
+                credential_digest=hashlib.sha256(request.credential_token.encode()).hexdigest(),
                 local_role="hub",
             ),
             handler=handler,

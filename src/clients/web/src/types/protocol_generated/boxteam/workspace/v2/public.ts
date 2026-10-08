@@ -1201,12 +1201,61 @@ export interface SessionListResultDTO {
   cursor?: string | undefined;
 }
 
-export interface SessionMessageDispatchRequest {
+/** 业务地址只携带稳定身份，连接及 channel locator 不进入通信合同。 */
+export interface GlobalThreadAddress {
+  gateway_id: string;
+  workspace_id: string;
+  session_id: string;
+  thread_id: string;
+}
+
+export interface CommunicationPayload {
   content: string;
-  metadata?: { [key: string]: any } | undefined;
-  simulate_user?: boolean | undefined;
-  delivery_policy?: string | undefined;
-  idempotency_key?: string | undefined;
+  kind: string;
+  reply_to_communication_id?: string | undefined;
+  delivery_policy: string;
+}
+
+export interface CommunicationDiscoveryRequest {
+  source: GlobalThreadAddress | undefined;
+  session_id: string;
+  workspace_id?: string | undefined;
+}
+
+export interface CommunicationAcceptanceRequest {
+  communication_id: string;
+  source: GlobalThreadAddress | undefined;
+  target: GlobalThreadAddress | undefined;
+  payload: CommunicationPayload | undefined;
+  request_id: string;
+}
+
+export interface CommunicationReceipt {
+  communication_id: string;
+  source: GlobalThreadAddress | undefined;
+  target: GlobalThreadAddress | undefined;
+  payload_hash: string;
+  admission_id: string;
+  state: string;
+  accepted_at: string;
+}
+
+export interface CommunicationObservationRequest {
+  observation_id: string;
+  source_call_id: string;
+  page_identity: string;
+  source: GlobalThreadAddress | undefined;
+  target: GlobalThreadAddress | undefined;
+  operation: string;
+  query: { [key: string]: any } | undefined;
+  page_ordinal: number;
+  expires_at: string;
+}
+
+export interface CommunicationGatewayRequest {
+  operation: string;
+  target: GlobalThreadAddress | undefined;
+  body: { [key: string]: any } | undefined;
 }
 
 export interface SessionNetworkWaitDTO {
@@ -9995,59 +10044,389 @@ export const SessionListResultDTO: MessageFns<SessionListResultDTO> = {
   },
 };
 
-function createBaseSessionMessageDispatchRequest(): SessionMessageDispatchRequest {
-  return {
-    content: "",
-    metadata: undefined,
-    simulate_user: undefined,
-    delivery_policy: undefined,
-    idempotency_key: undefined,
-  };
+function createBaseGlobalThreadAddress(): GlobalThreadAddress {
+  return { gateway_id: "", workspace_id: "", session_id: "", thread_id: "" };
 }
 
-export const SessionMessageDispatchRequest: MessageFns<SessionMessageDispatchRequest> = {
-  fromJSON(object: any): SessionMessageDispatchRequest {
+export const GlobalThreadAddress: MessageFns<GlobalThreadAddress> = {
+  fromJSON(object: any): GlobalThreadAddress {
     return {
-      content: isSet(object.content) ? globalThis.String(object.content) : "",
-      metadata: isObject(object.metadata) ? object.metadata : undefined,
-      simulate_user: isSet(object.simulate_user) ? globalThis.Boolean(object.simulate_user) : undefined,
-      delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : undefined,
-      idempotency_key: isSet(object.idempotency_key) ? globalThis.String(object.idempotency_key) : undefined,
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
     };
   },
 
-  toJSON(message: SessionMessageDispatchRequest): unknown {
+  toJSON(message: GlobalThreadAddress): unknown {
     const obj: any = {};
-    if (message.content !== "") {
-      obj.content = message.content;
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
     }
-    if (message.metadata !== undefined) {
-      obj.metadata = message.metadata;
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
     }
-    if (message.simulate_user !== undefined) {
-      obj.simulate_user = message.simulate_user;
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
     }
-    if (message.delivery_policy !== undefined) {
-      obj.delivery_policy = message.delivery_policy;
-    }
-    if (message.idempotency_key !== undefined) {
-      obj.idempotency_key = message.idempotency_key;
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SessionMessageDispatchRequest>, I>>(base?: I): SessionMessageDispatchRequest {
-    return SessionMessageDispatchRequest.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<GlobalThreadAddress>, I>>(base?: I): GlobalThreadAddress {
+    return GlobalThreadAddress.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SessionMessageDispatchRequest>, I>>(
-    object: I,
-  ): SessionMessageDispatchRequest {
-    const message = createBaseSessionMessageDispatchRequest();
+  fromPartial<I extends Exact<DeepPartial<GlobalThreadAddress>, I>>(object: I): GlobalThreadAddress {
+    const message = createBaseGlobalThreadAddress();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    return message;
+  },
+};
+
+function createBaseCommunicationPayload(): CommunicationPayload {
+  return { content: "", kind: "", reply_to_communication_id: undefined, delivery_policy: "" };
+}
+
+export const CommunicationPayload: MessageFns<CommunicationPayload> = {
+  fromJSON(object: any): CommunicationPayload {
+    return {
+      content: isSet(object.content) ? globalThis.String(object.content) : "",
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      reply_to_communication_id: isSet(object.reply_to_communication_id)
+        ? globalThis.String(object.reply_to_communication_id)
+        : undefined,
+      delivery_policy: isSet(object.delivery_policy) ? globalThis.String(object.delivery_policy) : "",
+    };
+  },
+
+  toJSON(message: CommunicationPayload): unknown {
+    const obj: any = {};
+    if (message.content !== "") {
+      obj.content = message.content;
+    }
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.reply_to_communication_id !== undefined) {
+      obj.reply_to_communication_id = message.reply_to_communication_id;
+    }
+    if (message.delivery_policy !== "") {
+      obj.delivery_policy = message.delivery_policy;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationPayload>, I>>(base?: I): CommunicationPayload {
+    return CommunicationPayload.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationPayload>, I>>(object: I): CommunicationPayload {
+    const message = createBaseCommunicationPayload();
     message.content = object.content ?? "";
-    message.metadata = object.metadata ?? undefined;
-    message.simulate_user = object.simulate_user ?? undefined;
-    message.delivery_policy = object.delivery_policy ?? undefined;
-    message.idempotency_key = object.idempotency_key ?? undefined;
+    message.kind = object.kind ?? "";
+    message.reply_to_communication_id = object.reply_to_communication_id ?? undefined;
+    message.delivery_policy = object.delivery_policy ?? "";
+    return message;
+  },
+};
+
+function createBaseCommunicationDiscoveryRequest(): CommunicationDiscoveryRequest {
+  return { source: undefined, session_id: "", workspace_id: undefined };
+}
+
+export const CommunicationDiscoveryRequest: MessageFns<CommunicationDiscoveryRequest> = {
+  fromJSON(object: any): CommunicationDiscoveryRequest {
+    return {
+      source: isSet(object.source) ? GlobalThreadAddress.fromJSON(object.source) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : undefined,
+    };
+  },
+
+  toJSON(message: CommunicationDiscoveryRequest): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = GlobalThreadAddress.toJSON(message.source);
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.workspace_id !== undefined) {
+      obj.workspace_id = message.workspace_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationDiscoveryRequest>, I>>(base?: I): CommunicationDiscoveryRequest {
+    return CommunicationDiscoveryRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationDiscoveryRequest>, I>>(
+    object: I,
+  ): CommunicationDiscoveryRequest {
+    const message = createBaseCommunicationDiscoveryRequest();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GlobalThreadAddress.fromPartial(object.source)
+      : undefined;
+    message.session_id = object.session_id ?? "";
+    message.workspace_id = object.workspace_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseCommunicationAcceptanceRequest(): CommunicationAcceptanceRequest {
+  return { communication_id: "", source: undefined, target: undefined, payload: undefined, request_id: "" };
+}
+
+export const CommunicationAcceptanceRequest: MessageFns<CommunicationAcceptanceRequest> = {
+  fromJSON(object: any): CommunicationAcceptanceRequest {
+    return {
+      communication_id: isSet(object.communication_id) ? globalThis.String(object.communication_id) : "",
+      source: isSet(object.source) ? GlobalThreadAddress.fromJSON(object.source) : undefined,
+      target: isSet(object.target) ? GlobalThreadAddress.fromJSON(object.target) : undefined,
+      payload: isSet(object.payload) ? CommunicationPayload.fromJSON(object.payload) : undefined,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+    };
+  },
+
+  toJSON(message: CommunicationAcceptanceRequest): unknown {
+    const obj: any = {};
+    if (message.communication_id !== "") {
+      obj.communication_id = message.communication_id;
+    }
+    if (message.source !== undefined) {
+      obj.source = GlobalThreadAddress.toJSON(message.source);
+    }
+    if (message.target !== undefined) {
+      obj.target = GlobalThreadAddress.toJSON(message.target);
+    }
+    if (message.payload !== undefined) {
+      obj.payload = CommunicationPayload.toJSON(message.payload);
+    }
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationAcceptanceRequest>, I>>(base?: I): CommunicationAcceptanceRequest {
+    return CommunicationAcceptanceRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationAcceptanceRequest>, I>>(
+    object: I,
+  ): CommunicationAcceptanceRequest {
+    const message = createBaseCommunicationAcceptanceRequest();
+    message.communication_id = object.communication_id ?? "";
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GlobalThreadAddress.fromPartial(object.source)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? GlobalThreadAddress.fromPartial(object.target)
+      : undefined;
+    message.payload = (object.payload !== undefined && object.payload !== null)
+      ? CommunicationPayload.fromPartial(object.payload)
+      : undefined;
+    message.request_id = object.request_id ?? "";
+    return message;
+  },
+};
+
+function createBaseCommunicationReceipt(): CommunicationReceipt {
+  return {
+    communication_id: "",
+    source: undefined,
+    target: undefined,
+    payload_hash: "",
+    admission_id: "",
+    state: "",
+    accepted_at: "",
+  };
+}
+
+export const CommunicationReceipt: MessageFns<CommunicationReceipt> = {
+  fromJSON(object: any): CommunicationReceipt {
+    return {
+      communication_id: isSet(object.communication_id) ? globalThis.String(object.communication_id) : "",
+      source: isSet(object.source) ? GlobalThreadAddress.fromJSON(object.source) : undefined,
+      target: isSet(object.target) ? GlobalThreadAddress.fromJSON(object.target) : undefined,
+      payload_hash: isSet(object.payload_hash) ? globalThis.String(object.payload_hash) : "",
+      admission_id: isSet(object.admission_id) ? globalThis.String(object.admission_id) : "",
+      state: isSet(object.state) ? globalThis.String(object.state) : "",
+      accepted_at: isSet(object.accepted_at) ? globalThis.String(object.accepted_at) : "",
+    };
+  },
+
+  toJSON(message: CommunicationReceipt): unknown {
+    const obj: any = {};
+    if (message.communication_id !== "") {
+      obj.communication_id = message.communication_id;
+    }
+    if (message.source !== undefined) {
+      obj.source = GlobalThreadAddress.toJSON(message.source);
+    }
+    if (message.target !== undefined) {
+      obj.target = GlobalThreadAddress.toJSON(message.target);
+    }
+    if (message.payload_hash !== "") {
+      obj.payload_hash = message.payload_hash;
+    }
+    if (message.admission_id !== "") {
+      obj.admission_id = message.admission_id;
+    }
+    if (message.state !== "") {
+      obj.state = message.state;
+    }
+    if (message.accepted_at !== "") {
+      obj.accepted_at = message.accepted_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationReceipt>, I>>(base?: I): CommunicationReceipt {
+    return CommunicationReceipt.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationReceipt>, I>>(object: I): CommunicationReceipt {
+    const message = createBaseCommunicationReceipt();
+    message.communication_id = object.communication_id ?? "";
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GlobalThreadAddress.fromPartial(object.source)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? GlobalThreadAddress.fromPartial(object.target)
+      : undefined;
+    message.payload_hash = object.payload_hash ?? "";
+    message.admission_id = object.admission_id ?? "";
+    message.state = object.state ?? "";
+    message.accepted_at = object.accepted_at ?? "";
+    return message;
+  },
+};
+
+function createBaseCommunicationObservationRequest(): CommunicationObservationRequest {
+  return {
+    observation_id: "",
+    source_call_id: "",
+    page_identity: "",
+    source: undefined,
+    target: undefined,
+    operation: "",
+    query: undefined,
+    page_ordinal: 0,
+    expires_at: "",
+  };
+}
+
+export const CommunicationObservationRequest: MessageFns<CommunicationObservationRequest> = {
+  fromJSON(object: any): CommunicationObservationRequest {
+    return {
+      observation_id: isSet(object.observation_id) ? globalThis.String(object.observation_id) : "",
+      source_call_id: isSet(object.source_call_id) ? globalThis.String(object.source_call_id) : "",
+      page_identity: isSet(object.page_identity) ? globalThis.String(object.page_identity) : "",
+      source: isSet(object.source) ? GlobalThreadAddress.fromJSON(object.source) : undefined,
+      target: isSet(object.target) ? GlobalThreadAddress.fromJSON(object.target) : undefined,
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      query: isObject(object.query) ? object.query : undefined,
+      page_ordinal: isSet(object.page_ordinal) ? globalThis.Number(object.page_ordinal) : 0,
+      expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : "",
+    };
+  },
+
+  toJSON(message: CommunicationObservationRequest): unknown {
+    const obj: any = {};
+    if (message.observation_id !== "") {
+      obj.observation_id = message.observation_id;
+    }
+    if (message.source_call_id !== "") {
+      obj.source_call_id = message.source_call_id;
+    }
+    if (message.page_identity !== "") {
+      obj.page_identity = message.page_identity;
+    }
+    if (message.source !== undefined) {
+      obj.source = GlobalThreadAddress.toJSON(message.source);
+    }
+    if (message.target !== undefined) {
+      obj.target = GlobalThreadAddress.toJSON(message.target);
+    }
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    if (message.query !== undefined) {
+      obj.query = message.query;
+    }
+    if (message.page_ordinal !== 0) {
+      obj.page_ordinal = Math.round(message.page_ordinal);
+    }
+    if (message.expires_at !== "") {
+      obj.expires_at = message.expires_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationObservationRequest>, I>>(base?: I): CommunicationObservationRequest {
+    return CommunicationObservationRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationObservationRequest>, I>>(
+    object: I,
+  ): CommunicationObservationRequest {
+    const message = createBaseCommunicationObservationRequest();
+    message.observation_id = object.observation_id ?? "";
+    message.source_call_id = object.source_call_id ?? "";
+    message.page_identity = object.page_identity ?? "";
+    message.source = (object.source !== undefined && object.source !== null)
+      ? GlobalThreadAddress.fromPartial(object.source)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? GlobalThreadAddress.fromPartial(object.target)
+      : undefined;
+    message.operation = object.operation ?? "";
+    message.query = object.query ?? undefined;
+    message.page_ordinal = object.page_ordinal ?? 0;
+    message.expires_at = object.expires_at ?? "";
+    return message;
+  },
+};
+
+function createBaseCommunicationGatewayRequest(): CommunicationGatewayRequest {
+  return { operation: "", target: undefined, body: undefined };
+}
+
+export const CommunicationGatewayRequest: MessageFns<CommunicationGatewayRequest> = {
+  fromJSON(object: any): CommunicationGatewayRequest {
+    return {
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      target: isSet(object.target) ? GlobalThreadAddress.fromJSON(object.target) : undefined,
+      body: isObject(object.body) ? object.body : undefined,
+    };
+  },
+
+  toJSON(message: CommunicationGatewayRequest): unknown {
+    const obj: any = {};
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    if (message.target !== undefined) {
+      obj.target = GlobalThreadAddress.toJSON(message.target);
+    }
+    if (message.body !== undefined) {
+      obj.body = message.body;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CommunicationGatewayRequest>, I>>(base?: I): CommunicationGatewayRequest {
+    return CommunicationGatewayRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CommunicationGatewayRequest>, I>>(object: I): CommunicationGatewayRequest {
+    const message = createBaseCommunicationGatewayRequest();
+    message.operation = object.operation ?? "";
+    message.target = (object.target !== undefined && object.target !== null)
+      ? GlobalThreadAddress.fromPartial(object.target)
+      : undefined;
+    message.body = object.body ?? undefined;
     return message;
   },
 };

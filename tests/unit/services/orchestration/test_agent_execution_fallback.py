@@ -54,6 +54,7 @@ from app.services.orchestration.resource_activation import ResourceActivationCoo
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
+from tests.support.communication import SOURCE_SESSION, SOURCE_THREAD, WORKSPACE_ID
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.usefixtures("workspace_scope")
@@ -537,12 +538,10 @@ def test_session_question_reply_requires_matching_communication_id():
     )
     assert _has_valid_session_question_reply(
         [valid],
-        sender_session_id="ses_sender",
         communication_id="comm_question",
     )
     assert not _has_valid_session_question_reply(
         [valid],
-        sender_session_id="ses_sender",
         communication_id="comm_other",
     )
 
@@ -704,7 +703,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
                 SuccessfulToolCall(
                     "send_message_to_session",
                     {
-                        "target_session_id": "ses_questioner",
+                        "target_session_id": SOURCE_SESSION,
                         "kind": "reply",
                         "reply_to_communication_id": "comm_question",
                     },
@@ -739,7 +738,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
                 "source": "send_message_to_session",
                 "kind": "question",
                 "reply_required": True,
-                "sender_session_id": "ses_questioner",
+                "source_address": {"gateway_id": "gw-question", "workspace_id": WORKSPACE_ID, "session_id": SOURCE_SESSION, "thread_id": SOURCE_THREAD},
                 "communication_id": "comm_question",
             },
             thread_id="thr_test",

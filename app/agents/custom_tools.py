@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
 )
@@ -51,6 +52,7 @@ class CustomToolFactoryContext:
     browser_resource_owner: BrowserResourceOwner
     invocation_context: ToolInvocationContext
     session_target_resolver: SessionTargetResolverProtocol | None = None
+    session_communication_service: SessionCommunicationProtocol | None = None
     tool_options: Mapping[str, object] = field(default_factory=dict)
     node_debug_service: NodeDebugService | None = None
 
@@ -149,6 +151,7 @@ def build_custom_tool_bundle(
     browser_resource_owner: BrowserResourceOwner,
     invocation_context: ToolInvocationContext,
     session_target_resolver: SessionTargetResolverProtocol | None = None,
+    session_communication_service: SessionCommunicationProtocol | None = None,
     node_debug_service: NodeDebugService | None = None,
 ) -> CustomToolBundle:
     context = CustomToolFactoryContext(
@@ -168,6 +171,7 @@ def build_custom_tool_bundle(
         browser_resource_owner=browser_resource_owner,
         invocation_context=invocation_context,
         session_target_resolver=session_target_resolver,
+        session_communication_service=session_communication_service,
         node_debug_service=node_debug_service,
     )
     tools = build_custom_tools(specs, context=context)

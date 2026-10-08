@@ -25,8 +25,8 @@ from app.services.business.session_context_assembly_query_service import (
     SessionContextAssemblyQueryService,
 )
 from app.services.business.session_context_projection import (
+    SessionContextReadSnapshot,
     is_effective_user,
-    paginate_read_items,
     project_record_items,
     public_session_data,
     sessions_revision,
@@ -39,7 +39,6 @@ from app.services.business.session_context_resource import (
     parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
-    session_context_read_operation,
     session_resource_identity,
     session_resource_uri,
     set_exact_returned_chars,
@@ -114,6 +113,10 @@ class SessionContextQueryService:
         self,
         request: SessionContextReadRequest,
     ) -> SessionContextReadResultDTO:
+        return (await self.freeze_read_context(request)).page(request)
+
+    async def freeze_read_context(self, request: SessionContextReadRequest) -> SessionContextReadSnapshot:
+        """一次冷读固定完整投影；通信分页复用它，不重读变化中的 target。"""
         resource = parse_session_context_ref(
             resource_identity=request.resource_identity,
             uri=request.uri,
@@ -129,40 +132,23 @@ class SessionContextQueryService:
 
         if request.view == "assembly":
             session = await self._load_session(resource)
-            return await self._assembly_query.read_assembly(
+            return await self._assembly_query.freeze_assembly(
                 resource,
                 request,
                 session,
             )
         if request.view == "assemblies":
             session = await self._load_session(resource)
-            return await self._assembly_query.read_assemblies(
+            return await self._assembly_query.freeze_assemblies(
                 resource,
                 request,
                 session,
             )
 
         if resource.kind == "workspace_sessions":
-            return await self._read_inventory(resource, request)
+            return await self._freeze_inventory(resource)
 
         snapshot = await self._load_snapshot(resource)
-        require_session_context_revision(request.revision, snapshot.revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=resource.resource_identity,
-            uri=resource.uri,
-            scope=resource.scope,
-            revision=snapshot.revision,
-            operation=session_context_read_operation(
-                view=request.view,
-                include=request.include,
-                recent_rounds=request.recent_rounds,
-                include_initial_goal=request.include_initial_goal,
-            ),
-            record_index=request.record_index,
-            assembly_ref=request.assembly_ref,
-        )
-
         if request.record_index is not None:
             items = self._selected_record_items(snapshot, resource, request)
         elif request.view == "information":
@@ -178,12 +164,9 @@ class SessionContextQueryService:
                 include=set(request.include),
                 messages_only=request.view == "messages",
             )
-        return paginate_read_items(
-            request=request,
+        return SessionContextReadSnapshot(
             revision=snapshot.revision,
             items=items,
-            offset=offset,
-            char_offset=char_offset,
             compacted=snapshot.compacted,
             compaction_cutoff=snapshot.compaction_cutoff,
             raw_message_count=snapshot.raw_message_count,
@@ -465,29 +448,9 @@ class SessionContextQueryService:
             data=information.model_dump(mode="json"),
         )
 
-    async def _read_inventory(
-        self,
-        resource: ParsedSessionContextResource,
-        request: SessionContextReadRequest,
-    ) -> SessionContextReadResultDTO:
+    async def _freeze_inventory(self, resource: ParsedSessionContextResource) -> SessionContextReadSnapshot:
         sessions = await self._list_sessions(self._workspace_id)
         revision = sessions_revision(sessions)
-        require_session_context_revision(request.revision, revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=resource.resource_identity,
-            uri=resource.uri,
-            scope=resource.scope,
-            revision=revision,
-            operation=session_context_read_operation(
-                view=request.view,
-                include=request.include,
-                recent_rounds=request.recent_rounds,
-                include_initial_goal=request.include_initial_goal,
-            ),
-            record_index=request.record_index,
-            assembly_ref=request.assembly_ref,
-        )
         items = [
             SessionContextItemDTO(
                 kind="session",
@@ -501,13 +464,7 @@ class SessionContextQueryService:
             )
             for session in sessions
         ]
-        return paginate_read_items(
-            request=request,
-            revision=revision,
-            items=items,
-            offset=offset,
-            char_offset=char_offset,
-        )
+        return SessionContextReadSnapshot(revision=revision, items=items)
 
     async def _search_candidates(
         self,

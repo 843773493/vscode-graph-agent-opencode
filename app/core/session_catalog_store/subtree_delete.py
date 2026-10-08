@@ -562,6 +562,33 @@ class SubtreeDeleteMixin:
             ).fetchall()
             return [self._subtree_delete_record_from_row(row) for row in rows]
 
+
+    def find_operation_replay_delete(self, workspace_id: str, session_id: str) -> SubtreeDeleteRecord | None:
+        """只查权威 journal 的冻结 locator；不扫描隔离区或重建 catalog。"""
+        _validate_workspace_id(workspace_id)
+        validate_session_id(session_id)
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                f"SELECT {_SUBTREE_DELETE_RECORD_COLUMNS} FROM subtree_delete_records "
+                "WHERE workspace_id=? AND state IN ('deleting','draining','completed') "
+                "AND EXISTS (SELECT 1 FROM json_each(frozen_session_locators) "
+                "WHERE json_extract(value,'$.session_id')=?)",
+                (workspace_id, session_id),
+            ).fetchall()
+            if len(rows) > 1:
+                raise RuntimeError("同 Session 有多个可恢复删除 journal")
+            return None if not rows else self._subtree_delete_record_from_row(rows[0])
+
+    def list_completed_subtree_deletes(self, workspace_id: str) -> tuple[SubtreeDeleteRecord, ...]:
+        _validate_workspace_id(workspace_id)
+        with self.read_transaction() as connection:
+            rows = connection.execute(
+                f"SELECT {_SUBTREE_DELETE_RECORD_COLUMNS} FROM subtree_delete_records "
+                "WHERE workspace_id=? AND state='completed' ORDER BY record_updated_at",
+                (workspace_id,),
+            ).fetchall()
+            return tuple(self._subtree_delete_record_from_row(row) for row in rows)
+
     def delete_empty_folder(
         self,
         folder_id: str,

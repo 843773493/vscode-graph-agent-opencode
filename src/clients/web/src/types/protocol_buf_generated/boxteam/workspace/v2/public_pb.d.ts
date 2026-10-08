@@ -5450,40 +5450,258 @@ export declare type SessionListResultDTO = Message<"boxteam.workspace.v2.Session
 export declare const SessionListResultDTOSchema: GenMessage<SessionListResultDTO>;
 
 /**
- * @generated from message boxteam.workspace.v2.SessionMessageDispatchRequest
+ * 业务地址只携带稳定身份，连接及 channel locator 不进入通信合同。
+ *
+ * @generated from message boxteam.workspace.v2.GlobalThreadAddress
  */
-export declare type SessionMessageDispatchRequest = Message<"boxteam.workspace.v2.SessionMessageDispatchRequest"> & {
+export declare type GlobalThreadAddress = Message<"boxteam.workspace.v2.GlobalThreadAddress"> & {
+  /**
+   * @generated from field: string gateway_id = 1;
+   */
+  gatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 2;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 3;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 4;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.GlobalThreadAddress.
+ * Use `create(GlobalThreadAddressSchema)` to create a new message.
+ */
+export declare const GlobalThreadAddressSchema: GenMessage<GlobalThreadAddress>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationPayload
+ */
+export declare type CommunicationPayload = Message<"boxteam.workspace.v2.CommunicationPayload"> & {
   /**
    * @generated from field: string content = 1;
    */
   content: string;
 
   /**
-   * @generated from field: optional google.protobuf.Struct metadata = 2;
+   * @generated from field: string kind = 2;
    */
-  metadata?: JsonObject | undefined;
+  kind: string;
 
   /**
-   * @generated from field: optional bool simulate_user = 3;
+   * @generated from field: optional string reply_to_communication_id = 3;
    */
-  simulateUser?: boolean | undefined;
+  replyToCommunicationId?: string | undefined;
 
   /**
-   * @generated from field: optional string delivery_policy = 4;
+   * @generated from field: string delivery_policy = 4;
    */
-  deliveryPolicy?: string | undefined;
-
-  /**
-   * @generated from field: optional string idempotency_key = 5;
-   */
-  idempotencyKey?: string | undefined;
+  deliveryPolicy: string;
 };
 
 /**
- * Describes the message boxteam.workspace.v2.SessionMessageDispatchRequest.
- * Use `create(SessionMessageDispatchRequestSchema)` to create a new message.
+ * Describes the message boxteam.workspace.v2.CommunicationPayload.
+ * Use `create(CommunicationPayloadSchema)` to create a new message.
  */
-export declare const SessionMessageDispatchRequestSchema: GenMessage<SessionMessageDispatchRequest>;
+export declare const CommunicationPayloadSchema: GenMessage<CommunicationPayload>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationDiscoveryRequest
+ */
+export declare type CommunicationDiscoveryRequest = Message<"boxteam.workspace.v2.CommunicationDiscoveryRequest"> & {
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress source = 1;
+   */
+  source?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: string session_id = 2;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: optional string workspace_id = 3;
+   */
+  workspaceId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CommunicationDiscoveryRequest.
+ * Use `create(CommunicationDiscoveryRequestSchema)` to create a new message.
+ */
+export declare const CommunicationDiscoveryRequestSchema: GenMessage<CommunicationDiscoveryRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationAcceptanceRequest
+ */
+export declare type CommunicationAcceptanceRequest = Message<"boxteam.workspace.v2.CommunicationAcceptanceRequest"> & {
+  /**
+   * @generated from field: string communication_id = 1;
+   */
+  communicationId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress source = 2;
+   */
+  source?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 3;
+   */
+  target?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.CommunicationPayload payload = 4;
+   */
+  payload?: CommunicationPayload | undefined;
+
+  /**
+   * @generated from field: string request_id = 5;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CommunicationAcceptanceRequest.
+ * Use `create(CommunicationAcceptanceRequestSchema)` to create a new message.
+ */
+export declare const CommunicationAcceptanceRequestSchema: GenMessage<CommunicationAcceptanceRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationReceipt
+ */
+export declare type CommunicationReceipt = Message<"boxteam.workspace.v2.CommunicationReceipt"> & {
+  /**
+   * @generated from field: string communication_id = 1;
+   */
+  communicationId: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress source = 2;
+   */
+  source?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 3;
+   */
+  target?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: string payload_hash = 4;
+   */
+  payloadHash: string;
+
+  /**
+   * @generated from field: string admission_id = 5;
+   */
+  admissionId: string;
+
+  /**
+   * @generated from field: string state = 6;
+   */
+  state: string;
+
+  /**
+   * @generated from field: string accepted_at = 7;
+   */
+  acceptedAt: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CommunicationReceipt.
+ * Use `create(CommunicationReceiptSchema)` to create a new message.
+ */
+export declare const CommunicationReceiptSchema: GenMessage<CommunicationReceipt>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationObservationRequest
+ */
+export declare type CommunicationObservationRequest = Message<"boxteam.workspace.v2.CommunicationObservationRequest"> & {
+  /**
+   * @generated from field: string observation_id = 1;
+   */
+  observationId: string;
+
+  /**
+   * @generated from field: string source_call_id = 2;
+   */
+  sourceCallId: string;
+
+  /**
+   * @generated from field: string page_identity = 3;
+   */
+  pageIdentity: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress source = 4;
+   */
+  source?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 5;
+   */
+  target?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: string operation = 6;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: google.protobuf.Struct query = 7;
+   */
+  query?: JsonObject | undefined;
+
+  /**
+   * @generated from field: uint32 page_ordinal = 8;
+   */
+  pageOrdinal: number;
+
+  /**
+   * @generated from field: string expires_at = 9;
+   */
+  expiresAt: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CommunicationObservationRequest.
+ * Use `create(CommunicationObservationRequestSchema)` to create a new message.
+ */
+export declare const CommunicationObservationRequestSchema: GenMessage<CommunicationObservationRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.CommunicationGatewayRequest
+ */
+export declare type CommunicationGatewayRequest = Message<"boxteam.workspace.v2.CommunicationGatewayRequest"> & {
+  /**
+   * @generated from field: string operation = 1;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: boxteam.workspace.v2.GlobalThreadAddress target = 2;
+   */
+  target?: GlobalThreadAddress | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Struct body = 3;
+   */
+  body?: JsonObject | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.CommunicationGatewayRequest.
+ * Use `create(CommunicationGatewayRequestSchema)` to create a new message.
+ */
+export declare const CommunicationGatewayRequestSchema: GenMessage<CommunicationGatewayRequest>;
 
 /**
  * @generated from message boxteam.workspace.v2.SessionNetworkWaitDTO

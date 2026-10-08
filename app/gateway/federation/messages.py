@@ -56,6 +56,8 @@ def require_discovery_scope(
             FEDERATION_TRANSIT_LIMIT_EXCEEDED, "visited 必须是字符串数组"
         )
     visited = tuple(raw_visited)
+    if len(set(visited)) != len(visited):
+        raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "visited 不得重复 Gateway")
     max_transit = require_int(request, "max_transit_gateways")
     max_hops = require_int(request, "max_gateway_hops")
     if max_transit != MAX_TRANSIT_GATEWAYS or max_hops != MAX_GATEWAY_HOPS:

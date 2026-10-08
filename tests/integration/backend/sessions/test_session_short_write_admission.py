@@ -28,6 +28,7 @@ from app.api.deps import (
 from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.goal import SessionGoalDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
@@ -66,21 +67,24 @@ class _InstantJobExecutor:
 
 
 class _RecordingCheckpointStore:
-    def __init__(self) -> None:
+    def __init__(self, workspace: CatalogWorkspaceContext) -> None:
+        self.workspace = workspace
+        self.checkpoint: ContextCompactionCheckpoint | None = None
+        self.load_calls = 0
+        self.save_calls = 0
+
+    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint:
+        assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
+        self.load_calls += 1
         messages = [HumanMessage(content="旧消息"), HumanMessage(content="新消息")]
         self.checkpoint = ContextCompactionCheckpoint(
+            owner=owner,
             raw_messages=list(messages),
             event=None,
             _tuple=cast(CheckpointTuple, object()),
             _checkpoint=cast(Checkpoint, {"channel_versions": {}}),
             _channel_values={"messages": messages},
         )
-        self.load_calls = 0
-        self.save_calls = 0
-
-    async def load(self, session_id: str) -> ContextCompactionCheckpoint:
-        del session_id
-        self.load_calls += 1
         return self.checkpoint
 
     async def save_compaction_request(
@@ -192,7 +196,7 @@ async def harness() -> AsyncIterator[_Harness]:
         job_event_bus=JobEventBus(),
     )
     runtime = _RuntimeProbe(session_service)
-    checkpoint_store = _RecordingCheckpointStore()
+    checkpoint_store = _RecordingCheckpointStore(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
         checkpoint_store=checkpoint_store,

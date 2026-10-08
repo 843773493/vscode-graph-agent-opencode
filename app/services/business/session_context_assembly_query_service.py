@@ -11,18 +11,14 @@ from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
     SessionContextReadRequest,
-    SessionContextReadResultDTO,
 )
 from app.services.business.session_context_projection import (
-    paginate_read_items,
+    SessionContextReadSnapshot,
     project_record_items,
 )
 from app.services.business.session_context_resource import (
     ParsedSessionContextResource,
-    SessionContextCursorCodec,
     context_assembly_identity,
-    require_session_context_revision,
-    session_context_read_operation,
 )
 
 
@@ -53,12 +49,12 @@ class SessionContextAssemblyQueryService:
     def __init__(self, *, assembly_source: SessionContextAssemblySourceProtocol) -> None:
         self._assembly_source = assembly_source
 
-    async def read_assemblies(
+    async def freeze_assemblies(
         self,
         resource: ParsedSessionContextResource,
         request: SessionContextReadRequest,
         session: SessionDTO,
-    ) -> SessionContextReadResultDTO:
+    ) -> SessionContextReadSnapshot:
         """只列 Saver 已封存快照；列表顺序不改变快照内部 selection。"""
         thread_id = self._require_main_thread_id(session)
         snapshots = await asyncio.to_thread(
@@ -73,22 +69,6 @@ class SessionContextAssemblyQueryService:
                     sorted(snapshot.assembly_id for snapshot in snapshots)
                 ).encode("utf-8")
             ).hexdigest()
-        )
-        require_session_context_revision(request.revision, revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=resource.resource_identity,
-            uri=resource.uri,
-            scope=resource.scope,
-            revision=revision,
-            operation=session_context_read_operation(
-                view=request.view,
-                include=request.include,
-                recent_rounds=request.recent_rounds,
-                include_initial_goal=request.include_initial_goal,
-            ),
-            record_index=request.record_index,
-            assembly_ref=request.assembly_ref,
         )
         items = [
             SessionContextItemDTO(
@@ -112,21 +92,18 @@ class SessionContextAssemblyQueryService:
             )
             for snapshot in reversed(snapshots)
         ]
-        return paginate_read_items(
-            request=request,
+        return SessionContextReadSnapshot(
             revision=revision,
             items=items,
-            offset=offset,
-            char_offset=char_offset,
             effective_record_count=len(items),
         )
 
-    async def read_assembly(
+    async def freeze_assembly(
         self,
         resource: ParsedSessionContextResource,
         request: SessionContextReadRequest,
         session: SessionDTO,
-    ) -> SessionContextReadResultDTO:
+    ) -> SessionContextReadSnapshot:
         """冻结检查面不读取 active view，也不物化 request-only 正文。"""
         if request.assembly_ref is None:
             raise ValueError("assembly 查询缺少 assembly_ref")
@@ -157,22 +134,6 @@ class SessionContextAssemblyQueryService:
         ).hexdigest()
         # assembly 不可变；检查面 revision 只绑定结构身份和 projection 参数。
         revision = f"assembly:{snapshot.assembly_id}:{include_hash}"
-        require_session_context_revision(request.revision, revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor,
-            resource_identity=resource.resource_identity,
-            uri=resource.uri,
-            scope=resource.scope,
-            revision=revision,
-            operation=session_context_read_operation(
-                view=request.view,
-                include=request.include,
-                recent_rounds=request.recent_rounds,
-                include_initial_goal=request.include_initial_goal,
-            ),
-            record_index=request.record_index,
-            assembly_ref=request.assembly_ref,
-        )
         messages, losses = await asyncio.to_thread(
             self._assembly_source.project_context_plan_to_history_with_diagnostics,
             session.session_id,
@@ -248,12 +209,9 @@ class SessionContextAssemblyQueryService:
             for projection, values in (("assembly", snapshot.loss), ("history", losses))
             for ordinal, loss in enumerate(values)
         )
-        return paginate_read_items(
-            request=request,
+        return SessionContextReadSnapshot(
             revision=revision,
             items=items,
-            offset=offset,
-            char_offset=char_offset,
             effective_record_count=len(snapshot.selection),
             raw_message_count=len(messages),
         )

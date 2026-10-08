@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointTuple
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 
 
 @dataclass(slots=True)
 class ContextCompactionCheckpoint:
+    owner: MutationIntentOwner
     raw_messages: list[object]
     event: object
     _tuple: CheckpointTuple
@@ -21,8 +24,9 @@ class ContextCompactionCheckpointStore:
     def __init__(self, *, checkpointer: BaseCheckpointSaver) -> None:
         self._checkpointer = checkpointer
 
-    async def load(self, session_id: str) -> ContextCompactionCheckpoint | None:
-        tup = await self._checkpointer.aget_tuple(build_checkpoint_config(session_id))
+    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint | None:
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            tup = await self._checkpointer.aget_tuple(build_checkpoint_config(owner.thread_id))
         if tup is None:
             return None
 
@@ -41,6 +45,7 @@ class ContextCompactionCheckpointStore:
             )
 
         return ContextCompactionCheckpoint(
+            owner=owner,
             raw_messages=raw_messages,
             event=channel_values.get("_summarization_event"),
             _tuple=tup,
@@ -89,9 +94,10 @@ class ContextCompactionCheckpointStore:
         channel_versions[channel] = value_version
         next_checkpoint["channel_versions"] = channel_versions
 
-        await self._checkpointer.aput(
-            config=checkpoint._tuple.config,
-            checkpoint=next_checkpoint,
-            metadata={"source": source, "step": -1, "writes": {}},
-            new_versions={channel: value_version},
-        )
+        with session_thread_owner_scope(checkpoint.owner, langgraph_thread_id=checkpoint.owner.thread_id):
+            await self._checkpointer.aput(
+                config=checkpoint._tuple.config,
+                checkpoint=next_checkpoint,
+                metadata={"source": source, "step": -1, "writes": {}},
+                new_versions={channel: value_version},
+            )

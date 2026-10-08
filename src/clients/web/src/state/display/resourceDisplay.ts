@@ -89,7 +89,6 @@ export function resourceName(resource: SessionResource): string {
     return resource.name;
   }
   const labels: Record<string, string> = {
-    monitor_session_agent_end: "监听会话 Agent 完成",
     emit_system_time_messages: "定时发送系统时间",
   };
   return labels[resource.name] ?? resource.name;

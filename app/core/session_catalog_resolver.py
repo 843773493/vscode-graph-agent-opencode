@@ -743,6 +743,13 @@ class SessionCatalogPathResolver:
         """
         self._store.delete_empty_folder(folder_id)
 
+    def resolve_operation_replay_node(self, session_id: str, *, now: datetime) -> Path:
+        """仅供独立 operation owner 核原请求后只读恢复，不开放普通 resolver。"""
+        return self._delete_service.resolve_operation_replay_node(session_id, now=now)
+
+    async def collect_expired_operation_replays(self, *, now: datetime) -> datetime | None:
+        return await self._delete_service.collect_expired_operation_replays(now=now)
+
     def pending_subtree_deletes(self) -> list[SubtreeDeleteRecord]:
         """列出本 workspace 待恢复的子树删除 record（启动恢复的权威依据）。"""
         return self._store.list_pending_subtree_delete_records(self._workspace_id)

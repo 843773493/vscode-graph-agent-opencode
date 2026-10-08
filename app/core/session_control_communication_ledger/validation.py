@@ -51,12 +51,13 @@ _OUTBOX_PREIMAGE_FIELDS = (
     "session_id", "source_gateway_id", "source_workspace_id", "source_thread_id",
     "target_gateway_id", "target_workspace_id", "target_session_id",
     "target_thread_id", "kind", "reply_to_communication_id", "payload_hash",
+    "content", "delivery_policy", "target_ref",
 )
 
 _INBOX_PREIMAGE_FIELDS = (
     "session_id", "source_gateway_id", "source_workspace_id", "source_session_id",
-    "source_thread_id", "target_thread_id", "kind", "reply_to_communication_id",
-    "payload_hash", "admission_id", "wakeup_key",
+    "source_thread_id", "target_gateway_id", "target_workspace_id", "target_thread_id", "kind", "reply_to_communication_id",
+    "payload_hash", "content", "delivery_policy", "admission_id", "wakeup_key",
 )
 
 

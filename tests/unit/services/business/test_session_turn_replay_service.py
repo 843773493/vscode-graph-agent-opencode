@@ -10,6 +10,10 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.execution_admission import ExecutionAdmission
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDTO
 from app.schemas.internal_v2.message import MessageReplayRequest, MessageRunAccepted
@@ -36,17 +40,17 @@ def _metadata(message_id: str) -> dict[str, object]:
     return metadata
 
 
-def _job(message_id: str, status: JobStatus, *, job_id: str = "job_target") -> JobDTO:
-    return JobDTO(
-        job_id=job_id,
-        message_id=message_id,
-        session_id="ses_019c205391bb7a4b81b6728df70f63e6",
-        mode=RunMode.single_agent,
-        status=status,
-        entry_agent="default",
-        created_at=NOW,
-        updated_at=NOW,
-    )
+def _job(message_id: str, status: JobStatus, *, job_id: str = "job_target") -> dict[str, object]:
+    return {
+        "job_id": job_id,
+        "message_id": message_id,
+        "session_id": "ses_019c205391bb7a4b81b6728df70f63e6",
+        "mode": RunMode.single_agent,
+        "status": status,
+        "entry_agent": "default",
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
 
 
 class FakeJobService:
@@ -82,111 +86,143 @@ class RecordingDispatcher:
         *,
         requested_agent_id: str | None,
     ) -> MessageRunAccepted:
-        checkpoint_tuple = await self.saver.aget_tuple(
-            build_checkpoint_config(session_id)
-        )
-        assert checkpoint_tuple is not None
-        messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
-        self.pre_dispatch_message_ids = [
-            item.response_metadata.get("message_id", "") for item in messages
-        ]
-        self.dispatched_message_id = message.message_id
+        owner = self.saver.resolve_main_thread_owner(session_id)
+        with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+            checkpoint_tuple = await self.saver.aget_tuple(
+                build_checkpoint_config(owner.thread_id)
+            )
+            assert checkpoint_tuple is not None
+            messages = checkpoint_tuple.checkpoint["channel_values"]["messages"]
+            self.pre_dispatch_message_ids = [
+                item.response_metadata.get("message_id", "") for item in messages
+            ]
+            self.dispatched_message_id = message.message_id
 
-        # 模拟 LangGraph 正常接收本次用户输入；回退服务自身不得预写同一消息。
-        checkpoint = deepcopy(checkpoint_tuple.checkpoint)
-        values = dict(checkpoint["channel_values"])
-        values["messages"] = [
-            *messages,
-            HumanMessage(
-                id=message.message_id,
-                content=message.content,
-                response_metadata=_metadata(message.message_id),
-            ),
-        ]
-        versions = dict(checkpoint["channel_versions"])
-        next_version = self.saver.get_next_version(versions.get("messages"), None)
-        versions["messages"] = next_version
-        checkpoint.update(
-            id=str(uuid4()),
-            channel_values=values,
-            channel_versions=versions,
-            updated_channels=["messages"],
-        )
-        await self.saver.aput(
-            checkpoint_tuple.config,
-            checkpoint,
-            {"source": "test_dispatch", "step": -1, "writes": {}},
-            {"messages": next_version},
-        )
-        return MessageRunAccepted(
-            message_id=message.message_id,
-            job_id="job_replayed",
-            status="running",
-            dispatch=JobDispatchSnapshotDTO(
-                session_id=session_id,
+            assert message.thread_id == owner.thread_id
+            accepted = self.saver.accept_turn(
+                session_id, thread_id=owner.thread_id,
+                accepted_ingress_id=message.message_id,
+                acceptance_idempotency_key=f"acceptance:{message.message_id}",
+                job_id="job_replayed", admission_idempotency_key=f"admission:{message.message_id}",
+                payload=message.content, root_item_id=f"item-{message.message_id}",
+            )
+            admission = self.saver.execution_admission(
+                session_id, thread_id=owner.thread_id, execution_id=accepted["initial_execution_id"],
+            )
+            # 模拟真实 dispatcher 的 acceptance/admission，再提交同一用户根输入。
+            checkpoint = deepcopy(checkpoint_tuple.checkpoint)
+            values = dict(checkpoint["channel_values"])
+            values["messages"] = [
+                *messages,
+                HumanMessage(
+                    id=message.message_id,
+                    content=message.content,
+                    response_metadata=_metadata(message.message_id),
+                ),
+            ]
+            versions = dict(checkpoint["channel_versions"])
+            next_version = self.saver.get_next_version(versions.get("messages"), None)
+            versions["messages"] = next_version
+            checkpoint.update(
+                id=str(uuid4()),
+                channel_values=values,
+                channel_versions=versions,
+                updated_channels=["messages"],
+            )
+            with execution_admission_scope(admission, langgraph_thread_id=owner.thread_id):
+                await self.saver.aput(
+                    checkpoint_tuple.config,
+                    checkpoint,
+                    {"source": "test_dispatch", "step": -1, "writes": {}},
+                    {"messages": next_version},
+                )
+            return MessageRunAccepted(
+                message_id=message.message_id,
                 job_id="job_replayed",
-                job_status="running",
-                active_job_id="job_replayed",
-                queued_jobs_ahead=0,
-                queued_job_count=0,
-                pending_job_count=1,
-            ),
-        )
+                status="running",
+                thread_id=owner.thread_id,
+                dispatch=JobDispatchSnapshotDTO(
+                    session_id=session_id,
+                    thread_id=owner.thread_id,
+                    job_id="job_replayed",
+                    job_status="running",
+                    active_job_id="job_replayed",
+                    queued_jobs_ahead=0,
+                    queued_job_count=0,
+                    pending_job_count=1,
+                ),
+            )
 
 
 async def _put_checkpoint(
     saver: RolloutCheckpointSaver,
     config: dict,
     *,
+    owner: MutationIntentOwner,
+    admission: ExecutionAdmission,
     messages: list[object],
     todos: list[str],
     summarization_event: dict[str, object] | None = None,
 ) -> dict:
-    previous = await saver.aget_tuple(config)
-    previous_versions = (
-        dict(previous.checkpoint["channel_versions"]) if previous is not None else {}
-    )
-    messages_version = saver.get_next_version(previous_versions.get("messages"), None)
-    todos_version = saver.get_next_version(previous_versions.get("todos"), None)
-    values: dict[str, object] = {"messages": messages, "todos": todos}
-    versions: dict[str, object] = {
-        "messages": messages_version,
-        "todos": todos_version,
-    }
-    new_versions: dict[str, object] = dict(versions)
-    if summarization_event is not None:
-        event_version = saver.get_next_version(
-            previous_versions.get("_summarization_event"), None
+    with (
+        session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id),
+        execution_admission_scope(admission, langgraph_thread_id=owner.thread_id),
+    ):
+        previous = await saver.aget_tuple(config)
+        previous_versions = (
+            dict(previous.checkpoint["channel_versions"]) if previous is not None else {}
         )
-        values["_summarization_event"] = summarization_event
-        versions["_summarization_event"] = event_version
-        new_versions["_summarization_event"] = event_version
-    checkpoint = {
-        "v": 1,
-        "ts": NOW.isoformat(),
-        "id": str(uuid4()),
-        "channel_values": values,
-        "channel_versions": versions,
-        "versions_seen": {},
-        "updated_channels": list(new_versions),
-    }
-    return await saver.aput(
-        config,
-        checkpoint,
-        {"source": "test", "step": 1, "writes": {}},
-        new_versions,
-    )
+        messages_version = saver.get_next_version(previous_versions.get("messages"), None)
+        todos_version = saver.get_next_version(previous_versions.get("todos"), None)
+        values: dict[str, object] = {"messages": messages, "todos": todos}
+        versions: dict[str, object] = {
+            "messages": messages_version,
+            "todos": todos_version,
+        }
+        new_versions: dict[str, object] = dict(versions)
+        if summarization_event is not None:
+            event_version = saver.get_next_version(
+                previous_versions.get("_summarization_event"), None
+            )
+            values["_summarization_event"] = summarization_event
+            versions["_summarization_event"] = event_version
+            new_versions["_summarization_event"] = event_version
+        checkpoint = {
+            "v": 1,
+            "ts": NOW.isoformat(),
+            "id": str(uuid4()),
+            "channel_values": values,
+            "channel_versions": versions,
+            "versions_seen": {},
+            "updated_channels": list(new_versions),
+        }
+        return await saver.aput(
+            config,
+            checkpoint,
+            {"source": "test", "step": 1, "writes": {}},
+            new_versions,
+        )
 
 
 async def _build_service(
     tmp_path,
     session_bundle_factory,
-    jobs: list[JobDTO],
+    jobs: list[dict[str, object]],
     trace_events: list[object] | None = None,
 ):
     session_bundle_factory(tmp_path, "ses_019c205391bb7a4b81b6728df70f63e6")
     saver = RolloutCheckpointSaver(sessions_dir=tmp_path)
-    config = build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6")
+    owner = saver.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
+    config = build_checkpoint_config(owner.thread_id)
+    saver.accept_turn(
+        owner.session_id, thread_id=owner.thread_id, accepted_ingress_id="msg_1",
+        acceptance_idempotency_key="acceptance:msg_1", job_id="job_1",
+        admission_idempotency_key="admission:msg_1", payload="第一问",
+        turn_id="turn-1", root_item_id="item-msg_1", initial_execution_id="execution-turn-1",
+    )
+    first_admission = saver.execution_admission(
+        owner.session_id, thread_id=owner.thread_id, execution_id="execution-turn-1",
+    )
     first_messages = [
         HumanMessage(content="第一问", response_metadata=_metadata("msg_1")),
         AIMessage(content="第一答", response_metadata=_metadata("assistant_1")),
@@ -194,8 +230,22 @@ async def _build_service(
     config = await _put_checkpoint(
         saver,
         config,
+        owner=owner, admission=first_admission,
         messages=first_messages,
         todos=["after_first"],
+    )
+    saver.finalize_turn(
+        session_id=owner.session_id, thread_id=owner.thread_id,
+        turn_id="turn-1", final_message_id="assistant_1",
+    )
+    saver.accept_turn(
+        owner.session_id, thread_id=owner.thread_id, accepted_ingress_id="msg_2",
+        acceptance_idempotency_key="acceptance:msg_2", job_id="job_target",
+        admission_idempotency_key="admission:msg_2", payload="第二问",
+        turn_id="turn-2", root_item_id="item-msg_2", initial_execution_id="execution-turn-2",
+    )
+    second_admission = saver.execution_admission(
+        owner.session_id, thread_id=owner.thread_id, execution_id="execution-turn-2",
     )
     second_messages = [
         *first_messages,
@@ -210,6 +260,7 @@ async def _build_service(
     await _put_checkpoint(
         saver,
         config,
+        owner=owner, admission=second_admission,
         messages=second_messages,
         todos=["after_second"],
         summarization_event={
@@ -226,16 +277,26 @@ async def _build_service(
     async def get_session(session_id: str):
         return SimpleNamespace(current_agent_id="default")
 
+    async def resolve_main_thread(session_id: str) -> str:
+        return saver.resolve_main_thread_owner(session_id).thread_id
+
     session_service.get = get_session
+    session_service.resolve_main_thread = resolve_main_thread
     service = SessionTurnReplayService(
         checkpointer=saver,
         message_service=build_message_service(tmp_path, checkpointer=saver),
         session_service=session_service,
-        job_service=FakeJobService(jobs),
+        job_service=FakeJobService([JobDTO(thread_id=owner.thread_id, **job) for job in jobs]),
         dispatcher=dispatcher,
         trace_event_store=FakeTraceEventStore(trace_events),
     )
     return service, saver, dispatcher
+
+
+async def _read_latest(saver: RolloutCheckpointSaver):
+    owner = saver.resolve_main_thread_owner("ses_019c205391bb7a4b81b6728df70f63e6")
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        return await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
 
 
 @pytest.mark.asyncio
@@ -266,7 +327,7 @@ async def test_edit_first_turn_removes_all_following_turns(
     assert result.removed_message_count == 4
     assert dispatcher.pre_dispatch_message_ids == []
     assert dispatcher.dispatched_message_id not in dispatcher.pre_dispatch_message_ids
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await _read_latest(saver)
     assert latest is not None
     final_messages = latest.checkpoint["channel_values"]["messages"]
     replacement_count = sum(
@@ -302,7 +363,7 @@ async def test_replay_turn_uses_turn_anchor_resolver(
     assert result.replaced_message_id == "msg_1"
     assert dispatcher.pre_dispatch_message_ids == []
     assert dispatcher.dispatched_message_id
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await _read_latest(saver)
     assert latest is not None
     messages = latest.checkpoint["channel_values"]["messages"]
     assert [message.content for message in messages] == ["按 Turn 重放第一问"]
@@ -356,7 +417,7 @@ async def test_retry_failed_clears_partial_tool_messages(
 
     assert result.action == "retry_failed"
     assert dispatcher.pre_dispatch_message_ids == ["msg_1", "assistant_1"]
-    latest = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    latest = await _read_latest(saver)
     assert latest is not None
     final_messages = latest.checkpoint["channel_values"]["messages"]
     assert not any(isinstance(message, ToolMessage) for message in final_messages)
@@ -461,7 +522,7 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
         session_bundle_factory,
         [_job("msg_2", JobStatus.running)],
     )
-    before = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    before = await _read_latest(saver)
     assert before is not None
 
     with pytest.raises(ValueError, match="仍有运行中任务"):
@@ -475,7 +536,7 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
             ),
         )
 
-    after = await saver.aget_tuple(build_checkpoint_config("ses_019c205391bb7a4b81b6728df70f63e6"))
+    after = await _read_latest(saver)
     assert after is not None
     assert after.checkpoint["id"] == before.checkpoint["id"]
     assert dispatcher.dispatched_message_id == ""

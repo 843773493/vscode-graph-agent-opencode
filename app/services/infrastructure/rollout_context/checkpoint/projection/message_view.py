@@ -26,6 +26,8 @@ class RolloutMessageViewMixin:
         view_id: str,
         *,
         connection: sqlite3.Connection | None = None,
+        selection_view_id: str | None = None,
+        additional_message_sequences: Sequence[int] = (),
     ) -> list[object]:
         view_id = strict_text(view_id, field="context_views.view_id")
         sequences = self._view_message_sequences(
@@ -36,6 +38,13 @@ class RolloutMessageViewMixin:
             session_id=session_id,
             connection=connection,
         )
+        if selection_view_id is not None:
+            selected = set(self._view_message_sequences(
+                thread_id, checkpoint_ns, selection_view_id, set(),
+                session_id=session_id, connection=connection,
+            ))
+            sequences = [sequence for sequence in sequences if sequence in selected]
+        sequences = list(dict.fromkeys((*sequences, *additional_message_sequences)))
         if not sequences:
             return []
         values = self._read_messages(
@@ -183,7 +192,7 @@ class RolloutMessageViewMixin:
                 raise RuntimeError(
                     f"context view range source_kind 非法: view={view_id}, source_kind={source_kind}"
                 )
-        if view_kind == "checkpoint" and parent_view_id is not None and not has_parent_range:
+        if view_kind in {"checkpoint", "checkpoint_messages"} and parent_view_id is not None and not has_parent_range:
             raise FormatDispatchError(
                 f"v2_migration_required: checkpoint view 缺少显式 parent range: view_id={view_id}"
             )

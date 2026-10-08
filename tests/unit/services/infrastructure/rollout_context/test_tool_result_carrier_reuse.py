@@ -21,7 +21,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.core.checkpoint_config import build_checkpoint_config
+from app.core.execution_admission_context import execution_admission_scope
+from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
     PayloadKind,
@@ -32,6 +38,7 @@ from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
 )
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     validate_tool_protocol_closure,
@@ -124,7 +131,7 @@ def _request_carrier(
 def storage(tmp_path: Path, session_bundle_factory) -> RolloutStorage:
     sessions_dir = tmp_path / "sessions"
     session_bundle_factory(sessions_dir, SESSION_ID)
-    owner = RolloutStorage(sessions_dir, message_codec=LangChainMessageCodec())
+    owner = RolloutStorage(sessions_dir, serde=JsonPlusSerializer(), message_codec=LangChainMessageCodec())
     owner.accept_turn(
         SESSION_ID, thread_id=owner.main_thread_id(SESSION_ID),
         accepted_ingress_id="carrier-ingress", acceptance_idempotency_key="carrier-accept",
@@ -328,7 +335,112 @@ def test_tool_pairing_survives_selected_carrier_replacement(
             "SELECT call.tool_call_id, result.message_id FROM tool_calls AS call "
             "JOIN messages AS result ON result.message_sequence = call.result_message_sequence"
         ))
-        assert pairings == {
+    assert pairings == {
             SCOPED_TOOL_CALL_ID: expected_stream_result,
             PROVIDER_TOOL_CALL_ID: "request-result",
         }
+
+
+@pytest.mark.parametrize("stream_result_timing", ["before_checkpoint", "after_checkpoint"])
+def test_checkpoint_restore_does_not_mix_uncheckpointed_stream_result(
+    storage: RolloutStorage, carrier_saver: RolloutCheckpointSaver,
+    stream_result_timing: str,
+) -> None:
+    """固定 checkpoint 的工具声明不得与稍后 active view 的唯一 stream 结果混读。"""
+    thread_id = storage.main_thread_id(SESSION_ID)
+    root = storage.read_items(SESSION_ID, thread_id)[0]
+    user = storage._codec().from_dict(storage._codec().project_message((root,)))
+    stream_call = CanonicalItemRecord.create(
+        item_sequence=1, item_id="item-live-call", semantic_kind=SemanticKind.TOOL_CALL,
+        payload_kind=PayloadKind.TOOL_CALL, status=CanonicalItemStatus.COMPLETED,
+        producer_ref={"producer_kind": "provider", "producer_id": "live-call", "invocation_id": MODEL_CALL_ID},
+        payload={"tool_call_id": SCOPED_TOOL_CALL_ID, "name": "task", "args": {}},
+        projection_identity=ItemProjectionIdentity(model_call_id=MODEL_CALL_ID),
+        turn_id=TURN_ID, turn_scope=TurnScope.TURN_MEMBER, message_group_id="message-live-call",
+        wire_role="assistant",
+    )
+    storage.append_items(SESSION_ID, thread_id, (stream_call,), execution_id=MODEL_CALL_ID)
+    assistant = AIMessage(
+        content="", id="request-call",
+        tool_calls=[{"id": PROVIDER_TOOL_CALL_ID, "name": "task", "args": {}}],
+        response_metadata={"model_call_id": MODEL_CALL_ID},
+    )
+    admission = carrier_saver.execution_admission(SESSION_ID, thread_id=thread_id, execution_id=MODEL_CALL_ID)
+    owner = MutationIntentOwner(session_id=SESSION_ID, thread_id=thread_id)
+    config = build_checkpoint_config(thread_id)
+
+    def put(checkpoint_id: str, messages: list[object], parent_config):
+        checkpoint = empty_checkpoint()
+        checkpoint["id"] = checkpoint_id
+        checkpoint["channel_values"] = {"messages": messages}
+        checkpoint["channel_versions"] = {"messages": checkpoint_id}
+        checkpoint["updated_channels"] = ["messages"]
+        with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+            return carrier_saver.put(parent_config, checkpoint, {"source": "unit"}, {"messages": checkpoint_id})
+
+    with session_thread_owner_scope(owner, langgraph_thread_id=thread_id):
+        if stream_result_timing == "before_checkpoint":
+            storage.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
+        fixed = put("checkpoint-call-only", [user, assistant], config)
+        if stream_result_timing == "after_checkpoint":
+            storage.append_items(SESSION_ID, thread_id, (_live_tool_result(3),), execution_id=MODEL_CALL_ID)
+        intermediate = put("checkpoint-before-result-carrier", [user, assistant], fixed)
+        # 私有 checkpoint 尚未提交结果；读取当前执行 checkpoint 必须等于按 ID 读取。
+        explicit = carrier_saver.get_tuple(fixed)
+        latest = carrier_saver.get_tuple(config)
+        assert explicit is not None and latest is not None
+        assert latest.checkpoint["id"] == intermediate["configurable"]["checkpoint_id"]
+        assert latest.checkpoint["channel_values"]["messages"] == explicit.checkpoint["channel_values"]["messages"]
+        assert [message.type for message in latest.checkpoint["channel_values"]["messages"]] == ["human", "ai"]
+        assert _catalog_tool_result_ids(storage) == [_live_tool_result(3).item_id]
+        assert carrier_saver.get_tuple(intermediate).checkpoint["channel_values"]["messages"] == explicit.checkpoint["channel_values"]["messages"]
+
+        result = ToolMessage(
+            content=RESULT_CONTENT, id="request-result", name="task", tool_call_id=PROVIDER_TOOL_CALL_ID,
+            response_metadata={"model_call_id": MODEL_CALL_ID},
+        )
+        put("checkpoint-with-result", [user, assistant, result], intermediate)
+        completed = carrier_saver.get_tuple(config)
+        assert completed is not None
+        messages = completed.checkpoint["channel_values"]["messages"]
+        assert [message.type for message in messages] == ["human", "ai", "tool"]
+        assert messages[-1].content == RESULT_CONTENT
+        assert messages[-1].tool_call_id == PROVIDER_TOOL_CALL_ID
+        assert carrier_saver.get_tuple(fixed).checkpoint == explicit.checkpoint
+
+        fixed_id = fixed["configurable"]["checkpoint_id"]
+        with sqlite3.connect(storage.index_path(SESSION_ID)) as connection:
+            selections = {
+                row[0]: row[1:]
+                for row in connection.execute(
+                    "SELECT checkpoint.checkpoint_id, history.branch_id, messages.branch_id, "
+                    "messages.view_id, messages.view_kind, history.control_sequence, messages.control_sequence "
+                    "FROM checkpoints AS checkpoint "
+                    "JOIN context_views AS history ON history.view_id = checkpoint.view_id "
+                    "JOIN checkpoint_channels AS channel ON channel.checkpoint_id = checkpoint.checkpoint_id AND channel.channel_name = 'messages' "
+                    "JOIN context_views AS messages ON messages.view_id = channel.context_view_id"
+                )
+            }
+            previous = selections[fixed_id]
+            future = selections[completed.checkpoint["id"]]
+            assert previous[0] == previous[1] == future[0] == future[1]
+            assert previous[3] == future[3] == "checkpoint_messages"
+            assert previous[4] == previous[5] < future[4] == future[5]
+            connection.execute(
+                "UPDATE checkpoint_channels SET context_view_id = ? WHERE checkpoint_id = ? AND channel_name = 'messages'",
+                (future[2], fixed_id),
+            )
+        # 同 branch 的未来结果 view 也不能成为旧执行快照的 messages channel。
+        with pytest.raises(RuntimeError, match="messages selection 与冻结 checkpoint 不一致"):
+            carrier_saver.get_tuple(fixed)
+        assert carrier_saver.get_tuple(config).checkpoint == completed.checkpoint
+        with sqlite3.connect(storage.index_path(SESSION_ID)) as connection:
+            assert connection.execute(
+                "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id = ? AND channel_name = 'messages'",
+                (fixed_id,),
+            ).fetchone() == (future[2],)
+            connection.execute(
+                "UPDATE checkpoint_channels SET context_view_id = ? WHERE checkpoint_id = ? AND channel_name = 'messages'",
+                (previous[2], fixed_id),
+            )
+        assert carrier_saver.get_tuple(fixed).checkpoint == explicit.checkpoint

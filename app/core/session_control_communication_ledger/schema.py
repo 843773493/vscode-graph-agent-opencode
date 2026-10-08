@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS communication_outbox (
     kind TEXT NOT NULL CHECK (kind IN ('question', 'reply', 'progress', 'result')),
     reply_to_communication_id TEXT,
     payload_hash TEXT NOT NULL,
+    content TEXT NOT NULL CHECK(length(trim(content)) > 0),
+    delivery_policy TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN (
         'accepted', 'routing', 'target_accepted', 'execution_bound',
         'terminal', 'failed', 'cancelled')),
@@ -45,15 +49,21 @@ CREATE TABLE IF NOT EXISTS communication_inbox (
     source_workspace_id TEXT NOT NULL,
     source_session_id TEXT NOT NULL,
     source_thread_id TEXT NOT NULL,
+    target_gateway_id TEXT NOT NULL,
+    target_workspace_id TEXT NOT NULL,
     target_thread_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('question', 'reply', 'progress', 'result')),
     reply_to_communication_id TEXT,
     payload_hash TEXT NOT NULL,
+    content TEXT NOT NULL CHECK(length(trim(content)) > 0),
+    delivery_policy TEXT NOT NULL,
+    request_id TEXT NOT NULL,
     admission_id TEXT NOT NULL UNIQUE,
     wakeup_key TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN (
         'target_accepted', 'execution_bound', 'terminal', 'failed', 'cancelled')),
     job_id TEXT,
+    execution_id TEXT,
     turn_id TEXT,
     admission_claim_owner TEXT,
     admission_claim_generation INTEGER,
@@ -64,6 +74,7 @@ CREATE TABLE IF NOT EXISTS communication_inbox (
     CHECK ((kind = 'reply') = (reply_to_communication_id IS NOT NULL)),
     CHECK ((admission_claim_owner IS NULL) = (admission_claim_generation IS NULL)),
     CHECK (admission_claim_generation IS NULL OR admission_claim_generation >= 1),
+    CHECK ((job_id IS NULL) = (execution_id IS NULL)),
     CHECK (job_id IS NULL OR state IN ('execution_bound', 'terminal'))
 )
 """
@@ -79,15 +90,15 @@ _COMMUNICATION_OUTBOX_COLUMNS = (
     "send_operation_id, session_id, source_gateway_id, source_workspace_id, "
     "source_thread_id, communication_id, target_gateway_id, "
     "target_workspace_id, target_session_id, target_thread_id, kind, "
-    "reply_to_communication_id, payload_hash, state, latest_receipt, "
+    "reply_to_communication_id, payload_hash, content, delivery_policy, request_id, target_ref, state, latest_receipt, "
     "abort_reason, created_at, updated_at"
 )
 
 _COMMUNICATION_INBOX_COLUMNS = (
     "communication_id, session_id, source_gateway_id, source_workspace_id, "
-    "source_session_id, source_thread_id, target_thread_id, kind, "
-    "reply_to_communication_id, payload_hash, admission_id, wakeup_key, "
-    "state, job_id, turn_id, admission_claim_owner, "
+    "source_session_id, source_thread_id, target_gateway_id, target_workspace_id, target_thread_id, kind, "
+    "reply_to_communication_id, payload_hash, content, delivery_policy, request_id, admission_id, wakeup_key, "
+    "state, job_id, execution_id, turn_id, admission_claim_owner, "
     "admission_claim_generation, last_error, terminal_outcome, "
     "created_at, updated_at"
 )

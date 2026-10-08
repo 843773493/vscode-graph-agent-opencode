@@ -19,7 +19,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 from app.core.session_catalog_store import (
     SessionCatalogNode,
@@ -33,6 +32,7 @@ from app.core.session_subtree_delete import (
 )
 from app.services.business.session_resource_service import SessionResourceService
 from tests.support.canonical_id_at import session_id_at, thread_id_at
+from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 
 WORKSPACE_ID = "ws-delete"
 
@@ -604,10 +604,14 @@ async def test_delete_mark_cas_failure_keeps_subtree_active(
     store.rename_node(tree.session_s1.node_id, "漂移")
     with pytest.raises(RuntimeError, match="漂移"):
         await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
-    # 失败回滚：子树仍全部 active、record 保持 preparing
+    # mark 事务回滚保整树 active；service owner 明确终结已漂移的 journal。
     for node_id in tree.subtree_node_ids:
         assert store.get_node(node_id).state == "active"
-    assert store.get_subtree_delete_record("del-key-1").state == "preparing"
+    record = store.get_subtree_delete_record("del-key-1")
+    assert record.state == "aborted"
+    assert record.abort_reason is not None and "revision 已漂移" in record.abort_reason
+    with pytest.raises(RuntimeError, match="已中止"):
+        await service.delete(idempotency_key="del-key-1", root_node_id=tree.root)
 
 
 async def test_delete_missing_root_raises_keyerror(

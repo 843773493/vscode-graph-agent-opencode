@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package boxteam.workspace.v2;
 
+import "boxteam/workspace/v2/message.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
-import "boxteam/workspace/v2/message.proto";
 
 // 这是公开业务 DTO 的 Protobuf 初始版本；后续以本文件为协议源维护。
 // Python Pydantic 模型保留为后端内部校验和业务组装模型，不再生成 TypeScript。
@@ -373,8 +373,7 @@ message NodeDebugActionRecordDTO {
   optional ExtensionCatalogBindingAuditDTO extension_catalog_binding = 11;
 }
 
-message NodeDebugNoActionParams {
-}
+message NodeDebugNoActionParams {}
 
 message NodeDebugSetBreakpointParams {
   string path = 1;
@@ -1224,12 +1223,61 @@ message SessionListResultDTO {
   optional string cursor = 3;
 }
 
-message SessionMessageDispatchRequest {
+// 业务地址只携带稳定身份，连接及 channel locator 不进入通信合同。
+message GlobalThreadAddress {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string session_id = 3;
+  string thread_id = 4;
+}
+
+message CommunicationPayload {
   string content = 1;
-  optional google.protobuf.Struct metadata = 2;
-  optional bool simulate_user = 3;
-  optional string delivery_policy = 4;
-  optional string idempotency_key = 5;
+  string kind = 2;
+  optional string reply_to_communication_id = 3;
+  string delivery_policy = 4;
+}
+
+message CommunicationDiscoveryRequest {
+  GlobalThreadAddress source = 1;
+  string session_id = 2;
+  optional string workspace_id = 3;
+}
+
+message CommunicationAcceptanceRequest {
+  string communication_id = 1;
+  GlobalThreadAddress source = 2;
+  GlobalThreadAddress target = 3;
+  CommunicationPayload payload = 4;
+  string request_id = 5;
+}
+
+message CommunicationReceipt {
+  string communication_id = 1;
+  GlobalThreadAddress source = 2;
+  GlobalThreadAddress target = 3;
+  string payload_hash = 4;
+  string admission_id = 5;
+  string state = 6;
+  string accepted_at = 7;
+}
+
+message CommunicationObservationRequest {
+  string observation_id = 1;
+  string source_call_id = 2;
+  string page_identity = 3;
+  GlobalThreadAddress source = 4;
+  GlobalThreadAddress target = 5;
+  string operation = 6;
+  google.protobuf.Struct query = 7;
+  uint32 page_ordinal = 8;
+  string expires_at = 9;
+}
+
+message CommunicationGatewayRequest {
+  string operation = 1;
+  GlobalThreadAddress target = 2;
+  google.protobuf.Struct body = 3;
 }
 
 message SessionNetworkWaitDTO {

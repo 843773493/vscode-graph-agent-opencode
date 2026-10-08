@@ -63,9 +63,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from app.core.atomic_fs import (
@@ -80,6 +82,9 @@ from app.core.session_catalog_store import (
 from app.core.session_catalog_store.contracts import (
     CatalogTransactionHook,
     SubtreeDeleteMarkRejectedError,
+)
+from app.core.session_control_communication_ledger.observations import (
+    RemoteObservationError,
 )
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
@@ -192,6 +197,59 @@ class SessionSubtreeDeleteService:
         if self._session_drain_callback is not None:
             raise RuntimeError("Session 删除排空回调已绑定")
         self._session_drain_callback = callback
+
+
+    def resolve_operation_replay_node(self, session_id: str, *, now: datetime) -> Path:
+        """删除 journal 的精确定点只读窗口，调用方还须核完整 operation preimage。"""
+        record = self._store.find_operation_replay_delete(self._workspace_id, session_id)
+        if record is None:
+            raise RemoteObservationError("target-deleted")
+        if now >= datetime.fromisoformat(record.record_updated_at) + timedelta(days=1, seconds=30):
+            raise RemoteObservationError("operation-retry-expired")
+        source = self._date_bucket_dir(record.frozen_session_locators[session_id])
+        target = self._deleting_dir(record.subtree_delete_idempotency_key) / session_id
+        if session_id not in record.drained_session_ids and not target.exists():
+            if not source.is_dir() or source.is_symlink():
+                raise RuntimeError("删除 journal 的原 operation 节点缺失")
+            return source
+        self._verify_isolated_target(source, target, session_id, stage="operation replay")
+        return target
+
+    async def collect_expired_operation_replays(self, *, now: datetime) -> datetime | None:
+        """唯一物理 GC：整节点所有观察/通信窗口结束且全部 lease 已终态才清理。"""
+        next_expiry = None
+        for record in self._store.list_completed_subtree_deletes(self._workspace_id):
+            journal_deadline = datetime.fromisoformat(record.record_updated_at) + timedelta(days=1, seconds=30)
+            if now < journal_deadline:
+                next_expiry = journal_deadline if next_expiry is None else min(next_expiry, journal_deadline)
+                continue
+            for session_id, locator in record.frozen_session_locators.items():
+                async with self._session_gate.exclusive(session_id):
+                    source = self._date_bucket_dir(locator)
+                    target = self._deleting_dir(record.subtree_delete_idempotency_key) / session_id
+                    if not target.exists() and not target.is_symlink():
+                        if source.exists() or source.is_symlink():
+                            raise RuntimeError("GC 后原 Session locator 重新出现")
+                        continue
+                    self._verify_isolated_target(source, target, session_id, stage="operation replay GC")
+                    control = SessionControlStore(target / CONTROL_DATABASE_NAME, read_only=True)
+                    try:
+                        if control.list_non_terminal_leases():
+                            raise RuntimeError("删除恢复 GC 仍有非终态 operation lease")
+                        retained_until = journal_deadline
+                        for row in control.list_remote_observations():
+                            retained_until = max(retained_until, datetime.fromisoformat(row.expires_at))
+                        communication_deadline = control.communication_recovery_deadline()
+                        if communication_deadline is not None:
+                            retained_until = max(retained_until, communication_deadline)
+                    finally:
+                        control.close()
+                    if now < retained_until:
+                        next_expiry = retained_until if next_expiry is None else min(next_expiry, retained_until)
+                        continue
+                    shutil.rmtree(target)
+                    _fsync_directory(target.parent)
+        return next_expiry
 
     # ------------------------------------------------------------------
     # 公开入口
@@ -488,7 +546,7 @@ class SessionSubtreeDeleteService:
                 f"session_id={session_id}, target={target}"
             )
         try:
-            control = SessionControlStore(control_path)
+            control = SessionControlStore(control_path, read_only=True)
         except sqlite3.Error as error:
             raise RuntimeError(
                 f"{stage}: 隔离目标 session-control.sqlite 无法打开: "

@@ -1,22 +1,14 @@
-"""联邦 RPC 访问工作区权威数据的端口实现。
-
-两条能力各自绑定真实工作区端点，Gateway 不读取任何工作区 ``.boxteam``：
-
-- cold catalog 查询复用既有 ``GET /api/v1/session-catalog/export``；
-- main thread 解析要求工作区提供权威 main pointer。**8.6 尚未把 main thread
-  暴露到任何工作区 HTTP 合同**，因此该端口在运行时以
-  ``federation-session-main-unavailable`` 响亮失败，并点名缺失的合同；绝不猜测
-  main thread、绝不返回虚假默认值、也不绕过工作区直接读盘。
-"""
+"""联邦 workspace HTTP port：复用权威 main endpoint，透明传输 send/read/wait。"""
 
 from __future__ import annotations
 
+import json
 import logging
-import secrets
 from collections.abc import Callable
 
 import httpx
 
+from app.core.trace_middleware import require_current_request_id
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.federation.errors import (
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
@@ -27,7 +19,7 @@ from app.gateway.proxy_upstream import load_proxy_gateway_id
 
 logger = logging.getLogger(__name__)
 
-#: 工作区权威 main pointer 的合同路径；8.6 落地后由工作区后端提供。
+#: 复用工作区后端已提供的权威 main pointer 合同路径。
 SESSION_MAIN_THREAD_ENDPOINT = "/api/v1/sessions/{session_id}/main-thread"
 
 
@@ -60,7 +52,7 @@ class WorkspaceCatalogPort:
         }
 
     async def _export(self, *, workspace_id: str) -> dict[str, object]:
-        request_id = f"federation-catalog-{secrets.token_hex(8)}"
+        request_id = require_current_request_id("联邦 cold catalog")
         backend_endpoint = self._backend_endpoints.get(workspace_id)
         if backend_endpoint is None:
             raise FederationError(
@@ -69,7 +61,7 @@ class WorkspaceCatalogPort:
                 detail={"workspace_id": workspace_id},
             )
         backend_url, backend_workspace_id = backend_endpoint
-        async with httpx.AsyncClient(timeout=self._request_timeout) as client:
+        async with httpx.AsyncClient(timeout=self._request_timeout, trust_env=False) as client:
             response = await client.get(
                 f"{backend_url}/api/v1/session-catalog/export",
                 headers={
@@ -86,8 +78,13 @@ class WorkspaceCatalogPort:
                 f"工作区 cold catalog 查询失败: status={response.status_code}",
                 detail={"workspace_id": workspace_id},
             )
-        body = response.json()
+        try:
+            body = response.json()
+        except json.JSONDecodeError as error:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"cold catalog 响应不是 JSON: {response.text[:2000]}") from error
         data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(body, dict) or body.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "cold catalog 响应 request_id 漂移")
         if not isinstance(data, dict):
             raise FederationError(
                 FEDERATION_SESSION_MAIN_UNAVAILABLE,
@@ -119,64 +116,96 @@ class WorkspaceCatalogPort:
                 isinstance(item, dict) and item.get("session_id") == session_id
                 for item in items
             ):
-                found.append(workspace_id)
+                found.append(self._backend_endpoints[workspace_id][1])
         return tuple(found)
 
 
 class WorkspaceSessionMainPort:
-    """工作区权威 main thread 解析端口（8.6 合同就绪前 fail closed）。"""
+    """只调用注册工作区的权威 HTTP 端点，不读业务盘或创建 Job。"""
 
     def __init__(self, *, request_timeout: float = 5.0) -> None:
         self._request_timeout = request_timeout
         self._backend_urls: dict[str, str] = {}
         self._backend_workspace_ids: dict[str, str] = {}
 
-    def project_workspaces(
-        self,
-        workspaces: tuple[tuple[str, str, str], ...],
-    ) -> None:
-        """整体重建本地工作区路由表；远端子工作区不参与。"""
+    def project_workspaces(self, workspaces: tuple[tuple[str, str, str], ...]) -> None:
+        projected = {backend_id: url.rstrip("/") for _route_id, url, backend_id in workspaces}
+        if len(projected) != len(workspaces):
+            raise RuntimeError("多个本地 Gateway route 指向同一稳定 workspace identity")
+        self._backend_urls = projected
+        self._backend_workspace_ids = {route_id: backend_id for route_id, _url, backend_id in workspaces}
 
-        self._backend_urls = {
-            workspace_id: backend_url.rstrip("/")
-            for workspace_id, backend_url, _backend_workspace_id in workspaces
-        }
-        self._backend_workspace_ids = {
-            workspace_id: backend_workspace_id
-            for workspace_id, _backend_url, backend_workspace_id in workspaces
-        }
+    def require_local_source(self, gateway_id: str, source: dict[str, object]) -> None:
+        if source.get("gateway_id") != gateway_id or source.get("workspace_id") not in self._backend_urls:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "origin 不属于当前 Gateway 注册的本地 workspace")
 
-    async def resolve_main_thread(
-        self, *, gateway_id: str, workspace_id: str, session_id: str
-    ) -> str:
-        del gateway_id
-        if (
-            workspace_id not in self._backend_urls
-            or workspace_id not in self._backend_workspace_ids
-        ):
-            raise FederationError(
-                FEDERATION_SESSION_MAIN_UNAVAILABLE,
-                f"目标工作区未注册到当前 Gateway: {workspace_id}",
-                detail={"workspace_id": workspace_id},
+    def canonical_workspace_id(self, workspace_id: str) -> str:
+        return self._backend_workspace_ids.get(workspace_id, workspace_id)
+
+    async def _request(self, *, workspace_id: str, method: str, path: str, origin: str, body: dict[str, object] | None = None, timeout: float | None = None) -> dict[str, object]:
+        request_id = require_current_request_id("联邦 workspace HTTP port")
+        url = self._backend_urls.get(workspace_id)
+        if url is None:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"本地 workspace 不可达: {workspace_id}")
+        async with httpx.AsyncClient(timeout=timeout if timeout is not None else self._request_timeout, trust_env=False) as client:
+            response = await client.request(method, url + path, json=body, headers={
+                "X-Local-Token": LOCAL_TOKEN, "X-BoxTeam-Workspace-Id": workspace_id,
+                "X-BoxTeam-Gateway-Id": load_proxy_gateway_id(), "X-Request-ID": request_id,
+                "X-BoxTeam-Communication-Origin": origin,
+            })
+        if response.status_code >= 400:
+            from app.core.session_control_communication_ledger.observations import (
+                observation_error_code,
             )
-        raise FederationError(
-            FEDERATION_SESSION_MAIN_UNAVAILABLE,
-            "工作区尚未暴露权威 main thread 合同，无法解析 target main pointer",
-            detail={
-                "workspace_id": workspace_id,
-                "session_id": session_id,
-                "required_endpoint": SESSION_MAIN_THREAD_ENDPOINT.format(
-                    session_id=session_id
-                ),
-                "owner": "8.6",
-            },
+            if response.headers.get("content-type", "").startswith("application/json"):
+                code = observation_error_code(response.json())
+                if code is not None:
+                    raise FederationError(code, code)
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信 HTTP 失败: status={response.status_code}, detail={response.text[:2000]}")
+        try:
+            data = response.json()
+        except json.JSONDecodeError as error:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信响应不是 JSON: {response.text[:2000]}") from error
+        if not isinstance(data, dict) or data.get("request_id") != request_id or response.headers.get("X-Request-ID") != request_id or not isinstance(data.get("data"), dict):
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "工作区通信响应身份或 data 非法")
+        return data["data"]
+
+    async def resolve_main_thread(self, *, gateway_id: str, workspace_id: str, session_id: str) -> str:
+        from app.core.session_catalog_store import (
+            validate_session_id,
+            validate_thread_id,
         )
+        validate_session_id(session_id)
+        data = await self._request(workspace_id=workspace_id, method="GET", path=SESSION_MAIN_THREAD_ENDPOINT.format(session_id=session_id), origin=gateway_id)
+        if data.get("session_id") != session_id:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "main-thread 响应 Session 身份漂移")
+        thread_id = data.get("thread_id")
+        validate_thread_id(thread_id)
+        return thread_id
+
+    async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]:
+        if operation in {"send", "reply"}:
+            from app.schemas.internal_v2.communication import (
+                CommunicationAcceptanceRequest,
+            )
+            accepted = CommunicationAcceptanceRequest.model_validate(body)
+            if (accepted.payload.kind == "reply") != (operation == "reply"):
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "relay operation 与 payload kind 不一致")
+        else:
+            from app.schemas.internal_v2.communication import (
+                CommunicationObservationRequest,
+            )
+            observed = CommunicationObservationRequest.model_validate(body)
+            if observed.operation != operation:
+                raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "relay operation 与 observation 不一致")
+        source = body.get("source")
+        if not isinstance(source, dict) or source.get("gateway_id") != origin:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "通信 source 与认证 channel origin 不一致")
+        if body.get("target") != target:
+            raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, "通信 body target 与冻结 target main 不一致")
+        session_id = target["session_id"]
+        path = f"/api/v1/sessions/{session_id}/" + ("inter-agent-messages" if operation in {"send", "reply"} else "communication-observations")
+        return await self._request(workspace_id=target["workspace_id"], method="POST", path=path, origin=origin, body=body, timeout=timeout)
 
 
-__all__ = [
-    "LOCAL_TOKEN",
-    "SESSION_MAIN_THREAD_ENDPOINT",
-    "FederationSpokeDirectory",
-    "WorkspaceCatalogPort",
-    "WorkspaceSessionMainPort",
-]
+__all__ = ["LOCAL_TOKEN", "SESSION_MAIN_THREAD_ENDPOINT", "FederationSpokeDirectory", "WorkspaceCatalogPort", "WorkspaceSessionMainPort"]

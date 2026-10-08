@@ -93,11 +93,12 @@ class RolloutManifest:
 
 @dataclass(frozen=True, slots=True)
 class RolloutTurnAnchor:
-    """从 active view 解析出的完整 Turn 用户锚点。"""
+    """完整 Turn 锚点；来源 checkpoint 与截断前的框架状态 header 分别定位。"""
 
     turn_id: str
     view_id: str
     checkpoint_id: str
+    state_header_checkpoint_id: str
     branch_id: str
     logical_turn_ordinal: int
     first_message_sequence: int

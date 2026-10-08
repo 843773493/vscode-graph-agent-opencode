@@ -21,6 +21,7 @@ from app.api.deps import (
 )
 from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
+from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,
@@ -49,12 +50,13 @@ class _ImmediateJobExecutor:
 
 
 class _RecordingCheckpointStore:
-    def __init__(self) -> None:
+    def __init__(self, workspace: CatalogWorkspaceContext) -> None:
+        self.workspace = workspace
         self.load_calls = 0
         self.save_calls = 0
 
-    async def load(self, session_id: str) -> ContextCompactionCheckpoint | None:
-        del session_id
+    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint | None:
+        assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
         self.load_calls += 1
         return None
 
@@ -115,7 +117,7 @@ async def harness() -> AsyncIterator[_Harness]:
         session_service=session_service,
         job_service=job_service,
     )
-    checkpoint_store = _RecordingCheckpointStore()
+    checkpoint_store = _RecordingCheckpointStore(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
         checkpoint_store=checkpoint_store,

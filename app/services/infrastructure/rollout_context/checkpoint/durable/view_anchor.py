@@ -137,7 +137,7 @@ class RolloutViewAnchorMixin:
                 level += 1
             return view_id
         materialized_sequences = sequence_values
-        if parent_view_id and view_kind == "checkpoint":
+        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages"}:
             # 新 checkpoint 的 visible_sequences 可能只是本次 delta；Turn
             # 索引也必须基于完整的父链，否则最新 view 会只有 ToolMessage，
             # 历史分页会暂时看不到这条正在执行的 Turn。
@@ -278,7 +278,7 @@ class RolloutViewAnchorMixin:
             else:
                 ranges[-1] = (ranges[-1][0], sequence)
         range_index = 0
-        if parent_view_id and view_kind == "checkpoint":
+        if parent_view_id and view_kind in {"checkpoint", "checkpoint_messages"}:
             # 普通 checkpoint 可能只携带本次 LangGraph delta（例如单独的
             # ToolMessage），而不是完整 messages 快照。parent_view_id 仅用于
             # 跳转索引并不能参与消息物化；显式保留父 view，才能让对应的
@@ -407,7 +407,7 @@ class RolloutViewAnchorMixin:
         # 再按 canonical item_sequence 排序，不能把 block item 盲目追加到旧
         # LangChain message 顺序之后；否则 assistant tool_call 会落到 tool
         # result 之后，provider/history projector 得到非法因果顺序。
-        if turn_ids:
+        if turn_ids and view_kind != "checkpoint_messages":
             placeholders = ",".join("?" for _ in turn_ids)
             block_items = connection.execute(
                 f"SELECT item_id FROM item_catalog WHERE turn_id IN ({placeholders}) ORDER BY item_sequence, item_id",
@@ -418,7 +418,7 @@ class RolloutViewAnchorMixin:
                 for (item_id,) in block_items
             )
         display_only_item_ids: set[str] = set()
-        if parent_view_id is not None and view_kind == "checkpoint":
+        if parent_view_id is not None and view_kind in {"checkpoint", "checkpoint_messages"}:
             display_rows = connection.execute(
                 "SELECT item_id FROM context_view_items "
                 "WHERE view_id = ? AND visible = 1 AND source_kind = 'display_only'",
@@ -453,7 +453,10 @@ class RolloutViewAnchorMixin:
                 )
                 source_kind = (
                     "display_only"
-                    if item_id in display_only_item_ids
+                    if item_id in display_only_item_ids or (
+                        view_kind == "checkpoint_messages" and turn_id is None
+                        and execution_id is not None and turn_scope not in {"turn_root", "turn_member"}
+                    )
                     else "canonical"
                 )
                 if source_kind == "display_only":
@@ -701,6 +704,11 @@ class RolloutViewAnchorMixin:
                     max_message_sequence=checkpoint_sequence_limit,
                 )
                 if checkpoint_id is not None:
+                    state_header_checkpoint_id = checkpoint_id
+                    if anchor_mode == "before" and not require_completed:
+                        state_header_checkpoint_id = self._checkpoint_for_turn_prefix(
+                            connection, checkpoint_ns, checkpoint_id, user_sequence,
+                        )
                     cutoff = (
                         last_sequence
                         if anchor_mode == "inclusive"
@@ -710,6 +718,7 @@ class RolloutViewAnchorMixin:
                         turn_id=stored_turn_id,
                         view_id=current_view_id,
                         checkpoint_id=checkpoint_id,
+                        state_header_checkpoint_id=state_header_checkpoint_id,
                         branch_id=strict_text(
                             candidate["branch_id"],
                             field="context_views.branch_id",
@@ -779,6 +788,41 @@ class RolloutViewAnchorMixin:
             if row is not None
             else None
         )
+
+    def _checkpoint_for_turn_prefix(
+        self, connection: sqlite3.Connection, checkpoint_ns: str,
+        checkpoint_id: str, user_sequence: int,
+    ) -> str:
+        """canonical anchor 负责截断；冻结输入边界选择对应的非消息状态 header。"""
+        current = self._checkpoint_row(connection, checkpoint_ns, checkpoint_id)
+        if current is None:
+            raise RuntimeError(f"Turn prefix 缺少持久 checkpoint header: {checkpoint_id}")
+        visited: set[str] = set()
+        while True:
+            checkpoint_id = strict_text(current[0], field="checkpoints.checkpoint_id")
+            if checkpoint_id in visited:
+                raise RuntimeError(f"checkpoint header 父链成环: {checkpoint_id}")
+            visited.add(checkpoint_id)
+            channel = connection.execute(
+                "SELECT context_view_id FROM checkpoint_channels WHERE checkpoint_id=? AND channel_name='messages'",
+                (checkpoint_id,),
+            ).fetchone()
+            if channel is None:
+                raise RuntimeError(f"Turn prefix checkpoint 缺少冻结 messages channel: {checkpoint_id}")
+            messages_view_id = self._require_checkpoint_messages_view(
+                connection, checkpoint_id=checkpoint_id,
+                history_view_id=strict_text(current[6], field="checkpoints.view_id"),
+                branch_id=strict_text(current[7], field="checkpoints.branch_id"),
+                messages_view_id=strict_text(channel[0], field="checkpoint_channels.context_view_id"),
+            )
+            if user_sequence not in self._view_message_sequences_from_connection(connection, messages_view_id):
+                return checkpoint_id
+            parent_id = strict_optional_text(current[5], field="checkpoints.parent_checkpoint_id")
+            parent = self._checkpoint_row(connection, checkpoint_ns, parent_id) if parent_id is not None else None
+            if parent is None:
+                # 首次 checkpoint 的内存初始父节点没有持久 header，保留首次状态。
+                return checkpoint_id
+            current = parent
 
     def materialize_turn_anchor(
         self,

@@ -13,6 +13,7 @@ hub 公钥验证签名与 audience/path/期限。
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import secrets
 from dataclasses import dataclass
@@ -99,6 +100,7 @@ class FederationGrant:
     expires_at: datetime
     issued_at: datetime
     principal_ref: str
+    request_hash: str
     target: GrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
@@ -117,6 +119,7 @@ class FederationGrant:
             "expires_at": self.expires_at.isoformat(),
             "issued_at": self.issued_at.isoformat(),
             "principal_ref": self.principal_ref,
+            "request_hash": self.request_hash,
             "target": self.target.to_payload() if self.target is not None else None,
             "operation": self.operation,
             "source_gateway_id": self.source_gateway_id,
@@ -182,6 +185,7 @@ class FederationGrant:
                 expires_at=_require_datetime(raw, "expires_at"),
                 issued_at=_require_datetime(raw, "issued_at"),
                 principal_ref=_require_str(raw, "principal_ref"),
+                request_hash=_require_str(raw, "request_hash"),
                 target=target,
                 operation=operation,
                 source_gateway_id=_optional_str(raw, "source_gateway_id"),
@@ -242,6 +246,7 @@ def sign_grant(
     transit_path: tuple[str, ...],
     request_id: str,
     principal_ref: str,
+    request_preimage: dict[str, object],
     lifetime_seconds: float,
     target: GrantTarget | None = None,
     operation: OperationKind | None = None,
@@ -269,6 +274,7 @@ def sign_grant(
         expires_at=issued_at + timedelta(seconds=lifetime_seconds),
         issued_at=issued_at,
         principal_ref=principal_ref,
+        request_hash=hashlib.sha256(_canonical_bytes(request_preimage)).hexdigest(),
         target=target,
         operation=operation,
         source_gateway_id=source_gateway_id,
@@ -291,6 +297,7 @@ def verify_grant(
     issuer: FederationPeerIdentity,
     local_gateway_id: str,
     expected_kind: GrantKind,
+    request_preimage: dict[str, object],
     expected_origin: str | None = None,
     expected_path: tuple[str, ...] | None = None,
     now: datetime | None = None,
@@ -308,6 +315,11 @@ def verify_grant(
             },
         )
     issuer.verify(grant.canonical_bytes(), _b64url_decode(grant.signature))
+    if grant.request_hash != hashlib.sha256(_canonical_bytes(request_preimage)).hexdigest() or grant.request_id != request_preimage.get("request_id"):
+        raise FederationError(
+            FEDERATION_GRANT_INVALID_SIGNATURE,
+            "grant 与实际请求的正文、选择或 request_id preimage 不一致",
+        )
     if grant.grant_kind != expected_kind:
         raise FederationError(
             FEDERATION_GRANT_KIND_MISMATCH,

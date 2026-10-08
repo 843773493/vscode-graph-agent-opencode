@@ -2,12 +2,15 @@
 
 `app/core/session_control_communication_ledger/` 承载 per-session `session-control.sqlite` 中跨 Session 通信 ledger 一条垂直链路的唯一实现：`communication_outbox` / `communication_inbox` 两张表的 DDL 与 target_accepted 覆盖索引、行投影、source 侧 create-or-get outbox（operation 层 PK 幂等 + communication 层 UNIQUE dedupe）与前向状态 CAS 迁移、target 侧 create-or-get inbox（main binding fresh 校验、admission identity 确定性派生）、admission 领取、execution bound、失败记录、状态索引列举与单条读取，以及 kind=reply 的双端因果证明。
 
+`observations.py` 同时承载 source/target 冷观察的独立有界 operation 记录、冻结 snapshot/page、cursor 认证材料及期限清理；这些不是 canonical history，也不承担 team/Goal 状态。
+
 # 可修改内容
 
 - 可以维护 `CommunicationLedgerMixin` 的方法族：`outbox_writes.py` 的 `OutboxWritesMixin`（`create_or_get_communication_outbox`、`advance_communication_outbox_state`）、`inbox_writes.py` 的 `InboxWritesMixin`（`create_or_get_communication_inbox`、`claim_communication_inbox_admission`、`mark_communication_inbox_execution_bound`、`record_communication_inbox_admission_failure`）、`reads.py` 的 `ReadsMixin`（`list_target_accepted_communication_inboxes`、`get_communication_inbox`）。
 - 可以维护 `communication_ledger.py` 这一 facade：它只保留模块 docstring、`__all__`、`CommunicationLedgerMixin` 的聚合类声明（多继承三个 mixin）与对子模块符号的再导出，不得承载实现逻辑。
 - 可以维护本模块自有的两张表 DDL、索引常量、列清单、`CommunicationOutboxRecord` / `CommunicationInboxRecord` 投影、`derive_communication_admission_identity` 派生器与取行 helper。
 - 可以维护对应的单元测试；测试仍放在 `tests/unit/core/test_session_control_store.py` 的 D5 节。
+- 可以维护 `CommunicationObservationMixin` 的 observation/page 唯一约束、冻结请求与结果、期限索引及清理方法。准入、删除终结和隔离重试由原生命周期与通信编排 owner 调用；通用 lease 的实现仍归原 operation lease 包。
 
 # 不可修改内容
 
@@ -16,6 +19,7 @@
 - 不得把 `SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 或 `validate_claim_fields` 在本目录复制一份；跨子包共用的形态口径只在 `session_control_primitives.py` 单点定义。
 - 不得放宽幂等守卫：同 `send_operation_id` 或同 `communication_id` 的身份字段漂移必须 fail closed，不得覆盖、重基或静默吸收。
 - 不得按墙钟时间自动让 inbox admission 过期；claim owner/generation 是无 TTL 的可恢复领取字段。
+- observation 恢复窗口与 operation 记录可按冻结期限清理，但 lease 不因墙钟自动终态；只有原 owner 完成冻结操作或核实取消后才能收敛。删除后的读取只允许原记录、原 preimage 的已授权定点恢复，不扫描隔离目录，不重建普通 Session reader。
 - 本子包不做 owner 准入门禁（不读 lifecycle fence）：`fence=deleting` 的 session 仍可写入 outbox/inbox。这是有意设计——准入红线由 `SessionLifecycleGate` 单点负责（唯一两个生产调用方 `CommunicationLedgerService.admit_outgoing_send` / `accept_incoming_send` 都在 `gate.exclusive(session_id)` 内）；绕过 gate 直接调用 store 即视为绕过。不得为此在 store 层补 fence 检查，这会与「gate 单点负责」的既有分工重复。
 
 # 规范
@@ -24,5 +28,5 @@
 - source/target 方向证明必须做在写事务内：`kind=reply` 时各自在本库对方表里要求方向相反的那一行，缺失或方向相同一律 fail closed。
 - 一律通过本模块的取行 helper 读投影行，不得就地手写新的 SELECT；跨子包共用的形态校验统一从 `session_control_primitives` 导入。
 - 错误分类沿用 `session_control_store`：`KeyError` 目标行缺失、`RuntimeError` 库被外部改动或 CAS 冲突、`ValueError` 输入形态非法、`TypeError` 输入类型错误。
-- 修改本目录后运行 `uv run ruff check` 与 `uv run pytest tests/unit/core/test_session_control_store.py`。
+- 每次编写源码运行 scoped `uv run ruff check`；全调用闭包迁齐后先验证少量真实核心，再集中跑 `tests/unit/core/test_session_control_store.py` 等受影响边界。所有动态测试使用 matrix 或进程外 timeout/数据段内存保护，不逐文件裸跑 pytest。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

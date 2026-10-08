@@ -24,6 +24,7 @@ from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     SESSION_OPERATION_LEASE_KINDS,
     NavigationTopologyGate,
+    OperationHolderGate,
     SessionLifecycleGate,
     SessionOperationLease,
     SessionReadGuard,
@@ -196,6 +197,28 @@ async def test_lock_order_topology_then_session_gate(tmp_path: Path) -> None:
         session_gate.shared(make_session_id()),
     ):
         pass
+
+
+async def test_holder_probe_preserves_live_owner_and_bounded_inodes(tmp_path: Path) -> None:
+    """非阻塞恢复只能在旧 holder 释放 OS 锁后取得证明；嵌套两端不共锁。"""
+    source = OperationHolderGate(tmp_path / "sessions", namespace="observation_source")
+    target = OperationHolderGate(tmp_path / "sessions", namespace="observation_target")
+    guard = source.lock_for("original-operation")
+    async with guard:
+        assert guard.acquired
+        assert _child_lock_probe(guard.path, "ex").returncode == 3
+        async with source.lock_for("original-operation", wait=False) as blocked:
+            assert not blocked.acquired
+        async with target.lock_for("original-operation", wait=False) as nested:
+            assert nested.acquired
+    inode = guard.path.stat().st_ino
+    async with source.lock_for("original-operation", wait=False) as recovered:
+        assert recovered.acquired
+        assert recovered.path.stat().st_ino == inode
+    assert _child_lock_probe(guard.path, "ex", "die").returncode == 0
+    async with source.lock_for("original-operation", wait=False) as after_crash:
+        assert after_crash.acquired
+    assert len({source.lock_for(f"operation-{index}").path for index in range(4096)}) == 64
 
 
 # ----------------------------------------------------------------------

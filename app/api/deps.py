@@ -55,6 +55,7 @@ from app.services.infrastructure.workspace_file_watch_service import (
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
+from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.goal_runtime_service import GoalRuntimeService
 from app.tool_testing.service import ToolTestService
 
@@ -97,6 +98,7 @@ class _AppContainerProtocol(Protocol):
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
+    session_communication_service: SessionCommunicationService
     mcp_catalog_owner: McpCatalogOwner
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
@@ -336,6 +338,10 @@ def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchServ
 
 def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
     return _require_service(request, "file_tree_settings_service", FileTreeSettingsService, "FileTreeSettingsService 尚未在应用启动阶段初始化")
+
+
+def get_session_communication_service(request: Request) -> SessionCommunicationService:
+    return _require_service(request, "session_communication_service", SessionCommunicationService, "SessionCommunicationService 尚未在应用启动阶段初始化")
 
 
 def get_session_orchestrator(request: Request) -> SessionOrchestrator:

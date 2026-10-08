@@ -101,6 +101,7 @@ async def health(
     if not isinstance(scheduler, SessionGeneratorScheduler):
         raise RuntimeError("会话生成器调度器尚未初始化")
     scheduler.assert_healthy()
+    request.app.state.federation_channel_owner.assert_healthy()
     return APIResponse(
         data=GatewayHealthDTO(
             gateway_id=request.app.state.gateway_id,

@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from app.core.session_catalog_store import validate_session_id, validate_thread_id
 from app.core.session_control_primitives import (
-    EXECUTION_JOB_ID_PATTERN,
     SHA256_HEX_PATTERN,
     validate_claim_fields,
 )
@@ -43,10 +42,15 @@ class InboxWritesMixin:
         source_workspace_id: str,
         source_session_id: str,
         source_thread_id: str,
+        target_gateway_id: str,
+        target_workspace_id: str,
         target_thread_id: str,
         kind: str,
         reply_to_communication_id: str | None,
         payload_hash: str,
+        content: str,
+        delivery_policy: str,
+        request_id: str,
     ) -> tuple[CommunicationInboxRecord, bool]:
         """create-or-get target inbox（gate 内短事务调用）。
 
@@ -121,6 +125,8 @@ class InboxWritesMixin:
                         "source_session_id": source_session_id,
                         "source_thread_id": source_thread_id,
                         "target_thread_id": target_thread_id,
+                        "target_gateway_id": target_gateway_id,
+                        "target_workspace_id": target_workspace_id,
                     },
                     session_id=session_id,
                     reply_to_communication_id=str(reply_to_communication_id),
@@ -139,10 +145,13 @@ class InboxWritesMixin:
                     source_workspace_id=source_workspace_id,
                     source_session_id=source_session_id,
                     source_thread_id=source_thread_id,
+                    target_gateway_id=target_gateway_id,
+                    target_workspace_id=target_workspace_id,
                     target_thread_id=target_thread_id,
                     kind=kind,
                     reply_to_communication_id=reply_to_communication_id,
                     payload_hash=payload_hash,
+                    content=content, delivery_policy=delivery_policy,
                     admission_id=admission_id,
                     wakeup_key=wakeup_key,
                 )
@@ -156,8 +165,8 @@ class InboxWritesMixin:
             now_text = datetime.now(UTC).isoformat()
             connection.execute(
                 f"INSERT INTO communication_inbox ({_COMMUNICATION_INBOX_COLUMNS}) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-                "'target_accepted', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "'target_accepted', NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)",
                 (
                     communication_id,
                     session_id,
@@ -165,10 +174,12 @@ class InboxWritesMixin:
                     source_workspace_id,
                     source_session_id,
                     source_thread_id,
+                    target_gateway_id, target_workspace_id,
                     target_thread_id,
                     kind,
                     reply_to_communication_id,
                     payload_hash,
+                    content, delivery_policy, request_id,
                     admission_id,
                     wakeup_key,
                     now_text,
@@ -275,6 +286,7 @@ class InboxWritesMixin:
         communication_id: str,
         *,
         job_id: str,
+        execution_id: str,
         turn_id: str | None,
         claim_owner: str,
         claim_generation: int,
@@ -285,10 +297,10 @@ class InboxWritesMixin:
         一致 → 幂等返回（崩溃恢复补写同一 binding 的契约面）；identity
         漂移 → RuntimeError。
         """
-        if EXECUTION_JOB_ID_PATTERN.fullmatch(job_id) is None:
-            raise ValueError(f"job_id 形态非法: {job_id!r}")
+        _validate_communication_text(job_id, field="job_id")
         if turn_id is not None:
             _validate_communication_text(turn_id, field="turn_id")
+        _validate_communication_text(execution_id, field="execution_id")
         validate_claim_fields(claim_owner, claim_generation)
         with self._write_transaction() as connection:
             row = _fetch_inbox_row(connection, communication_id)
@@ -315,7 +327,7 @@ class InboxWritesMixin:
                 frozen_turn = (
                     None if row["turn_id"] is None else str(row["turn_id"])
                 )
-                if str(row["job_id"]) != job_id or frozen_turn != turn_id:
+                if str(row["job_id"]) != job_id or str(row["execution_id"]) != execution_id or frozen_turn != turn_id:
                     raise RuntimeError(
                         "communication inbox 已 execution_bound 且提交 "
                         f"identity 漂移（fail closed）: communication_id="
@@ -331,10 +343,11 @@ class InboxWritesMixin:
                 )
             cursor = connection.execute(
                 "UPDATE communication_inbox SET state = 'execution_bound', "
-                "job_id = ?, turn_id = ?, last_error = NULL, updated_at = ? "
+                "job_id = ?, execution_id = ?, turn_id = ?, last_error = NULL, updated_at = ? "
                 "WHERE communication_id = ? AND state = 'target_accepted'",
                 (
                     job_id,
+                    execution_id,
                     turn_id,
                     datetime.now(UTC).isoformat(),
                     communication_id,
@@ -417,3 +430,14 @@ class InboxWritesMixin:
                 )
             return _communication_inbox_from_row(updated)
 
+
+    def drain_communication_inboxes(self) -> None:
+        """删除终结仍保留原 binding；未绑定取消，已绑定以 terminal 保存原 execution。"""
+        with self._write_transaction() as connection:
+            connection.execute(
+                "UPDATE communication_inbox SET "
+                "state=CASE WHEN job_id IS NULL THEN 'cancelled' ELSE 'terminal' END,"
+                "last_error='target-deleted',terminal_outcome='target-deleted',updated_at=? "
+                "WHERE state NOT IN ('terminal','failed','cancelled')",
+                (datetime.now(UTC).isoformat(),),
+            )

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
+from app.core.execution_admission_context import current_execution_admission
 from app.core.hashing import sha256_hex as _hash_bytes
 from app.domain.itemized.identity.refs import ContextRef
 from app.domain.itemized.records import CanonicalItemRecord
@@ -31,6 +32,34 @@ if TYPE_CHECKING:
 
 class RolloutCheckpointQueriesMixin:
     """checkpoint header、active view 和已提交 context query owner。"""
+
+    @staticmethod
+    def _require_checkpoint_messages_view(
+        connection: sqlite3.Connection, *, checkpoint_id: str,
+        history_view_id: str, branch_id: str, messages_view_id: str,
+    ) -> str:
+        """读取与继承都必须证明 messages selection 属于精确冻结 checkpoint。"""
+        owner = connection.execute(
+            "SELECT messages.branch_id, messages.view_kind, messages.control_sequence, "
+            "history.branch_id, history.control_sequence, event.checkpoint_id, "
+            "event.view_id, event.branch_id, event.control_kind "
+            "FROM context_views AS messages "
+            "JOIN context_views AS history ON history.view_id = ? "
+            "JOIN control_events AS event ON event.control_sequence = history.control_sequence "
+            "WHERE messages.view_id = ?",
+            (history_view_id, messages_view_id),
+        ).fetchone()
+        if (
+            owner is None
+            or owner[0] != branch_id
+            or owner[1] != "checkpoint_messages"
+            or owner[2] != owner[4]
+            or owner[3] != branch_id
+            or owner[5:] != (checkpoint_id, history_view_id, branch_id, "checkpoint_created")
+        ):
+            raise RuntimeError(f"checkpoint messages selection 与冻结 checkpoint 不一致: checkpoint_id={checkpoint_id}, messages_view_id={messages_view_id}, owner={owner!r}")
+        strict_non_negative_int(owner[2], field="checkpoint messages context_views.control_sequence")
+        return messages_view_id
 
     def latest_checkpoint(
         self,
@@ -320,6 +349,7 @@ class RolloutCheckpointQueriesMixin:
         *,
         snapshot: RolloutReadSnapshot | None = None,
         context_view_id_override: str | None = None,
+        include_accepted_inputs: bool = False,
     ) -> dict[str, object]:
         session_id = strict_text(session_id, field="checkpoint_values.session_id")
         strict_text(thread_id, field="checkpoint_values.thread_id")
@@ -365,21 +395,78 @@ class RolloutCheckpointQueriesMixin:
                     view_id, field="checkpoint_channels.context_view_id"
                 )
                 if channel == "messages":
-                    context_view_id = context_view_id_override or index.view_id
+                    context_view_id = context_view_id_override or view_id
                     if (
                         storage_kind != "rollout_view"
                         or state != "view"
-                        or view_id != index.view_id
+                        or view_id is None
                     ):
                         raise RuntimeError(
                             f"checkpoint messages view 指针非法: {index.checkpoint_id}"
                         )
+                    self._require_checkpoint_messages_view(
+                        connection, checkpoint_id=index.checkpoint_id,
+                        history_view_id=index.view_id, branch_id=index.branch_id,
+                        messages_view_id=view_id,
+                    )
+                    selection_view_id = None
+                    if include_accepted_inputs:
+                        selection = connection.execute(
+                            "SELECT branch.branch_id, branch.head_view_id "
+                            "FROM checkpoint_namespace_state AS namespace "
+                            "JOIN branches AS branch ON branch.branch_id = namespace.active_branch_id "
+                            "WHERE namespace.checkpoint_ns = ?",
+                            (checkpoint_ns,),
+                        ).fetchone()
+                        if selection is None:
+                            raise RuntimeError("最新 checkpoint 缺少权威 active branch selection")
+                        if selection[0] != index.branch_id:
+                            # rewind 等显式分支选择可继续引用旧 checkpoint；只截断
+                            # 其冻结 channel，不把 active view 的 stream 消息重新注入。
+                            selection_view_id = strict_text(selection[1], field="branches.head_view_id")
+                    accepted_sequences: list[int] = []
+                    admission = current_execution_admission(langgraph_thread_id=thread_id) if include_accepted_inputs else None
+                    if include_accepted_inputs and (admission is None or admission.execution_origin == "user_turn"):
+                        # 仅 acceptance/Turn owner 证明的根输入可进入最新执行状态；
+                        # active history 中的 live assistant/tool item 不属于 checkpoint channel。
+                        cutoff_ordinal = None
+                        if admission is not None:
+                            cutoff = connection.execute(
+                                "SELECT turn_ordinal FROM turn_records WHERE turn_id = ? AND session_id = ? AND thread_id = ?",
+                                (admission.turn_id, session_id, thread_id),
+                            ).fetchone()
+                            if cutoff is None:
+                                raise RuntimeError("checkpoint 执行 cutoff 缺少同 owner 的真实 Turn")
+                            cutoff_ordinal = strict_non_negative_int(cutoff[0], field="execution cutoff turn_records.turn_ordinal")
+                        roots = connection.execute(
+                            "SELECT message.message_sequence, turn.session_id, turn.thread_id, "
+                            "acceptance.turn_id, item.turn_id, acceptance.session_id, acceptance.thread_id, turn.turn_ordinal "
+                            "FROM checkpoint_namespace_state AS namespace "
+                            "JOIN branches AS branch ON branch.branch_id = namespace.active_branch_id "
+                            "JOIN context_view_items AS member ON member.view_id = branch.head_view_id AND member.visible = 1 "
+                            "JOIN item_catalog AS item ON item.item_id = member.item_id "
+                            "LEFT JOIN turn_records AS turn ON turn.root_input_item_id = item.item_id "
+                            "LEFT JOIN turn_acceptances AS acceptance ON acceptance.accepted_ingress_id = turn.accepted_ingress_id "
+                            "LEFT JOIN messages AS message ON message.jsonl_offset = item.jsonl_offset AND message.jsonl_length = item.jsonl_length "
+                            "WHERE namespace.checkpoint_ns = ? AND item.semantic_kind = 'user_input' AND item.turn_scope = 'turn_root' "
+                            "ORDER BY member.logical_item_ordinal",
+                            (checkpoint_ns,),
+                        ).fetchall()
+                        for root in roots:
+                            if root[4] is None or root[1:7] != (session_id, thread_id, root[4], root[4], session_id, thread_id):
+                                raise RuntimeError(f"最新 checkpoint 根输入缺少同 owner 的权威 acceptance: {root!r}")
+                            ordinal = strict_non_negative_int(root[7], field="accepted input turn_records.turn_ordinal")
+                            if cutoff_ordinal is not None and ordinal > cutoff_ordinal:
+                                continue
+                            accepted_sequences.append(strict_non_negative_int(root[0], field="accepted input messages.message_sequence"))
                     values[channel] = self._messages_for_view(
                         session_id,
                         thread_id,
                         checkpoint_ns,
                         context_view_id,
                         connection=connection,
+                        selection_view_id=selection_view_id,
+                        additional_message_sequences=accepted_sequences,
                     )
                     has_messages = True
                 elif state == "present":
@@ -422,6 +509,7 @@ class RolloutCheckpointQueriesMixin:
         *,
         snapshot: RolloutReadSnapshot | None = None,
         context_view_id_override: str | None = None,
+        include_accepted_inputs: bool = False,
     ) -> Checkpoint:
         session_id = strict_text(session_id, field="load_checkpoint.session_id")
         strict_text(thread_id, field="load_checkpoint.thread_id")
@@ -441,6 +529,7 @@ class RolloutCheckpointQueriesMixin:
             index,
             snapshot=snapshot,
             context_view_id_override=context_view_id_override,
+            include_accepted_inputs=include_accepted_inputs,
         )
         checkpoint["channel_versions"] = {}
         checkpoint["updated_channels"] = []

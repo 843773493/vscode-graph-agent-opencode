@@ -20,8 +20,10 @@ import pytest
 
 from app import main
 from app.container import AppContainer
+from app.core.checkpoint_config import build_checkpoint_config
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadExecutionIntent
+from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.hashing import canonical_json_bytes, content_hash, sha256_jcs
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
@@ -30,11 +32,18 @@ from app.services.business.message_display import project_message_for_display
 from app.services.business.system_reminder_checkpoint_service import (
     submit_checkpoint_reminder,
 )
+from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
+from app.services.infrastructure.resource_platform.virtual_resources import (
+    workspace_agent_spec_display_uri,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
+)
+from app.services.infrastructure.rollout_context.checkpoint.saver import (
+    RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     detail_relative_path,
@@ -79,10 +88,11 @@ class RuntimeSourceCase:
 
 def _prepare_source_workspace(
     context: TestRunContext, port: int, *, delegated_report: bool = False,
+    workspace_template: str = "default_test_workspace",
 ) -> Path:
     workspace = prepare_default_test_workspace(
         workspace_root=context.workspace_root,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_root=Path.cwd() / "tests/fixtures/workspaces" / workspace_template,
     )
     config_path = install_test_workspace_config(
         workspace_root=workspace,
@@ -118,6 +128,7 @@ async def source_case(
     options = getattr(request, "param", {})
     workspace = _prepare_source_workspace(
         context, port, delegated_report=options.get("delegated_report", False),
+        workspace_template=options.get("workspace_template", "default_test_workspace"),
     )
     workspace_id = load_or_create_workspace_id(workspace)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -440,11 +451,12 @@ async def test_h3_four_retries_share_one_real_execution(source_case: RuntimeSour
                 metadata={"source": "session_subagent_delegation", "parent_session_id": sender_session_id},
                 display_content="H3 委派任务")
         else:
+            source_address = {"gateway_id": "gw-h3", "workspace_id": case.container.session_service.workspace_id, "session_id": sender_session_id, "thread_id": await case.container.session_service.resolve_main_thread(sender_session_id)}
             prepared = internal_message_factory.build(kind="session_message", control="H3 问题回复恢复",
-                sections=[PromptSection("control_context", {"sender_session_id": sender_session_id, "communication_id": "h3-question"}),
+                sections=[PromptSection("control_context", {"source_address": source_address, "communication_id": "h3-question"}),
                           PromptSection("session_message", "H3 返回普通文本，验证真实定向回复限次失败")],
                 metadata={"source": "send_message_to_session", "kind": "question", "reply_required": True,
-                          "sender_session_id": sender_session_id, "communication_id": "h3-question"})
+                          "source_address": source_address, "communication_id": "h3-question"})
         accepted_internal = await case.container.session_orchestrator.submit_runtime_event(
             session_id, prepared, thread_id=thread_id, source_id=f"h3:{retry_kind}", idempotency_key=f"h3:{retry_kind}")
         job_id = accepted_internal.job_id
@@ -883,3 +895,116 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
         assert after["parent"]["assemblies"][-1][2] == "execution_lost"
         assert after["parent"]["models"] == before["parent"]["models"]
         assert len(report_requests) == 1
+
+
+@pytest.mark.parametrize("source_case", [{"workspace_template": "model_tool_test_workspace"}], indirect=True)
+@pytest.mark.asyncio
+async def test_replay_and_manual_compaction_http_keep_catalog_main_owner(
+    source_case: RuntimeSourceCase,
+) -> None:
+    case = source_case
+
+    def reply(payload: dict[str, object]) -> dict[str, object]:
+        human = next((_wire_text(message["content"]) for message in reversed(payload["messages"])
+                      if message["role"] == "user" and message["content"]), "")
+        return {"content": f"真实 owner 回答：{human}"}
+
+    case.model.response_callback = reply
+    session_id = await create_session(case.client, "Replay 与手动压缩归属")
+    first = await _send(case, session_id, "replay-first-private")
+    await _job(case, first["job_id"])
+    second = await _send(case, session_id, "replay-second-private")
+    await _job(case, second["job_id"])
+    registry = case.container.workspace_file_resource_registry
+    agents_snapshot = registry.snapshot(workspace_agent_spec_display_uri(
+        load_or_create_workspace_id(registry.workspace_root),
+    ))
+    assert agents_snapshot.available and agents_snapshot.revision
+    assert agents_snapshot.content == (registry.workspace_root / "AGENTS.md").read_text()
+    case.write_actual("replay-published-agents-source", {
+        "uri": agents_snapshot.uri, "available": agents_snapshot.available,
+        "revision": agents_snapshot.revision,
+        "fixture": "model_tool_test_workspace", "workspace_root": str(registry.workspace_root),
+    })
+    saver = case.container.checkpointer
+    owner = saver.resolve_main_thread_owner(session_id)
+    assert owner.thread_id != session_id
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        original = await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+    assert original is not None
+    original_messages = original.checkpoint["channel_values"]["messages"]
+
+    edited = await case.client.post(
+        f"/api/v1/sessions/{session_id}/messages/{first['message_id']}/replay",
+        headers={"X-Request-ID": "req-replay-catalog-owner"},
+        json={"action": "edit_and_continue", "content": "replay-edited-private", "acknowledge_context_only": True},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.headers["X-Request-ID"] == edited.json()["request_id"] == "req-replay-catalog-owner"
+    accepted = edited.json()["data"]
+    assert accepted["thread_id"] == accepted["dispatch"]["thread_id"] == owner.thread_id
+    await _job(case, accepted["job_id"])
+    (turn_id,) = case.sql(session_id, owner.thread_id,
+        "SELECT turn_id FROM turn_acceptances WHERE accepted_ingress_id=?", (accepted["message_id"],))[0]
+
+    regenerated = await case.client.post(
+        f"/api/v1/sessions/{session_id}/turns/{turn_id}/replay",
+        json={"action": "regenerate", "acknowledge_context_only": True},
+    )
+    assert regenerated.status_code == 200, regenerated.text
+    replayed = regenerated.json()["data"]
+    assert replayed["thread_id"] == replayed["dispatch"]["thread_id"] == owner.thread_id
+    assert replayed["message_id"] != accepted["message_id"]
+    await _job(case, replayed["job_id"])
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        latest = await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+        frozen = await saver.aget_tuple(original.config)
+    assert latest is not None and frozen is not None
+    messages = latest.checkpoint["channel_values"]["messages"]
+    assert [message.content for message in messages if message.type == "human"] == ["replay-edited-private"]
+    assert frozen.checkpoint["channel_values"]["messages"] == original_messages
+    assemblies = [saver.get_context_assembly(session_id, owner.thread_id, assembly_id=row[0])
+                  for row in case.sql(session_id, owner.thread_id,
+                      "SELECT assembly_id FROM context_assemblies ORDER BY created_at,assembly_id")]
+    assert [snapshot.seal_binding.prefix.state.epoch.ordinal for snapshot in assemblies] == [1, 1, 2, 3]
+    guidance_revision = None
+    for ordinal, snapshot in enumerate(assemblies):
+        guidance = [frame for frame in snapshot.seal_binding.prefix.state.frames
+                    if frame.item_ref.source_identity == MCP_GUIDANCE_SOURCE_ID]
+        assert len(guidance) == 1
+        if ordinal == 0:
+            guidance_revision = guidance[0].item_ref.source_revision
+        assert guidance[0].item_ref.source_revision == guidance_revision
+        applied = [source for source in snapshot.seal_binding.source_revisions
+                   if source.source_id == MCP_GUIDANCE_SOURCE_ID]
+        assert len(applied) == (1 if ordinal == 0 else 0)
+    assert case.sql(session_id, owner.thread_id,
+        "SELECT COUNT(*) FROM context_source_control_states WHERE source_id=?", (MCP_GUIDANCE_SOURCE_ID,))[0][0] == 0
+    with RolloutCheckpointSaver(saver._storage.sessions_dir) as cold:
+        for snapshot in assemblies:
+            restored = cold.get_context_assembly(session_id, owner.thread_id, assembly_id=snapshot.assembly_id)
+            assert canonical_json_bytes(restored.to_dict()) == canonical_json_bytes(snapshot.to_dict())
+    before_execution_count = case.sql(session_id, owner.thread_id, "SELECT COUNT(*) FROM executions")[0][0]
+
+    compact = await case.client.post(f"/api/v1/sessions/{session_id}/compact")
+    assert compact.status_code == 200, compact.text
+    assert compact.json()["data"]["status"] == "scheduled"
+    with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
+        scheduled = await saver.aget_tuple(build_checkpoint_config(owner.thread_id))
+    assert scheduled is not None
+    assert scheduled.checkpoint["channel_values"]["_force_cache_compaction"] is True
+    assert scheduled.checkpoint["channel_values"]["messages"] == messages
+    assert case.sql(session_id, owner.thread_id, "SELECT COUNT(*) FROM executions")[0][0] == before_execution_count
+    assert case.sql(session_id, owner.thread_id,
+        "SELECT DISTINCT session_id,thread_id FROM executions") == [(session_id, owner.thread_id)]
+    case.write_actual("replay-and-compaction-main-owner", {
+        "session_id": session_id, "thread_id": owner.thread_id,
+        "edited": accepted, "regenerated": replayed, "compact": compact.json(),
+        "execution_count": before_execution_count, "original_checkpoint_id": original.checkpoint["id"],
+        "scheduled_checkpoint_id": scheduled.checkpoint["id"],
+        "sealed_assemblies": [{
+            "assembly_id": snapshot.assembly_id,
+            "epoch": snapshot.seal_binding.prefix.state.epoch.ordinal,
+            "source_revisions": [source.source_id for source in snapshot.seal_binding.source_revisions],
+        } for snapshot in assemblies],
+    })

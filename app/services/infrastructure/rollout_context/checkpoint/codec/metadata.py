@@ -24,7 +24,7 @@ ANNOTATION_FIELDS = (
     "goal_id", "goal_continuation", "goal_objective", "goal_budget_limited", "goal_objective_updated",
     "team_id", "team_task_id", "coordinator_thread_id", "member_thread_id",
     "boxteam_generation_run_id", "boxteam_generator_id", "boxteam_generation_phase",
-    "attempt", "missing_tools", "sender_session_id", "communication_id", "kind", "reply_required",
+    "attempt", "missing_tools", "source_address", "target", "communication_id", "kind", "reply_required", "reply_to_communication_id",
     "source",
     "tool_name",
     "task_id",
@@ -117,7 +117,7 @@ def project_annotations(item: CanonicalItemRecord) -> dict[str, object]:
     }
     provenance = {
         key: result[key]
-        for key in ("source", "parent_session_id", "sender_session_id", "communication_id", "kind", "reply_required")
+        for key in ("source", "parent_session_id", "source_address", "target", "communication_id", "kind", "reply_required", "reply_to_communication_id")
         if key in result
     }
     if provenance:

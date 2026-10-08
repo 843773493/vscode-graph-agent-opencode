@@ -415,6 +415,10 @@ class RegistryPersistenceMixin:
         """注册 registry commit 观察者；每次成功持久化后按注册顺序回调。"""
 
         self._commit_observers.append(observer)
+    def remove_commit_observer(self, observer: Callable[[], None]) -> None:
+        """owner 停止时移除原回调，不让关闭后的 owner 接收提交。"""
+        if observer in self._commit_observers:
+            self._commit_observers.remove(observer)
     def _notify_commit_observers(self) -> None:
         """在单点提交后通知观察者；端口重投影失败必须响亮失败，不得静默。"""
 

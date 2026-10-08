@@ -7,14 +7,29 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, WebSocket
+import time
+from dataclasses import asdict
+from datetime import UTC, datetime
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
+
+from app.core.trace_middleware import require_current_request_id
+from app.gateway.auth import verify_gateway_token
 from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.endpoint import (
     FederationChannelServer,
     serve_federation_channel,
 )
+from app.gateway.federation.errors import FederationError
+from app.gateway.federation.grants import GrantTarget
 from app.gateway.federation.rpc import FederationRpcService
+from app.schemas.internal_v2.common import APIResponse
+from app.schemas.internal_v2.communication import (
+    CommunicationDiscoveryRequest,
+    CommunicationGatewayRequest,
+    CommunicationObservationRequest,
+)
 
 router = APIRouter(prefix="/api/gateway/federation", tags=["gateway-federation"])
 
@@ -55,3 +70,38 @@ async def federation_channel(websocket: WebSocket) -> None:
 
 
 __all__ = ["router"]
+
+
+@router.post("/discovery")
+async def discover_communication_target(payload: CommunicationDiscoveryRequest, request: Request, _: Annotated[str, Depends(verify_gateway_token)]):
+    service = request.app.state.federation_rpc_service
+    try:
+        service.session_main.require_local_source(service.gateway_id, asdict(payload.source))
+        workspace = None if payload.workspace_id is None else service.session_main.canonical_workspace_id(payload.workspace_id)
+        result = await service.resolve_session_target(session_id=payload.session_id, workspace_id=workspace)
+    except FederationError as error:
+        raise HTTPException(status_code=409, detail=error.to_wire()) from error
+    return APIResponse(data={"target": {key: result[key] for key in ("gateway_id", "workspace_id", "session_id", "thread_id")}, "main_thread_id": result["main_thread_id"]}, request_id=require_current_request_id("discovery response"))
+
+
+@router.post("/relay")
+async def relay_communication(payload: CommunicationGatewayRequest, request: Request, _: Annotated[str, Depends(verify_gateway_token)]):
+    service = request.app.state.federation_rpc_service
+    try:
+        source = payload.body.get("source")
+        if not isinstance(source, dict):
+            raise TypeError("通信 relay 缺少 source")
+        service.session_main.require_local_source(service.gateway_id, source)
+        timeout = 8.0
+        if payload.operation == "wait":
+            observation = CommunicationObservationRequest.model_validate(payload.body)
+            deadline = observation.query["deadline"]["deadline_at_utc"]
+            timeout = max((datetime.fromisoformat(deadline) - datetime.now(UTC)).total_seconds(), 0) + 10
+        result = await service.relay_operation(target=GrantTarget(payload.target.gateway_id, payload.target.workspace_id, payload.target.session_id), operation=payload.operation, body=payload.body, deadline_at=time.time() + timeout)
+        while isinstance(result.get("result"), dict) and "relayed_by" in result:
+            result = result["result"]
+    except FederationError as error:
+        raise HTTPException(status_code=403 if "authorization" in error.code else 409, detail=error.to_wire()) from error
+    except (ValueError, TypeError, KeyError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return APIResponse(data=result, request_id=require_current_request_id("relay response"))

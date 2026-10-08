@@ -31,6 +31,8 @@ class FederationSessionMainPort(Protocol):
         self, *, gateway_id: str, workspace_id: str, session_id: str
     ) -> str: ...
 
+    async def execute(self, *, operation: str, target: dict[str, object], body: dict[str, object], origin: str, timeout: float) -> dict[str, object]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class FederationSpoke:

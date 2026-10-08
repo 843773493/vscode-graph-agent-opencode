@@ -13,11 +13,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+
 from app.core.session_control_store import (
     CommunicationInboxRecord,
     SessionControlStore,
 )
-from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.session_lifecycle_gate import SessionOperationLease
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
 )
@@ -47,31 +50,34 @@ class CommunicationLedgerService:
         *,
         session_id: str,
         store: SessionControlStore,
-        gate: SessionLifecycleGate,
+        write_admission: Callable[[str], AbstractAsyncContextManager[None]],
     ) -> None:
         self._session_id = session_id
         self._store = store
-        self._gate = gate
+        self._write_admission = write_admission
 
     async def admit_outgoing_send(
         self,
         *,
         request: CommunicationSendRequest,
         communication_id: str,
+        request_id: str,
+        target_ref: str,
     ) -> CommunicationAdmissionDecision:
         """source 侧 admission：gate 内建立 communication_source lease 并
         create-or-get outbox；同 operation 不同 preimage 或同
         communication_id 不同 payload/target 在 store 层 fail closed。
         """
         preimage = resolve_request_preimage(request)
-        async with self._gate.exclusive(self._session_id):
-            self._store.create_or_get_lease(
+        async with self._write_admission(self._session_id):
+            lease = self._store.create_or_get_lease(
                 operation_kind="communication_source",
                 operation_identity=(
                     f"communication-source|{request.send_operation_id}"
                 ),
                 preimage_hash=bare_sha256(preimage),
             )
+            self._begin_settlement(lease)
             record, created = self._store.create_or_get_communication_outbox(
                 session_id=self._session_id,
                 send_operation_id=request.send_operation_id,
@@ -88,6 +94,8 @@ class CommunicationLedgerService:
                     request.payload.reply_to_communication_id
                 ),
                 payload_hash=bare_sha256(preimage),
+                content=request.payload.content, delivery_policy=request.payload.delivery_policy,
+                request_id=request_id, target_ref=target_ref,
             )
         return CommunicationAdmissionDecision(
             communication_id=record.communication_id,
@@ -102,6 +110,7 @@ class CommunicationLedgerService:
         source: GlobalThreadAddress,
         target: GlobalThreadAddress,
         payload: CommunicationPayload,
+        request_id: str,
     ) -> CommunicationInboxRecord:
         """target 侧 acceptance：gate 内建立 communication_target lease 并
         create-or-get inbox。
@@ -117,12 +126,13 @@ class CommunicationLedgerService:
                 f"绑定的 Session: {target.session_id!r} != {self._session_id!r}"
             )
         preimage = communication_preimage_hash(target=target, payload=payload)
-        async with self._gate.exclusive(self._session_id):
-            self._store.create_or_get_lease(
+        async with self._write_admission(self._session_id):
+            lease = self._store.create_or_get_lease(
                 operation_kind="communication_target",
                 operation_identity=f"communication-target|{communication_id}",
                 preimage_hash=bare_sha256(preimage),
             )
+            self._begin_settlement(lease)
             record, _created = self._store.create_or_get_communication_inbox(
                 session_id=self._session_id,
                 communication_id=communication_id,
@@ -130,10 +140,13 @@ class CommunicationLedgerService:
                 source_workspace_id=source.workspace_id,
                 source_session_id=source.session_id,
                 source_thread_id=source.thread_id,
+                target_gateway_id=target.gateway_id,
+                target_workspace_id=target.workspace_id,
                 target_thread_id=target.thread_id,
                 kind=payload.kind,
                 reply_to_communication_id=payload.reply_to_communication_id,
                 payload_hash=bare_sha256(preimage),
+                content=payload.content, delivery_policy=payload.delivery_policy, request_id=request_id,
             )
         return record
 
@@ -144,3 +157,23 @@ class CommunicationLedgerService:
     def get_inbox(self, communication_id: str) -> CommunicationInboxRecord:
         """读取单条 inbox 投影。"""
         return self._store.get_communication_inbox(communication_id)
+
+    def _begin_settlement(self, lease: SessionOperationLease) -> None:
+        if lease.state == "active":
+            self._store.mark_lease_settling(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token)
+        elif lease.state not in {"settling", "completed"}:
+            raise RuntimeError("通信 lifecycle lease 已失效")
+
+    def assert_lease_current(self, lease: SessionOperationLease) -> SessionOperationLease:
+        """提交主体前校验原 token，拒绝已被删除或恢复接管的 callback。"""
+        current = self._store.get_lease(lease.lease_id)
+        if current.fencing_token != lease.fencing_token or current.state not in {"settling", "completed"}:
+            raise RuntimeError("通信 callback 的原 lifecycle lease 已失效")
+        return current
+
+    def complete_lease(self, lease: SessionOperationLease) -> None:
+        """主体已提交后以原 token 终结；调用方仍持有本端短 gate。"""
+        current = self.assert_lease_current(lease)
+        if current.state == "completed":
+            return
+        self._store.settle_lease(lease_id=lease.lease_id, expected_fencing_token=lease.fencing_token, outcome="completed")

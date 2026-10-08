@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+from pydantic import BaseModel, ConfigDict
+
 from app.prompting.validation import internal_prompt_metadata
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
@@ -14,6 +16,7 @@ from app.schemas.internal_v2.session_context import (
 from app.services.business.session_context_resource import (
     SessionContextCursorCodec,
     require_cursor_offset_in_range,
+    require_session_context_revision,
     session_context_read_operation,
     set_exact_returned_chars,
 )
@@ -21,6 +24,34 @@ from app.services.mapping.itemized.provider_history import reasoning_projection_
 from app.services.mapping.itemized.provider_history import (
     visible_text as litellm_visible_text,
 )
+
+
+class SessionContextReadSnapshot(BaseModel):
+    """冻结的完整冷投影；普通 read 和 durable RemoteObservation 共用分页器。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision: str
+    items: list[SessionContextItemDTO]
+    compacted: bool = False
+    compaction_cutoff: int | None = None
+    raw_message_count: int = 0
+    effective_record_count: int = 0
+
+    def page(self, request: SessionContextReadRequest) -> SessionContextReadResultDTO:
+        require_session_context_revision(request.revision, self.revision)
+        offset, char_offset = SessionContextCursorCodec.decode(
+            request.cursor, resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
+            revision=self.revision, operation=session_context_read_operation(
+                view=request.view, include=request.include, recent_rounds=request.recent_rounds,
+                include_initial_goal=request.include_initial_goal,
+            ), record_index=request.record_index, assembly_ref=request.assembly_ref,
+        )
+        return paginate_read_items(
+            request=request, revision=self.revision, items=self.items, offset=offset, char_offset=char_offset,
+            compacted=self.compacted, compaction_cutoff=self.compaction_cutoff,
+            raw_message_count=self.raw_message_count, effective_record_count=self.effective_record_count,
+        )
 
 
 def public_session_data(session: SessionDTO) -> dict[str, object]:

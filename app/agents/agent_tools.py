@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_message import SessionMessageDeliveryProtocol
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
@@ -27,7 +27,6 @@ from app.agents.tools.python_execution import (
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
 from app.agents.tools.session_subagent import create_session_subagent_tool
 from app.agents.tools.session_wait import (
-    CommunicationWaitBindingLookupPort,
     create_wait_for_session_tool,
 )
 from app.agents.tools.team import create_team_tools
@@ -64,8 +63,7 @@ def build_default_tools(
     invocation_context: ToolInvocationContext | None = None,
     workspace_root: Path | None = None,
     goal_service: SessionGoalService | None = None,
-    session_message_delivery_service: SessionMessageDeliveryProtocol | None = None,
-    communication_binding_lookup: CommunicationWaitBindingLookupPort | None = None,
+    session_communication_service: SessionCommunicationProtocol | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
 ) -> list[BaseTool]:
@@ -86,11 +84,6 @@ def build_default_tools(
         raise RuntimeError("build_default_tools 需要显式传入 TerminalResourceOwner")
     if invocation_context is None:
         raise RuntimeError("build_default_tools 需要显式传入 ToolInvocationContext")
-    if communication_binding_lookup is None:
-        raise RuntimeError(
-            "build_default_tools 需要显式传入 communication binding lookup"
-            "（wait_for_session 的跨会话执行绑定解析）"
-        )
     tools = [
         create_apply_patch_tool(workspace_root=workspace_root),
         create_python_execution_tool(session_id=session_id, agent_id=agent_id),
@@ -138,9 +131,8 @@ def build_default_tools(
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             invocation_context=invocation_context,
-            session_message_delivery_service=session_message_delivery_service,
-            communication_binding_lookup=communication_binding_lookup,
-            include_team_tools=include_team_tools,
+            session_communication_service=session_communication_service,
+                include_team_tools=include_team_tools,
         ),
     ]
     if goal_service is not None:

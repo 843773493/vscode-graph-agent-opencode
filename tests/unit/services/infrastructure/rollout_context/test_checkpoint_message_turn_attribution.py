@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -127,6 +130,89 @@ def _query(
         storage.index_path(session_id, thread_id=thread_id)
     ) as connection:
         return connection.execute(sql, parameters).fetchall()
+
+
+@dataclass
+class HeadSelectionCase:
+    saver: RolloutCheckpointSaver
+    thread_id: str
+    fixed: RunnableConfig
+    admissions: dict[str, ExecutionAdmission]
+
+
+@pytest.fixture
+def head_selection_case(tmp_path: Path, session_bundle_factory) -> Iterator[HeadSelectionCase]:
+    storage, saver, thread_id = _make_saver(
+        tmp_path, session_bundle_factory, session_ids=(SESSION_ID, OTHER_SESSION_ID),
+    )
+    with saver:
+        current, _message = _user_admission(saver, thread_id)
+        fixed = _put_with_admission(
+            saver, session_id=SESSION_ID, thread_id=thread_id, admission=current,
+            config=build_checkpoint_config(thread_id), checkpoint_id="checkpoint-before-accepted-input", messages=[],
+        )
+        future = saver.accept_turn(
+            SESSION_ID, thread_id=thread_id, accepted_ingress_id="future-ingress",
+            acceptance_idempotency_key="future-acceptance", job_id="future-job",
+            admission_idempotency_key="future-admission", payload="future question",
+            turn_id="future-turn", initial_execution_id="future-execution",
+        )
+        future_admission = saver.execution_admission(
+            SESSION_ID, thread_id=thread_id, execution_id=future["initial_execution_id"],
+        )
+        notice = internal_message_factory.build(
+            kind="generated_session_result", control="汇报内部任务。",
+            sections=(
+                PromptSection("control_context", {}),
+                PromptSection("generated_session_result", "内部任务结果"),
+            ),
+            display_content="内部任务已完成。",
+        )
+        internal = saver.admit_internal_execution(
+            SESSION_ID, thread_id=thread_id, job_id="internal-scope-job",
+            intent=InternalExecutionIntent(
+                message_id="internal-scope-notice", execution_id="internal-scope-execution",
+                admission_idempotency_key="internal-scope-admission",
+            ),
+            message=HumanMessage(
+                content=notice.content, id="internal-scope-notice",
+                response_metadata={
+                    "message_id": "internal-scope-notice",
+                    "created_at": "2026-10-04T12:00:00+00:00",
+                    "message_metadata": notice.metadata,
+                },
+            ),
+        )
+        saver.accept_turn(
+            OTHER_SESSION_ID, thread_id=storage.main_thread_id(OTHER_SESSION_ID),
+            accepted_ingress_id="other-scope-ingress", acceptance_idempotency_key="other-scope-acceptance",
+            job_id="other-scope-job", admission_idempotency_key="other-scope-admission",
+            payload="other scope question",
+        )
+        yield HeadSelectionCase(saver, thread_id, fixed, {
+            "current": current, "future": future_admission, "internal": internal,
+        })
+
+
+@pytest.mark.parametrize("scope, expected", [
+    ("cold", ["accepted question", "future question"]),
+    ("current", ["accepted question"]),
+    ("future", ["accepted question", "future question"]),
+    ("internal", []),
+])
+def test_latest_messages_keep_accepted_input_with_execution_cutoff(
+    head_selection_case: HeadSelectionCase, scope: str, expected: list[str],
+) -> None:
+    case = head_selection_case
+    with ExitStack() as stack:
+        stack.enter_context(session_thread_owner_scope(_owner(SESSION_ID, case.thread_id), langgraph_thread_id=case.thread_id))
+        if scope != "cold":
+            stack.enter_context(execution_admission_scope(case.admissions[scope], langgraph_thread_id=case.thread_id))
+        latest = case.saver.get_tuple(build_checkpoint_config(case.thread_id))
+        assert latest is not None
+        assert [message.content for message in latest.checkpoint["channel_values"]["messages"]] == expected
+        fixed = case.saver.get_tuple(case.fixed)
+        assert fixed is not None and fixed.checkpoint["channel_values"]["messages"] == []
 
 
 def test_new_user_turn_append_uses_acceptance_and_prefix_replay_needs_no_admission(

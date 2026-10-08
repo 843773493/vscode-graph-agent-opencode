@@ -17,6 +17,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
+from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.business.communication.addresses import (
     GlobalThreadAddress,
     ResolvedMainTargetBinding,
@@ -33,6 +34,7 @@ class CommunicationPayload:
     content: str
     kind: CommunicationKind = "result"
     reply_to_communication_id: str | None = None
+    delivery_policy: DeliveryPolicy = "after_turn"
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, str) or not self.content.strip():
@@ -92,8 +94,7 @@ class ExistingOutboxView:
 class ReceivedCommunicationView:
     """本 source 之前收到的 communication 的只读视图，用于 reply 因果方向证明。
 
-    TODO: 当前生产 send_message_to_session 尚未接线收件 ledger 查询；
-    后续 E03 ledger 切片接入时必须提供该视图，否则 kind=reply 无法通过 admission。
+    生产 admission 只从本 Session inbox 取方向证明。
     """
 
     communication_id: str
@@ -139,6 +140,7 @@ def communication_preimage_hash(
             "content": payload.content,
             "kind": payload.kind,
             "reply_to_communication_id": payload.reply_to_communication_id,
+            "delivery_policy": payload.delivery_policy,
         },
         sort_keys=True,
         ensure_ascii=False,

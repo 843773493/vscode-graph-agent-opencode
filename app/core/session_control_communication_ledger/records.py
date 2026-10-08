@@ -49,6 +49,10 @@ class CommunicationOutboxRecord:
     kind: str
     reply_to_communication_id: str | None
     payload_hash: str
+    content: str
+    delivery_policy: str
+    request_id: str
+    target_ref: str
     state: str
     latest_receipt: str | None
     abort_reason: str | None
@@ -73,14 +77,20 @@ class CommunicationInboxRecord:
     source_workspace_id: str
     source_session_id: str
     source_thread_id: str
+    target_gateway_id: str
+    target_workspace_id: str
     target_thread_id: str
     kind: str
     reply_to_communication_id: str | None
     payload_hash: str
+    content: str
+    delivery_policy: str
+    request_id: str
     admission_id: str
     wakeup_key: str
     state: str
     job_id: str | None
+    execution_id: str | None
     turn_id: str | None
     admission_claim_owner: str | None
     admission_claim_generation: int | None

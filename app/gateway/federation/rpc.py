@@ -20,12 +20,22 @@ workspace 及其它 active spoke。未授权存在与不存在统一返回
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
-import time
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from app.core.trace_middleware import (
+    require_current_request_id,
+    reset_current_gateway_id,
+    reset_current_request_id,
+    set_current_gateway_id,
+    set_current_request_id,
+)
+from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation.channel import (
     FederationChannelSession,
     FederationRequestHandler,
@@ -98,6 +108,7 @@ class FederationRpcService:
     signing_key: object
     catalog: FederationCatalogPort
     session_main: FederationSessionMainPort
+    credential_store: FederationCredentialStore
     spoke_directory: FederationSpokeDirectoryPort | None = None
     _channels: dict[str, FederationChannelSession] = field(default_factory=dict)
     _local_channels: dict[str, FederationChannelSession] = field(default_factory=dict)
@@ -109,19 +120,31 @@ class FederationRpcService:
     def local_role(self) -> Literal["hub", "spoke"]:
         """本地在 hub/spoke 拓扑中的角色：有 spoke 目录即 hub。"""
 
-        return "hub" if self.spoke_directory is not None else "spoke"
+        return "hub" if self.spoke_directory is not None and self.spoke_directory.active_spokes() else "spoke"
 
-    def register_channel(self, session: FederationChannelSession) -> None:
-        self._local_channels[session.channel_instance_id] = session
+    async def register_channel(self, session: FederationChannelSession) -> None:
+        if session.local_role == "spoke" and self._hub_channel is not None and not self._hub_channel.closed and self._hub_channel.peer_gateway_id != session.peer_gateway_id:
+            raise FederationError(FEDERATION_UNKNOWN_PEER, "spoke 只能接入一个受信 hub")
+        await self._register_channel(session, direction="inbound")
+
+    async def _register_channel(self, session: FederationChannelSession, *, direction: str) -> None:
+        previous = self._hub_channel if session.local_role == "spoke" else self._channels.get(session.peer_gateway_id)
         self.control_store.register_channel(
             channel_instance_id=session.channel_instance_id,
             peer_gateway_id=session.peer_gateway_id,
             connection_id=session.handshake.peer.connection_id,
             channel_epoch=session.channel_epoch,
-            direction="inbound",
+            direction=direction,
         )
+        self._local_channels[session.channel_instance_id] = session
         if session.local_role == "spoke":
-            self.adopt_hub_channel(session)
+            self._hub_channel = session
+        else:
+            self._channels[session.peer_gateway_id] = session
+        if previous is not None and previous.channel_instance_id != session.channel_instance_id:
+            await previous.close(FederationError(FEDERATION_AUTHORIZATION_REVOKED, "channel 已被新的 epoch 替代"))
+            await previous.join()
+            self.unregister_channel(previous.channel_instance_id)
 
     def unregister_channel(self, channel_instance_id: str) -> None:
         self.control_store.unregister_channel(
@@ -133,15 +156,10 @@ class FederationRpcService:
             if session.channel_instance_id == channel_instance_id:
                 self._channels.pop(gateway_id, None)
 
-    def adopt_outbound_channel(self, session: FederationChannelSession) -> None:
+    async def adopt_outbound_channel(self, session: FederationChannelSession) -> None:
         """hub 记录到 spoke 的 outbound channel（拨号成功后调用）。"""
 
-        self._channels[session.peer_gateway_id] = session
-
-    def adopt_hub_channel(self, session: FederationChannelSession) -> None:
-        """spoke 记录它唯一的 hub channel；旧 channel 已关闭时替换。"""
-
-        self._hub_channel = session
+        await self._register_channel(session, direction="outbound")
 
     def clear_hub_channel(self, channel_instance_id: str) -> None:
         if (
@@ -163,7 +181,15 @@ class FederationRpcService:
                 FEDERATION_TARGET_NOT_RESOLVABLE,
                 f"目标 Gateway 当前没有可用 channel: {gateway_id}",
             )
+        self._check_channel(session)
         return session
+
+    async def close_channels(self) -> None:
+        sessions = tuple(self._local_channels.values())
+        await asyncio.gather(*(session.close() for session in sessions))
+        await asyncio.gather(*(session.join() for session in sessions))
+        for session in sessions:
+            self.unregister_channel(session.channel_instance_id)
 
     # --- 入站请求分发 -----------------------------------------------------
 
@@ -205,7 +231,7 @@ class FederationRpcService:
     # --- hub 侧：来自直接 spoke 的 origin 请求 ------------------------------
 
     async def resolve_session_target(
-        self, *, session_id: str, deadline_at: float | None = None
+        self, *, session_id: str, workspace_id: str | None = None, deadline_at: float | None = None
     ) -> dict[str, object]:
         """有界 exact-ID discovery：本地查询 + （必要时）经唯一 hub 的一次 fan-out。
 
@@ -214,9 +240,10 @@ class FederationRpcService:
         """
 
         require_str({"session_id": session_id}, "session_id")
+        self._authorize(capability="discovery", origin=self.gateway_id, session=None)
         visited: tuple[str, ...] = (self.gateway_id,)
         matches = await self._local_matches(session_id)
-        if self.spoke_directory is not None:
+        if self.local_role == "hub":
             # 本地即 hub：直接向其它 active spoke fan-out 一次。
             remaining = remaining_deadline(deadline_at)
             matches.extend(
@@ -230,10 +257,13 @@ class FederationRpcService:
             )
         elif self._hub_channel is not None and not self._hub_channel.closed:
             remaining = remaining_deadline(deadline_at)
-            result = await self._hub_channel.request(
+            channel = self._hub_channel
+            self._check_channel(channel)
+            result = await channel.request(
                 method=METHOD_DISCOVERY,
                 request={
                     "session_id": session_id,
+                    "request_id": require_current_request_id("联邦 discovery"),
                     "nonce": new_origin_nonce(),
                     "visited": list(visited),
                     "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
@@ -242,6 +272,7 @@ class FederationRpcService:
                 timeout=remaining,
                 deadline_at=deadline_at,
             )
+            self._check_channel(channel)
             raw_matches = result.get("matches")
             if not isinstance(raw_matches, list):
                 raise FederationError(
@@ -255,6 +286,9 @@ class FederationRpcService:
                         "hub discovery 候选项必须是对象",
                     )
                 matches.append(item)
+        if workspace_id is not None:
+            matches = [item for item in matches if item.get("workspace_id") == workspace_id]
+        self._authorize(capability="discovery", origin=self.gateway_id, session=None)
         if not matches:
             raise FederationError(
                 FEDERATION_TARGET_NOT_RESOLVABLE,
@@ -273,6 +307,7 @@ class FederationRpcService:
         *,
         target: GrantTarget,
         operation: OperationKind,
+        body: dict[str, object],
         deadline_at: float | None = None,
     ) -> dict[str, object]:
         """把一个 operation 经唯一 hub transit 送到目标并取回 target envelope。
@@ -282,8 +317,16 @@ class FederationRpcService:
         """
 
         remaining = remaining_deadline(deadline_at)
-        if self.spoke_directory is not None:
+        self._authorize(capability=operation, origin=self.gateway_id, session=None)
+        if target.gateway_id == self.gateway_id:
+            return await self._execute_local(target=target, operation=operation, body=body, origin=self.gateway_id, remaining=remaining)
+        if self.local_role == "hub":
             assert_hop_budget((self.gateway_id, target.gateway_id))
+            forwarded = {
+                "body": body, "request_id": require_current_request_id("联邦 relay"),
+                "operation": operation, "target": target.to_payload(), "visited": [self.gateway_id],
+                "max_transit_gateways": MAX_TRANSIT_GATEWAYS, "max_gateway_hops": MAX_GATEWAY_HOPS,
+            }
             grant = self._sign_grant(
                 grant_kind="operation",
                 origin_gateway_id=self.gateway_id,
@@ -293,30 +336,31 @@ class FederationRpcService:
                 lifetime=remaining,
                 target=target,
                 operation=operation,
+                request_preimage=forwarded,
             )
-            return await self.channel_to(target.gateway_id).request(
+            channel = self.channel_to(target.gateway_id)
+            result = await channel.request(
                 method=METHOD_RELAY,
-                request={
-                    "grant": grant.encode(),
-                    "operation": operation,
-                    "target": target.to_payload(),
-                    "visited": [self.gateway_id],
-                    "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
-                    "max_gateway_hops": MAX_GATEWAY_HOPS,
-                },
+                request={**forwarded, "grant": grant.encode()},
                 timeout=remaining,
                 deadline_at=deadline_at,
             )
+            self._check_channel(channel)
+            self._authorize(capability=operation, origin=self.gateway_id, session=None)
+            return result
         hub_channel = self._hub_channel
         if hub_channel is None or hub_channel.closed:
             raise FederationError(
                 FEDERATION_TARGET_NOT_RESOLVABLE,
                 "本地没有可用 hub channel，无法 transit 到目标 Gateway",
             )
-        return await hub_channel.request(
+        self._check_channel(hub_channel)
+        result = await hub_channel.request(
             method=METHOD_RELAY,
             request={
                 "nonce": new_origin_nonce(),
+                "body": body,
+                "request_id": require_current_request_id("联邦 relay"),
                 "operation": operation,
                 "target": target.to_payload(),
                 "visited": [self.gateway_id],
@@ -326,6 +370,9 @@ class FederationRpcService:
             timeout=remaining,
             deadline_at=deadline_at,
         )
+        self._check_channel(hub_channel)
+        self._authorize(capability=operation, origin=self.gateway_id, session=None)
+        return result
 
     async def _serve_discovery_as_hub(
         self,
@@ -345,6 +392,8 @@ class FederationRpcService:
             request, local_gateway_id=self.gateway_id
         )
         del max_transit, max_hops
+        if visited != (origin,):
+            raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "origin discovery visited 与认证 channel 不一致")
         path = (*visited, self.gateway_id)
         assert_hop_budget(path)
         remaining = remaining_deadline(deadline_at)
@@ -359,6 +408,7 @@ class FederationRpcService:
                 deadline_at=deadline_at,
             )
         )
+        self._authorize(capability="discovery", origin=origin, session=session)
         return discovery_response(self.gateway_id, matches)
 
     async def _serve_relay_as_hub(
@@ -379,17 +429,26 @@ class FederationRpcService:
         visited, _max_transit, _max_hops = require_discovery_scope(
             request, local_gateway_id=self.gateway_id
         )
-        path = (*visited, self.gateway_id, target.gateway_id)
+        if visited != (origin,):
+            raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "origin relay visited 与认证 channel 不一致")
+        path = (*visited, self.gateway_id) if target.gateway_id == self.gateway_id else (*visited, self.gateway_id, target.gateway_id)
         assert_hop_budget(path)
-        if target.gateway_id in visited or target.gateway_id == self.gateway_id:
-            raise FederationError(
-                FEDERATION_TRANSIT_LIMIT_EXCEEDED,
-                "relay 目标已在访问路径中，拒绝回环",
-                detail={"path": list(path)},
-            )
+        if target.gateway_id in visited:
+            raise FederationError(FEDERATION_TRANSIT_LIMIT_EXCEEDED, "relay 目标造成回环")
         self._authorize(capability="transit", origin=origin, session=session)
+        self._authorize(capability=operation, origin=origin, session=session)
+        if target.gateway_id == self.gateway_id:
+            result = await self._execute_local(target=target, operation=operation, body=request.get("body"), origin=origin, remaining=remaining_deadline(deadline_at))
+            self._authorize(capability="transit", origin=origin, session=session)
+            self._authorize(capability=operation, origin=origin, session=session)
+            return result
         principal = principal_ref_for_gateway(origin)
         remaining = remaining_deadline(deadline_at)
+        forwarded = {
+            "body": request.get("body"), "request_id": require_current_request_id("联邦 relay"),
+            "operation": operation, "target": target.to_payload(), "visited": list(path[:-1]),
+            "max_transit_gateways": MAX_TRANSIT_GATEWAYS, "max_gateway_hops": MAX_GATEWAY_HOPS,
+        }
         grant = self._sign_grant(
             grant_kind="operation",
             origin_gateway_id=origin,
@@ -399,20 +458,18 @@ class FederationRpcService:
             lifetime=remaining,
             target=target,
             operation=operation,
+            request_preimage=forwarded,
         )
-        inner = await self.channel_to(target.gateway_id).request(
+        channel = self.channel_to(target.gateway_id)
+        inner = await channel.request(
             method=METHOD_RELAY,
-            request={
-                "grant": grant.encode(),
-                "operation": operation,
-                "target": target.to_payload(),
-                "visited": list(path[:-1]),
-                "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
-                "max_gateway_hops": MAX_GATEWAY_HOPS,
-            },
+            request={**forwarded, "grant": grant.encode()},
             timeout=remaining,
             deadline_at=deadline_at,
         )
+        self._check_channel(channel)
+        self._authorize(capability="transit", origin=origin, session=session)
+        self._authorize(capability=operation, origin=origin, session=session)
         return {
             "relayed_by": self.gateway_id,
             "origin_gateway_id": origin,
@@ -439,36 +496,30 @@ class FederationRpcService:
         for spoke in directory.active_spokes():
             if spoke.gateway_id in path:
                 continue
-            channel = self._channels.get(spoke.gateway_id)
-            if channel is None or channel.closed:
-                raise FederationError(
-                    FEDERATION_TARGET_NOT_RESOLVABLE,
-                    f"active spoke 缺少可用 channel: {spoke.gateway_id}",
-                )
+            channel = self.channel_to(spoke.gateway_id)
             target_path = (*path, spoke.gateway_id)
             assert_hop_budget(target_path)
+            forwarded = {
+                "request_id": require_current_request_id("联邦 discovery"), "session_id": session_id,
+                "visited": list(path), "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
+                "max_gateway_hops": MAX_GATEWAY_HOPS,
+            }
             grant = self._sign_grant(
                 grant_kind="discovery",
                 origin_gateway_id=origin,
                 audience_gateway_id=spoke.gateway_id,
                 transit_path=target_path,
                 principal_ref=principal,
-                lifetime=min(
-                    max(DISCOVERY_GRANT_LIFETIME_SECONDS, remaining), remaining
-                ),
+                lifetime=min(DISCOVERY_GRANT_LIFETIME_SECONDS, remaining),
+                request_preimage=forwarded,
             )
             result = await channel.request(
                 method=METHOD_DISCOVERY,
-                request={
-                    "grant": grant.encode(),
-                    "session_id": session_id,
-                    "visited": list(path),
-                    "max_transit_gateways": MAX_TRANSIT_GATEWAYS,
-                    "max_gateway_hops": MAX_GATEWAY_HOPS,
-                },
+                request={**forwarded, "grant": grant.encode()},
                 timeout=remaining,
                 deadline_at=deadline_at,
             )
+            self._check_channel(channel)
             raw_matches = result.get("matches")
             if not isinstance(raw_matches, list):
                 raise FederationError(
@@ -513,8 +564,10 @@ class FederationRpcService:
                 "discovery 请求声明的路径与 grant 绑定路径不一致",
                 detail={"path": list(path), "grant": list(grant.transit_path)},
             )
-        _ = deadline_at
+        remaining_deadline(deadline_at)
         matches = await self._local_matches(session_id)
+        self._verify_grant_current(grant, request, session)
+        self._authorize(capability="discovery", origin=grant.origin_gateway_id, session=session)
         return discovery_response(self.gateway_id, matches)
 
     async def _serve_relay_as_spoke(
@@ -555,14 +608,40 @@ class FederationRpcService:
                 "relay 请求声明的路径与 grant 绑定路径不一致",
                 detail={"path": list(path), "grant": list(grant.transit_path)},
             )
-        _ = deadline_at
-        resolved = await self.resolve_target_main_thread(target=target)
-        return {
-            "accepted_by": self.gateway_id,
-            "operation": operation,
-            "target": resolved,
-            "principal_ref": grant.principal_ref,
-        }
+        if operation == "wait":
+            from app.schemas.internal_v2.communication import (
+                CommunicationObservationRequest,
+            )
+            body = CommunicationObservationRequest.model_validate(request.get("body"))
+            wait_deadline = datetime.fromisoformat(body.query["deadline"]["deadline_at_utc"])
+            effective = max((wait_deadline - datetime.now(UTC)).total_seconds(), 0)
+            self._verify_grant_current(grant, request, session, minimum_remaining_seconds=effective + GRANT_CLOCK_SKEW_SECONDS)
+        result = await self._execute_local(target=target, operation=operation, body=request.get("body"), origin=grant.origin_gateway_id, remaining=remaining_deadline(deadline_at))
+        self._verify_grant_current(grant, request, session)
+        self._authorize(capability=capability, origin=grant.origin_gateway_id, session=session)
+        return result
+
+    async def _execute_local(self, *, target: GrantTarget, operation: OperationKind, body: dict[str, object], origin: str, remaining: float) -> dict[str, object]:
+        if target.gateway_id != self.gateway_id:
+            raise FederationError(FEDERATION_TARGET_NOT_RESOLVABLE, "target audience 不是本 Gateway")
+        self._authorize(capability=operation, origin=origin, session=None)
+        if not isinstance(body, dict):
+            raise FederationError(FEDERATION_MALFORMED_FRAME, "relay 必须包含完整业务 envelope")
+        if operation in {"read", "wait"}:
+            from app.schemas.internal_v2.communication import (
+                CommunicationObservationRequest,
+            )
+            observed = CommunicationObservationRequest.model_validate(body)
+            if (observed.target.gateway_id, observed.target.workspace_id, observed.target.session_id, observed.operation) != (target.gateway_id, target.workspace_id, target.session_id, operation):
+                raise FederationError(FEDERATION_MALFORMED_FRAME, "冻结 observation target 与 grant 不一致")
+            frozen_target = observed.model_dump(mode="json")["target"]
+        else:
+            resolved = await self.resolve_target_main_thread(target=target)
+            frozen_target = {"gateway_id": self.gateway_id, "workspace_id": target.workspace_id, "session_id": target.session_id, "thread_id": resolved["resolved_main_thread_id"]}
+        self._authorize(capability=operation, origin=origin, session=None)
+        result = await self.session_main.execute(operation=operation, target=frozen_target, body=body, origin=origin, timeout=remaining)
+        self._authorize(capability=operation, origin=origin, session=None)
+        return result
 
     async def resolve_target_main_thread(
         self, *, target: GrantTarget
@@ -643,22 +722,21 @@ class FederationRpcService:
 
     async def _local_matches(self, session_id: str) -> list[dict[str, object]]:
         workspaces = await self.catalog.local_session_workspaces(session_id)
-        return [
-            {
-                "gateway_id": self.gateway_id,
-                "workspace_id": workspace_id,
-                "session_id": session_id,
-            }
-            for workspace_id in workspaces
-        ]
+        matches = []
+        for workspace_id in workspaces:
+            main = await self.session_main.resolve_main_thread(gateway_id=self.gateway_id, workspace_id=workspace_id, session_id=session_id)
+            matches.append({"gateway_id": self.gateway_id, "workspace_id": workspace_id, "session_id": session_id, "thread_id": main, "main_thread_id": main})
+        return matches
 
     def _authorize(
         self,
         *,
         capability: Capability,
         origin: str,
-        session: FederationChannelSession,
+        session: FederationChannelSession | None,
     ) -> None:
+        if session is not None:
+            self._check_channel(session)
         snapshot = self.policy_store.snapshot
         if snapshot.hardening_enabled and not snapshot.rules:
             raise FederationError(
@@ -674,12 +752,31 @@ class FederationRpcService:
             raise FederationError(
                 FEDERATION_AUTHORIZATION_REVOKED,
                 "最新 federation policy 拒绝了该操作",
-                detail={
-                    "capability": capability,
-                    "policy_revision": snapshot.revision,
-                },
+                detail={"capability": capability, "policy_revision": snapshot.revision},
             )
-        _ = session
+
+    def _check_channel(self, session: FederationChannelSession) -> None:
+        if session.closed or self._local_channels.get(session.channel_instance_id) is not session:
+            raise FederationError(FEDERATION_AUTHORIZATION_REVOKED, "channel 未登记或已关闭")
+        try:
+            credential = self.credential_store.get(session.handshake.peer.connection_id)
+        except (LookupError, PermissionError) as error:
+            raise FederationError(FEDERATION_AUTHORIZATION_REVOKED, f"channel 的当前凭据不可用: {error}") from error
+        expected_peer = self.gateway_id if session.local_role == "hub" else session.peer_gateway_id
+        if credential.peer_gateway_id != expected_peer or not secrets.compare_digest(hashlib.sha256(credential.token.encode()).hexdigest(), session.handshake.credential_digest):
+            raise FederationError(FEDERATION_AUTHORIZATION_REVOKED, "channel 凭据已变更或不属于当前 peer")
+        current = self._hub_channel if session.local_role == "spoke" else self._channels.get(session.peer_gateway_id)
+        if current is not session:
+            raise FederationError(FEDERATION_AUTHORIZATION_REVOKED, "旧 channel 已被新的 epoch 替代")
+
+    def _verify_grant_current(self, grant: FederationGrant, request: dict[str, object], session: FederationChannelSession, *, minimum_remaining_seconds: float = 0.0) -> None:
+        verify_grant(
+            grant, issuer=session.handshake.peer, local_gateway_id=self.gateway_id,
+            expected_kind=grant.grant_kind, request_preimage=grant_preimage(request),
+            expected_origin=grant.origin_gateway_id,
+            expected_path=((session.peer_gateway_id, self.gateway_id) if grant.origin_gateway_id == session.peer_gateway_id else (grant.origin_gateway_id, session.peer_gateway_id, self.gateway_id)),
+            minimum_remaining_seconds=minimum_remaining_seconds,
+        )
 
     def _sign_grant(
         self,
@@ -690,6 +787,7 @@ class FederationRpcService:
         transit_path: tuple[str, ...],
         principal_ref: str,
         lifetime: float,
+        request_preimage: dict[str, object],
         target: GrantTarget | None = None,
         operation: OperationKind | None = None,
     ) -> FederationGrant:
@@ -702,7 +800,8 @@ class FederationRpcService:
             origin_gateway_id=origin_gateway_id,
             audience_gateway_id=audience_gateway_id,
             transit_path=transit_path,
-            request_id=f"req_{int(time.time() * 1000)}",
+            request_id=require_current_request_id("grant 签发"),
+            request_preimage=request_preimage,
             principal_ref=principal_ref,
             lifetime_seconds=lifetime,
             target=target,
@@ -724,8 +823,9 @@ class FederationRpcService:
             issuer=session.handshake.peer,
             local_gateway_id=self.gateway_id,
             expected_kind=expected_kind,
+            request_preimage=grant_preimage(request),
             expected_origin=grant.origin_gateway_id,
-            expected_path=(grant.origin_gateway_id, hub_gateway_id, self.gateway_id),
+            expected_path=((hub_gateway_id, self.gateway_id) if grant.origin_gateway_id == hub_gateway_id else (grant.origin_gateway_id, hub_gateway_id, self.gateway_id)),
         )
         self._authorize(
             capability=capability,
@@ -756,12 +856,15 @@ class _FederationRequestDispatcher(FederationRequestHandler):
         session: FederationChannelSession,
         deadline_at: float | None,
     ) -> dict[str, object]:
-        return await self._service.handle_request(
-            method=method,
-            request=request,
-            session=session,
-            deadline_at=deadline_at,
-        )
+        request_id = require_str(request, "request_id") if method != METHOD_STATUS else None
+        request_token = set_current_request_id(request_id)
+        gateway_token = set_current_gateway_id(self._service.gateway_id)
+        try:
+            return await self._service.handle_request(method=method, request=request, session=session, deadline_at=deadline_at)
+        finally:
+            reset_current_gateway_id(gateway_token)
+            reset_current_request_id(request_token)
+
 
 
 __all__ = [

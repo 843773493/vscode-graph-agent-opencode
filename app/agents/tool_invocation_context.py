@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from app.core.identifier import uuid7_datetime_from_hex
 from app.core.model_delta_context import get_current_model_delta_sink
 from app.core.session_catalog_store import validate_thread_id
 from app.core.turn_execution_scope import (
@@ -19,7 +23,10 @@ from app.core.turn_execution_scope import (
     set_current_turn_execution_scope,
 )
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.domain.itemized.identity.tool_call_identity import matches_tool_call_id
+from app.domain.itemized.identity.tool_call_identity import (
+    matches_tool_call_id,
+    provider_tool_call_id,
+)
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingRef,
 )
@@ -102,6 +109,25 @@ class ToolInvocationContext:
         if identity is None or identity.model_call_id is None:
             raise RuntimeError("当前工具执行上下文缺少 emitting assistant 的 model_call_id")
         return identity.model_call_id
+
+    def require_operation_created_at(self) -> datetime:
+        """沿原 emitting model-call 的 UUIDv7 时刻恢复，重试不延长窗口。"""
+        identity = UUID(self.require_model_call_id())
+        if identity.version != 7:
+            raise ValueError("通信 operation 必须来自受信 UUIDv7 model call")
+        return uuid7_datetime_from_hex(identity.hex)
+
+    def require_operation_id(self, operation: str) -> str:
+        """软件操作身份来自已持久化的 emitting model call，不进入模型 schema。"""
+        invocation = self._invocation.get()
+        model_call_id = self.require_model_call_id()
+        if invocation is None or self.thread_binding is None:
+            raise RuntimeError("通信工具缺少精确 thread invocation binding")
+        call_id = provider_tool_call_id(invocation.projection_identity, invocation.tool_call_id)
+        preimage = json.dumps([operation, self.thread_binding.session_id,
+                              self.thread_binding.thread_id, model_call_id, call_id],
+                             ensure_ascii=False, separators=(",", ":"))
+        return "cop_" + hashlib.sha256(preimage.encode()).hexdigest()
 
     def set_extension_catalog_binding(
         self,

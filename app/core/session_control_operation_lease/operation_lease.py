@@ -37,6 +37,7 @@ __all__ = [
     "IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL",
     "SESSION_OPERATION_LEASES_TABLE_DDL",
     "OperationLeaseMixin",
+    "delete_terminal_leases",
 ]
 
 
@@ -381,3 +382,22 @@ class OperationLeaseMixin:
                 f"path={self.database_path}"
             )
         return row
+
+def delete_terminal_leases(
+    connection: sqlite3.Connection, operation_identities: tuple[str, ...],
+    *, operation_kind: str,
+) -> None:
+    """在业务 owner 已持有的写事务内校验并清理精确引用；不另开事务。"""
+    if not connection.in_transaction:
+        raise RuntimeError("清理关联 lease 必须位于原业务 owner 的写事务内")
+    for identity in operation_identities:
+        rows = connection.execute(
+            "SELECT operation_kind,state FROM session_operation_leases WHERE operation_identity=?",
+            (identity,),
+        ).fetchall()
+        if not rows or any(row["operation_kind"] != operation_kind or row["state"] not in SESSION_OPERATION_LEASE_TERMINAL_STATES for row in rows):
+            raise RuntimeError(f"清理关联 lease 必须存在、匹配原 kind 且全部终态: {identity}")
+    connection.executemany(
+        "DELETE FROM session_operation_leases WHERE operation_identity=?",
+        ((identity,) for identity in operation_identities),
+    )

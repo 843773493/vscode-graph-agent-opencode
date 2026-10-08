@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
-from app.abstractions.internal_message import PreparedInternalMessage
 from app.abstractions.job_service import JobServiceProtocol
 from app.api.canonical_params import CanonicalSessionId
 from app.api.deps import (
@@ -12,6 +12,7 @@ from app.api.deps import (
     get_job_service,
     get_message_service,
     get_request_id,
+    get_session_communication_service,
     get_session_orchestrator,
     get_session_turn_replay_service,
     verify_local_token,
@@ -20,6 +21,11 @@ from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
+from app.schemas.internal_v2.communication import (
+    CommunicationAcceptanceRequest,
+    CommunicationObservationRequest,
+    CommunicationReceipt,
+)
 from app.schemas.internal_v2.message import (
     AgentStateMessagesDTO,
     MessageDTO,
@@ -27,7 +33,6 @@ from app.schemas.internal_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
     MessageRunRequest,
-    SessionMessageDispatchRequest,
 )
 from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
@@ -40,6 +45,7 @@ from app.services.business.session_turn_replay_service import SessionTurnReplayS
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.orchestration.communication.service import SessionCommunicationService
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 logger = logging.getLogger(__name__)
@@ -197,40 +203,46 @@ async def create_message_and_run(
 
 
 @router.post(
-    "/{session_id}/inter-agent-messages",
-    response_model=APIResponse[MessageRunAccepted],
-    summary="通过 Gateway 派发跨会话消息",
+    "/{session_id}/inter-agent-messages", response_model=APIResponse[CommunicationReceipt],
+    summary="持久接收来自受认证 Gateway origin 的通信",
 )
 async def dispatch_inter_agent_message(
-    session_id: CanonicalSessionId,
-    payload: SessionMessageDispatchRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
+    session_id: CanonicalSessionId, payload: CommunicationAcceptanceRequest,
+    origin: Annotated[str, Header(alias="X-BoxTeam-Communication-Origin")],
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionCommunicationService, Depends(get_session_communication_service)],
 ):
+    if payload.target.session_id != session_id or payload.source.gateway_id != origin:
+        raise HTTPException(status_code=400, detail="通信 path/source 与认证 origin 不一致")
     try:
-        if payload.simulate_user:
-            result = await session_orchestrator.create_and_run(
-                session_id,
-                payload.content,
-                delivery_policy=payload.delivery_policy,
-                idempotency_key=payload.idempotency_key,
-            )
-        else:
-            result = await session_orchestrator.create_and_run_internal(
-                session_id,
-                PreparedInternalMessage(
-                    content=payload.content,
-                    metadata=payload.metadata,
-                ),
-                delivery_policy=payload.delivery_policy,
-                idempotency_key=payload.idempotency_key,
-            )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except JobAdmissionClosedError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    return APIResponse(message="ok", data=result, request_id=request_id)
+        result = await service.accept(payload)
+    except (ValueError, RuntimeError, KeyError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/{session_id}/communication-observations")
+async def observe_communication(
+    session_id: CanonicalSessionId, payload: CommunicationObservationRequest,
+    origin: Annotated[str, Header(alias="X-BoxTeam-Communication-Origin")],
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionCommunicationService, Depends(get_session_communication_service)],
+):
+    if payload.target.session_id != session_id or payload.source.gateway_id != origin:
+        raise HTTPException(status_code=400, detail="观察 path/source 与认证 origin 不一致")
+    from app.core.trace_middleware import require_current_gateway_id
+    if payload.target.gateway_id != require_current_gateway_id("target observation"):
+        raise HTTPException(status_code=400, detail="观察 Gateway audience 不一致")
+    from app.core.session_control_communication_ledger.observations import (
+        RemoteObservationError,
+    )
+    try:
+        result = await service.observations.observe(payload)
+    except RemoteObservationError as error:
+        raise HTTPException(status_code=409, detail=error.to_wire()) from error
+    except (ValueError, RuntimeError, KeyError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.get(

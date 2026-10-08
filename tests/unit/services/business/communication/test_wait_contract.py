@@ -12,7 +12,6 @@ from app.services.business.communication.addresses import GlobalThreadAddress
 from app.services.business.communication.errors import CommunicationContractError
 from app.services.business.communication.wait import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
-    CommunicationWaitBinding,
     DurableDeadline,
     WaitObservation,
     WaitSelector,
@@ -65,43 +64,6 @@ def make_observation(state: str, revision: str = "rev-1") -> WaitObservation:
 def test_selector_rejects_blank_id() -> None:
     with pytest.raises(CommunicationContractError, match="wait-selector-invalid"):
         WaitSelector(kind="job", selector_id="  ")
-
-
-def test_binding_rejects_blank_job_id_with_closed_code() -> None:
-    """空 job_id 必须以闭集错误码抛出 typed 合同错误，不能降级成裸 ValueError。"""
-    target = make_target()
-    with pytest.raises(CommunicationContractError) as caught:
-        CommunicationWaitBinding(
-            target_session_id=target.session_id,
-            target_main_thread_id=target.thread_id,
-            job_id="  ",
-            turn_id=None,
-        )
-    assert caught.value.code == "wait-binding-invalid"
-
-
-def test_binding_rejects_blank_turn_id_with_closed_code() -> None:
-    target = make_target()
-    with pytest.raises(CommunicationContractError) as caught:
-        CommunicationWaitBinding(
-            target_session_id=target.session_id,
-            target_main_thread_id=target.thread_id,
-            job_id=None,
-            turn_id="  ",
-        )
-    assert caught.value.code == "wait-binding-invalid"
-
-
-def test_binding_accepts_none_selectors() -> None:
-    target = make_target()
-    binding = CommunicationWaitBinding(
-        target_session_id=target.session_id,
-        target_main_thread_id=target.thread_id,
-        job_id=None,
-        turn_id=None,
-    )
-    assert binding.job_id is None
-    assert binding.turn_id is None
 
 
 def test_timeout_boundaries() -> None:

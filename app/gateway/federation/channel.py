@@ -91,6 +91,7 @@ class ChannelHandshake:
     channel_epoch: int
     local_gateway_id: str
     peer: FederationPeerIdentity
+    credential_digest: str
     #: 本端在 hub/spoke 拓扑中的角色：``hub`` 接受 spoke 的 origin 请求，
     #: ``spoke`` 只接受受信 hub 签发的 grant。
     local_role: Literal["hub", "spoke"] = "spoke"
