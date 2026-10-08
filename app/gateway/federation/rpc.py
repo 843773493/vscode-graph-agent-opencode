@@ -193,8 +193,20 @@ class FederationRpcService:
         sessions = tuple(self._local_channels.values())
         await asyncio.gather(*(session.close() for session in sessions))
         await asyncio.gather(*(session.join() for session in sessions))
+        unregister_error: Exception | None = None
         for session in sessions:
-            self.unregister_channel(session.channel_instance_id)
+            try:
+                self.unregister_channel(session.channel_instance_id)
+            except Exception as error:  # noqa: BLE001 - 注销失败后仍须尝试其余 channel
+                if unregister_error is None:
+                    unregister_error = error
+                else:
+                    unregister_error.add_note(
+                        "注销其他联邦 channel 时也失败："
+                        f"{type(error).__name__}: {error}"
+                    )
+        if unregister_error is not None:
+            raise unregister_error
 
     # --- 入站请求分发 -----------------------------------------------------
 
