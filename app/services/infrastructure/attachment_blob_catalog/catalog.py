@@ -193,7 +193,21 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin):
         connection.execute("BEGIN IMMEDIATE")
         try:
             yield connection
-        except BaseException:
-            connection.execute("ROLLBACK")
+            connection.execute("COMMIT")
+        except BaseException as error:
+            try:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+            except BaseException as rollback_error:  # noqa: BLE001 - 保留原始事务异常
+                error.add_note(
+                    "附件 blob catalog 写事务回滚失败；原始事务异常仍优先保留: "
+                    f"{rollback_error!r}"
+                )
+                try:
+                    self.close()
+                except BaseException as close_error:  # noqa: BLE001 - 关闭失败仅附加诊断
+                    error.add_note(
+                        "附件 blob catalog 关闭失败；原始事务异常仍优先保留: "
+                        f"{close_error!r}"
+                    )
             raise
-        connection.execute("COMMIT")
