@@ -528,6 +528,8 @@ target workspace MUST 由单一`InboxAdmissionWorker`恢复未绑定communicatio
 
 后台任务和邮箱 MUST 归属于精确的 `(session_id, thread_id)`，不得只用 Session、可复用的 Agent 名称或内存对象作为 owner。可由 Agent 工具启动的后台任务 MUST 具有版本化 typed 恢复描述和 checkpoint handler；缺少该恢复能力时，任务 MUST 在接受前明确失败。任务创建 MUST 先持久化稳定 `task_id`、handler 及版本、输入身份、状态和初始 checkpoint，再向调用方确认；checkpoint MUST 记录可恢复的 typed 进度与外部操作幂等身份，不得序列化 Python 协程、进程句柄或 compiled graph。backend 重启后 MUST 按最近已提交 checkpoint 恢复同一任务。活动任务的 Thread lease 在任务进入已核实终态或安全挂起状态前 MUST 阻止 Thread idle unload。恢复时若无法确认外部副作用是否已经发生，owner MUST 暴露 `reconcile_required` 并停止自动重放；已有数据缺少可用 handler 或 checkpoint 时 MUST 明确报告中断/待恢复状态，不得伪报成功或静默丢弃。
 
+后台任务和邮箱的权威读写 MUST 复用现有 SessionControlStore 与同一 Session 的 `session-control.sqlite`，按精确 Thread identity 分区并由权威 catalog/resolver 定位。运行时注册表 MUST 只持执行句柄和已提交事实镜像；`agent_id` MAY 作业务 selector，但 MUST NOT 代替 Thread owner。旧 `background_tasks.json` 与无持久 owner 注入的内存 emit 旁路 MUST 物理下线，不保双读、双写或旧数据迁移。现有时间任务 MUST 使用版本化 typed step handler，在同一 SQLite 写事务中提交输出 mailbox 消息及任务 checkpoint；失败 MUST 不留下部分已提交事实，外部执行 MUST NOT 持有数据库事务或 lifecycle gate。
+
 每个 Thread 的 mailbox MUST 保存在该 Thread 的 durable storage owner 中，并由稳定 `message_id`、精确 Thread owner、来源身份、顺序、内容和消费状态组成；存储位置 MUST 通过权威 Session/Thread catalog 与统一 resolver 定位。发送只有在消息已持久接收后才可确认；相同 identity/相同内容的重试 MUST 返回同一消息，不同内容 MUST 明确冲突。目标 Thread 只有在其 checkpoint 或等价的原子消费记录已提交该 `message_id` 后才可确认消费；checkpoint 未提交时允许以同一 identity 重投，已提交时不得再次应用该消息。任务输出和 mailbox 写入之间的崩溃恢复 MUST 复用同一 message identity，不能产生重复逻辑消息。冷 Thread 的任务和 mailbox 读取 MUST 不加载 Agent graph；实际执行或消费消息 MUST 经该 Thread 的 execution admission 创建/恢复唯一 runtime generation，不得回退到 main thread 或向旧 generation 写入。
 
 #### Scenario: 任务创建在确认前已进入持久记录
