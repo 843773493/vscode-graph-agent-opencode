@@ -113,9 +113,18 @@ class AttachmentBlobCatalog(IngestMixin, BlobsMixin, QueriesMixin):
         self._connection = connection
         try:
             self._initialize(connection)
-        except BaseException:
-            connection.close()
-            self._connection = None
+        except BaseException as error:
+            try:
+                connection.close()
+            except BaseException as close_error:  # noqa: BLE001 - 保留原始初始化异常
+                self._connection = None
+                self._closed = True
+                error.add_note(
+                    "附件 blob catalog 初始化失败后连接关闭失败；原始初始化异常仍优先保留: "
+                    f"{close_error!r}"
+                )
+            else:
+                self._connection = None
             raise
         return connection
 
