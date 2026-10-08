@@ -121,8 +121,14 @@ async def dial_spoke_channel(
             ),
             handler=handler,
         )
-    except Exception:
-        await connection.close()
+    except BaseException as error:
+        try:
+            await connection.close()
+        except BaseException as close_error:  # noqa: BLE001 - cleanup 不得覆盖原异常或取消
+            error.add_note(
+                "关闭握手未完成的联邦连接时再次失败："
+                f"{type(close_error).__name__}: {close_error}"
+            )
         raise
     session.start()
     return session
