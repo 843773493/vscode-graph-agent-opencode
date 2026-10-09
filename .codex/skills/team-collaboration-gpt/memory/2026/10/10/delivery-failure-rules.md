@@ -1,4 +1,4 @@
-027派单纠正：026浏览器代表入口完整但Pythonsample漏owner_preimage_sha256（actual1/59.708s）；025此前漏client_sequence，说明作者只补报错key，主又用单次smoke→STOP边界放大交接。现在同作者盘齐整个producer/projection/Python minimal/full字段，一次改齐后集中调试，再整体STOP；不逐字段冻结、倒填默认或放宽原断言。旧失败保留，效果待027真实整体交付。
+027派单纠正及实测：026浏览器代表入口完整但Pythonsample漏owner_preimage_sha256（actual1/59.708s）；025此前漏client_sequence，作者逐key补漏，主逐字段STOP交接又放大返工。同Sol盘齐producer/projection/Python minimal/full全部字段，统一转发31项真实facts后集中调试。027首轮actual1/43.552s不再漏字段，但全局UI在已完成屏障后被另一operation更新，末断言跨工具往返读到更晚忙碌状态。改为同一有界浏览器任务联合等真实完成→原双rAF→捕获不可变text/count/page时间快照；双rAF末仍忙则在原deadline继续等待，末断言只核该结束时刻，额外诊断不计elapsed。第二轮actual0/40.760s，5file＋2跨页＋2Gateway及完整Python断言通过，整体STOP/固定/机械交付0；效果限输出闭包与代表入口，原full独验仍待。旧失败保原字节，不猜operation、不倒填默认、不延时限或改统计合同。
 
 导航025作者两次受保护minimal实际1/46.334s、1/51.049s。001浏览器5文件＋2跨页＋2Gateway完成，但输出遗漏client_sequence；002发起页全局completionCount可由A完成增加，B仍queued，旧等待穿透。HTTP仅证明A committed、B queued、另一页B committed，不证明同operation状态倒退。025STOP/raw/四SHA/PGID0已保；同Sol026联合等真实UI文本与计数、保双rAF/elapsed/原规模，效果待运行，不交独审代调试。
 
