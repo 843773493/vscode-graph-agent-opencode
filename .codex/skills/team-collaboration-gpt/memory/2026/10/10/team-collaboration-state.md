@@ -9,7 +9,7 @@
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8必要生产/调用/fixture/E2E完整闭包一次收齐，正在现有copy/attachment owner的capture→claim→settlement→恢复/删除协议；不微交接、不跑半成品矩阵 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **055 active/NWT三个测试消费者**：提前装真实DOM观察、按真实op保存双rAF快照、接通消费/输出与计时/FS窗口；静态后最多2次protected原minimal，再整体STOP |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **054 STOP/常驻独审**：已核原合同和052失败；待055固定后只审真实增量，不测试或写源码 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **057 STOP/常驻审查**：056固定19源字段表＋057四callee已交付；主核机器SHA/bytes，将可用事实写回既有design/AGENTS；原1.5–1.7未整体闭合 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **058 STOP/常驻审查**：056/057字段表已写回design/AGENTS；058固定66源＋7callee metadata审计无确证finding，主核SHA/bytes；原1.5–1.7未整体闭合 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **041 full STOP、未启动**：started=false、无PID/actual/raw，主核owned0并撤alias；055固定及独审关闭后才派唯一原full |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
@@ -19,7 +19,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`3366b5e5a4b17d40ecd6baa3731f21ee5259c1d0`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 恢复核实际HEAD；最近已核文档提交`8c17f0cde6e02a37fdb3a19608d48e004481f37a`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
 - 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
 - NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 short alias `ROOT/out/.navigation055-tmp`→该目录runtime/navigation-author055/tmp。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
@@ -46,7 +46,9 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 - 054按design1133/10.4b纠正主先前过严门：通用文案不必持续到迟到消费，但历史callback不能证明React完成DOM；完成callback后92.7ms新queued，无同期DOM事实。真正观察缺口是多个await后才装等待器。报告`RV/a06_navigation_independent/artifacts/navigation-dom052-timing054-review/report.json` SHA2db388e2。原041报告/052失败保留，不改生产迎合错误门。
 - 055 lease/report根=`RV/candidate_boundary_reviewer/artifacts/navigation-dom055-observer-closure/`；index=`RV/candidate_boundary_reviewer/git/navigation-dom055-observer-closure.idx`已init ae680。仅NWT原MJS/harness.tsx/Python三消费者写权限。mount提前持续DOM观察，唯一真实terminal/count归属，DOM提交后即时双rAF/op快照，迟到消费只核保存快照；计时取真实端点/核同机时间域，650ms从端点并行计，真实发起页目标可见仍实际验。queryHolds full分支不改；不造业务事实/新性能门。实现完整caller/输出后最多2次protected原minimal，再整体STOP，机器raw/actual/argv/time/source17/PID与短报告；原规模full只在固定独审关闭后唯一运行。
 
-052主核收据=`RV/coordinator/artifacts/navigation-dom052-provenance/verified-attempt002.json`；055方案/clock映射尚未实测，不记有效。NWT与ROOT不整树相同：旧文档和已接受034/035/036 owner差异逐路径deferred；.venv/node_modules是生成依赖，不声明源码deferred。
+055 attempt001实际已结束：工具2026-10-09T21:56:53.782Z返回actual1/pytest51.23s，MJS1376 `sample`块作用域错误；作者恢复时漏读终态并把session_id18014交wait，误报无法恢复。主从原rollout恢复具名终态/工具转录与browser raw，保`RV/coordinator/artifacts/navigation055-attempt001-recovered/`；不补造未采集pretest指纹。已通知同作者修完整调用方后只用原第2次protected minimal，启动前机器source17、raw直接落盘、结束actual；效果仍待。PID1971848/PGID主核成员0，alias待整体STOP再撤。作者另漏一次ROOT裸status，主核共享index原字节，incident保`navigation055-boundary-receipt`，禁Git继续。
+
+052主核收据=`RV/coordinator/artifacts/navigation-dom052-provenance/verified-attempt002.json`；055方案/clock映射尚未通过原minimal，不记有效。NWT与ROOT不整树相同：旧文档和已接受034/035/036 owner差异逐路径deferred；.venv/node_modules是生成依赖，不声明源码deferred。
 
 ## 已接受实现与余下原门
 
@@ -64,6 +66,8 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 | N04–N16 | 各窄错误/关闭/取消清理合同已接受，不外推完整联邦生命周期 |
 
 itemized目前56/89。原7.5-F架构材料已对表，原8.4三节点46pass已闭合；均不代整个7.5/8。049/053只支持原1.5–1.7局部：最新053核E六具名收据，H4 current002与admission单测、迁移47/64窄原子有限复用；字段owner映射/metadata决策审计/旧v2原件拒绝、逐例typed矩阵、notice Web/checkpoint与admission durable→intent CAS崩溃/hash分域复合門尚未完整对表。不推实现缺失；050结束后同Sol收齐，不再泛查旧A02。
+
+056/057固定23源已核字段owner/type/wire/manifest/异常事实并写design/AGENTS，8c17文档集成strict/guard0；API/Proto mapper、逐字段中文注释与writer全映射仍有未核边界。058固定66Python＋7callee审计按LangChain ingress/typed mirror、版本注解、checkpoint/session控制、provider wire、v1 importer分类，无确证canonical自由metadata决策finding；主固定全仓符号检索仅见`LangChainMessageCodec.turn_id`两测试caller，不据此推死代码或生产事故。主收据`RV/coordinator/artifacts/metadata058-source-review/receipt.json`。均不代live050或1.5–1.7整体验收。
 
 原core清单=E/navigation-index-only-10-3/remaining-original-goal.json；原ledger=E/a06-final-task-evidence-ledger.json；E=T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries。原accepted证据按具名收据及实际依赖复用，失败124等不改写为绿。
 

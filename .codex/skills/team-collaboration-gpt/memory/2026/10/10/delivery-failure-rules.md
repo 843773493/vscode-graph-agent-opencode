@@ -312,3 +312,5 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 052首次只callback加DOM门minimal0/47.18s，复核发现双rAF可从queued状态开始；补原启动前条件后002真实1/77.14s，5串行文件完成、首跨页30s超时/Gateway0。旧raw保真，不用放松门或再跑长矩阵补救；054仅用现有失败核观察是否在操作完成后才迟到安装、真实DOM与回调事件及原合同，尚无修法有效结论。首次report两条手抄SHA缺位已主机器查出，只作转录纠正不判源码漂移；沿既有程序计算规则执行，不另增通用规则。
 
 054纠正：design1133/10.4b只要求真实动作至渲染后UI确认，没有通用文案须持续到迟到读取的合同；主先前沿旧predicate补此门过严。现有callback完成后92.7ms新queued并不能证明期间DOM，真正证据缺口是操作后才安装观察且只有事件。055沿三个测试callee操作前持续DOM观察、即时双rAF/op快照与真实端点计时，原失败/审查保留，clock映射与效果待本次真实入口验证；不让错误门驱动生产改造。回报引用程序actual/manifest/raw，避免手抄机器字段及重复长历史。
+
+055首次minimal实际1/51.23s，MJS `sample`块作用域错误；纯Transpiler解析未捕获该运行错误。作者恢复时漏读已返回终态，又把session_id18014交functions.wait，误报无法恢复。主精确解码原rollout终态，保工具转录和正式browser raw，不重跑坏候选、不造pretest指纹。改为区分session/cell handle，并在进程内直接落本attempt raw/source/actual；同作者集中修调用方后原第2次minimal验证，效果待收。裸status越界另有incident，共享index原字节；不据无损结果认可越界，不追加同义禁令。
