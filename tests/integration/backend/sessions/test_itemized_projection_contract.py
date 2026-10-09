@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.core.checkpoint_config import build_checkpoint_config
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
+from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import (
     canonical_json_bytes,
     contribution_content_hash,
@@ -213,7 +214,9 @@ def test_unsealed_saver_plan_cannot_enter_any_projection(projection_saver) -> No
         saver.project_context_plan_to_native,
     ):
         with pytest.raises(ValueError, match="未 sealed"):
-            projector(session_id, saver._storage.storage.main_thread_id(session_id), draft)
+            projector(
+                session_id, saver._storage.storage.main_thread_id(session_id), draft
+            )
 
 
 @pytest.mark.parametrize(
@@ -253,7 +256,9 @@ def test_omission_keeps_selection_without_resolving_body_or_tools(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
         draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(
             session_id,
@@ -339,42 +344,545 @@ def test_persisted_manifest_mismatch_rejects_every_projection(
                 (RuntimeError, ValueError), match="不一致|mismatch|manifest"
             ):
                 projector(session_id, plan.thread_id, plan)
+        with pytest.raises(
+            (RuntimeError, ValueError), match="不一致|mismatch|manifest"
+        ):
+            restarted.project_context_plan_to_provider(
+                session_id, plan.thread_id, plan, target_format="chat_completions"
+            )
 
 
-@pytest.mark.parametrize("damage", ["missing", "body", "hash", "revision", "length"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "unreadable",
+        "no_body",
+        "body",
+        "hash",
+        "revision",
+        "length",
+        "protection",
+        "owner",
+        "manifest",
+    ],
+)
 def test_missing_or_changed_sealed_detail_cannot_fall_back_to_inline_body(
     projection_saver,
-    projection_plan,
+    projection_draft,
     damage: str,
 ) -> None:
     saver, session_id, session = projection_saver
-    plan = projection_plan.as_sealed_plan()
-    detail = plan.selection[1].detail_ref
+    draft, bodies = projection_draft
+    draft = replace(
+        draft,
+        refs=tuple(
+            replace(ref, protection="protected") if ref.ref_id == "plain-ref" else ref
+            for ref in draft.refs
+        ),
+    )
+    draft = register_projection_draft(saver, session_id, draft)
+    plan = saver.seal_context_plan(
+        session_id,
+        draft.thread_id,
+        draft,
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
+        turn_id="turn-1",
+        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        provider_version="contract-provider",
+        request_only_content=bodies,
+    ).as_sealed_plan()
+    detail = plan.selection[2].detail_ref
     target = session / detail_relative_path(detail)
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        before_assemblies = connection.execute(
+            "SELECT COUNT(*) FROM context_assemblies"
+        ).fetchone()
+        before_details = connection.execute(
+            "SELECT detail_ref FROM context_plan_details ORDER BY detail_ref"
+        ).fetchall()
+    original_mode = target.stat().st_mode & 0o777
     if damage == "missing":
         target.unlink()
+    elif damage == "unreadable":
+        target.chmod(0)
+    elif damage == "manifest":
+        with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+            connection.execute(
+                "UPDATE context_plan_details SET source_revision = ? WHERE detail_ref = ?",
+                ("wrong-manifest-revision", detail_ref_key(detail)),
+            )
     else:
         payload = json.loads(target.read_text(encoding="utf-8"))
         field, value = {
+            "no_body": ("detail", None),
             "body": ("detail", "被覆盖的正文"),
             "hash": ("detail_content_hash", "sha256:jcs:v1:" + "0" * 64),
             "revision": ("source_revision", "different-revision"),
             "length": ("length", 1),
+            "protection": ("protection", "public"),
+            "owner": ("detail_ref", {**detail.to_dict(), "session_id": "other-owner"}),
         }[damage]
         payload[field] = value
+        if damage == "protection":
+            payload["sensitive"] = False
         target.write_bytes(canonical_json_bytes(payload))
+    try:
+        with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
+            for projector in (
+                restarted.project_context_plan_to_messages,
+                restarted.project_context_plan_to_native,
+            ):
+                with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
+                    projector(session_id, plan.thread_id, plan)
+            with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
+                restarted.project_context_plan_to_provider(
+                    session_id, plan.thread_id, plan, target_format="chat_completions"
+                )
+            next_draft = replace(
+                draft,
+                plan_id=f"required-recovery-{damage}",
+                contributions=(),
+                tool_set_refs=(),
+                refs=(
+                    replace(
+                        plan.selection[2].ref,
+                        plan_id=f"required-recovery-{damage}",
+                        ref_id="recover-required-plain",
+                        source_ref=detail,
+                    ),
+                ),
+            )
+            next_draft = register_projection_draft(restarted, session_id, next_draft)
+            with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
+                restarted.seal_context_plan(
+                    session_id,
+                    plan.thread_id,
+                    next_draft,
+                    wire_profile=None,
+                    wire_params=None,
+                    seal_idempotency_key=f"seal:{next_draft.plan_id}",
+                    turn_id="turn-1",
+                    execution_id=restarted.execution_for_turn(
+                        session_id, turn_id="turn-1"
+                    ),
+                    provider_version="contract-provider",
+                )
+            assert (
+                restarted._find_runtime_context_plan(
+                    session_id, plan.thread_id, next_draft.plan_id, ""
+                ).plan_state
+                == "unsealed"
+            )
+            assert restarted._prepared_dispatches == {}
+            with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM context_assemblies"
+                    ).fetchone()
+                    == before_assemblies
+                )
+                assert (
+                    connection.execute(
+                        "SELECT detail_ref FROM context_plan_details ORDER BY detail_ref"
+                    ).fetchall()
+                    == before_details
+                )
+            # 正文损坏不影响只读 canonical history；registry manifest 损坏必须连 history 一起拒绝。
+            if damage == "manifest":
+                with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
+                    restarted.project_context_plan_to_history(
+                        session_id, plan.thread_id, plan
+                    )
+            else:
+                history = restarted.project_context_plan_to_history(
+                    session_id, plan.thread_id, plan
+                )
+                assert [message.id for message in history] == ["answer-1", "user-1"]
+    finally:
+        if damage == "unreadable":
+            target.chmod(original_mode)
+
+
+@pytest.mark.parametrize("target_format", ["chat_completions", "responses"])
+@pytest.mark.parametrize("damage", ["missing", "unreadable", "protection", "manifest"])
+def test_required_detail_failure_blocks_prepared_dispatch(
+    projection_saver,
+    overlay_source,
+    frozen_provider_wire,
+    frozen_provider_activation,
+    target_format: str,
+    damage: str,
+) -> None:
+    saver, session_id, session = projection_saver
+    thread = saver._storage.storage.main_thread_id(session_id)
+    execution_id = saver.execution_for_turn(session_id, turn_id="turn-1")
+    key = f"required-provider-{target_format}-{damage}:create"
+    arguments = {
+        "turn_id": "turn-1",
+        "execution_id": execution_id,
+        "plan_creation_idempotency_key": key,
+        "seal_idempotency_key": f"seal:{key}",
+        "tool_set_supplier": lambda: EMPTY_TOOL_SET,
+        **frozen_provider_wire("contract-provider", target_format),
+        **frozen_provider_activation(saver, plan_creation_idempotency_key=key),
+    }
+    manager = ContextSourceManager(
+        owner=ContextSourceOwnerKey(session_id, thread),
+        control_state_port=saver,
+    )
+    prepared = saver.prepare_context_for_provider(
+        session_id,
+        thread,
+        context_source_manager=manager,
+        **arguments,
+    )
+    snapshot = prepared["snapshot"]
+    assert snapshot.seal_binding is not None
+    entry = next(
+        entry for entry in snapshot.selection if entry.ref.ref_type == "request_only"
+    )
+    target = session / detail_relative_path(entry.detail_ref)
+    original_mode = target.stat().st_mode & 0o777
+    before_jsonl = saver._storage.storage.jsonl_path(session_id).read_bytes()
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        before_assemblies = connection.execute(
+            "SELECT COUNT(*) FROM context_assemblies"
+        ).fetchone()
+        before_details = connection.execute(
+            "SELECT detail_ref FROM context_plan_details ORDER BY detail_ref"
+        ).fetchall()
+    saver.discard_prepared_context_for_dispatch(
+        session_id,
+        thread,
+        execution_id=execution_id,
+        assembly_id=snapshot.assembly_id,
+    )
+    assert saver._prepared_dispatches == {}
+    if damage == "missing":
+        target.unlink()
+    elif damage == "unreadable":
+        target.chmod(0)
+    elif damage == "manifest":
+        with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+            connection.execute(
+                "UPDATE context_plan_details SET source_revision = ? WHERE detail_ref = ?",
+                ("wrong-manifest-revision", detail_ref_key(entry.detail_ref)),
+            )
+    else:
+        payload = json.loads(target.read_bytes())
+        payload.update(protection="protected", sensitive=True)
+        target.write_bytes(canonical_json_bytes(payload))
+    try:
+        with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
+            manager = ContextSourceManager(
+                owner=ContextSourceOwnerKey(session_id, thread),
+                control_state_port=restarted,
+            )
+            # 复用真实 wire/epoch/activation binding，拒绝必须发生在 prepare 内而非 fixture 求值。
+            with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
+                restarted.prepare_context_for_provider(
+                    session_id,
+                    thread,
+                    context_source_manager=manager,
+                    **arguments,
+                )
+            assert restarted._prepared_dispatches == {}
+            assert (
+                restarted.consume_prepared_context_for_dispatch(
+                    session_id,
+                    thread,
+                    execution_id=execution_id,
+                )
+                is None
+            )
+            assert (
+                restarted._storage.storage.jsonl_path(session_id).read_bytes()
+                == before_jsonl
+            )
+            with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+                assert (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM context_assemblies"
+                    ).fetchone()
+                    == before_assemblies
+                )
+                assert (
+                    connection.execute(
+                        "SELECT detail_ref FROM context_plan_details ORDER BY detail_ref"
+                    ).fetchall()
+                    == before_details
+                )
+    finally:
+        if damage == "unreadable":
+            target.chmod(original_mode)
+
+
+@pytest.mark.parametrize(
+    "component", ["thread_root", "rollout", "details", "assembly", "leaf"]
+)
+def test_detail_read_rejects_each_symlink_component(
+    projection_saver,
+    projection_plan,
+    component: str,
+) -> None:
+    saver, session_id, session = projection_saver
+    entry = projection_plan.selection[2]
+    target = session / detail_relative_path(entry.detail_ref)
+    node = {
+        "thread_root": session,
+        "rollout": session / "rollout",
+        "details": session / "rollout/context-plan-details",
+        "assembly": target.parent,
+        "leaf": target,
+    }[component]
+    parked = node.with_name(f"{node.name}.contract-original")
+    outside = parked / target.relative_to(node)
+    node.rename(parked)
+    before = outside.read_bytes()
+    node.symlink_to(parked, target_is_directory=parked.is_dir())
+    try:
+        with pytest.raises((RuntimeError, ValueError)):
+            saver.read_context_plan_detail(
+                session_id,
+                projection_plan.thread_id,
+                detail_ref=entry.detail_ref,
+            )
+        assert outside.read_bytes() == before
+    finally:
+        node.unlink()
+        parked.rename(node)
+
+
+def test_detail_realpath_containment_rejects_resolved_escape(
+    projection_saver,
+    projection_plan,
+    projection_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saver, _, session = projection_saver
+    detail = projection_plan.selection[2].detail_ref
+    target = session / detail_relative_path(detail)
+    outside = projection_workspace / "containment-outside.json"
+    outside.write_bytes(b"outside-owner-body")
+    original_resolve = Path.resolve
+
+    # 独立故障注入 realpath 结果；真实 symlink 的逐级拒绝由上面的 OS 文件测试覆盖。
+    def resolve(path: Path, *args, **kwargs) -> Path:
+        return outside if path == target else original_resolve(path, *args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "resolve", resolve)
+            with pytest.raises(RuntimeError, match="越出 session node"):
+                saver._detail_store._files.path(detail)
+        assert outside.read_bytes() == b"outside-owner-body"
+    finally:
+        outside.unlink()
+
+
+@pytest.mark.parametrize("included", [False, True])
+@pytest.mark.parametrize(
+    ("tag", "wrong_ref_type"),
+    [
+        (tag, ref_type)
+        for tag, allowed in (
+            ("canonical_history", "canonical_item"),
+            ("request_only", "request_only"),
+            ("overlay_base", "request_only"),
+            ("overlay_delta", "request_only"),
+            ("tool_set", "tool_set"),
+        )
+        for ref_type in ("canonical_item", "request_only", "tool_set")
+        if ref_type != allowed
+    ],
+)
+def test_invalid_selection_union_is_rejected_in_domain_and_restore(
+    projection_saver,
+    projection_draft,
+    overlay_source,
+    tag: str,
+    wrong_ref_type: str,
+    included: bool,
+) -> None:
+    saver, session_id, session = projection_saver
+    thread = saver._storage.storage.main_thread_id(session_id)
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        thread,
+        plan_id=f"union-{tag}-{wrong_ref_type}-{included}",
+        tool_set=EMPTY_TOOL_SET,
+    )
+    role = {"overlay_base": "base", "overlay_delta": "delta"}.get(tag, "none")
+    target = (
+        draft.tool_set_refs[0]
+        if tag == "tool_set"
+        else next(
+            ref
+            for ref in draft.refs
+            if ref.ref_type
+            == ("canonical_item" if tag == "canonical_history" else "request_only")
+            and ref.base_delta_role == role
+        )
+    )
+    omitted = (
+        ()
+        if included
+        else tuple(
+            ref.ref_id for ref in draft.refs if ref.base_delta_role in {"base", "delta"}
+        )
+        if tag == "overlay_base"
+        else (target.ref_id,)
+    )
+    draft = register_projection_draft(saver, session_id, draft)
+    snapshot = saver.seal_context_plan(
+        session_id,
+        thread,
+        draft,
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
+        turn_id="turn-1",
+        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        provider_version="contract-provider",
+        omitted_ref_ids=omitted,
+    )
+    entry = next(
+        entry for entry in snapshot.selection if entry.ref.ref_id == target.ref_id
+    )
+    assert entry.included == included and entry.selection_kind == tag
+    assert replace(entry) == entry
+    assert _project(saver, session_id, snapshot.assembly_id)["selection"] == [
+        item.to_dict() for item in snapshot.selection
+    ]
+    saver.project_context_plan_to_provider(
+        session_id, thread, snapshot.as_sealed_plan(), target_format="chat_completions"
+    )
+    wrong_ref = next(
+        entry.ref
+        for entry in snapshot.selection
+        if entry.ref.ref_type == wrong_ref_type
+    )
+    # 只替换 union ref，保留真实 seal 分配的必填槽；正对照已经成功构造和投影。
+    with pytest.raises(
+        ItemSchemaError, match="selection/ref_type/base_delta_role 不兼容"
+    ):
+        replace(entry, ref=wrong_ref)
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        cursor = connection.execute(
+            "UPDATE context_assembly_selections SET ref_type = ? "
+            "WHERE assembly_id = ? AND plan_ordinal = ?",
+            (wrong_ref_type, snapshot.assembly_id, entry.plan_ordinal),
+        )
+        assert cursor.rowcount == 1
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         for projector in (
             restarted.project_context_plan_to_messages,
             restarted.project_context_plan_to_native,
+            restarted.project_context_plan_to_history,
         ):
-            with pytest.raises((RuntimeError, ValueError), match="detail|详情"):
-                projector(session_id, plan.thread_id, plan)
-        # 普通历史不读取任何 request-only 详情正文，仍可返回 canonical history。
-        history = restarted.project_context_plan_to_history(
-            session_id, restarted._storage.storage.main_thread_id(session_id), plan
+            with pytest.raises((RuntimeError, ValueError), match="selection manifest"):
+                projector(
+                    session_id,
+                    thread,
+                    snapshot.as_sealed_plan(),
+                )
+        with pytest.raises((RuntimeError, ValueError), match="selection manifest"):
+            restarted.project_context_plan_to_provider(
+                session_id,
+                thread,
+                snapshot.as_sealed_plan(),
+                target_format="chat_completions",
+            )
+
+
+@pytest.mark.parametrize("included", [False, True])
+@pytest.mark.parametrize("tag", ["canonical_history", "tool_set"])
+@pytest.mark.parametrize(
+    "field", ["detail_ref", "contribution_id", "contribution_ordinal"]
+)
+def test_canonical_and_tool_selection_forbid_detail_and_contribution_slots(
+    projection_saver,
+    projection_draft,
+    tag: str,
+    field: str,
+    included: bool,
+) -> None:
+    saver, session_id, session = projection_saver
+    thread = saver._storage.storage.main_thread_id(session_id)
+    draft = saver.compose_committed_context_plan(
+        session_id,
+        thread,
+        plan_id=f"forbidden-{tag}-{field}-{included}",
+        tool_set=EMPTY_TOOL_SET,
+    )
+    target = (
+        draft.tool_set_refs[0]
+        if tag == "tool_set"
+        else next(ref for ref in draft.refs if ref.ref_type == "canonical_item")
+    )
+    draft = register_projection_draft(saver, session_id, draft)
+    snapshot = saver.seal_context_plan(
+        session_id,
+        thread,
+        draft,
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
+        turn_id="turn-1",
+        execution_id=saver.execution_for_turn(session_id, turn_id="turn-1"),
+        provider_version="contract-provider",
+        omitted_ref_ids=() if included else (target.ref_id,),
+    )
+    entry = next(
+        entry for entry in snapshot.selection if entry.ref.ref_id == target.ref_id
+    )
+    assert entry.included == included and replace(entry) == entry
+    assert _project(saver, session_id, snapshot.assembly_id)["selection"] == [
+        item.to_dict() for item in snapshot.selection
+    ]
+    saver.project_context_plan_to_provider(
+        session_id, thread, snapshot.as_sealed_plan(), target_format="chat_completions"
+    )
+    values = {
+        "detail_ref": next(
+            entry.detail_ref
+            for entry in snapshot.selection
+            if entry.detail_ref is not None
+        ),
+        "contribution_id": "forbidden-contribution",
+        "contribution_ordinal": 0,
+    }
+    with pytest.raises(ItemSchemaError):
+        replace(entry, **{field: values[field]})
+    value = detail_ref_key(values[field]) if field == "detail_ref" else values[field]
+    with sqlite3.connect(session / "rollout/index.sqlite") as connection:
+        connection.execute(
+            f"UPDATE context_assembly_selections SET {field} = ? "
+            "WHERE assembly_id = ? AND plan_ordinal = ?",
+            (value, snapshot.assembly_id, entry.plan_ordinal),
         )
-        assert [message.id for message in history] == ["answer-1", "user-1"]
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
+        for projector in (
+            restarted.project_context_plan_to_messages,
+            restarted.project_context_plan_to_native,
+            restarted.project_context_plan_to_history,
+        ):
+            with pytest.raises((RuntimeError, ValueError), match="selection manifest"):
+                projector(
+                    session_id,
+                    thread,
+                    snapshot.as_sealed_plan(),
+                )
+        with pytest.raises((RuntimeError, ValueError), match="selection manifest"):
+            restarted.project_context_plan_to_provider(
+                session_id,
+                thread,
+                snapshot.as_sealed_plan(),
+                target_format="chat_completions",
+            )
 
 
 @pytest.mark.parametrize("field", ["source_revision", "content_length", "content_hash"])
@@ -398,7 +906,9 @@ def test_canonical_source_mismatch_is_rejected_before_seal(
             session_id,
             saver._storage.storage.main_thread_id(session_id),
             draft,
-            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None,
+            wire_params=None,
+            seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
             execution_id=saver.execution_for_turn(
                 session_id,
@@ -436,19 +946,26 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
     )
     thread = saver._storage.storage.main_thread_id(session_id)
     manager = ContextSourceManager(
-        owner=ContextSourceOwnerKey(session_id, thread), control_state_port=saver,
+        owner=ContextSourceOwnerKey(session_id, thread),
+        control_state_port=saver,
     )
     first = saver.prepare_context_for_provider(
-        session_id, thread, turn_id="turn-1",
+        session_id,
+        thread,
+        turn_id="turn-1",
         execution_id=saver.execution_for_turn(
-            session_id, turn_id="turn-1", thread_id=thread,
+            session_id,
+            turn_id="turn-1",
+            thread_id=thread,
         ),
         plan_creation_idempotency_key="overlay-before:create",
         seal_idempotency_key="overlay-before:seal",
-        context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
+        context_source_manager=manager,
+        tool_set_supplier=lambda: EMPTY_TOOL_SET,
         **frozen_provider_wire("contract-provider", "responses"),
         **frozen_provider_activation(
-            saver, plan_creation_idempotency_key="overlay-before:create",
+            saver,
+            plan_creation_idempotency_key="overlay-before:create",
         ),
     )["snapshot"]
     first_result = _project(saver, session_id, first.assembly_id)
@@ -472,19 +989,26 @@ def test_overlay_reuses_source_after_history_rewind_and_restart(
         assert draft.source_overlay_epoch == first.source_overlay_epoch == 0
         thread = restarted._storage.storage.main_thread_id(session_id)
         manager = ContextSourceManager(
-            owner=ContextSourceOwnerKey(session_id, thread), control_state_port=restarted,
+            owner=ContextSourceOwnerKey(session_id, thread),
+            control_state_port=restarted,
         )
         prepared = restarted.prepare_context_for_provider(
-            session_id, thread, turn_id="turn-1",
+            session_id,
+            thread,
+            turn_id="turn-1",
             execution_id=restarted.execution_for_turn(
-                session_id, turn_id="turn-1", thread_id=thread,
+                session_id,
+                turn_id="turn-1",
+                thread_id=thread,
             ),
             plan_creation_idempotency_key="overlay-after:create",
             seal_idempotency_key="overlay-after:seal",
-            context_source_manager=manager, tool_set_supplier=lambda: EMPTY_TOOL_SET,
+            context_source_manager=manager,
+            tool_set_supplier=lambda: EMPTY_TOOL_SET,
             **frozen_provider_wire("contract-provider", "responses"),
             **frozen_provider_activation(
-                restarted, plan_creation_idempotency_key="overlay-after:create",
+                restarted,
+                plan_creation_idempotency_key="overlay-after:create",
             ),
         )
         second = prepared["snapshot"]
@@ -597,7 +1121,9 @@ def test_protected_reasoning_reports_loss_in_all_projections(projection_saver) -
         turn_scope="turn_member",
     )
     saver.append_items(
-        session_id, (opaque,), thread_id=saver._storage.storage.main_thread_id(session_id)
+        session_id,
+        (opaque,),
+        thread_id=saver._storage.storage.main_thread_id(session_id),
     )
     draft = saver.compose_committed_context_plan(
         session_id,
@@ -611,7 +1137,9 @@ def test_protected_reasoning_reports_loss_in_all_projections(projection_saver) -
         session_id,
         saver._storage.storage.main_thread_id(session_id),
         draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(
             session_id,
@@ -656,7 +1184,9 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
                 session_id,
                 saver._storage.storage.main_thread_id(session_id),
                 draft,
-                wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+                wire_profile=None,
+                wire_params=None,
+                seal_idempotency_key=f"seal:{draft.plan_id}",
                 turn_id="turn-1",
                 execution_id=saver.execution_for_turn(
                     session_id,
@@ -671,7 +1201,9 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
         draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(
             session_id,
@@ -697,7 +1229,8 @@ def test_overlay_omission_preserves_role_without_allocating_contribution(
 
 @pytest.mark.parametrize("backed", [False, True])
 def test_sensitive_request_exact_detail_survives_restart(
-    projection_saver, backed: bool,
+    projection_saver,
+    backed: bool,
 ) -> None:
     saver, session_id, session = projection_saver
     thread = saver._storage.storage.main_thread_id(session_id)
@@ -705,40 +1238,61 @@ def test_sensitive_request_exact_detail_survives_restart(
     length = len(canonical_json_bytes(body))
     if backed:
         saver.register_context_contribution(
-            session_id, thread,
+            session_id,
+            thread,
             ContextContribution(
                 contribution_id="protected-contribution",
-                source_kind="protected_source", source_revision="protected-v1",
+                source_kind="protected_source",
+                source_revision="protected-v1",
                 content_hash=contribution_content_hash("prompt", body),
-                content_length=length, protection="protected", extensions={},
+                content_length=length,
+                protection="protected",
+                extensions={},
                 source_binding=SourceBinding(source_ref="source:protected"),
             ),
             request_content=body,
         )
     draft = saver.compose_committed_context_plan(
-        session_id, thread, plan_id="protected-plan", tool_set=EMPTY_TOOL_SET,
+        session_id,
+        thread,
+        plan_id="protected-plan",
+        tool_set=EMPTY_TOOL_SET,
     )
     if not backed:
         ref = ContextRef.request_only_ref(
-            "protected-plan-ref", session_id=session_id, thread_id=thread,
-            plan_id=draft.plan_id, source_revision="protected-v1",
-            content_length=length, content_hash_value=sha256_jcs(body),
-            protection="protected", payload_kind="structured_content",
+            "protected-plan-ref",
+            session_id=session_id,
+            thread_id=thread,
+            plan_id=draft.plan_id,
+            source_revision="protected-v1",
+            content_length=length,
+            content_hash_value=sha256_jcs(body),
+            protection="protected",
+            payload_kind="structured_content",
             source_ref="source:protected",
         )
         draft = replace(draft, refs=(*draft.refs, ref))
     draft = register_projection_draft(saver, session_id, draft)
     snapshot = saver.seal_context_plan(
-        session_id, thread, draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
-        turn_id="turn-1", execution_id=saver.execution_for_turn(
-            session_id, turn_id="turn-1", thread_id=thread,
+        session_id,
+        thread,
+        draft,
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
+        turn_id="turn-1",
+        execution_id=saver.execution_for_turn(
+            session_id,
+            turn_id="turn-1",
+            thread_id=thread,
         ),
         provider_version="contract-provider",
         request_only_content={"protected-plan-ref": body} if not backed else None,
     )
     snapshot.validate_hashes()
-    entry = next(entry for entry in snapshot.selection if entry.ref.ref_type == "request_only")
+    entry = next(
+        entry for entry in snapshot.selection if entry.ref.ref_type == "request_only"
+    )
     assert entry.content_hash == (
         contribution_content_hash("prompt", body) if backed else sha256_jcs(body)
     )
@@ -751,21 +1305,38 @@ def test_sensitive_request_exact_detail_survives_restart(
     assert exact["detail_content_hash"] == sha256_jcs(body)
     assert exact["detail_ref"] == entry.detail_ref.to_dict()
     assert tuple(target.parent.iterdir()) == (target,)
-    assert not any(path.name in {
-        ".context-detail-key", ".context-redaction-key", "context-plan-details-protected",
-    } for path in session.rglob("*"))
+    assert not any(
+        path.name
+        in {
+            ".context-detail-key",
+            ".context-redaction-key",
+            "context-plan-details-protected",
+        }
+        for path in session.rglob("*")
+    )
     before = _project(saver, session_id, snapshot.assembly_id)
     assert "protected-source-only-42" in json.dumps(before["native"]["request"])
     assert "protected-source-only-42" not in json.dumps(before["history"])
     assert len(before["history"]) == 2
-    assert b"protected-source-only-42" not in (session / "rollout/index.sqlite").read_bytes()
+    assert (
+        b"protected-source-only-42"
+        not in (session / "rollout/index.sqlite").read_bytes()
+    )
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as restarted:
         assert _project(restarted, session_id, snapshot.assembly_id) == before
         with pytest.raises(PermissionError, match="未授权读取"):
-            restarted.read_context_plan_detail(session_id, thread, detail_ref=entry.detail_ref)
-        assert restarted.read_context_plan_detail(
-            session_id, thread, detail_ref=entry.detail_ref, include_sensitive=True,
-        )["detail"] == body
+            restarted.read_context_plan_detail(
+                session_id, thread, detail_ref=entry.detail_ref
+            )
+        assert (
+            restarted.read_context_plan_detail(
+                session_id,
+                thread,
+                detail_ref=entry.detail_ref,
+                include_sensitive=True,
+            )["detail"]
+            == body
+        )
 
 
 @pytest.mark.parametrize("damage", ["content_hash", "content_length"])
@@ -786,7 +1357,9 @@ def test_invalid_request_body_does_not_leave_partial_seal_details(
             session_id,
             saver._storage.storage.main_thread_id(session_id),
             draft,
-            wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+            wire_profile=None,
+            wire_params=None,
+            seal_idempotency_key=f"seal:{draft.plan_id}",
             turn_id="turn-1",
             execution_id=saver.execution_for_turn(
                 session_id,
@@ -854,7 +1427,9 @@ def test_native_tool_calls_and_results_keep_saver_selection_order(
         session_id,
         saver._storage.storage.main_thread_id(session_id),
         draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(
             session_id,
@@ -877,10 +1452,9 @@ def test_native_tool_calls_and_results_keep_saver_selection_order(
     assert result["messages"][-2]["tool_calls"][0]["id"] == call["call_id"]
     assert result["messages"][-1]["tool_call_id"] == output["call_id"]
     assert result["history"] == result["messages"]
-    assert [
-        source["plan_ordinal"] for source in result["native"]["wire_sources"]
-    ] == [
-        entry.plan_ordinal for entry in snapshot.selection
+    assert [source["plan_ordinal"] for source in result["native"]["wire_sources"]] == [
+        entry.plan_ordinal
+        for entry in snapshot.selection
         if entry.included and entry.ref.ref_type == "canonical_item"
     ]
     assert len(snapshot.tool_set_refs) == 1 and snapshot.tool_set_refs[0].tools == ()
@@ -914,7 +1488,9 @@ def test_toolset_manifest_keeps_one_plan_across_wire_formats(projection_saver) -
         session_id,
         saver._storage.storage.main_thread_id(session_id),
         draft,
-        wire_profile=None, wire_params=None, seal_idempotency_key=f"seal:{draft.plan_id}",
+        wire_profile=None,
+        wire_params=None,
+        seal_idempotency_key=f"seal:{draft.plan_id}",
         turn_id="turn-1",
         execution_id=saver.execution_for_turn(
             session_id,
