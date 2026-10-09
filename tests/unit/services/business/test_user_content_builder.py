@@ -34,12 +34,12 @@ def _build_user_content(
     ).content
 
 
-def test_user_content_builder_converts_workspace_image_attachment(tmp_path, monkeypatch):
+def test_user_content_builder_converts_workspace_image_attachment(workspace_scope):
     """图片附件应被转换成 OpenAI-compatible image_url content block。"""
-    image_path = tmp_path / "assets" / "test.jpg"
-    image_path.parent.mkdir(parents=True)
+    workspace_root = workspace_scope[1]
+    image_path = workspace_root / "assets" / "test.jpg"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(_image_bytes("JPEG", (1600, 900)))
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     content = _build_user_content(
         "请描述图片",
@@ -72,7 +72,7 @@ def test_user_content_builder_converts_workspace_image_attachment(tmp_path, monk
     assert len(preview_bytes) < len(image_path.read_bytes())
 
 
-def test_user_content_builder_rejects_unpersisted_inline_image():
+def test_user_content_builder_rejects_unpersisted_inline_image(workspace_scope):
     """Agent 运行时只接受已经持久化的附件定位符。"""
     data_url = "data:image/jpeg;base64,/9j/2Q=="
 
@@ -87,19 +87,18 @@ def test_user_content_builder_rejects_unpersisted_inline_image():
                     data_url=data_url,
                 )
             ],
+            workspace_root=workspace_scope[1],
         )
 
 
 def test_user_content_builder_converts_workspace_video_attachment_to_frames(
-    tmp_path, monkeypatch
+    workspace_scope,
 ):
     """视频附件应被转换成按时间顺序排列的 image_url 关键帧块。"""
     if shutil.which("ffmpeg") is None:
         pytest.skip("需要 ffmpeg 才能验证视频抽帧")
 
-    # 真实 mp4 是只读模板资源，必须复制到隔离工作区再使用；直接把
-    # WORKSPACE_ROOT 指向 fixture 源目录会让产品路径在只读模板上初始化
-    # .boxteam/navigation 的 SQLite 并改写受版本控制的文件。
+    # 真实 mp4 是只读模板资源，必须复制到隔离工作区再使用。
     video_source = (
         Path.cwd()
         / "tests"
@@ -109,10 +108,10 @@ def test_user_content_builder_converts_workspace_video_attachment_to_frames(
         / "assets"
         / "multimodal-test.mp4"
     )
-    assets = tmp_path / "assets"
-    assets.mkdir()
+    workspace_root = workspace_scope[1]
+    assets = workspace_root / "assets"
+    assets.mkdir(exist_ok=True)
     shutil.copy2(video_source, assets / "multimodal-test.mp4")
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     content = _build_user_content(
         "请描述视频",

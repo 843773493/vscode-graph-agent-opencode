@@ -206,7 +206,7 @@ afterEach(() => {
 });
 
 describe("Gateway 工作区排序", () => {
-  test("活动工作区为空时回退到上一个活动工作区并保留原工作区元数据", async () => {
+  test("活动工作区为空时清空原工作区身份与元数据", async () => {
     const reorder = spyOnGatewayApi("reorderGatewayWorkspaces").mockResolvedValue(
       workspaceList(null, [
         gatewayWorkspace({ workspace_id: "ws-1", name: "工作区一" }),
@@ -214,7 +214,6 @@ describe("Gateway 工作区排序", () => {
       ]),
     );
     const list = spyOnGatewayApi("listGatewayWorkspaces");
-    // 回退目标不在返回列表里，用于确认根路径与名称确实沿用 prev。
     const { hook, state } = await mountHook(appState({
       activeGatewayWorkspaceId: "ws-fallback",
       workspaceRoot: "/tmp/fallback-root",
@@ -226,9 +225,9 @@ describe("Gateway 工作区排序", () => {
     expect(reorder).toHaveBeenCalledWith(API_PORT, { workspace_ids: ["ws-2", "ws-1"] });
     expect(list).not.toHaveBeenCalled();
     const next = state();
-    expect(next.activeGatewayWorkspaceId).toBe("ws-fallback");
-    expect(next.workspaceRoot).toBe("/tmp/fallback-root");
-    expect(next.workspaceName).toBe("回退工作区");
+    expect(next.activeGatewayWorkspaceId).toBeNull();
+    expect(next.workspaceRoot).toBeNull();
+    expect(next.workspaceName).toBeNull();
     expect(next.gatewayWorkspaces.map((item) => item.workspace_id)).toEqual(["ws-1", "ws-2"]);
     expect(next.status).toBe("工作区顺序已更新");
   });

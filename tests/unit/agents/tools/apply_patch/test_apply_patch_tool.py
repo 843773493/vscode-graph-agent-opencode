@@ -85,10 +85,9 @@ def test_apply_patch_schema_matches_vscode_required_parameters() -> None:
 
 
 def test_apply_patch_add_update_delete_and_records_paths(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    workspace_root = workspace_scope[1]
 
     result = _apply(
         """*** Begin Patch
@@ -99,7 +98,7 @@ def test_apply_patch_add_update_delete_and_records_paths(
 *** End Patch"""
     )
     assert result["status"] == "success"
-    assert (tmp_path / "src" / "demo.txt").read_text(encoding="utf-8") == "one\nold\nthree"
+    assert (workspace_root / "src" / "demo.txt").read_text(encoding="utf-8") == "one\nold\nthree"
 
     update_patch = """*** Begin Patch
 *** Update File: src/demo.txt
@@ -111,20 +110,19 @@ def test_apply_patch_add_update_delete_and_records_paths(
 *** End Patch"""
     assert extract_apply_patch_file_paths(update_patch) == ["src/demo.txt"]
     _apply(update_patch)
-    assert (tmp_path / "src" / "demo.txt").read_text(encoding="utf-8") == "one\nnew\nthree"
+    assert (workspace_root / "src" / "demo.txt").read_text(encoding="utf-8") == "one\nnew\nthree"
 
     _apply("""*** Begin Patch
 *** Delete File: src/demo.txt
 *** End Patch""")
-    assert not (tmp_path / "src" / "demo.txt").exists()
+    assert not (workspace_root / "src" / "demo.txt").exists()
 
 
 def test_apply_patch_uses_multiple_hints_to_target_repeated_code(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "service.py"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "service.py"
     target.write_text(
         """class First:
     def run(self):
@@ -154,11 +152,10 @@ class Second:
 
 
 def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "copy.txt"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "copy.txt"
     target.write_text("title — old   \nnext\n", encoding="utf-8")
 
     result = _apply(
@@ -176,11 +173,10 @@ def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
 
 
 def test_apply_patch_uses_edit_distance_for_conservative_context_match(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "fuzzy.txt"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "fuzzy.txt"
     target.write_text("first\nsecond\nthird\n", encoding="utf-8")
 
     result = _apply(
@@ -199,11 +195,10 @@ def test_apply_patch_uses_edit_distance_for_conservative_context_match(
 
 
 def test_apply_patch_normalizes_explicit_tab_prefixes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "tabs.py"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "tabs.py"
     target.write_text("def value():\n\treturn 1\n", encoding="utf-8")
 
     result = _apply(
@@ -221,11 +216,10 @@ def test_apply_patch_normalizes_explicit_tab_prefixes(
 
 
 def test_apply_patch_end_of_file_prefers_last_matching_context(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "values.txt"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "values.txt"
     target.write_text("item\nitem", encoding="utf-8")
 
     _apply(
@@ -242,13 +236,12 @@ def test_apply_patch_end_of_file_prefers_last_matching_context(
 
 
 def test_apply_patch_multi_file_move_overwrites_target(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    (tmp_path / "old.txt").write_text("old\n", encoding="utf-8")
-    (tmp_path / "target.txt").write_text("replace me\n", encoding="utf-8")
-    (tmp_path / "delete.txt").write_text("delete\n", encoding="utf-8")
+    workspace_root = workspace_scope[1]
+    (workspace_root / "old.txt").write_text("old\n", encoding="utf-8")
+    (workspace_root / "target.txt").write_text("replace me\n", encoding="utf-8")
+    (workspace_root / "delete.txt").write_text("delete\n", encoding="utf-8")
 
     result = _apply(
         """*** Begin Patch
@@ -263,10 +256,10 @@ def test_apply_patch_multi_file_move_overwrites_target(
 *** End Patch"""
     )
 
-    assert not (tmp_path / "old.txt").exists()
-    assert not (tmp_path / "delete.txt").exists()
-    assert (tmp_path / "target.txt").read_text(encoding="utf-8") == "moved\n"
-    assert (tmp_path / "created.txt").read_text(encoding="utf-8") == "created"
+    assert not (workspace_root / "old.txt").exists()
+    assert not (workspace_root / "delete.txt").exists()
+    assert (workspace_root / "target.txt").read_text(encoding="utf-8") == "moved\n"
+    assert (workspace_root / "created.txt").read_text(encoding="utf-8") == "created"
     assert result["files"] == [
         {"path": "old.txt", "operation": "move"},
         {"path": "target.txt", "operation": "move"},
@@ -276,12 +269,11 @@ def test_apply_patch_multi_file_move_overwrites_target(
 
 
 def test_apply_patch_invalid_later_file_leaves_all_files_unchanged(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    first = tmp_path / "first.txt"
-    second = tmp_path / "second.txt"
+    workspace_root = workspace_scope[1]
+    first = workspace_root / "first.txt"
+    second = workspace_root / "second.txt"
     first.write_text("first\n", encoding="utf-8")
     second.write_text("second\n", encoding="utf-8")
 
@@ -304,10 +296,10 @@ def test_apply_patch_invalid_later_file_leaves_all_files_unchanged(
 
 
 def test_apply_patch_rolls_back_when_filesystem_write_fails_mid_commit(
-    tmp_path: Path,
+    workspace_scope: tuple[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    workspace_root = workspace_scope[1]
     real_replace = apply_patch_executor.os.replace
     replace_calls = 0
 
@@ -329,16 +321,15 @@ def test_apply_patch_rolls_back_when_filesystem_write_fails_mid_commit(
 *** End Patch"""
         )
 
-    assert not (tmp_path / "first-created.txt").exists()
-    assert not (tmp_path / "second-created.txt").exists()
+    assert not (workspace_root / "first-created.txt").exists()
+    assert not (workspace_root / "second-created.txt").exists()
 
 
 def test_apply_patch_accepts_missing_end_marker_like_vscode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "value.txt"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "value.txt"
     target.write_text("before\n", encoding="utf-8")
 
     _apply("""*** Begin Patch
@@ -351,11 +342,10 @@ def test_apply_patch_accepts_missing_end_marker_like_vscode(
 
 
 def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    (tmp_path / "same.txt").write_text("same\n", encoding="utf-8")
+    workspace_root = workspace_scope[1]
+    (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
 
     with pytest.raises(DiffError, match="Duplicate Path"):
         _apply(
@@ -381,7 +371,7 @@ def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
 
     # 工作区外的宿主机绝对路径不会逃出工作区，而是被收敛到工作区内；
     # 文件不会写到工作区外。
-    outside_file = (tmp_path.parent / "outside.txt").resolve()
+    outside_file = (workspace_root.parent / "outside.txt").resolve()
     _apply(
         f"""*** Begin Patch
 *** Add File: {outside_file}
@@ -392,11 +382,10 @@ def test_apply_patch_rejects_duplicate_paths_and_escapes_workspace(
 
 
 def test_apply_patch_normalizes_in_workspace_absolute_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    absolute_inside = (tmp_path / "src" / "abs.txt").resolve()
+    workspace_root = workspace_scope[1]
+    absolute_inside = (workspace_root / "src" / "abs.txt").resolve()
 
     result = _apply(
         f"""*** Begin Patch
@@ -406,14 +395,13 @@ def test_apply_patch_normalizes_in_workspace_absolute_path(
     )
 
     assert result["status"] == "success"
-    assert (tmp_path / "src" / "abs.txt").read_text(encoding="utf-8") == "content"
+    assert (workspace_root / "src" / "abs.txt").read_text(encoding="utf-8") == "content"
 
 
 def test_apply_patch_tool_returns_json_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    workspace_root = workspace_scope[1]
     tool = create_apply_patch_tool()
 
     result_text = tool.invoke(
@@ -431,9 +419,9 @@ def test_apply_patch_tool_returns_json_result(
     journal_id = result["journal_id"]
     assert isinstance(journal_id, str)
     assert journal_id.startswith("patch_")
-    assert (tmp_path / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json").is_file()
+    assert (workspace_root / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json").is_file()
     assert result["files"] == [{"path": "tool.txt", "operation": "add"}]
-    assert (tmp_path / "tool.txt").read_text(encoding="utf-8") == "created by tool"
+    assert (workspace_root / "tool.txt").read_text(encoding="utf-8") == "created by tool"
     assert result["verification"] == [{
         "path": "/tool.txt",
         "exists": True,
@@ -441,18 +429,17 @@ def test_apply_patch_tool_returns_json_result(
         "sha256": sha256(b"created by tool").hexdigest(),
     }]
     journal = json.loads(
-        (tmp_path / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json")
+        (workspace_root / ".boxteam" / "cache" / "apply_patch" / f"{journal_id}.json")
         .read_text(encoding="utf-8")
     )
     assert journal["verification"] == result["verification"]
 
 
 def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    (tmp_path / "same.txt").write_text("same\n", encoding="utf-8")
+    workspace_root = workspace_scope[1]
+    (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
     tool = create_apply_patch_tool()
 
     result_text = tool.invoke(
@@ -470,15 +457,15 @@ def test_apply_patch_tool_rejects_success_when_write_does_not_change_bytes(
     result = json.loads(result_text)
     assert result["status"] == "error"
     assert "字节未发生变化" in result["error"]
-    assert (tmp_path / "same.txt").read_text(encoding="utf-8") == "same\n"
+    assert (workspace_root / "same.txt").read_text(encoding="utf-8") == "same\n"
 
 
 def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
-    tmp_path: Path,
+    workspace_scope: tuple[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    target = tmp_path / "target.txt"
+    workspace_root = workspace_scope[1]
+    target = workspace_root / "target.txt"
     target.write_text("before\n", encoding="utf-8")
 
     def write_wrong_content(commit, snapshots, workspace_root):
@@ -510,26 +497,23 @@ def test_apply_patch_tool_rejects_success_when_written_bytes_are_not_expected(
     assert result["status"] == "error"
     assert "写入校验失败" in result["error"]
     assert target.read_text(encoding="utf-8") == "before\n"
-    journal_root = tmp_path / ".boxteam" / "cache" / "apply_patch"
+    journal_root = workspace_root / ".boxteam" / "cache" / "apply_patch"
     assert not list(journal_root.glob("*.json"))
 
 
 def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    configured_root = tmp_path / "configured"
-    explicit_root = tmp_path / "explicit"
-    configured_root.mkdir()
+    context_root = workspace_scope[1]
+    explicit_root = context_root / "explicit"
     explicit_root.mkdir()
-    monkeypatch.setenv("WORKSPACE_ROOT", str(configured_root))
     tool = create_apply_patch_tool(workspace_root=explicit_root)
 
     result = json.loads(
         tool.invoke(
             {
                 "input": """*** Begin Patch
-*** Add File: target.txt
+*** Add File: explicit-root-target.txt
 +written to explicit workspace
 *** End Patch""",
                 "explanation": "验证显式工作区路径",
@@ -538,25 +522,33 @@ def test_apply_patch_uses_explicit_workspace_for_write_and_journal(
     )
 
     assert result["status"] == "success"
-    assert (explicit_root / "target.txt").read_text(encoding="utf-8") == (
+    assert (explicit_root / "explicit-root-target.txt").read_text(encoding="utf-8") == (
         "written to explicit workspace"
     )
-    assert not (configured_root / "target.txt").exists()
-    assert (
+    assert not (context_root / "explicit-root-target.txt").exists()
+    explicit_journal = (
         explicit_root
         / ".boxteam"
         / "cache"
         / "apply_patch"
         / f"{result['journal_id']}.json"
-    ).is_file()
+    )
+    context_journal = (
+        context_root
+        / ".boxteam"
+        / "cache"
+        / "apply_patch"
+        / f"{result['journal_id']}.json"
+    )
+    assert explicit_journal.is_file()
+    assert not context_journal.exists()
 
 
 def test_apply_patch_tool_returns_retryable_error_for_invalid_patch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    workspace_scope: tuple[str, Path],
 ) -> None:
-    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
-    (tmp_path / "same.txt").write_text("same\n", encoding="utf-8")
+    workspace_root = workspace_scope[1]
+    (workspace_root / "same.txt").write_text("same\n", encoding="utf-8")
     tool = create_apply_patch_tool()
 
     result_text = tool.invoke(
@@ -580,4 +572,4 @@ def test_apply_patch_tool_returns_retryable_error_for_invalid_patch(
     assert result["error_type"] == "DiffError"
     assert result["retryable"] is True
     assert "Duplicate Path" in result["error"]
-    assert (tmp_path / "same.txt").read_text(encoding="utf-8") == "same\n"
+    assert (workspace_root / "same.txt").read_text(encoding="utf-8") == "same\n"

@@ -289,16 +289,9 @@ export function useGatewayWorkspaceMutations({
           workspace_ids: workspaceIds,
         });
         setState((prev) => {
-          const activeWorkspaceId =
-            workspaceList.active_workspace_id ?? prev.activeGatewayWorkspaceId;
-          const activeWorkspace = workspaceList.items.find(
-            (workspace) => workspace.workspace_id === activeWorkspaceId,
-          );
           return {
             ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
-            activeGatewayWorkspaceId: activeWorkspaceId,
-            workspaceRoot: activeWorkspace?.root_path ?? prev.workspaceRoot,
-            workspaceName: activeWorkspace?.name ?? prev.workspaceName,
+            ...activeGatewayWorkspaceFields(workspaceList),
             status: "工作区顺序已更新",
           };
         });
