@@ -319,4 +319,6 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 062交付又误把旧060成功measurements.json（273577bytes）保存成failed-measurements.json，漏交本次实际24,401,400bytes失败JSON；虽报告标旧且未冒称通过，仍延误并发定位。主按原路径、mtime、300/0样本与失败operation固定正确文件并告知064，作者另correction001、原report保字节、不重跑补证。产物身份共同核源路径/时段/结构/operation，复制文件名不是证明；后续实际交付效果待收，不重复增加通用门。
 
-050 core-web003漏cassette独立user parts、004最终旧roles断言、005扩展误用后端workspace身份作Gateway注册路由，分别actual1/155.62s、133.786s、146.98s；005基线两轮真实loop/roles已过。旧fixture中的身份语义和输出断言未随完整闭包迁齐，重启整组服务后逐处发现，延缓原A–S交付。主已要求同Sol先一次写齐已知扩展setup/route-ID、E团队及必要schema/caller再启动下一入口，复用未变绿项；实际整批效果待收，不加逐字段冻结门。
+050 core-web003漏cassette独立user parts、004最终旧roles断言、005扩展误用后端workspace身份作Gateway注册路由，分别actual1/155.62s、133.786s、146.98s；005基线两轮真实loop/roles已过。006又在两轮baseline后因PageDTO.session_id旧断言失败（actual1/169.639695s），同driver还误写binding hash形状，作者已一次按真实entry owner与sha256:64修齐、静态0，未实跑扩展。旧fixture身份/断言未随完整闭包迁齐，反复付整组启动与基础两轮成本；纠正为先批量盘齐生产/driver/fixture共同前置，唯一产品owner可选受影响具名场景并按依赖复用未变基线，原A–S完整要求保留。A/F持久观测不能证明AgentLoop重启续接，原Job/checkpoint恢复仍须实现。完整交付与效率效果待收，不加逐字段冻结门。
+
+067短观察未启动，主供两caller及064材料却漏`workspace_service.py::_scan_directory`，读取范围也被解释为仅manifest内；未建workspace/进程，没有新的运行或根因结论。068主补真实owner并开放同闭包只读后，作者又将probe写到NWT相对ART、调用不存在的裸python且包装丢了exit，23:16:32Z仍未启动。沿既有绝对workdir/产物和uv规则纠正，只迁14392bytes唯一脚本、保SHA及完整fixture、撤误建空目录，不重复编写/复制或增加同义禁令。后续一次实际owner观察待收，未启动不算模型失败、测试红或已执行证据。
