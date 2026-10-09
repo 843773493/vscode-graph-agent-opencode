@@ -144,7 +144,7 @@ SQLite 中的 `Turn.status` 必须使用闭合集合 `open | active | completed 
 #### Scenario: sealed 提交与终态提交分离
 
 - **WHEN** sealed-before-dispatch 已提交但进程在 dispatch 前或 terminal convergence 前退出
-- **THEN** 恢复保留原 sealed plan；`dispatch_state=ready` 表示尚未确认发出，可用相同 assembly/model-call identity 继续或显式终止；已开始 dispatch 但无终态的 call 必须以 `terminal_convergence`/`metadata_only` 的 `unknown/execution_lost` 收敛，不得假设成功
+- **THEN** 恢复保留原 sealed plan；`dispatch_state=ready` 表示尚未确认发出，可用相同 assembly/model-call identity 继续或显式终止；已开始 dispatch 且缺少已提交完整模型 carrier 与同 owner checkpoint 完成证明的 call 必须以 `terminal_convergence`/`metadata_only` 的 `unknown/execution_lost` 收敛，不得假设成功。只有满足 itemized identity requirement 的全部非终态 pending `send/read/wait` 证明条件时，才能续接原 checkpoint；不得仅凭 `unknown/dispatched` 字段推断模型完成或重新发出原 Provider request
 
 #### Scenario: SQLite 提交后恢复
 
@@ -338,7 +338,7 @@ ExtensionCatalogBindingRef使用独立的`extension_dispatch_binding_hash`（版
 
 #### Scenario: Provider 调用后进程退出
 
-- **WHEN** Provider 已收到 request，但 canonical output 或 assembly outcome 尚未进入 SQLite 收敛事务
+- **WHEN** Provider 已收到 request，但没有已提交完整 canonical carrier 与精确 pending-tools checkpoint 的同 owner 完成证明
 - **THEN** 重启将 model call/assembly 标记为 `unknown`/`execution_lost`，未提交 JSONL item 不对 reader 可见
 
 #### Scenario: 跨 provider hash 可比

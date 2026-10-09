@@ -321,4 +321,4 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 050 core-web003漏cassette独立user parts、004最终旧roles断言、005扩展误用后端workspace身份作Gateway注册路由，分别actual1/155.62s、133.786s、146.98s；005基线两轮真实loop/roles已过。006又在两轮baseline后因PageDTO.session_id旧断言失败（actual1/169.639695s），同driver还误写binding hash形状，作者已一次按真实entry owner与sha256:64修齐、静态0，未实跑扩展。旧fixture身份/断言未随完整闭包迁齐，反复付整组启动与基础两轮成本；纠正为先批量盘齐生产/driver/fixture共同前置，唯一产品owner可选受影响具名场景并按依赖复用未变基线，原A–S完整要求保留。A/F持久观测不能证明AgentLoop重启续接，原Job/checkpoint恢复仍须实现。完整交付与效率效果待收，不加逐字段冻结门。
 
-067短观察未启动，主供两caller及064材料却漏`workspace_service.py::_scan_directory`，读取范围也被解释为仅manifest内；未建workspace/进程，没有新的运行或根因结论。068主补真实owner并开放同闭包只读后，作者又将probe写到NWT相对ART、调用不存在的裸python且包装丢了exit，23:16:32Z仍未启动。沿既有绝对workdir/产物和uv规则纠正，只迁14392bytes唯一脚本、保SHA及完整fixture、撤误建空目录，不重复编写/复制或增加同义禁令。后续一次实际owner观察待收，未启动不算模型失败、测试红或已执行证据。
+067主供caller漏扫描owner且读取范围被解释为只限manifest，未启动；开放同闭包后068又误写NWT相对ART、裸python不存在且包装漏exit。迁回绝对ART修同loop/静态后，protected命令再次选ROOT cwd，8.08s actual1/owner未初始化；fingerprint还把实际config_service package写成不存在的.py，仅改cwd不能修。重复路径漂移按既有规则中断/撤脚本写入及运行权、核进程0，固定15200bytes脚本和原raw交072整体核装配；不重复复制fixture、不加同义规则。交072后实际效果待收，不将装配失败归生产或未启动算模型失败。

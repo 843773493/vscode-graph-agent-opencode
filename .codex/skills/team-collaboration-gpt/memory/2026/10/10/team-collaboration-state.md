@@ -7,9 +7,9 @@
 | Agent | 实际模型 | 当前任务 |
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8必要生产/调用/fixture/E2E完整闭包一次收齐，正在现有copy/attachment owner的capture→claim→settlement→恢复/删除协议；不微交接、不跑半成品矩阵 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067 STOP-no-probe；068 active/短owner观察**：缺失扫描callee已补并开放同闭包只读；NWT只读/显式隔离workspace，最多一次protected300s |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **064 STOP/常驻独审**：B显式依赖合法、receipt12→observe14；正常staging已过滤，缺两次签名轨迹，未确证bug；067一次短观察在途 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **063/065 STOP；069 active/恢复合同独审**：仅固定3spec核原Job/checkpoint续接与execution_lost/显式resume边界，约6分钟先交；不读live050、不新增阻断门 |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067/068 STOP/撤写入与运行权**：重复路径漂移，唯一protected命令在owner初始化前actual1/8.08s；原脚本/raw保留，主核进程0，待短STOP收据 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **064 STOP；072 active/单次短owner观察**：接手固定068脚本，整体核cwd/实际包文件/callee/同loop清理，一次protected300s；NWT只读、复用显式隔离fixture |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **063/065/069/069b STOP/常驻独审**：固定规范确认技术重建与业务resume边界歧义；主已在原5artifact澄清，不代050真实恢复 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **062 STOP**：原full actual1/588.85s，300串行完成、pair5版本冲突/Gateway0；误选旧JSON已另correction001，未重跑 |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
@@ -19,7 +19,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`4102281b4ff0bd7a1eebac7bf351b0be7195907a`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 恢复核实际HEAD；最近已核文档提交`9ffb8c8ab15ed148cd35411b6f70a0cd1d033115`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
 - 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
 - NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 alias已owned0后撤。060 alias已owned0后撤；062 short alias已owned0后撤。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
@@ -97,6 +97,8 @@ A/current-recovery-receipt.json只读当前具名键/historical_receipts，不�
 
 最新050：E双真实child/team、coordinator/role/task、queued-active mutation、turn/model_call冻结、cold不唤醒与非法跨Session输入零mutation均已写入唯一driver；strict SendMessageInput与必要unit/组件断言静态0，尚未真实跑E。core006 actual1/169.639695s：两轮baseline通过，扩展child getter误断言PageDTO.session_id；作者已按entry owner与真实sha256:64 binding hash同批修齐、静态0，未重跑。A/F恢复合同已定位但未写：GraphBinding重建后公开aget_state须确认唯一pending tools节点、末尾AI carrier绑定原unknown ModelCall且全部工具为幂等send/read/wait，使用原checkpoint_id＋None输入恢复原Job/Turn/admission/stream；其它节点或外部副作用execution_lost。canonical tool attempt/result沿已有typed owner去重，不新造去重器。B/D/I/J/K/L/M/O/P/Q/R/S扩展故障/竞争/negative仍待实现；现有weekly、普通copy/pinned、compaction脚本未实跑。下一批先收齐生产/driver/fixture共同前置，再在唯一owner选受影响具名入口集中调试、复用未变基础两轮。不称A–S完整。
 
-067 report/lease原字节保，未启动探针/进程/workspace；068 ART/index同agent同名`navigation-conflict068-short-observation`，主init d339、新增workspace_service.py固定24968bytes与NWT同。准确开始23:07:46Z，最多一次protected300s，直接真实WorkspaceService+两个create显式依赖+外置观察记录；无需逐callee审批，写源码仍禁止。23:16:32Z仍未启动：probe误写NWT相对ART、裸python不存在、包装漏精确exit；作者如实纠正。唯一14392bytes脚本现已迁到分配ROOT绝对ART，主SHA核`7bcc54e5842f7d75feb922f71eee56b17b40677db0bc6483e43eb54796e7dd3a`；保既有完整隔离fixture，撤误建空目录，不重复复制。原单次实际结果待收；无复现则明确限制，不盲重跑full。
+067 report/lease原字节保，未启动探针/进程/workspace；068 ART/index同agent同名`navigation-conflict068-short-observation`，主init d339、新增workspace_service.py固定24968bytes与NWT同。23:16:32Z仍未启动：probe误写NWT相对ART、裸python不存在、包装漏精确exit；作者如实纠正。唯一脚本迁到分配ROOT绝对ART后修同loop/静态0，但23:28:09Z protected命令又在ROOT cwd运行，8.08s actual1/source_hashes失败，owner尚未初始化、无actual.json。config_service.py在ROOT/NWT均不存在（实际package），仅改cwd仍无法执行；不能把装配失败归生产。主中断并沿既有规则撤本批脚本写入/测试权、核probe进程0，固定15200bytes/SHA`99800a71623e38319082875527eeb455592b25b6c780c491c27cb6cc8df98aa7`交072；保原raw/receipt，不追加同义禁令、不复制workspace。短STOP收据待收。
 
-069 ART/index同原架构reviewer同名`section8-recovery069-contract`；主init410，固定itemized/session-turn-history/rollout-checkpoint-storage三个完整spec共390922bytes及机器manifest。只核自动pending工具续接、execution_lost与显式resume_turn边界，短报引用固定path/line、不修改生产或规范。结果不代050真实恢复验收，也不作为新增阻断门。
+069 ART/index同原架构reviewer同名`section8-recovery069-contract`；主init410，固定三spec390922bytes/manifest，主逐SHA核report`1bb96ef7`；因A/F在tasks而非spec，主补同410完整tasks281245bytes/SHA0424ad31，069b另addendum不改原report。两次均STOP；边界原文不精确，不能据此直接判候选违规。主已澄清原5artifact：可证明完整模型projection group、sealed request及精确GraphBinding/唯一pending幂等send/read/wait且尚无terminal convergence才能续接原checkpoint＋None；cold/startup只读不编译graph，最终校验由已有执行owner承接；缺证/外部副作用/已有lost终止，显式resume创建新execution。strict0，不勾A/F，不代真实恢复。
+
+072 ART/index同navigation reviewer同名`navigation-conflict072-short-observation`；主init d339，23:30:34Z交固定068脚本/实际失败handoff，原作者权限已撤且owned0。business workspace复用`RV/candidate_boundary_reviewer/workspace/`完整fixture，不另复制；NWT只读，本ART允许一次修完整脚本并单次protected300s真实owner观察。结果待收、无复现就STOP；真实核心finding仍交同Sol自然边界。

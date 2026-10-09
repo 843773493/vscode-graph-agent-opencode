@@ -875,6 +875,8 @@ pin与workspace ingest是以稳定operation identity关联的显式跨库saga，
 
 `GraphBinding` 至少保存 `graph_id`、`graph_revision`、`graph_schema_hash` 和 `capability_profile_hash`。持久化的是可验证的 factory selector，不是 Python `CompiledStateGraph`。backend启动和cold read不编译任何thread的Agent graph；首次execution admission按binding查找受注册的factory并校验revision/hash，然后把compiled graph及其thread-scoped handles放入该thread runtime generation的`LifetimeScope`。同一thread的后续Turn在该generation内复用compiled graph；另一个thread必须有自己的编译实例。进程可跨thread缓存不捕获Session/Thread的immutable blueprint/topology；每次invocation通过显式`ThreadRuntimeBinding`提供Turn、execution、model-call及其它可变调用状态，compiled graph不得保留这些跨Turn状态。cold unload或backend重启后丢弃进程对象，再按持久binding重建；找不到或不匹配返回`graph_binding_unavailable`，不能回退到当前最新图。
 
+进程重建与已终态执行的业务 resume 分开：原执行尚无 terminal convergence，且精确 GraphBinding 的公开 checkpoint state 只剩 `tools` 时，才核其末尾完整 AI carrier、committed completed canonical carrier 与 sealed assembly/request 的 SessionThread/execution/model-call owner。全部 pending 工具必须是既有 owner 可按原 invocation identity 幂等恢复的 send/read/wait；满足完整证明后用原 checkpoint_id＋None 输入续接同 Job/Turn/admission/execution，不注入 root、不重发原 Provider request、不建新恢复账本。现行 unknown/dispatched 字段不能单独证明完成，canonical tool result 沿既有 typed owner 去重。缺证、非 tools 节点、未知副作用或已有 lost/terminal 继续原明确失败与显式 resume；后者创建新 execution。冷只读路径不得触发此恢复或编译 graph。
+
 LangGraph `configurable.thread_id` 必须传 product `thread_id`；`checkpoint_ns` 仍只表示该 thread 内 graph/subgraph 的 checkpoint namespace。短生命周期、无用户可见历史的 independent subagent 可以继续作为 per-invocation subgraph，不创建 SessionThread；需要多轮、可恢复、可展示的 delegated agent 才创建 child thread，并对同一 persistent child thread 串行执行。跨 session context/history/full-copy fork 仍创建 target Session 及其 main thread，不把 fork 表示为 child thread。
 
 本决策是本 change 内所有旧 session-only 物理定位和逻辑引用的规范替代：此前出现的 session 根 `rollout/` 必须解释并迁移为 catalog 解析后的 thread node `rollout/`；此前 `{session_id, assembly_id, detail_id}` 等不含 thread 的 operational ref 必须升级为包含 `thread_id` 的 owner ref。历史任务台账中的旧路径仅描述当时已验证实现，不证明本节新增迁移已经完成。
@@ -1123,7 +1125,7 @@ worker是上述四入口唯一文件副作用owner，按持久operation/有界st
 - [middleware/toolset 在 retry 或 resume 时发生变化] → `ContextAssemblySnapshot` 保存 source/version/policy/toolset hash；重建不一致时进入显式 mismatch/loss 路径，不把新配置伪装成旧请求。
 - [wire role 合并后丢失动态上下文来源] → plan 保留独立的 canonical/request-only ref、贡献顺序和关系边；wire projector 只负责编码合并，历史与详情服务不从合并后的 system message 反向推断来源。
 - [Turn root 被 synthetic message 抢占] → acceptance-time 在同一提交边界建立 `TurnRecord` 和 user root item；runtime notice 使用 `pending_next_turn`/ambient scope，所有查询使用 root identity 而不是 role。
-- [assembly 已发出但 terminal outcome 未提交] → sealed plan 先持久化；canonical item、Turn finalization 和 assembly outcome 采用同一收敛事务，崩溃窗口统一恢复为 `unknown/execution_lost`。
+- [assembly 已发出但 terminal outcome 未提交] → sealed plan 先持久化；无法用 committed 完整 carrier 与精确 checkpoint 证明 pending 幂等工具阶段时，崩溃恢复为 `unknown/execution_lost`。仅原非终态执行满足上述完整证明条件可续接；已有 terminal 收敛不可逆。
 - [v1/v2 混读造成错误恢复] → manifest 与每行 envelope 双重 dispatch，版本不一致直接报错；migration 使用临时 v2 artifact 和原子安装，永不覆盖 v1 原件。
 - [child runtime 空闲回收与迟到 callback 竞争] → execution/runtime lease 与 generation fence阻止活跃 owner被卸载；callback只依赖持久 thread地址并在提交前重新取得当前 owner，不能向旧内存实例或 main thread写入。
 - [跨服务器 Session link 泄露地址或产生歧义] → link只含逻辑 Gateway connection/workspace/session identity且不含凭据；Gateway catalog唯一解析、目标 workspace解析 main pointer，任何歧义、未授权或不可达都显式失败。

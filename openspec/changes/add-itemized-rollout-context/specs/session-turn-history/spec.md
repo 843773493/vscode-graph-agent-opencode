@@ -178,12 +178,12 @@ Turn acceptance identity、`turn_ordinal`、root item、history view 和 `final_
 #### Scenario: source 丢失 receipt 后仍只投递一次
 
 - **WHEN**target已经durable acceptance，而source在持久化receipt前由harness终止；测试重启source并恢复同一tool/API invocation
-- **THEN**source按原send operation找回同一outbox/communication，target以新grant返回原acceptance receipt；DOM、双端communication/trace和target history证明没有第二个ambient item、Job、Turn或可见消息
+- **THEN**source按原send operation找回同一outbox/communication，target以新grant返回原acceptance receipt；DOM、双端communication/trace和target history证明没有第二个ambient item、Job、Turn或可见消息。AgentLoop 自动续接仅适用于 itemized identity requirement 定义的可证明非终态 pending `send/read/wait` checkpoint；丢失 receipt 本身不授权重放 Provider 或其它外部副作用
 
 #### Scenario: source 丢失 read 或 wait response 后恢复同一 observation
 
 - **WHEN** target已冻结远端read page或无selector wait baseline，而source在保存response/tool result前重启；期间目标新增Turn或Job
-- **THEN** source以同一source call/operation invocation和新grant恢复原RemoteObservationRecord/PageRecord，page、selector集合、baseline及terminal envelope不变，该调用方DOM/history只出现一个tool result；read下一页使用新source call但仍属cursor绑定的同一observation/read series，record过期明确失败，不把目标新状态静默混入
+- **THEN** source以同一source call/operation invocation和新grant恢复原RemoteObservationRecord/PageRecord，page、selector集合、baseline及terminal envelope不变，该调用方DOM/history只出现一个tool result；read下一页使用新source call但仍属cursor绑定的同一observation/read series，record过期明确失败，不把目标新状态静默混入。原 AgentLoop checkpoint 的自动续接沿 itemized identity requirement 的全部证明条件；已终态/lost 执行只能按显式 resume 合同处理
 
 #### Scenario: 远端裸 ID discovery 不泄露或递归
 

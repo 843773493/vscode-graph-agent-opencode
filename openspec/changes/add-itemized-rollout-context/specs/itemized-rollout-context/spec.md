@@ -683,7 +683,14 @@ item `status` 只描述单个 canonical payload 的持久化/语义完成事实�
 
 ### Requirement: Execution、model call、retry/resume 和 final item identity 必须分层
 
-系统 SHALL 将用户交互 `turn_id`、AgentLoop `execution_id`、Provider 请求 `model_call_id` 和 canonical output `item_id` 作为不同 identity，并通过显式的 `TurnExecutionLink(turn_id, execution_id)` 与 `ModelCallRecord(execution_id, model_call_id)` 关联。一次 execution 内的 Provider retry MUST 创建新的 `model_call_id` 和 attempt ordinal；整个 execution 重启或 `resume_turn` MUST 创建新的 `execution_id`，且只有 Turn.status 转移表允许时才可在没有新用户输入时继续原 Turn；`cancelled` Turn 不得恢复。任何 retry/resume 不得复用已经提交的 output `item_id`。
+系统 SHALL 将用户交互 `turn_id`、AgentLoop `execution_id`、Provider 请求 `model_call_id` 和 canonical output `item_id` 作为不同 identity，并通过显式的 `TurnExecutionLink(turn_id, execution_id)` 与 `ModelCallRecord(execution_id, model_call_id)` 关联。一次 execution 内的 Provider retry MUST 创建新的 `model_call_id` 和 attempt ordinal；已终止 execution 的重新执行或 `resume_turn` MUST 创建新的 `execution_id`，且只有 Turn.status 转移表允许时才可在没有新用户输入时继续原 Turn；`cancelled` Turn 不得恢复。任何 retry/resume 不得复用已经提交的 output `item_id`。
+
+backend 进程重建后的同一非终态 checkpoint 续接不属于上述重新执行。唯一允许自动续接的范围是：原 Job、Turn 与 execution 尚无 terminal convergence；按精确持久 `GraphBinding` 重建后，公开 checkpoint state 证明下一节点唯一为 `tools`；checkpoint 末尾完整 AI carrier 与已提交完整的 typed canonical projection group（成员 `status=completed` 且 tool-call 批次一致）、sealed assembly/request owner 逐字段属于同一 SessionThread、execution 和 model call；全部 pending tool invocation 均为原 owner 以稳定身份幂等恢复的 `send/read/wait`。`outcome=unknown` 或 `dispatch_state=dispatched` 本身不得作为完成证明。续接 MUST 使用原 checkpoint identity 与空的新输入，保留原 Job/Turn/admission/execution/model-call/tool-call identity，不重新注入用户 root、不重发原 Provider request；已提交 canonical tool result 沿既有 typed owner 去重，下一真实 Provider call 仍分配新 model-call identity。缺少任一证明、其它 pending 节点、未知外部副作用或已有 terminal/lost 收敛时不得自动续接，按原失败/`execution_lost` 与显式 resume 合同处理。
+
+#### Scenario: 进程重建只续接可证明幂等的待完成工具
+
+- **WHEN** backend 在已提交完整模型 carrier、尚未提交通信 tool result 的 pending tools checkpoint 后退出，重建时满足上述全部证明条件
+- **THEN** 系统续接原非终态执行与工具调用，找回原 communication/observation/result，history 只有一个 typed tool result，不创建第二个 Job/Turn/root 或重发已完成的 Provider request；已终态执行及无法证明的 checkpoint 不适用此续接
 
 `TurnRecord.final_item_id` MUST 只在 `turn_finalize` 与对应 canonical `assistant_output` item 的 terminal convergence 提交边界内写入。`Turn.status=completed` 时 `final_item_id` 必须非空，并指向同一 Turn 内 `status=completed` 的 `assistant_output` item；`completed_empty`、`open`、`active`、`interrupted`、`cancelled`、`failed` 和 `unknown` 时必须为空。Provider 空输出使用 `completed_empty`，不创建伪造 output item。`assistant_text` 和 `final_response` 是 projection；未完成 finalization 时，partial、failed、cancelled 或 unknown item 不得仅因其是最后一个 assistant item 就成为 final response。
 
@@ -1071,7 +1078,7 @@ assembly snapshot metadata MUST 在 provider dispatch 前通过 `RolloutCheckpoi
 
 #### Scenario: Provider 调用后在提交前崩溃
 
-- **WHEN** Provider 已收到 request，但进程在 canonical output、Turn outcome 或 assembly terminal outcome 收敛前退出
+- **WHEN** Provider 已收到 request，但进程退出时缺少已提交完整 canonical projection group 与精确 checkpoint 的模型节点完成证明
 - **THEN** 重启将该 model call/assembly 标记为 `unknown` 或 `execution_lost`，不得伪造 completed/final item；JSONL 已写但 SQLite 未提交的 item 对 reader 不可见
 
 #### Scenario: detail store 丢失
