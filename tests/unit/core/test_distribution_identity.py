@@ -14,7 +14,7 @@ from app.core.distribution_identity import (
     encode_version,
     load_distribution_id,
 )
-from app.services.infrastructure.resource_platform.virtual_resources import (
+from app.core.resource_uri import (
     parse_resource_uri,
     skill_display_uri,
 )
@@ -39,14 +39,37 @@ def _valid_manifest(root: Path, **overrides: object) -> Path:
     return _write_manifest(root, payload)
 
 
+@pytest.fixture
+def manifest_distributions() -> tuple[str, ...]:
+    schema = json.loads(
+        (Path.cwd() / "packages/launcher/runtime-manifest.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return tuple(schema["properties"]["distribution"]["enum"])
+
+
+def test_distribution_domain_matches_launcher_schema(
+    manifest_distributions: tuple[str, ...],
+) -> None:
+    assert distribution_identity._DISTRIBUTIONS == manifest_distributions
+    # 任一发行类型都不能是「另一发行类型 + 连字符」的前缀，组合的分界才唯一。
+    assert all(
+        not right.startswith(f"{left}-")
+        for left, right in itertools.permutations(manifest_distributions, 2)
+    )
+
+
 def test_encode_version_replaces_dots_with_underscores() -> None:
     assert encode_version("0.0.2") == "0_0_2"
     assert encode_version("1.0.0-beta.1") == "1_0_0-beta_1"
     assert encode_version("2.0") == "2_0"
 
 
-def test_encode_version_is_injective_over_admitted_charset() -> None:
-    """穷举模块自己承认的 version 字符集，证明编码单射（无碰撞）。
+def test_encode_version_is_injective_over_admitted_charset(
+    tmp_path: Path, manifest_distributions: tuple[str, ...]
+) -> None:
+    """穷举 version 代表字母表，并验证四发行类型与这些版本的组合身份单射。
 
     样本字母表由 _VERSION_PATTERN 实际承认的字符导出——若有人放宽该 pattern 让 `_`
     重新合法（如回退到 `[A-Za-z0-9._-]`），字母表会包含 `_`，样本随之含连续下划线
@@ -71,6 +94,14 @@ def test_encode_version_is_injective_over_admitted_charset() -> None:
     # 单射即无碰撞：任一编码值只对应一个源样本，故可唯一还原。
     for sample, value in zip(samples, encoded):
         assert value.replace("_", ".") == sample
+
+    scope_ids = [
+        load_distribution_id(
+            _valid_manifest(tmp_path, distribution=distribution, version=sample)
+        )
+        for distribution, sample in itertools.product(manifest_distributions, samples)
+    ]
+    assert len(set(scope_ids)) == len(manifest_distributions) * len(samples)
 
 
 def test_manifest_rejects_underscore_in_version(tmp_path: Path) -> None:
@@ -100,13 +131,29 @@ def test_blank_field_is_rejected(tmp_path: Path, field: str) -> None:
         load_distribution_id(manifest)
 
 
-@pytest.mark.parametrize("bad", ["a/b", "a b", "a.b", "\u4e2d\u6587"])
+@pytest.mark.parametrize("bad", ["a/b", "a b", "a.b", "\u4e2d\u6587", "foo-1.0.0"])
 def test_illegal_distribution_is_rejected(tmp_path: Path, bad: str) -> None:
     manifest = _valid_manifest(tmp_path, distribution=bad)
     with pytest.raises(
-        ValueError, match="runtime manifest\\.distribution 含 URI charset 之外的字符"
+        ValueError, match="runtime manifest\\.distribution 未登记值"
     ):
         load_distribution_id(manifest)
+
+
+@pytest.mark.parametrize(
+    ("distribution", "version"), [("foo-1", "2"), ("foo", "1-2")]
+)
+def test_charset_admitted_collision_inputs_are_rejected(
+    tmp_path: Path, distribution: str, version: str
+) -> None:
+    """两组旧接受域输入都曾编码成 foo-1-2，但发行类型均未登记。"""
+    manifest = _valid_manifest(tmp_path, distribution=distribution, version=version)
+    with pytest.raises(
+        ValueError, match="runtime manifest\\.distribution 未登记值"
+    ) as error:
+        load_distribution_id(manifest)
+    assert repr(distribution) in str(error.value)
+    assert str(manifest) in str(error.value)
 
 
 @pytest.mark.parametrize("bad", ["1 0", "1/0", "1.0.0+build", "v\u4e2d"])
@@ -157,11 +204,32 @@ def test_env_var_path_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert load_distribution_id() == "source-development-0_0_2"
 
 
-def test_legal_manifest_yields_grammar_valid_scope_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("distribution", "version", "expected"),
+    [
+        ("source-development", "0.0.2", "source-development-0_0_2"),
+        ("source-development", "1.0.0-beta.1", "source-development-1_0_0-beta_1"),
+        ("source-installed", "0.0.2", "source-installed-0_0_2"),
+        ("source-installed", "1.0.0-beta.1", "source-installed-1_0_0-beta_1"),
+        ("npm", "0.0.2", "npm-0_0_2"),
+        ("npm", "1.0.0-beta.1", "npm-1_0_0-beta_1"),
+        ("standalone", "0.0.2", "standalone-0_0_2"),
+        ("standalone", "1.0.0-beta.1", "standalone-1_0_0-beta_1"),
+    ],
+)
+def test_legal_manifest_yields_grammar_valid_scope_id(
+    tmp_path: Path, distribution: str, version: str, expected: str
+) -> None:
     """输出必须能作为真实 URI scope_id 被 parse_resource_uri 解析（接上真实 grammar）。"""
-    manifest = _valid_manifest(tmp_path)
+    manifest = _valid_manifest(tmp_path, distribution=distribution, version=version)
     distribution_id = load_distribution_id(manifest)
-    assert distribution_id == "source-development-0_0_2"
+    assert distribution_id == expected
+    other_install = tmp_path / "other-install"
+    other_install.mkdir()
+    other_manifest = _valid_manifest(
+        other_install, distribution=distribution, version=version
+    )
+    assert load_distribution_id(other_manifest) == expected
     uri = skill_display_uri(
         scope="inline", scope_id=distribution_id, skill_name="gateway-context"
     )
@@ -170,4 +238,3 @@ def test_legal_manifest_yields_grammar_valid_scope_id(tmp_path: Path) -> None:
     assert parsed.scope_id == distribution_id
     assert parsed.kind == "skills"
     assert parsed.logical_name == "gateway-context"
-

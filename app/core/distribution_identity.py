@@ -20,8 +20,9 @@ from pathlib import Path
 MANIFEST_ENV = "BOXTEAM_RUNTIME_MANIFEST"
 
 # URI 动段的闭合 charset 是 ``[A-Za-z0-9_-]``（grammar 的 _NAME_CHARSET 单点
-# 定义）；点号不在内，故 version 必须编码。distribution 本身落在该 charset 内。
-_DISTRIBUTION_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+# 定义）；点号不在内，故 version 必须编码。distribution 只接受 Launcher schema 的
+# 四值闭枚举；专属单测核对 packages/launcher/runtime-manifest.schema.json，防止漂移。
+_DISTRIBUTIONS = ("source-development", "source-installed", "npm", "standalone")
 # version 只接受 semver 允许的形态：pre-release/build 标识的字符集是
 # ``[0-9A-Za-z-]``，故下划线 ``_`` 本就非法，在此显式排除。排除 ``_`` 是编码成为
 # 单射的前提（见 encode_version），含 ``_`` 的 manifest 一律 fail-closed 拒绝。
@@ -51,10 +52,10 @@ def load_distribution_id(manifest_path: Path | str | None = None) -> str:
     payload = _load_manifest(resolved_path)
     distribution = _require_field(payload, "distribution", resolved_path)
     version = _require_field(payload, "version", resolved_path)
-    if _DISTRIBUTION_PATTERN.fullmatch(distribution) is None:
+    if distribution not in _DISTRIBUTIONS:
         raise ValueError(
-            "runtime manifest.distribution 含 URI charset 之外的字符: "
-            f"{distribution!r} ({resolved_path})"
+            "runtime manifest.distribution 未登记值: "
+            f"{distribution!r}，只允许 {', '.join(_DISTRIBUTIONS)} ({resolved_path})"
         )
     if _VERSION_PATTERN.fullmatch(version) is None:
         raise ValueError(
@@ -96,4 +97,3 @@ def _require_field(payload: dict[str, object], field: str, path: Path) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"runtime manifest.{field} 必须是非空字符串: {path}")
     return value
-
