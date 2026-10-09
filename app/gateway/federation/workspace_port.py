@@ -18,6 +18,7 @@ from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
     FEDERATION_TARGET_NOT_RESOLVABLE,
+    FEDERATION_TARGET_OWNER_REJECTED,
     FederationError,
 )
 from app.gateway.federation.rpc import FederationSpoke
@@ -191,7 +192,18 @@ class WorkspaceSessionMainPort:
                     if isinstance(code, str) and (
                         code in RESOURCE_URI_RESOLVE_REASON_CODES or code == "snapshot_changed"
                     ):
-                        raise FederationError(code, code)
+                        raise FederationError(
+                            FEDERATION_TARGET_OWNER_REJECTED,
+                            "目标工作区拒绝上下文查询",
+                            detail={
+                                "owner": (
+                                    "resource_uri_resolver"
+                                    if code in RESOURCE_URI_RESOLVE_REASON_CODES
+                                    else "context_revision"
+                                ),
+                                "code": code,
+                            },
+                        )
                 raise FederationError(
                     FEDERATION_SESSION_MAIN_UNAVAILABLE,
                     f"工作区上下文 HTTP 失败: status={response.status_code}",
@@ -199,7 +211,11 @@ class WorkspaceSessionMainPort:
             if response.headers.get("content-type", "").startswith("application/json"):
                 code = observation_error_code(response.json())
                 if code is not None:
-                    raise FederationError(code, code)
+                    raise FederationError(
+                        FEDERATION_TARGET_OWNER_REJECTED,
+                        "目标工作区拒绝通信 observation",
+                        detail={"owner": "communication_observation", "code": code},
+                    )
             raise FederationError(FEDERATION_SESSION_MAIN_UNAVAILABLE, f"工作区通信 HTTP 失败: status={response.status_code}, detail={response.text[:2000]}")
         try:
             data = response.json()

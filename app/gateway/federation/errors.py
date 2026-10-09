@@ -18,8 +18,10 @@ class FederationError(Exception):
         *,
         detail: dict[str, object] | None = None,
     ) -> None:
-        if not code or not message:
-            raise ValueError("FederationError 需要非空 code 与 message")
+        if not isinstance(code, str) or code not in FEDERATION_ERROR_CODES:
+            raise ValueError(f"FederationError 未登记的错误码: {code!r}")
+        if not message:
+            raise ValueError("FederationError 需要非空 message")
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
@@ -55,6 +57,15 @@ FEDERATION_TARGET_NOT_RESOLVABLE = "target_not_resolvable"
 FEDERATION_TARGET_AMBIGUOUS = "target_ambiguous"
 FEDERATION_CAPABILITY_DENIED = "federation-capability-denied"
 FEDERATION_SESSION_MAIN_UNAVAILABLE = "federation-session-main-unavailable"
+FEDERATION_TARGET_OWNER_REJECTED = "federation-target-owner-rejected"
+
+# FederationError 只接受本文件声明的联邦码，避免重复维护第二份登记清单。目标
+# owner 的 resolver 与 observation 错误仍由各自 owner 闭集管理，并通过 detail 传输。
+FEDERATION_ERROR_CODES = frozenset(
+    value
+    for name, value in globals().items()
+    if name.startswith("FEDERATION_") and isinstance(value, str)
+)
 
 # WebSocket close code 合同：协议错误 1002、鉴权/策略 1008、内部失败 1011。
 CLOSE_CODE_PROTOCOL_ERROR = 1002
@@ -85,6 +96,7 @@ _POLICY_ERROR_CODES = frozenset(
         FEDERATION_TRANSIT_LIMIT_EXCEEDED,
         FEDERATION_AUTHORIZATION_REVOKED,
         FEDERATION_HARDENING_ACTIVE,
+        FEDERATION_TARGET_OWNER_REJECTED,
     }
 )
 
@@ -109,6 +121,7 @@ __all__ = [
     "FEDERATION_CHANNEL_EPOCH_STALE",
     "FEDERATION_CHANNEL_HEARTBEAT_TIMEOUT",
     "FEDERATION_DEADLINE_EXCEEDED",
+    "FEDERATION_ERROR_CODES",
     "FEDERATION_GRANT_AUDIENCE_MISMATCH",
     "FEDERATION_GRANT_EXPIRED",
     "FEDERATION_GRANT_INVALID_SIGNATURE",
@@ -125,6 +138,7 @@ __all__ = [
     "FEDERATION_SESSION_MAIN_UNAVAILABLE",
     "FEDERATION_TARGET_AMBIGUOUS",
     "FEDERATION_TARGET_NOT_RESOLVABLE",
+    "FEDERATION_TARGET_OWNER_REJECTED",
     "FEDERATION_TRANSIT_LIMIT_EXCEEDED",
     "FEDERATION_UNKNOWN_METHOD",
     "FEDERATION_UNKNOWN_PEER",

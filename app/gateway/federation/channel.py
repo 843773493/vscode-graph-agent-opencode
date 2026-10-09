@@ -408,9 +408,10 @@ class FederationChannelSession:
                 FederationError(FEDERATION_MALFORMED_FRAME, "response 缺少 error 对象")
             )
             return
-        future.set_exception(
-            FederationError(
-                str(wire.get("code") or FEDERATION_MALFORMED_FRAME),
+        code = str(wire.get("code") or FEDERATION_MALFORMED_FRAME)
+        try:
+            response_error = FederationError(
+                code,
                 str(wire.get("message") or "对端返回未命名错误"),
                 detail=(
                     wire.get("detail")
@@ -418,7 +419,13 @@ class FederationChannelSession:
                     else None
                 ),
             )
-        )
+        except ValueError as cause:
+            raise FederationError(
+                FEDERATION_MALFORMED_FRAME,
+                "对端响应包含未登记的联邦错误码",
+                detail={"remote_code": code},
+            ) from cause
+        future.set_exception(response_error)
 
     async def _serve_request(
         self, frame: FederationFrame, correlation_id: str

@@ -25,6 +25,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.gateway.federation.errors import FEDERATION_TARGET_OWNER_REJECTED
 from app.schemas.internal_v2.communication import CommunicationObservationRequest
 from app.schemas.internal_v2.session_context import SessionContextReadRequest
 from app.services.business.communication.addresses import (
@@ -309,7 +310,11 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     assert direct.headers["X-Request-ID"] == direct.json()["request_id"]
     relayed = await case.client.post("/api/gateway/federation/relay", json={**relay, "body": bad.model_dump(mode="json")})
     assert relayed.status_code == 409
-    assert relayed.json()["detail"]["code"] == "read-snapshot-invalid"
+    assert relayed.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert relayed.json()["detail"]["detail"] == {
+        "owner": "communication_observation",
+        "code": "read-snapshot-invalid",
+    }
     assert relayed.headers["X-Request-ID"] == relayed.json()["request_id"]
     monkeypatch.setattr("app.services.infrastructure.gateway_communication_client.get_gateway_local_token", lambda: case.client.headers["X-Local-Token"])
     source_client = GatewayCommunicationClient(gateway_url=f"http://127.0.0.1:{case.gateway.port}", timeout_seconds=10)
@@ -321,17 +326,32 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
         reset_current_request_id(token)
     mismatch = request.model_copy(update={"target": GlobalThreadAddress(target.gateway_id, target.workspace_id, target.session_id, source_thread)})
     mismatched = await case.client.post("/api/gateway/federation/relay", json={"operation": "read", "target": mismatch.model_dump(mode="json")["target"], "body": mismatch.model_dump(mode="json")})
-    assert mismatched.status_code == 409 and mismatched.json()["detail"]["code"] == "read-snapshot-mismatch"
+    assert mismatched.status_code == 409
+    assert mismatched.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert mismatched.json()["detail"]["detail"] == {
+        "owner": "communication_observation",
+        "code": "read-snapshot-mismatch",
+    }
     expired = request.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)})
     expired_response = await case.client.post("/api/gateway/federation/relay", json={**relay, "body": expired.model_dump(mode="json")})
-    assert expired_response.status_code == 409 and expired_response.json()["detail"]["code"] == "operation-retry-expired"
+    assert expired_response.status_code == 409
+    assert expired_response.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert expired_response.json()["detail"]["detail"] == {
+        "owner": "communication_observation",
+        "code": "operation-retry-expired",
+    }
     deletion = await submit_navigation_operation(case.client, "delete_session", target_node_id=target_id)
     assert deletion["state"] == "committed", deletion
     restored = await case.client.post("/api/gateway/federation/relay", json=relay)
     assert restored.status_code == 200 and restored.json()["data"] == first, restored.text
     new_page = bad.model_copy(update={"source_call_id": "cop_http_new_after_delete", "page_identity": _page_identity(source, "cop_http_new_after_delete"), "query": {"read": read.model_copy(update={"cursor": first["result"]["next_cursor"]}).model_dump(mode="json")}})
     rejected = await case.client.post("/api/gateway/federation/relay", json={**relay, "body": new_page.model_dump(mode="json")})
-    assert rejected.status_code == 409 and rejected.json()["detail"]["code"] == "target-deleted"
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == FEDERATION_TARGET_OWNER_REJECTED
+    assert rejected.json()["detail"]["detail"] == {
+        "owner": "communication_observation",
+        "code": "target-deleted",
+    }
     case.record("observation-http-errors", {"direct": direct.json(), "gateway": relayed.json(), "mismatch": mismatched.json(), "expired": expired_response.json(), "deleted": rejected.json()})
 
 

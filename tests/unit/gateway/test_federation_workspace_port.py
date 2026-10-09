@@ -9,6 +9,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from app.core.session_control_communication_ledger.observations import (
+    observation_error_code,
+)
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
@@ -19,6 +22,7 @@ from app.gateway.federation.errors import (
     FEDERATION_DEADLINE_EXCEEDED,
     FEDERATION_SESSION_MAIN_UNAVAILABLE,
     FEDERATION_TARGET_NOT_RESOLVABLE,
+    FEDERATION_TARGET_OWNER_REJECTED,
     FederationError,
 )
 from app.gateway.federation.workspace_port import (
@@ -253,19 +257,20 @@ def context_read_body() -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    ("status", "detail", "expected_code"),
+    ("status", "detail", "expected_code", "expected_owner_code", "expected_owner"),
     [
-        (404, "missing", FEDERATION_TARGET_NOT_RESOLVABLE),
-        (403, "unshared", FEDERATION_TARGET_NOT_RESOLVABLE),
-        (400, {"code": "unsupported_view"}, "unsupported_view"),
-        (400, {"code": "scope_mismatch"}, "scope_mismatch"),
-        (409, {"code": "snapshot_changed"}, "snapshot_changed"),
-        (400, {"code": "made-up-code", "message": "/private/path"}, FEDERATION_SESSION_MAIN_UNAVAILABLE),
+        (404, "missing", FEDERATION_TARGET_NOT_RESOLVABLE, None, None),
+        (403, "unshared", FEDERATION_TARGET_NOT_RESOLVABLE, None, None),
+        (400, {"code": "unsupported_view"}, FEDERATION_TARGET_OWNER_REJECTED, "unsupported_view", "resource_uri_resolver"),
+        (400, {"code": "scope_mismatch"}, FEDERATION_TARGET_OWNER_REJECTED, "scope_mismatch", "resource_uri_resolver"),
+        (409, {"code": "snapshot_changed"}, FEDERATION_TARGET_OWNER_REJECTED, "snapshot_changed", "context_revision"),
+        (400, {"code": "made-up-code", "message": "/private/path"}, FEDERATION_SESSION_MAIN_UNAVAILABLE, None, None),
     ],
 )
 async def test_context_query_preserves_owner_reject_codes_without_locator_disclosure(
     http_context: _HTTPContext, context_read_body: dict[str, object],
     status: int, detail: object, expected_code: str,
+    expected_owner_code: str | None, expected_owner: str | None,
 ) -> None:
     http_context.status = status
     http_context.data = {"request_id": REQUEST_ID, "detail": detail}
@@ -276,8 +281,47 @@ async def test_context_query_preserves_owner_reject_codes_without_locator_disclo
         )
     assert error.value.code == expected_code
     assert "/private/path" not in str(error.value)
+    assert error.value.detail.get("code") == expected_owner_code
+    assert error.value.detail.get("owner") == expected_owner
     assert len(http_context.requests) == 1
     assert http_context.requests[0].url.path == "/api/v1/context/read"
+
+
+async def test_observation_rejection_keeps_owner_code_for_existing_consumer(
+    http_context: _HTTPContext, read_body: dict[str, object],
+) -> None:
+    http_context.status = 409
+    http_context.data = {
+        "request_id": REQUEST_ID,
+        "detail": {
+            "code": "read-snapshot-invalid",
+            "message": "/private/path",
+            "detail": {"locator": "/private/path"},
+        },
+    }
+
+    with pytest.raises(FederationError) as error:
+        await http_context.port.execute(
+            operation="read",
+            target=read_body["target"],
+            body=read_body,
+            origin="gateway_source",
+            timeout=5,
+        )
+
+    assert error.value.code == FEDERATION_TARGET_OWNER_REJECTED
+    assert error.value.detail == {
+        "owner": "communication_observation",
+        "code": "read-snapshot-invalid",
+    }
+    assert observation_error_code({"detail": error.value.to_wire()}) == (
+        "read-snapshot-invalid"
+    )
+    assert "/private/path" not in str(error.value)
+    assert "/private/path" not in repr(error.value.to_wire())
+    assert http_context.requests[0].url.path == (
+        f"/api/v1/sessions/{TARGET_SESSION}/communication-observations"
+    )
 
 
 async def test_context_target_rejects_unregistered_workspace_before_http(
