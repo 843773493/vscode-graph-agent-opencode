@@ -176,6 +176,15 @@ CanonicalItemRecord
 
 固定的 `mapping/itemized/canonical_langchain.py::project_reasoning_carrier` 是 canonical→LangChain 的投影构造点：opaque/未知 extension envelope 不投影，已知 envelope 的非法 type/wire_type 抛 `ValueError`；typed carrier 指定形状/text key，否则构造标准 reasoning carrier。这不证明上游 canonical producer 已完整登记。`domain/itemized/errors.py` 中 `ItemSchemaError` 继承 `ValueError`，`FormatDispatchError` 继承它；二者不继承有 `code` 的 `CodeCarryingError`。没有固定 API mapper 证据时，不为它们填写臆造的 HTTP/Proto 失败码。
 
+**API / Proto 投影的已核实切片**：固定提交 `c320bf9f` 的 063/065 报告补充以下映射；普通上下文投影和协议声明不等于 canonical 正文的 wire 映射，也不代在途 050 或整个 1.5–1.7 的验收。
+
+| 字段 / 链路 | 唯一 owner 与已核行为 | 结论边界 |
+|---|---|---|
+| context read/search 请求与结果 | `schemas/internal_v2/session_context.py` 定义资源身份、URI、scope、selector/include、分页与预算；`session_context_query_service.py`、assembly query service 构造查询和封存 selection 投影 | DTO `kind` 是展示类别；未输出某个领域顶层字段不能反推领域字段丢失 |
+| 普通 record → item / read 分页 | `session_context_projection.py::project_record_items` 从 record 字典按 include 投影 role/text/reasoning/tool 字段；`SessionContextReadSnapshot.page` 校验 revision/cursor，按 limit/max_chars 分页并为过大 item 输出带 offsets 的 chunk | `raw_record` 仅显式请求时保留；该输入合同未证明直接接收 `CanonicalItemRecord`；read builder 的 `partial_errors` 使用默认空列表 |
+| 成功 envelope / HTTP 失败 | `internal_v2/common.py::APIResponse` 为 `code=0`、`message="ok"`、可空 data 和必填 request_id；context route 映射 revision409、URI400闭集 reason_code、KeyError/NotFound404、TypeError/ValueError400字符串 detail | read 另按 RuntimeError 文本映射三类409，search没有该分支；query的 source-mismatch ValueError 实际落400，不能用捕获分支推定 raiser。全局 body/header 共用 request_id |
+| Proto 声明 / 生成绑定 | `proto/boxteam/workspace/v2/public.proto` 定义 context DTO；`scripts/generate_protocol.mjs` 通过 Buf 生成各运行面绑定 | 生成脚本不是 Pydantic ↔ Proto 转换器；当前切片只核两侧声明，不宣称运行时转换完整，也不据未核边界新增缺陷或阻断门 |
+
 `semantic_kind` 是唯一的 canonical 语义枚举字段；`payload_kind` 只描述 payload 的物理/结构形态；禁止再使用无明确边界的 `kind`、`type` 或 `assistant_text` 作为 canonical item 语义分类。`assistant_text` 是从 `assistant_output` 的 text content part 生成的历史/live projection，`final_response` 是指向已选 final item 的 projection，不是 canonical semantic kind。
 
 `CanonicalItemRecord.status` 的完整枚举固定为 `completed | partial | incomplete | cancelled | failed | unknown`，这些值在 JSONL 中全部表示终态事实；`completed` 表示该 semantic item 的声明 payload 已完整收敛、可按其 schema 正常投影，`partial` 表示已经持久化的 payload 是截至中断/停止边界的完整快照但尚未达到正常语义完成边界，二者都只能写成一个 immutable JSONL item，不能通过后续更新把 `partial` 改成 `completed`。`incomplete` 表示结构化 payload（例如 tool call arguments）没有完成，`cancelled` 表示被明确取消且没有继续执行，`failed` 表示已知失败，`unknown` 表示执行或结果无法确认。`open`、`active`、`running`、`draft` 和 `completed_empty` 不是 canonical item status：它们只能存在于内存 `ItemDraft` 或 assembly/Turn/control outcome；provider 空输出没有 item，使用 `Turn.status=completed_empty` 的 metadata-only terminal convergence。

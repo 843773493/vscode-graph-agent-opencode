@@ -7,10 +7,10 @@
 | Agent | 实际模型 | 当前任务 |
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8必要生产/调用/fixture/E2E完整闭包一次收齐，正在现有copy/attachment owner的capture→claim→settlement→恢复/删除协议；不微交接、不跑半成品矩阵 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **060 active/NWT测试小修**：原055已STOP；按059一次修可选hold消费者及650ms实际deadline采样，最多一次原minimal后整体STOP，不改核心 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **059 STOP/常驻独审**：两项测试finding，observer/DOM/跨页无单独阻断；060固定后只增审实际修订 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **058 STOP/常驻审查**：056/057字段表已写回design/AGENTS；058固定66源＋7callee metadata审计无确证finding，主核SHA/bytes；原1.5–1.7未整体闭合 |
-| `/root/caller_inventory013` | `gpt-6-luna/max` | **041 full STOP、未启动**：started=false、无PID/actual/raw，主核owned0并撤alias；055固定及独审关闭后才派唯一原full |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **067 active/短owner观察**：NWT只读/显式隔离workspace，最多一次protected300s；060/061未变通过项保留，不重跑full定位 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **064 STOP/常驻独审**：B显式依赖合法、receipt12→observe14；正常staging已过滤，缺两次签名轨迹，未确证bug；067一次短观察在途 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **063/065 STOP/常驻独审**：固定15源补普通record投影/APIResponse/Proto生成边界，无确证finding；主写回现有design，不代1.5–1.7全验收 |
+| `/root/caller_inventory013` | `gpt-6-luna/max` | **062 STOP**：原full actual1/588.85s，300串行完成、pair5版本冲突/Gateway0；误选旧JSON已另correction001，未重跑 |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
 
@@ -19,12 +19,14 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`d0fbd72c2fb603289de34edc998aba7f47cf571b`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 恢复核实际HEAD；最近已核文档提交`c320bf9f44fab96682a8449e8e94a5849ba75139`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
 - 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
-- NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 alias已owned0后撤。060 short alias `ROOT/out/.navigation060-tmp`→该目录runtime/navigation-author060/tmp。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
+- NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 alias已owned0后撤。060 alias已owned0后撤；062 short alias已owned0后撤。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
 - 七保护路径沿已接受HEAD：`app/domain/itemized/request_plan.py`；`app/gateway/federation/{channel,transport,rpc}.py`；`tests/unit/gateway/{test_federation_channel_engine.py,test_federation_transport.py,federation/test_rpc_close_cleanup.py}`。032的channel response-error窄例外已接受；不开放其它片段。
 - 六deferred保留：`examples/demos/Itemized_context_storage/runtime/demo/{request-plan.json,transcript.json}`、`src/boxteam.egg-info/PKG-INFO`、`tools/ssh/{a4500_known_hosts,id_ed25519_kunlun,windows_vm_known_hosts}`。开发中间数据可删；保源码/独有修改/凭据/demo/必要raw。ROOT/.boxteam/terminal-manager已不存在。
+
+恢复066主误用裸status刷新共享index的stat缓存，已保现场、机器核stage/flags完全相同后恢复原字节；收据`RV/coordinator/artifacts/recovery-index066-incident/receipt.json`。不据无损认可越界，不追加同义禁令。062 short alias已核owned0后撤。
 
 ## 050核心批
 
@@ -32,9 +34,11 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 
 原8.1-G/H产品pending父Folder、8.3-E最少domain/SQLite/API身份及负向门、8.13 A–S唯一产品E2E及外置harness、8.14剩余生命周期同批。必要callee授权一次，文件清单作盘点不逐文件审批；017未变46pass有限复用，不新增额外external resource矩阵。
 
-已实际编辑：精确ModelCallIdentity/call_identity、transport/assets/schema及原消费者，canonical IdentifierFactory/真实callback namespace，中立phase observer、residency/wait clock与既有导航/通信/观察/删除阶段接线。作者最新回报已接原CreationJournal下持久snapshot登记/marker、SQLite online backup/JSONL committed上界、AttachmentBlobCatalog claim/mapping、target settlement及startup recovery/delete drain，继续补schema/caller、token及低层fork失败收敛和唯一E2E A–S。不凭类型名判断闭合；尚未启动核心测试/Provider、未整体STOP或固定，不记通过。
+已实际编辑：精确ModelCallIdentity/call_identity、transport/assets/schema及原消费者，canonical IdentifierFactory/真实callback namespace，中立phase observer、residency/wait clock与既有导航/通信/观察/删除阶段接线。作者最新回报已接原CreationJournal下持久snapshot登记/marker、SQLite online backup/JSONL committed上界、AttachmentBlobCatalog claim/mapping、target settlement及startup recovery/delete drain，继续补schema/caller、token及低层fork失败收敛和唯一E2E A–S。不凭类型名判断闭合；050核心001真实identity replay/三fork模式2pass/19.18s（wrapper27.10s），Webbuild0/23.44s；Web core001实际1/18.21s为fixture runtime_ports类型引用循环，原作者TYPE_CHECKING收口；002actual1/101.45s已三backend/三Gateway/两SSH就绪，Chromium长socket path失败，正式runtime改proc-FD短引用；003actual1/155.62s首message SSE超时；作者核精确ID匹配，旧cassette roles限制漏封存user parts，同时前端job_id→turn_id fallback请求404。050收齐真实turn DTO/stream/terminal caller与cassette选择器，主/063不写业务源，原失败保留。原8.13-E必要team board投影由同Sol接现有child-threads/TeamBoardDTO/唯一ledger并最后协议/OpenAPI核。A–S仍未闭合、未整体STOP/固定，不记整批通过。
 
 唯一产品Web E2E owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`；全部场景/collection/PASS归此模块，pytest外置停启/barrier/clock控制，不写业务事实或产品test路由。完整必要改动→静态→少量真实核心集中调试→受影响边界→整体STOP/固定/独审/串行集成。
+
+050最新：MessageRunAccepted/ReplayAccepted带真实nullable turn_id，thread_id必填；Orchestrator复用JobService唯一UserExecutionIdentity，pending/stream/Trace/terminal与前端不再用Job冒充Turn。协议生成0/10.58s、Webbuild002 0/20.26s、必要Python边界24pass；Web组87pass/1旧fixture失败，作者已迁旧Job-as-Turn输入/静态0，修后受影响节点待收。core-web004 actual1/133.786s：两轮loop到最终旧roles断言，已修；005 actual1/146.98s：基线两轮真实loop/roles通过，首次扩展误把后端workspace稳定身份用于Gateway注册路由而404。作者正在一次盘齐扩展route-ID消费者及E双child团队/queued-active/strict send schema，先写齐再启动下一Web入口；A–S未闭合、未整体STOP/固定。
 
 ## 055导航观察与未完成full
 
@@ -50,7 +54,11 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 
 059已STOP，report=`RV/a06_navigation_independent/artifacts/navigation055-delta059-review/report.json` SHA471393403aa7d0401354c458a6294bb4388704bc97d9added23c9cf02f18d65a。复用13依赖/054，确认可选hold被Python必查，且7FS中5timer早于deadline0.1–0.5ms；实际FS读取晚于端点663–917ms。observer清理/真实DOM双帧/跨页归属无另阻断，不改生产迎合测试。060 lease/report根=`RV/candidate_boundary_reviewer/artifacts/navigation-consumer060-hold-timer/`，index=`RV/candidate_boundary_reviewer/git/navigation-consumer060-hold-timer.idx`主已init完整42f42；仅NWT原MJS/Python两消费者写，另2及13依赖固定。原作者一次修齐可选诊断与同Chromium实际deadline，保650ms/30s/原样本及operation/DOM门，静态后最多一次protected原minimal，进程直接落raw/actual/source17/PID再整体STOP。主核4源preimage/059报告/shared原字节，收据`RV/coordinator/artifacts/navigation059-to060-receipt/receipt.json`；060实际入口及增审关闭后才派唯一full。
 
-052主核收据=`RV/coordinator/artifacts/navigation-dom052-provenance/verified-attempt002.json`；055整体失败，059仅支持真实DOM观察与跨页归属，060尚未实际通过，不记完整有效。NWT与ROOT不整树相同：旧文档和已接受034/035/036 owner差异逐路径deferred；.venv/node_modules是生成依赖，不声明源码deferred。
+052主核收据=`RV/coordinator/artifacts/navigation-dom052-provenance/verified-attempt002.json`；055整体失败保留；060原minimal0/59.68s（wrapper65.323s），7timer均达到原deadline、2cross真实DOM/identity/order门同过，17pre/post同、13已接受HEAD同、owned0/alias撤。完整固定`d33907863177856a9e0b3097d72ac4fefe672e43`（parent c320、4测试源、strict/full机械0，30具体候选外差异deferred）；manifest=`RV/coordinator/artifacts/navigation060-stopped-fixed/manifest.json`。作者摘要字段把source-before误标pretest，原report保字节，correction001与主直接17对比闭合，不重测。061固定增审report SHA0192ce5d94718c433f0629f021d9fbbc6f582c5ece5a0456dc32104b8e6f36f3，两finding关闭；062 lease/report根=`RV/caller_inventory013/artifacts/navigation060-full062/`，index=`RV/caller_inventory013/git/navigation060-full062.idx`主init固定d339。原full一次protected900s/内部600s；17pre/post、两个实际setsid/timeout组核owned0，停止后主撤精确alias。不把窄机制通过当整个10.4b/10.8或goal完成。NWT与ROOT不整树相同：旧文档和已接受034/035/036 owner差异逐路径deferred；.venv/node_modules是生成依赖，不声明源码deferred。
+
+062原full actual1/pytest588.85s/wrapper591.961345s，300串行完成，第5对`concurrent_b_5.txt`的`op_bbd12381c6dc4531b83237c4825673e5`被拒：directory revision expected12/actual14、effect=none；Gateway0，无本次成功measurements，不能完整分类门。17前后同、owned0/alias撤。作者误把旧060 `measurements.json`（273577bytes）另存失败JSON；主唯一固定真实24,401,400bytes/SHA `cee093256f451146460b4dd066052e671aa10fba867a82342cd113c986b82086`于`RV/coordinator/artifacts/navigation062-provenance/failed-measurements-current062.json`。原report保字节，correction001 SHA0eaa5ff8已核，不重跑补证。064 ART=`RV/a06_navigation_independent/artifacts/navigation062-conflict064-review/`，index=`RV/a06_navigation_independent/git/navigation062-conflict064-review.idx`，index主init d339；只核真实失败/18报文/10固定生产callee及060四源，已STOP，report SHAee3f44ee；B依赖声明合法，staging登记/创建及删除/done顺序均按签名过滤；没有两次revision变化的观察输入，不确证根因。禁止改accepted payload、拿当前revision补缺或新全局CAS；核心finding交Sol自然边界。
+
+067短观察由原Luna作者执行，ART=`RV/candidate_boundary_reviewer/artifacts/navigation-conflict067-short-observation/`，index同名已init d339；NWT只读，业务workspace显式`RV/candidate_boundary_reviewer/workspace/`。仅ART脚本/原raw/actual/report，可读固定owner及真实unit fixture；最多一次protected300s、不启动Web/Provider/dev、不改生产/CAS/accepted payload、不盲重跑full。真实observe输入wrapper只记录、不伪造业务事实；核心finding交Sol自然边界。
 
 ## 已接受实现与余下原门
 
@@ -69,7 +77,9 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 
 itemized目前56/89。原7.5-F架构材料已对表，原8.4三节点46pass已闭合；均不代整个7.5/8。049/053只支持原1.5–1.7局部：最新053核E六具名收据，H4 current002与admission单测、迁移47/64窄原子有限复用；字段owner映射/metadata决策审计/旧v2原件拒绝、逐例typed矩阵、notice Web/checkpoint与admission durable→intent CAS崩溃/hash分域复合門尚未完整对表。不推实现缺失；050结束后同Sol收齐，不再泛查旧A02。
 
-056/057固定23源已核字段owner/type/wire/manifest/异常事实并写design/AGENTS，8c17文档集成strict/guard0；API/Proto mapper、逐字段中文注释与writer全映射仍有未核边界。058固定66Python＋7callee审计按LangChain ingress/typed mirror、版本注解、checkpoint/session控制、provider wire、v1 importer分类，无确证canonical自由metadata决策finding；主固定全仓符号检索仅见`LangChainMessageCodec.turn_id`两测试caller，不据此推死代码或生产事故。主收据`RV/coordinator/artifacts/metadata058-source-review/receipt.json`。均不代live050或1.5–1.7整体验收。
+056/057固定23源已核字段owner/type/wire/manifest/异常事实并写design/AGENTS，8c17文档集成strict/guard0；API/Proto mapper、逐字段中文注释与writer全映射仍有未核边界。058固定66Python＋7callee审计按LangChain ingress/typed mirror、版本注解、checkpoint/session控制、provider wire、v1 importer分类，无确证canonical自由metadata决策finding；主固定全仓符号检索仅见`LangChainMessageCodec.turn_id`两测试caller，不据此推死代码或生产事故。主收据`RV/coordinator/artifacts/metadata058-source-review/receipt.json`。均不代live050或1.5–1.7整体验收。063 lease/report根=`RV/a06_architecture_final/artifacts/field-api-proto063-mapping/`、index=`RV/a06_architecture_final/git/field-api-proto063-mapping.idx`主init固定c320；12具名API/schema/query/mapper/异常/proto共143146字节，补原字段表未核投影及失败映射，约8分钟可行动结论，不扩矩阵或读live050。
+
+063已STOP，主逐fixed Git blob/SHA/bytes核12/12，report SHA792f1452；收据`RV/coordinator/artifacts/field-api-proto063-source-check/receipt.json`。确认context revision409、URI400闭集码，ValueError/TypeError400字符串；read按RuntimeError文字映射409而search无该分支，不能推下游所有异常类别。065只补`session_context_projection.py`、`internal_v2/common.py`及协议生成器3固定源21962bytes，ART/index同名`field-api-proto065-callees`，主init c320；065已STOP、3源机器SHA/bytes吻合，无确证finding；字段投影/APIResponse与Proto生成边界写回现有design，不勾整个1.5–1.7。
 
 原core清单=E/navigation-index-only-10-3/remaining-original-goal.json；原ledger=E/a06-final-task-evidence-ledger.json；E=T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries。原accepted证据按具名收据及实际依赖复用，失败124等不改写为绿。
 
@@ -81,6 +91,6 @@ Gateway条件不实施：原create_folder/move_workspace p95=94.910/75.451ms，H
 
 A/current-recovery-receipt.json只读当前具名键/historical_receipts，不全文打印；A/efficiency-comparison.json分列路由/等待、继承投入、主代理补救与实际attempt，不宣称无同起点A/B的倍率或永久最优。
 
-041同批迁完整消费者减少逐字段微交接，但原full未过；052/054主错误门与Luna手抄字段分别登记，055修订尚待实测。上游路由已由用户修复，实际工具/源码已恢复；不沿旧blocked计数。running不等于测试已启动，权威结束/核owned0后才交下个owner。
+041同批迁完整消费者减少逐字段微交接，但原full未过；052/054主错误门与Luna手抄字段分别登记，060一次minimal及增审验证了650ms与跨页DOM消费者，062原full在pair5冲突失败，不把通过部分当完整门绿。上游路由已恢复实际工具/源码，不沿旧blocked计数；核权威终态/owned0后才交下个owner。
 
 本页压缩前完整状态与SHA保`RV/coordinator/artifacts/current-state-compaction055/{state-before.md,receipt.json}`；更早快照`RV/coordinator/artifacts/current-state-compaction014/`。当前只维护10/10一份memory；旧过程按A具名收据恢复，不重新累积长历史。

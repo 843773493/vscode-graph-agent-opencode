@@ -315,4 +315,8 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 
 055首次minimal实际1/51.23s，MJS `sample`块作用域错误；纯Transpiler解析未捕获该运行错误。作者恢复时漏读已返回终态，又把session_id18014交functions.wait，误报无法恢复。主精确解码原rollout终态，保工具转录和正式browser raw，不重跑坏候选、不造pretest指纹。改为区分session/cell handle，并由进程直接落本attempt raw/source/actual；002实际执行了机器落盘，actual1/65.09s，故只证明收据恢复方式改善，未证明业务验收通过。裸status越界另有incident，共享index原字节；不据无损结果认可越界，不追加同义禁令。
 
-059固定增审复用13个未变依赖与054，只核055增量：Python又把可选query hold当每op必需，导致002测完5file/2cross/2Gateway后StopIteration；同类041曾纠正，说明规则未稳定落实。另7个FS样本中5个timer早于deadline0.1–0.5ms，单修hold仍会红；实际FS读取均晚于端点663–917ms。060交原作者一次修两个消费者：保真实跨页operation/DOM/顺序门，hold只核实际分支；同Chromium时间域复核deadline后采样，保650ms下界和原规模，不让诊断分支变产品门。报告`RV/a06_navigation_independent/artifacts/navigation055-delta059-review/report.json` SHA47139340，原055失败保留；060效果待真实入口与固定增审，不先记有效。
+059固定增审复用13个未变依赖与054，只核055增量：Python又把可选query hold当每op必需，导致002测完5file/2cross/2Gateway后StopIteration；同类041曾纠正，说明规则未稳定落实。另7个FS样本中5个timer早于deadline0.1–0.5ms，单修hold仍会红；实际FS读取均晚于端点663–917ms。060一次修两个消费者，唯一原minimal0/59.68s、7timer达deadline、2cross硬门保持，17pre/post同；完整机械0及061两finding关闭。效果限代表入口，062原full在300串行完成后pair5 revision冲突失败，Gateway0，不外推完整导航。作者source-before误标pretest已保原report另correction001，主机器对比无漂移。
+
+062交付又误把旧060成功measurements.json（273577bytes）保存成failed-measurements.json，漏交本次实际24,401,400bytes失败JSON；虽报告标旧且未冒称通过，仍延误并发定位。主按原路径、mtime、300/0样本与失败operation固定正确文件并告知064，作者另correction001、原report保字节、不重跑补证。产物身份共同核源路径/时段/结构/operation，复制文件名不是证明；后续实际交付效果待收，不重复增加通用门。
+
+050 core-web003漏cassette独立user parts、004最终旧roles断言、005扩展误用后端workspace身份作Gateway注册路由，分别actual1/155.62s、133.786s、146.98s；005基线两轮真实loop/roles已过。旧fixture中的身份语义和输出断言未随完整闭包迁齐，重启整组服务后逐处发现，延缓原A–S交付。主已要求同Sol先一次写齐已知扩展setup/route-ID、E团队及必要schema/caller再启动下一入口，复用未变绿项；实际整批效果待收，不加逐字段冻结门。
