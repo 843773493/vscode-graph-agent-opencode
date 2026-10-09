@@ -8,10 +8,10 @@
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT**：041整体STOP，002代表入口0/39.53s、2真实跨页确认/错op与乱序拒绝；固定b04504a9、机械0，NWT只交独审/full。050一次收齐原Section8确定性身份replay、外置harness及唯一产品E2E原门，必要callee同闭包授权，不微交接；036已375600b2接受 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **041 full STOP、未启动**：started=false、无PID/handle/raw/actual，主核owned0并撤精确alias；NAV041-001修复及独审关闭后才给新候选唯一full。029真实失败保留 |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **041固定增审 STOP**：NAV041-001确认页双rAF未验当前DOM完成文案，待052修；full/queryHolds误读已撤、原报告保留。不测试或写源码 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **052 active/NWT两测试消费者窄修**：恢复确认页真实DOM完成屏障及Python字段断言，保冻结op与发起页目标可见、原计时/规模；静态＋受保护原minimal后整体STOP，不碰ROOT/Sol050。046准备包已交Sol |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **054 active/只读有限诊断**：用052现有失败核原UI完成/双rAF时序、真实DOM与事件区别、观察安装/消费边界，约5分钟先交精确方案；不测试/写码，不打断Sol |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **052待最终STOP/NWT两消费者**：首次仅callback gate原minimal0/47.18s；补启动前真实完成条件后002实际1/77.14s，首跨页30s超时、5串行文件完成/Gateway0。保原失败，无第三次/放松门，保存17SHA及进程清零；不碰ROOT/Sol050 |
 | `/root/luna_federation_codes032` | `gpt-6-luna/max` | **035已集成82f518e8**：四relay预期一次迁齐，原直连/业务异常保；1pass/37.61s、Ruff0、owned0、五源SHA同。未变32unit复用 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **053 active/只读最终typed收据**：仅补049未核的E最终具名raw/原1.5–1.7原子对表，约10分钟先交可执行结论；不重复早期A02泛查或改Sol050。049继承旧HEAD字段已主另存纠正，036已接受 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **053 STOP/有限typed最终收据**：H4 current002与admission单测等窄原子按E依赖复用；1.5–1.7复合门仍未闭合，不推实现缺失，不重跑旧矩阵。后续同Sol收齐原验收，不改050在途范围 |
 
 至少3常驻、最多15活动agent；闲置不制造改动。主统一调度、禁止派生；主只维护文档/固定交付/串行集成，不手写业务源码。Luna只外围小修/独审/验收，不做大型核心改造。
 
@@ -96,3 +96,7 @@
 050 active lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure/`；workdir=ROOT/index=`RV/sol_vertical_implementer/git/section8-product050-full-closure.idx`，主已初始化540157c8，禁作者Git/派生/skill/spec/NWT。原8.1-G/H、8.3-E、8.13A-S及8.14剩余门同一完整批推进；唯一Web E2E owner仍`tests/e2e/clients/web/test_basic_chat_tool_loop.py`。原8.14不含额外外部资源矩阵，017未变46pass有限复用；原少数缺口在现有runtime owner验。正式测试目录沿owner；shortTMPDIR=`ROOT/out/.section8-050-tmp`→正式`runtime/test-control/tmp`，最后owned0仅unlink。全部测试timeout＋ulimit，ROOT venv/--no-sync/唯一ROOT PYTHONPATH；先完整改齐，核心少量入口集中调试，末尾受影响边界，整体STOP后固定独审。046仅准备计划，049仅partial evidence，不把它们记为实现通过。
 
 041增审report322bedb8唯一NAV041-001：历史event/count不能替代确认瞬间当前DOM文案；主已核029原屏障，拒收待窄修。full owner明确未启动，主核进程0/撤alias，`RV/caller_inventory013/artifacts/navigation-crosspage041-full/not-started-stop.json`记录无actual/raw，不能算测试失败或成功。052 lease/report根=`RV/candidate_boundary_reviewer/artifacts/navigation-dom052-narrow/`，index已read-tree b04504a9，只有NWT MJS/Python两测试消费者写权限；原minimal timeout240＋ulimit，short alias `ROOT/out/.navigation052-tmp` 指向正式runtime/navigation-author052/tmp。053 lease/report根=`RV/a06_architecture_final/artifacts/typed-original053-final-receipts/`，当前3e977c8只读最终E收据，有限补证不重复049。Sol050已实际编辑精确ModelCallIdentity与无共享顺序游标replay，维持整批推进；尚无测试结果，不将running记成通过。
+
+050实际推进：精确ModelCallIdentity/call_identity已迁transport/assets/schema及原消费者，canonical IdentifierFactory/真实callback namespace已接；中立phase observer、residency/wait clock及原导航/通信/观察/删除阶段接线已编辑，外置harness/唯一产品E2E fixture继续同批实现。作者报告现行CheckpointForkOwner仍TemporaryDirectory捕获后直接materialization，原8.13-K/M/O持久capture/attachment settlement所需闭包将沿既有owner收齐；主已要求以实际语义/原合同核缺口，不凭新类型名rg零命中造第二owner。尚未测试/固定，不记通过。
+
+053report=`RV/a06_architecture_final/artifacts/typed-original053-final-receipts/report.json`：只核固定E及六具名收据，H4 current002、execution admission单测、迁移47/64窄原子有限复用；不代原1.5–1.7复合门，当前live/050未核。052report001 cc8d3cf7有两条SHA手抄缺位，主机器对照仅确认转录错误，原raw SHA已核；纠正收据`RV/coordinator/artifacts/navigation-dom052-provenance/report001-transcription-crosscheck.json`，不能据错表推生产漂移或补造第一次run快照。002真实raw显示双rAF启动前条件补齐后跨页30s超时，已禁止第三次/full；054只读有限核观察时机与原合同，保持核心不打断。
