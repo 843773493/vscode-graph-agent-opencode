@@ -21,5 +21,8 @@ root 编译，`serde/` 承载 registry 与 plan/assembly 序列化边界，
 
 # 规范
 
+- 字段 owner 导航：`records.py` 持有 canonical item；`identity/item_projection.py` 定义 group/projection/tool-result/source/provenance 值对象；`request_plan.py` 定义 contribution 的选择、替换、source binding 与 ordinal；`enums.py` 定义闭合值域，`schema.py` 与 `serde/` 负责校验和唯一编解码。
+- `source_ordinal` 的持久分配/恢复归 `app/services/infrastructure/rollout_context/assembly/registry.py`，sealed assembly 顺序归 `contribution_ordinal`；领域 producer 不按事件、计数或 metadata 补号。
+- 新增决策字段须同步类型与中文业务注释、校验、serde、实际存储/投影和必要测试；详细映射维护在 `openspec/changes/add-itemized-rollout-context/design.md`，不另建运行时万能字段 registry，不以字段表代替可运行约束。
 - 所有 hash 使用 RFC 8785 JCS v1；非法 JSON value 必须直接抛出。
 - `ref_type`、`payload_kind`、`semantic_kind` 和 status 必须使用闭合集合；未知扩展不能静默降级。

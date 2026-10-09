@@ -9,7 +9,7 @@
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT唯一核心作者**：Section8必要生产/调用/fixture/E2E完整闭包一次收齐，正在现有copy/attachment owner的capture→claim→settlement→恢复/删除协议；不微交接、不跑半成品矩阵 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **055 active/NWT三个测试消费者**：提前装真实DOM观察、按真实op保存双rAF快照、接通消费/输出与计时/FS窗口；静态后最多2次protected原minimal，再整体STOP |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **054 STOP/常驻独审**：已核原合同和052失败；待055固定后只审真实增量，不测试或写源码 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **053 STOP/常驻审查**：原1.5–1.7只补最终E有限收据；仍未整项闭合，不推实现缺失 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **057 STOP/常驻审查**：056固定19源字段表＋057四callee已交付；主核机器SHA/bytes，将可用事实写回既有design/AGENTS；原1.5–1.7未整体闭合 |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **041 full STOP、未启动**：started=false、无PID/actual/raw，主核owned0并撤alias；055固定及独审关闭后才派唯一原full |
 
 至少3常驻、最多15活动；闲置不制造任务。主统一调度、禁派生；主维护规范/技能、机械固定与串行集成，不手写业务源码。Luna只隔离小修/独审/验收；37mixin与平行状态表不能据结构风险派大型改造。
@@ -19,7 +19,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt，仅此活跃代码worktree。禁/tmp、整仓复制、新venv、历史排除业务工作区、源码根注册测试业务工作区。
-- 恢复核实际HEAD；最近已核文档提交`cc7d26129086c3ece43879fd3d0bae1c89584bcc`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
+- 恢复核实际HEAD；最近已核文档提交`3366b5e5a4b17d40ecd6baa3731f21ee5259c1d0`。最近源码集成`375600b2936aaeb819533354f050fc1d947d5769`；ROOT当前050源码在途，未固定/未接受。
 - 共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节；禁止裸Git/index写入、reset/rebase/amend/清暂存。主每次fresh私有index从当前HEAD读树，只灌固定blob/精确路径，strict重建及guard record→commit→verify0。作者/当前审查者禁全部Git操作。
 - 官方dev停止；不改全局配置、不按端口杀未知服务。Python显式ROOT/.venv、UV_PROJECT_ENVIRONMENT、UV_NO_SYNC=1、uv run --no-sync、唯一所属代码根PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试/探针timeout＋ulimit-d4194304。
 - NWT正式测试workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/；055 short alias `ROOT/out/.navigation055-tmp`→该目录runtime/navigation-author055/tmp。050 alias `ROOT/out/.section8-050-tmp`→ROOT/out/tests/e2e/clients/web/test_basic_chat_tool_loop/runtime/test-control/tmp。仅owned0后核target并unlink；正式输出保留。
@@ -32,7 +32,7 @@ lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-
 
 原8.1-G/H产品pending父Folder、8.3-E最少domain/SQLite/API身份及负向门、8.13 A–S唯一产品E2E及外置harness、8.14剩余生命周期同批。必要callee授权一次，文件清单作盘点不逐文件审批；017未变46pass有限复用，不新增额外external resource矩阵。
 
-已实际编辑：精确ModelCallIdentity/call_identity、transport/assets/schema及原消费者，canonical IdentifierFactory/真实callback namespace，中立phase observer、residency/wait clock与既有导航/通信/观察/删除阶段接线。现行CheckpointForkOwner仍TemporaryDirectory捕获后直接materialization，作者正在按原8.13-K/M/O沿既有CreationJournal/copy/attachment owner补持久捕获与settlement；不凭新类型名rg零命中造第二owner。尚未测试/固定，不记通过。
+已实际编辑：精确ModelCallIdentity/call_identity、transport/assets/schema及原消费者，canonical IdentifierFactory/真实callback namespace，中立phase observer、residency/wait clock与既有导航/通信/观察/删除阶段接线。作者最新回报已接原CreationJournal下持久snapshot登记/marker、SQLite online backup/JSONL committed上界、AttachmentBlobCatalog claim/mapping、target settlement及startup recovery/delete drain，继续补schema/caller、token及低层fork失败收敛和唯一E2E A–S。不凭类型名判断闭合；尚未启动核心测试/Provider、未整体STOP或固定，不记通过。
 
 唯一产品Web E2E owner=`tests/e2e/clients/web/test_basic_chat_tool_loop.py`；全部场景/collection/PASS归此模块，pytest外置停启/barrier/clock控制，不写业务事实或产品test路由。完整必要改动→静态→少量真实核心集中调试→受影响边界→整体STOP/固定/独审/串行集成。
 
