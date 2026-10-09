@@ -37,6 +37,7 @@ export async function listSessionCatalogChildren(
   workspaceTarget: GatewayWorkspaceRequestTarget,
   parentNodeId?: string | null,
   cursor?: string | null,
+  options: { signal?: AbortSignal } = {},
 ): Promise<SessionCatalogPage> {
   const query = new URLSearchParams({ limit: "100" });
   if (parentNodeId) query.set("parent_node_id", parentNodeId);
@@ -44,7 +45,7 @@ export async function listSessionCatalogChildren(
   const page = unwrapApiData(await requestJson<APIResponse<SessionCatalogPage>>(
     port,
     `/api/v1/session-catalog/children?${query.toString()}`,
-    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget) },
+    { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
   assertSessionCatalogNodes(page.items, "会话目录子节点");
   return page;

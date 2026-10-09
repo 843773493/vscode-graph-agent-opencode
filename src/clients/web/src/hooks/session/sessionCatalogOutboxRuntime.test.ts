@@ -142,6 +142,17 @@ describe("会话目录 outbox runtime", () => {
 
     try {
       runtime.activatePrincipal(access);
+      const phases: string[] = [];
+      runtime.registerFailureOwner(access, {
+        async refresh(target, reported, revision, signal) {
+          expect(target).toEqual(WORKSPACE_TARGET);
+          expect(revision).toBe(7);
+          expect(reported.operations[0].state).toBe("rejected");
+          expect(signal.aborted).toBe(false);
+          phases.push("confirmed");
+        },
+        async waitForProjection() { phases.push("projection"); },
+      });
       const handle = await runtime.openWorkspace(WORKSPACE_TARGET, access);
       await statusRequest;
       allowStatus({
@@ -153,6 +164,7 @@ describe("会话目录 outbox runtime", () => {
       // 等待 outbox 清理完成；删除回调记录当时已交付的错误。
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
 
+      expect(phases).toEqual(["confirmed", "projection", "projection"]);
       expect(queryTargets).toEqual([WORKSPACE_TARGET]);
       expect(handle.workspaceTarget).toEqual(WORKSPACE_TARGET);
       expect(errorsAtDelete).toEqual(errors);
@@ -166,4 +178,87 @@ describe("会话目录 outbox runtime", () => {
       runtime.dispose();
     }
   });
+});
+
+describe("失败 confirmed owner 的恢复边界", () => {
+  for (const failure of ["owner 缺席", "刷新失败", "owner 在刷新中撤销"] as const) {
+    test(`${failure}保留持久 pending 与真实错误，后注册 owner 可恢复`, async () => {
+      const access = testGatewayUserAccess();
+      const { record } = persistedOperation();
+      let records = [record];
+      const errors: string[] = [];
+      const phases: string[] = [];
+      let completeDelete!: () => void;
+      const deleted = new Promise<void>((resolve) => { completeDelete = resolve; });
+      let refreshStarted!: () => void;
+      const refreshing = new Promise<void>((resolve) => { refreshStarted = resolve; });
+      let finishRefresh!: () => void;
+      const refreshGate = new Promise<void>((resolve) => { finishRefresh = resolve; });
+      let queryCount = 0;
+      installGatewayFetch(({ path }) => {
+        if (path === "/api/gateway/health") return apiResponse({ gateway_id: GATEWAY_ID });
+        if (path === "/api/v1/workspace") return apiResponse({ workspace_id: BACKEND_WORKSPACE_ID });
+        return undefined;
+      });
+      const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT, reconcileIntervalMs: 60_000,
+        onError: (message) => errors.push(message),
+        openPersistence: async () => ({
+          load: async () => records,
+          insert: async () => { throw new Error("恢复用例不应新增命令"); },
+          delete: async () => { phases.push("delete"); records = []; completeDelete(); },
+        }),
+        adapter: {
+          enqueue: async () => { throw new Error("拒绝命令不得重复入队"); },
+          queryStatus: async (_port, _target, ids) => {
+            queryCount += 1;
+            expect(ids).toEqual([OPERATION_ID]);
+            return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+              items: [rejectedReceipt()], unknown_operation_ids: [] };
+          },
+        },
+      });
+      try {
+        runtime.activatePrincipal(access);
+        let unregister: () => void = () => undefined;
+        if (failure !== "owner 缺席") {
+          unregister = runtime.registerFailureOwner(access, {
+            async refresh() {
+              if (failure === "刷新失败") throw new Error("权威 snapshot 请求失败");
+              refreshStarted();
+              await refreshGate;
+            },
+            async waitForProjection() {},
+          });
+        }
+        const handle = await runtime.openWorkspace(WORKSPACE_TARGET, access);
+        const attempt = handle.driver.reconcile();
+        if (failure === "owner 在刷新中撤销") {
+          await refreshing;
+          unregister();
+          finishRefresh();
+        }
+        await expect(attempt).rejects.toThrow(failure === "刷新失败" ? "权威 snapshot 请求失败" : "owner");
+        if (failure === "刷新失败") unregister();
+        expect(handle.driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([OPERATION_ID]);
+        expect(records).toEqual([record]);
+        expect(errors.join("；")).toContain("会话正在运行");
+        expect(errors.join("；")).toContain(OPERATION_ID);
+        runtime.registerFailureOwner(access, {
+          async refresh(target, reported, revision, signal) {
+            expect(target).toEqual(WORKSPACE_TARGET);
+            expect(revision).toBe(12);
+            expect(reported.operations[0].state).toBe("rejected");
+            expect(signal.aborted).toBe(false);
+            phases.push("refresh");
+          },
+          async waitForProjection() { phases.push("projection"); },
+        });
+        await deleted;
+        await handle.driver.reconcile();
+        expect(phases).toEqual(["refresh", "projection", "delete", "projection"]);
+        expect(queryCount).toBe(1);
+        expect(handle.driver.current().operations).toEqual([]);
+      } finally { finishRefresh(); runtime.dispose(); }
+    });
+  }
 });

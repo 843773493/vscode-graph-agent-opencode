@@ -111,6 +111,7 @@ async function renderExplorer(options: {
       }
       return apiResponse({
         revision: "catalog",
+        catalog_revision: 3,
         parent_node_id: null,
         items: options.branchItems ?? [],
         cursor: null,

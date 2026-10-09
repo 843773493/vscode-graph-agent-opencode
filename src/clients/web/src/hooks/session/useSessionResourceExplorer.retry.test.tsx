@@ -124,15 +124,15 @@ describe("迟到定位请求的失败不得覆盖新分支终态", () => {
       if (path.includes("/api/v1/session-catalog/children")) {
         childrenCalls += 1;
         if (childrenCalls === 1) {
-          return apiResponse({ revision: "mount", parent_node_id: null, items: [], cursor: null, total: 0 });
+          return apiResponse({ revision: "mount", catalog_revision: 7, parent_node_id: null, items: [], cursor: null, total: 0 });
         }
         if (childrenCalls === 2) {
-          return apiResponse({ revision: "refresh", parent_node_id: null, items: [], cursor: "c1", total: 0 });
+          return apiResponse({ revision: "refresh", catalog_revision: 7, parent_node_id: null, items: [], cursor: "c1", total: 0 });
         }
         if (childrenCalls === 3) {
           return new Promise<Response>((resolve) => { pagingResolve = resolve; });
         }
-        return apiResponse({ revision: "ok", parent_node_id: null, items: [], cursor: null, total: 0 });
+        return apiResponse({ revision: "ok", catalog_revision: 8, parent_node_id: null, items: [], cursor: null, total: 0 });
       }
       return undefined;
     }));

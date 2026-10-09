@@ -187,6 +187,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
         catalogRequests.push(parentNodeId ?? "root");
         return apiResponse({
           revision: "catalog",
+          catalog_revision: 3,
           parent_node_id: parentNodeId,
           items: parentNodeId === "folder-a"
             ? [{ node_id: "session-a", kind: "session", name: "Session A", session_id: "session-a" }]

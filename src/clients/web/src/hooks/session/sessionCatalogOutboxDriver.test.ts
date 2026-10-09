@@ -9,6 +9,7 @@ import type {
 import {
   addCatalogOutboxIntent,
   assignCatalogOutboxOperationSequence,
+  catalogOutboxBatchToIntents,
   createCatalogOutbox,
   type CatalogOutbox,
   type CatalogOutboxOperation,
@@ -575,6 +576,7 @@ describe("会话目录 outbox 驱动：持久化先于入队", () => {
 describe("会话目录 outbox 驱动：未知结果与对账", () => {
   function driverWithAdapter(
     adapter: SessionCatalogOperationsAdapter,
+    reconcileFailure?: Parameters<typeof createSessionCatalogOutboxDriver>[0]["reconcileFailure"],
   ): CatalogOutboxDriver {
     return createSessionCatalogOutboxDriver({
       port: PORT,
@@ -583,6 +585,7 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
       partition: PARTITION,
       persistence: recordingPort(),
       adapter,
+      reconcileFailure,
     });
   }
 
@@ -641,6 +644,10 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
           unknown_operation_ids: [],
         };
       },
+    }, async (reported, revision, finalize) => {
+      expect(revision).toBe(12);
+      expect(reported.operations[0].state).toBe("rejected");
+      await finalize();
     });
     await driver.restore();
     const outcome = await driver.applyIntent(opId("a"), renameIntent(), {
@@ -656,7 +663,6 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     const bInserted = deferred<void>();
     const releaseBInsert = deferred<void>();
     const deleteStarted = deferred<void>();
-    const bCleanupStarted = deferred<void>();
     const releaseDelete = deferred<void>();
     const enqueueStarted = deferred<void>();
     const rejectA = deferred<void>();
@@ -676,7 +682,6 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
       async delete(partitionKey, clientOperationIds) {
         deleteCalls.push([...clientOperationIds]);
         if (deleteCalls.length === 1) deleteStarted.resolve();
-        else bCleanupStarted.resolve();
         await releaseDelete.promise;
         await base.delete(partitionKey, clientOperationIds);
       },
@@ -687,6 +692,10 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
       workspaceTarget: WORKSPACE_TARGET,
       partition: PARTITION,
       persistence,
+      async reconcileFailure(_reported, revision, finalize) {
+        expect(revision).toBe(12);
+        await finalize();
+      },
       adapter: {
         async enqueue(_port, _workspaceId, intents) {
           const operationIds = intents.map((intent) => intent.client_operation_id);
@@ -747,11 +756,10 @@ describe("会话目录 outbox 驱动：未知结果与对账", () => {
     await deleteStarted.promise;
     // B 的 IDB 行已提交，但它的 insert continuation 尚未把序号回填到内存。
     releaseBInsert.resolve();
-    await bCleanupStarted.promise;
     releaseDelete.resolve();
     const outcomes = await Promise.allSettled([first, dependent, independent]);
     expect(outcomes[0]).toMatchObject({ status: "fulfilled", value: "rejected" });
-    expect(outcomes[1]).toMatchObject({ status: "rejected" });
+    expect(outcomes[1]).toMatchObject({ status: "fulfilled", value: "rejected" });
     expect(outcomes[2]).toMatchObject({ status: "fulfilled", value: "accepted" });
     expect(deleteCalls[0]).toEqual([opId("a"), opId("b")]);
     expect(enqueueCalls).toEqual([[opId("a")], [opId("c")]]);
@@ -1091,3 +1099,359 @@ describe("会话目录 outbox 驱动：身份切换 fence", () => {
 function createCatalogOutboxBroadcasterForTest() {
   return createCatalogOutboxBroadcaster();
 }
+
+describe("会话目录失败对账的派发边界", () => {
+  for (const missingOwner of [true, false]) {
+    test(`${missingOwner ? "缺少 owner" : "权威刷新失败"}后新独立命令不得绕过未完成的失败对账`, async () => {
+      const persistence = recordingPort();
+      const enqueued: string[][] = [];
+      let refreshAvailable = false;
+      const driver = createSessionCatalogOutboxDriver({
+        port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+        partition: PARTITION, persistence,
+        reconcileFailure: missingOwner ? undefined : async (_reported, revision, finalize) => {
+          expect(revision).toBe(12);
+          if (!refreshAvailable) throw new Error("权威目录读取失败");
+          await finalize();
+        },
+        adapter: {
+          async enqueue(_port, _target, intents) {
+            enqueued.push(intents.map((intent) => intent.client_operation_id));
+            return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: intents.length,
+              receipts: intents.map((intent) => receipt(intent.client_operation_id)), created_node_ids: {} };
+          },
+          async queryStatus(_port, _target, ids) {
+            return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+              items: ids.includes(opId("a")) ? [receipt(opId("a"), { state: "rejected",
+                error_code: "revision_changed", error_detail: "其它客户端已修改 A", receipt_revision: 2 })] : [],
+              unknown_operation_ids: ids.filter((id) => id !== opId("a")) };
+          },
+        },
+      });
+      await driver.restore();
+      await driver.applyIntent(opId("a"), renameIntent(), { baseCatalogRevision: 7, expectedRevision: 3 });
+      const failure = missingOwner ? "缺少 confirmed" : "权威目录读取失败";
+      await expect(driver.reconcile()).rejects.toThrow(failure);
+      await expect(driver.applyIntent(opId("c"), { kind: "rename_node", targetNodeId: "cnode_3", name: "独立 C" },
+        { baseCatalogRevision: 7, expectedRevision: 4 })).rejects.toThrow(failure);
+      expect(enqueued).toEqual([[opId("a")]]);
+      expect(driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([opId("a"), opId("c")]);
+      expect((await persistence.load(PARTITION_KEY)).map((record) => record.operation.client_operation_id)).toEqual([opId("a"), opId("c")]);
+      expect(driver.current().operations[1].base_catalog_revision).toBe(7);
+      if (!missingOwner) {
+        refreshAvailable = true;
+        await driver.reconcile();
+        expect(enqueued).toEqual([[opId("a")], [opId("c")]]);
+        expect(driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([opId("c")]);
+        expect(driver.current().operations[0].base_catalog_revision).toBe(7);
+      }
+    });
+  }
+
+  test("入队返回已有拒绝 tombstone 时先等权威对账并如实返回 rejected", async () => {
+    const refreshing = deferred();
+    const release = deferred();
+    let driver!: CatalogOutboxDriver;
+    driver = createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION, persistence: recordingPort(),
+      async reconcileFailure(reported, _revision, finalize) {
+        expect(reported.operations[0].state).toBe("rejected");
+        refreshing.resolve();
+        await release.promise;
+        await finalize();
+      },
+      adapter: {
+        async enqueue() {
+          return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: 1,
+            receipts: [receipt(opId("a"), { state: "rejected", receipt_revision: 2,
+              error_code: "revision_changed", error_detail: "原操作已被拒绝" })], created_node_ids: {} };
+        },
+        async queryStatus() { throw new Error("202 已返回完整终态，不能改用第二次读取取得同一回执"); },
+      },
+    });
+    await driver.restore();
+    const applying = driver.applyIntent(opId("a"), renameIntent(), { baseCatalogRevision: 7, expectedRevision: 3 });
+    try {
+      await refreshing.promise;
+      expect(driver.current().operations[0].state).toBe("persisted");
+    } finally { release.resolve(); }
+    expect(await applying).toBe("rejected");
+    expect(driver.current().operations).toEqual([]);
+  });
+
+  test("身份切换取消失败刷新，迟到 owner 不得清理持久 pending", async () => {
+    const persistence = recordingPort();
+    const refreshing = deferred();
+    const release = deferred();
+    let refreshSignal!: AbortSignal;
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION, persistence,
+      async reconcileFailure(_reported, _revision, finalize, signal) {
+        refreshSignal = signal;
+        refreshing.resolve();
+        await release.promise;
+        await finalize();
+      },
+      adapter: {
+        async enqueue() { return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: 1,
+          receipts: [receipt(opId("a"))], created_node_ids: {} }; },
+        async queryStatus() { return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+          items: [receipt(opId("a"), { state: "cancelled", error_detail: "服务端已取消", receipt_revision: 2 })],
+          unknown_operation_ids: [] }; },
+      },
+    });
+    await driver.restore();
+    await driver.applyIntent(opId("a"), renameIntent(), { baseCatalogRevision: 7, expectedRevision: 3 });
+    const reconciling = driver.reconcile();
+    await refreshing.promise;
+    const current = driver.current();
+    driver.deactivate();
+    expect(refreshSignal.aborted).toBe(true);
+    release.resolve();
+    await expect(reconciling).rejects.toThrow("principal 已失效");
+    expect(driver.current()).toBe(current);
+    expect((await persistence.load(PARTITION_KEY)).map((record) => record.operation.client_operation_id)).toEqual([opId("a")]);
+  });
+});
+
+describe("跨 tab 失败对账", () => {
+  test("外部删项通知先按原 ID 对账与刷新 confirmed，不能先丢失败信号", async () => {
+    const persistence = recordingPort();
+    const refreshing = deferred();
+    const release = deferred();
+    let enqueues = 0;
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION, persistence,
+      async reconcileFailure(_reported, revision, finalize) {
+        expect(revision).toBe(12);
+        refreshing.resolve();
+        await release.promise;
+        await finalize();
+      },
+      adapter: {
+        async enqueue(_port, _target, intents) {
+          enqueues += 1;
+          return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: intents.length,
+            receipts: intents.map((intent) => receipt(intent.client_operation_id)), created_node_ids: {} };
+        },
+        async queryStatus(_port, _target, ids) {
+          expect(ids).toEqual([opId("a"), opId("c")]);
+          return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+            items: [receipt(opId("a"), { state: "dependency_failed", receipt_revision: 2, error_detail: "其它窗口已对账失败" }),
+              receipt(opId("c"))], unknown_operation_ids: [] };
+        },
+      },
+    });
+    await driver.restore();
+    await driver.applyIntent(opId("a"), renameIntent(), { baseCatalogRevision: 7, expectedRevision: 3 });
+    await driver.applyIntent(opId("c"), { kind: "rename_node", targetNodeId: "cnode_3", name: "C" }, { baseCatalogRevision: 7, expectedRevision: 4 });
+    await persistence.delete(PARTITION_KEY, [opId("a")]);
+    const reloading = driver.reload();
+    try {
+      await Promise.race([refreshing.promise, reloading.then(() => { throw new Error("外部删项尚未完成 confirmed 刷新就已公开"); })]);
+      expect(driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([opId("a"), opId("c")]);
+    } finally { release.resolve(); }
+    await reloading;
+    expect(enqueues).toBe(2);
+    expect(driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([opId("c")]);
+    expect(driver.current().operations[0].state).toBe("accepted");
+    expect(driver.current().operations[0].base_catalog_revision).toBe(7);
+  });
+});
+
+
+describe("失败持久清理的同 driver 恢复", () => {
+  test("持久清理失败后同 driver 重试，并保留清理等待中新独立命令及原派发身份", async () => {
+    const base = recordingPort();
+    let seed = createCatalogOutbox(PARTITION);
+    seed = addCatalogOutboxIntent(seed, opId("a"), {
+      kind: "create_folder", name: "被拒绝的父目录 A",
+    }, { baseCatalogRevision: 7 });
+    seed = addCatalogOutboxIntent(seed, opId("b"), {
+      kind: "move_node", targetNodeId: "cnode_b", parentCreatedByOperationId: opId("a"),
+    }, { baseCatalogRevision: 7, expectedRevision: 2, dependsOn: [opId("a")] });
+    seed = addCatalogOutboxIntent(seed, opId("c"), renameIntent(), {
+      baseCatalogRevision: 7, expectedRevision: 3,
+    });
+    for (const operation of seed.operations) await base.insert(PARTITION_KEY, operation);
+    const retryDeleteStarted = deferred<void>();
+    const releaseDelete = deferred<void>();
+    const newIntentsPersisted = deferred<void>();
+    const deleted: string[][] = [];
+    const phases: string[] = [];
+    const enqueued: ReturnType<typeof catalogOutboxBatchToIntents>[] = [];
+    let queryCount = 0;
+    let ownerCount = 0;
+    let driver!: CatalogOutboxDriver;
+    const persistence: CatalogOutboxPersistencePort = {
+      ...base,
+      async delete(partitionKey, ids) {
+        deleted.push([...ids]);
+        phases.push("delete:" + ids.join(","));
+        if (deleted.length === 1) throw new Error("AbortError: IndexedDB 删除事务暂时失败");
+        if (deleted.length === 2) {
+          retryDeleteStarted.resolve();
+          await releaseDelete.promise;
+        }
+        await base.delete(partitionKey, ids);
+      },
+    };
+    driver = createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION, persistence,
+      async reconcileFailure(reported, revision, finalize, signal) {
+        ownerCount += 1;
+        expect(revision).toBe(12);
+        expect(reported.operations.find((operation) => operation.client_operation_id === opId("a"))?.state)
+          .toBe("rejected");
+        expect(signal.aborted).toBe(false);
+        phases.push("confirmed:" + ownerCount, "projection:before");
+        await finalize();
+        phases.push("projection:after");
+        expect(driver.current().operations.every((operation) =>
+          operation.client_operation_id === opId("c") || operation.client_operation_id === opId("e")))
+          .toBe(true);
+      },
+      adapter: {
+        async queryStatus(_port, target, ids) {
+          queryCount += 1;
+          expect(target).toEqual(WORKSPACE_TARGET);
+          expect(ids).toEqual([opId("a"), opId("b"), opId("c")]);
+          return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+            items: [receipt(opId("a"), { kind: "create_folder", state: "rejected",
+              error_code: "revision_changed", error_detail: "父目录被其它客户端修改", receipt_revision: 2 })],
+            unknown_operation_ids: [opId("b"), opId("c")] };
+        },
+        async enqueue(_port, target, intents) {
+          expect(target).toEqual(WORKSPACE_TARGET);
+          expect(phases[phases.length - 1]).toBe("projection:after");
+          phases.push("enqueue");
+          enqueued.push(structuredClone(intents));
+          return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: intents.length,
+            receipts: intents.map((intent) => receipt(intent.client_operation_id, {
+              client_sequence: intent.client_sequence,
+            })), created_node_ids: {} };
+        },
+      },
+      onChange(outbox) {
+        const newIds = [opId("d"), opId("e")];
+        if (newIds.every((id) => outbox.operations.some((operation) =>
+          operation.client_operation_id === id && operation.state === "persisted"))) {
+          newIntentsPersisted.resolve();
+        }
+      },
+    });
+    await driver.restore();
+    const originalC = structuredClone(driver.current().operations.find((operation) =>
+      operation.client_operation_id === opId("c"))!);
+    const originalWire = catalogOutboxBatchToIntents([originalC]);
+    await expect(driver.reconcile()).rejects.toThrow("IndexedDB 删除事务暂时失败");
+    expect(enqueued).toEqual([]);
+    expect((await persistence.load(PARTITION_KEY)).map((record) => record.operation.client_operation_id))
+      .toEqual([opId("a"), opId("b"), opId("c")]);
+
+    // 必须复用原 driver 与原回执；第一次 delete 失败不能要求整页恢复或重查新 ID。
+    const retrying = driver.reconcile();
+    let applying: Promise<PromiseSettledResult<unknown>[]> | null = null;
+    let originalE: CatalogOutboxOperation | null = null;
+    try {
+      await Promise.race([retryDeleteStarted.promise, retrying.then(() => {
+        throw new Error("持久清理重试尚未开始就已返回成功");
+      })]);
+      expect(driver.current().operations.map((operation) => operation.client_operation_id))
+        .toEqual([opId("a"), opId("b"), opId("c")]);
+      expect(driver.current().operations[0]!.state).toBe("rejected");
+      const dependent = driver.applyIntent(opId("d"), {
+        kind: "create_folder", name: "清理期间新增的依赖 D",
+      }, { baseCatalogRevision: 7, dependsOn: [opId("b")] });
+      const independent = driver.applyIntent(opId("e"), {
+        kind: "rename_node", targetNodeId: "cnode_e", name: "清理期间新增的独立 E",
+      }, { baseCatalogRevision: 7, expectedRevision: 5 });
+      applying = Promise.allSettled([dependent, independent]);
+      await newIntentsPersisted.promise;
+      originalE = structuredClone(driver.current().operations.find((operation) =>
+        operation.client_operation_id === opId("e"))!);
+      expect(catalogOutboxBatchToIntents([driver.current().operations.find((operation) =>
+        operation.client_operation_id === opId("c"))!])).toEqual(originalWire);
+      expect(enqueued).toEqual([]);
+      expect((await persistence.load(PARTITION_KEY)).map((record) => record.operation.client_operation_id))
+        .toEqual([opId("a"), opId("b"), opId("c"), opId("d"), opId("e")]);
+    } finally {
+      releaseDelete.resolve();
+      await Promise.allSettled([retrying, ...(applying ? [applying] : [])]);
+    }
+    await retrying;
+    expect(await applying!).toEqual([
+      { status: "fulfilled", value: "rejected" },
+      { status: "fulfilled", value: "accepted" },
+    ]);
+    expect(queryCount).toBe(1);
+    expect(ownerCount).toBe(2);
+    expect(deleted).toEqual([[opId("a"), opId("b")], [opId("a"), opId("b")], [opId("d")]]);
+    expect(phases).toEqual([
+      "confirmed:1", "projection:before", "delete:" + [opId("a"), opId("b")].join(","),
+      "confirmed:2", "projection:before", "delete:" + [opId("a"), opId("b")].join(","),
+      "delete:" + opId("d"), "projection:after", "enqueue",
+    ]);
+    expect(enqueued).toEqual([catalogOutboxBatchToIntents([originalC, originalE!])]);
+    expect(driver.current().operations.map((operation) => operation.client_operation_id))
+      .toEqual([opId("c"), opId("e")]);
+    expect(driver.current().operations.map((operation) => operation.state)).toEqual(["accepted", "accepted"]);
+    expect(catalogOutboxBatchToIntents(driver.current().operations))
+      .toEqual(catalogOutboxBatchToIntents([originalC, originalE!]));
+    expect((await persistence.load(PARTITION_KEY)).map((record) => record.operation.client_operation_id))
+      .toEqual([opId("c"), opId("e")]);
+  });
+
+  test("持久删除等待中失效不得发布清理成功或继续派发", async () => {
+    const base = recordingPort();
+    const deleting = deferred<void>();
+    const release = deferred<void>();
+    const phases: string[] = [];
+    const broadcasts: string[] = [];
+    let failureSignal!: AbortSignal;
+    const driver = createSessionCatalogOutboxDriver({
+      port: PORT, gatewayWorkspaceId: GATEWAY_WORKSPACE_ID, workspaceTarget: WORKSPACE_TARGET,
+      partition: PARTITION,
+      persistence: { ...base, async delete(partitionKey, ids) {
+        deleting.resolve();
+        await release.promise;
+        await base.delete(partitionKey, ids);
+      } },
+      broadcast: { post: (key) => broadcasts.push(key) },
+      async reconcileFailure(_reported, _revision, finalize, signal) {
+        failureSignal = signal;
+        phases.push("projection:before");
+        await finalize();
+        phases.push("projection:after");
+      },
+      adapter: {
+        async enqueue() { return { workspace_id: BACKEND_WORKSPACE_ID, accepted_count: 1,
+          receipts: [receipt(opId("a"))], created_node_ids: {} }; },
+        async queryStatus() { return { workspace_id: BACKEND_WORKSPACE_ID, catalog_revision: 12,
+          items: [receipt(opId("a"), { state: "cancelled", error_detail: "服务端已取消", receipt_revision: 2 })],
+          unknown_operation_ids: [] }; },
+      },
+    });
+    await driver.restore();
+    await driver.applyIntent(opId("a"), renameIntent(), { baseCatalogRevision: 7, expectedRevision: 3 });
+    const reconciling = driver.reconcile();
+    await deleting.promise;
+    const beforeDeactivation = driver.current();
+    const broadcastCount = broadcasts.length;
+    driver.deactivate();
+    expect(failureSignal.aborted).toBe(true);
+    release.resolve();
+    await expect(reconciling).rejects.toThrow("principal 已失效");
+    expect(driver.current()).toBe(beforeDeactivation);
+    expect(driver.current().operations.map((operation) => operation.client_operation_id)).toEqual([opId("a")]);
+    expect(driver.current().operations[0]!.state).toBe("cancelled");
+    expect(broadcasts).toHaveLength(broadcastCount);
+    expect(phases).toEqual(["projection:before"]);
+    // 已开始的持久事务可能完成，但旧 principal 不能把它伪报为 UI 清理成功。
+    expect(await base.load(PARTITION_KEY)).toEqual([]);
+  });
+});

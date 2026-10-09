@@ -66,6 +66,7 @@ async function renderWithBranchItem(
     if (request.path.includes("/api/v1/session-catalog/children")) {
       return apiResponse({
         revision: "catalog",
+        catalog_revision: 3,
         parent_node_id: null,
         items: branchItems,
         cursor: null,

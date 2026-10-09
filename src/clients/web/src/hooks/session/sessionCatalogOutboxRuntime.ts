@@ -45,7 +45,19 @@ export interface SessionCatalogOutboxHandle {
   driver: CatalogOutboxDriver;
 }
 
+export interface SessionCatalogFailureOwner {
+  refresh: (
+    workspaceTarget: GatewayWorkspaceRequestTarget,
+    outbox: CatalogOutbox,
+    minimumCatalogRevision: number,
+    signal: AbortSignal,
+  ) => Promise<void>;
+  waitForProjection: (signal: AbortSignal) => Promise<void>;
+}
+
 export interface SessionCatalogOutboxRuntime {
+  /** 只接入失败对账；打开、成功提交与原恢复入口不依赖 UI 注册。 */
+  registerFailureOwner: (access: GatewayUserAccess, owner: SessionCatalogFailureOwner) => () => void;
   getSnapshot: () => SessionCatalogOutboxSnapshot;
   subscribe: (listener: () => void) => () => void;
   openWorkspace: (
@@ -147,6 +159,7 @@ export function createSessionCatalogOutboxRuntime(
   const openingsByScope = new Map<string, Promise<RuntimeDriver>>();
   const driversByPartition = new Map<string, RuntimeDriver>();
   const listeners = new Set<() => void>();
+  const failureOwners = new Map<string, Set<SessionCatalogFailureOwner>>();
   const terminalOperations = new Map<string, CatalogOutboxOperation>();
   const reportedFailures = new Set<string>();
   let snapshot: SessionCatalogOutboxSnapshot = new Map();
@@ -261,7 +274,7 @@ export function createSessionCatalogOutboxRuntime(
       for (const runtimeDriver of driversByScope.values()) {
         if (!isCurrentDriver(runtimeDriver)) continue;
         const hasUnsettled = runtimeDriver.driver.current().operations.some(
-          (operation) => !catalogOutboxOperationIsTerminal(operation),
+          (operation) => operation.state !== "committed",
         );
         if (!hasUnsettled) continue;
         void runtimeDriver.driver.reconcile().catch((error: unknown) => {
@@ -355,6 +368,27 @@ export function createSessionCatalogOutboxRuntime(
         persistence,
         adapter: options.adapter,
         broadcast: broadcast?.broadcaster,
+        async reconcileFailure(outbox, catalogRevision, finalize, signal) {
+          assertCurrentDriver(runtimeDriver);
+          const owners = [...(failureOwners.get(principal) ?? [])];
+          if (owners.length === 0) {
+            throw new Error("会话目录失败对账缺少 confirmed 分支刷新 owner，保留 pending 等待恢复");
+          }
+          await Promise.all(owners.map((owner) => owner.refresh(
+            workspaceTarget, outbox, catalogRevision, signal,
+          )));
+          assertCurrentDriver(runtimeDriver);
+          // 新 confirmed 必须先经过现有纯投影，才允许撤销失败闭包。
+          await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+          assertCurrentDriver(runtimeDriver);
+          if (owners.some((owner) => !failureOwners.get(principal)?.has(owner))) {
+            throw new Error("会话目录 confirmed owner 已离开，保留 pending 等待恢复");
+          }
+          await finalize();
+          // 清理后仍独立的 pending 必须已经由最新 confirmed 进入现有纯投影。
+          await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+          assertCurrentDriver(runtimeDriver);
+        },
         onChange(outbox) {
           for (const operation of outbox.operations) {
             if (catalogOutboxOperationIsTerminal(operation)) {
@@ -403,8 +437,7 @@ export function createSessionCatalogOutboxRuntime(
         throw error;
       }
       scheduleReconciliation();
-      // A restored outbox is authoritative local pending state. Status failures stay visible and
-      // do not discard it or prevent the directory from rendering.
+      // 恢复只取回本地 pending；对账错误保持可见，不丢命令，也不阻止目录显示。
       void driver.reconcile().catch((error: unknown) => {
         if (isCurrentDriver(runtimeDriver)) {
           reportError(
@@ -546,6 +579,26 @@ export function createSessionCatalogOutboxRuntime(
     return { ...submitted, operation };
   };
 
+  const registerFailureOwner: SessionCatalogOutboxRuntime["registerFailureOwner"] = (access, owner) => {
+    if (disposed) throw new Error("会话目录 outbox runtime 已停止");
+    const principal = principalFor(access);
+    const owners = failureOwners.get(principal) ?? new Set<SessionCatalogFailureOwner>();
+    owners.add(owner);
+    failureOwners.set(principal, owners);
+    // owner 晚于恢复就绪时重新对账现存命令，不给合法的打开入口增加注册前置。
+    for (const runtimeDriver of driversByScope.values()) {
+      if (runtimeDriver.principal !== principal || !isCurrentDriver(runtimeDriver)) continue;
+      if (runtimeDriver.driver.current().operations.length === 0) continue;
+      void runtimeDriver.driver.reconcile().catch((error: unknown) => {
+        if (isCurrentDriver(runtimeDriver)) reportError("恢复失败对账: " + errorMessage(error));
+      });
+    }
+    return () => {
+      owners.delete(owner);
+      if (owners.size === 0) failureOwners.delete(principal);
+    };
+  };
+
   const dispose: SessionCatalogOutboxRuntime["dispose"] = () => {
     if (disposed) return;
     disposed = true;
@@ -557,6 +610,7 @@ export function createSessionCatalogOutboxRuntime(
     driversByScope.clear();
     driversByPartition.clear();
     openingsByScope.clear();
+    failureOwners.clear();
     unsubscribeBroadcast?.();
     unsubscribeBroadcast = null;
     broadcast?.close();
@@ -564,6 +618,7 @@ export function createSessionCatalogOutboxRuntime(
   };
 
   return {
+    registerFailureOwner,
     getSnapshot: () => snapshot,
     subscribe(listener) {
       listeners.add(listener);

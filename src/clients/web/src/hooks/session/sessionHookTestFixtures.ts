@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useSyncExternalStore } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { GatewayUserAccess, Session } from "../../types/backend";
@@ -12,7 +12,9 @@ import {
   createCatalogOutbox,
   markCatalogOutboxOperationPersisted,
   pruneReconciledCatalogOutbox,
+  resolveCatalogOutboxFailures,
   type CatalogOutboxIntent,
+  type CatalogOutboxOperation,
   type CatalogOutboxOptions,
 } from "../../state/session/sessionCatalogOutbox";
 import type {
@@ -20,6 +22,7 @@ import type {
   CatalogOutboxDriver,
 } from "./sessionCatalogOutboxDriver";
 import type {
+  SessionCatalogFailureOwner,
   SessionCatalogOutboxHandle,
   SessionCatalogOutboxRuntime,
   SessionCatalogOutboxSnapshot,
@@ -108,7 +111,7 @@ export interface GatewayFetchRequest {
  */
 export type GatewayFetchHandler = (
   request: GatewayFetchRequest,
-) => Response | Promise<Response> | undefined;
+) => Response | Promise<Response | undefined> | undefined;
 
 /**
  * 安装统一的 fetch mock：先收口本地凭据与当前用户两条隧道，再交给用例自己的
@@ -130,7 +133,7 @@ export function installGatewayFetch(
         return apiResponse({ kind: "guest", user_id: null });
       }
       const method = String(init?.method ?? "GET");
-      const response = handler({
+      const response = await handler({
         url,
         path: parsed.pathname,
         method,
@@ -190,6 +193,8 @@ export function createTestSessionCatalogOutboxRuntime(options: {
 } = {}): TestSessionCatalogOutboxRuntime {
   const listeners = new Set<() => void>();
   const handles = new Map<string, SessionCatalogOutboxHandle>();
+  const failureOwners = new Map<string, Set<SessionCatalogFailureOwner>>();
+  const terminalOperations = new Map<string, CatalogOutboxOperation>();
   const entries = new Map<string, {
     gatewayWorkspaceId: string;
     principal: string;
@@ -262,10 +267,24 @@ export function createTestSessionCatalogOutboxRuntime(options: {
           receipt_revision: sequence,
           updated_at: "2026-10-04T00:00:00Z",
         }]);
+        const terminal = outbox.operations.find((item) => item.client_operation_id === operationId);
+        if (terminal) terminalOperations.set(operationId, terminal);
         publish(handle, outbox);
         return "accepted";
       },
-      reconcile: async () => outbox,
+      reconcile: async () => {
+        const resolution = resolveCatalogOutboxFailures(outbox);
+        if (resolution.removed_operation_ids.length === 0) return outbox;
+        const owners = [...(failureOwners.get(principal) ?? [])];
+        if (owners.length === 0) throw new Error("测试 outbox 缺少 confirmed 分支刷新 owner，保留失败项");
+        const signal = new AbortController().signal;
+        await Promise.all(owners.map((owner) => owner.refresh(workspaceTarget, outbox, 0, signal)));
+        await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+        outbox = resolveCatalogOutboxFailures(outbox).outbox;
+        publish(handle, outbox);
+        await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+        return outbox;
+      },
       deactivate: () => undefined,
       prune: async (catalogRevision, operationIds) => {
         pruneCalls.push({ catalogRevision, operationIds });
@@ -308,20 +327,33 @@ export function createTestSessionCatalogOutboxRuntime(options: {
     handle,
     operationId,
   ) => {
-    const operation = handle.driver.current().operations.find(
+    const operation = terminalOperations.get(operationId) ?? handle.driver.current().operations.find(
       (item) => item.client_operation_id === operationId,
     );
     if (!operation) throw new Error(`测试 outbox 缺少 operation: ${operationId}`);
     if (operation.state !== "committed") {
+      let refreshError = "";
+      try { await handle.driver.reconcile(); }
+      catch (error) { refreshError = "；" + (error instanceof Error ? error.message : String(error)); }
       throw new Error(
         `会话目录操作 ${operationId} 被 ${operation.state}：`
-        + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim(),
+        + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim() + refreshError,
       );
     }
     return operation;
   };
 
   const runtime: SessionCatalogOutboxRuntime = {
+    registerFailureOwner(access, owner) {
+      const principal = access.kind === "guest" ? "guest" : `user:${access.user_id}`;
+      const owners = failureOwners.get(principal) ?? new Set<SessionCatalogFailureOwner>();
+      owners.add(owner);
+      failureOwners.set(principal, owners);
+      return () => {
+        owners.delete(owner);
+        if (owners.size === 0) failureOwners.delete(principal);
+      };
+    },
     getSnapshot: () => snapshot,
     subscribe(listener) {
       listeners.add(listener);
@@ -339,7 +371,7 @@ export function createTestSessionCatalogOutboxRuntime(options: {
       errors.push(message);
     },
     activatePrincipal() {},
-    dispose() {},
+    dispose() { failureOwners.clear(); },
   };
 
   return { runtime, errors, pruneCalls, submitted };
@@ -444,8 +476,8 @@ export function hangUntilReleased<T>(): {
 export function withCatalogDefaults(
   handler: GatewayFetchHandler,
 ): GatewayFetchHandler {
-  return (request) => {
-    const claimed = handler(request);
+  return async (request) => {
+    const claimed = await handler(request);
     if (claimed !== undefined) return claimed;
     if (request.path.includes("/api/gateway/workspace-navigation")) {
       return apiResponse({ revision: "navigation", nodes: [] });
@@ -658,10 +690,13 @@ function useSessionResourceExplorerHarness(options: {
   onExplorer?: (explorer: SessionResourceExplorerHandle) => void;
 }): () => React.ReactNode {
   const { props, onExplorer } = options;
+  const subscribe = props.sessionCatalogOutboxRuntime?.subscribe ?? (() => () => undefined);
+  const getSnapshot = props.sessionCatalogOutboxRuntime?.getSnapshot ?? (() => props.sessionCatalogOutboxSnapshot);
   if (options.liveGeneratorResources) {
     return function Harness(): React.ReactNode {
       const generatorResources = useSessionGeneratorResources(props.apiPort);
-      const explorer = useSessionResourceExplorer({ ...props, generatorResources });
+      const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+      const explorer = useSessionResourceExplorer({ ...props, sessionCatalogOutboxSnapshot: snapshot, generatorResources });
       onExplorer?.(explorer);
       return null;
     };
@@ -669,8 +704,10 @@ function useSessionResourceExplorerHarness(options: {
   // 空控制器必须是稳定引用，否则每次渲染都换对象会让 explorer 的依赖反复失效。
   const generatorResources = emptyGeneratorResources();
   return function Harness(): React.ReactNode {
+    const snapshot = useSyncExternalStore(subscribe, getSnapshot);
     const explorer = useSessionResourceExplorer({
       ...props,
+      sessionCatalogOutboxSnapshot: snapshot,
       generatorResources,
     });
     onExplorer?.(explorer);

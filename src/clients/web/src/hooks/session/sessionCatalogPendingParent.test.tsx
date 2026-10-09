@@ -5,10 +5,11 @@ import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCa
 import type { GatewayWorkspace, SessionCatalogNode } from "../../types/backend";
 import type { CatalogOutboxPersistencePort, CatalogOutboxStoredOperation } from "../../state/session/sessionCatalogOutboxStore";
 import { createSessionCatalogOutboxRuntime } from "./sessionCatalogOutboxRuntime";
+import { catalogOutboxBatchToIntents } from "../../state/session/sessionCatalogOutbox";
 import { useSessionCatalogActions } from "../shell/useSessionCatalogActions";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import {
-  apiResponse, emptyGeneratorResources, explorerProps, flushEffects,
+  apiResponse, errorResponse, emptyGeneratorResources, explorerProps, flushEffects,
   installGatewayFetch, restoreSessionHookGlobals, testGatewayUserAccess,
   TEST_WORKSPACE_REQUEST_TARGET, withCatalogDefaults,
 } from "./sessionHookTestFixtures";
@@ -46,15 +47,18 @@ async function mountPendingParent() {
   const errors: string[] = [];
   const statuses: string[] = [];
   let revision = 7;
+  let readFailure: "snapshot" | "children" | null = null;
   installGatewayFetch(withCatalogDefaults(({ path, url }) => {
     if (path === "/api/gateway/health") return apiResponse({ gateway_id: "pending-parent-gateway" });
     if (path === "/api/v1/workspace") {
       return apiResponse({ workspace_id: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id });
     }
     if (path === "/api/v1/session-catalog/snapshot") {
+      if (readFailure === "snapshot") return errorResponse(500, "权威 snapshot 读取失败");
       return apiResponse({ revision: `catalog-${revision}`, catalog_revision: revision, nodes: [...nodes.values()] });
     }
     if (path === "/api/v1/session-catalog/children") {
+      if (readFailure === "children") return errorResponse(500, "权威 children 读取失败");
       const parent = new URL(url).searchParams.get("parent_node_id");
       childQueries.push(parent);
       return apiResponse({
@@ -124,6 +128,7 @@ async function mountPendingParent() {
   const handle = await runtime.openWorkspace(TEST_WORKSPACE_REQUEST_TARGET, access);
   return {
     explorer: () => explorer, actions: () => actions, handle, receipts, nodes, errors, statuses, childQueries,
+    setReadFailure: (failure: typeof readFailure) => { readFailure = failure; },
     settle: async (failure = false) => {
       revision += 1;
       for (const operation of handle.driver.current().operations) {
@@ -209,4 +214,178 @@ describe("未提交父 Folder 的两条真实 Web 入口", () => {
       .toEqual(["rejected", "dependency_failed", "committed"]);
     expect(mounted.childQueries).not.toContain(parent.client_ref);
   });
+});
+
+
+describe("失败对账的真实 confirmed owner 闭包", () => {
+  test("失败对账先发布最新confirmed再清理闭包并投影独立pending", async () => {
+    const { addCatalogOutboxIntent, assignCatalogOutboxOperationSequence,
+      catalogOutboxPartitionKey, catalogOutboxBatchToIntents, createCatalogOutbox, markCatalogOutboxOperationPersisted } =
+      await import('../../state/session/sessionCatalogOutbox');
+    const ids = ['a', 'b', 'd', 'c'].map((suffix) => 'op_' + suffix.repeat(32));
+    const partition = { gatewayId: 'failure-gateway', workspaceId: TEST_WORKSPACE_REQUEST_TARGET.backend_workspace_id!, principal: 'guest' };
+    let seed = createCatalogOutbox(partition);
+    const intents = [
+      { kind: 'rename_node' as const, targetNodeId: 'cnode_a', name: 'A已提交' },
+      { kind: 'create_folder' as const, name: 'B失败目录' },
+      { kind: 'move_node' as const, targetNodeId: 'cnode_b', parentCreatedByOperationId: ids[1] },
+      { kind: 'rename_node' as const, targetNodeId: 'cnode_c', name: 'C独立pending' },
+    ];
+    for (const [index, intent] of intents.entries()) {
+      seed = addCatalogOutboxIntent(seed, ids[index]!, intent, { baseCatalogRevision: 7,
+        ...(intent.kind === 'create_folder' ? {} : { expectedRevision: 3 }),
+        ...(index === 2 ? { dependsOn: [ids[1]!] } : {}) });
+      seed = markCatalogOutboxOperationPersisted(assignCatalogOutboxOperationSequence(seed, ids[index]!, index + 1), ids[index]!);
+    }
+    const originalC = seed.operations[3]!;
+    const records = new Map(seed.operations.map((operation) => {
+      if (operation.client_sequence === null) throw new Error("恢复用例的持久 operation 缺少序号");
+      return [operation.client_operation_id,
+        { partition_key: catalogOutboxPartitionKey(partition), client_sequence: operation.client_sequence,
+          operation: { ...operation, client_sequence: operation.client_sequence } }] as const;
+    }));
+    const deleted: string[][] = [];
+    const persistence: CatalogOutboxPersistencePort = {
+      load: async () => [...records.values()],
+      insert: async () => { throw new Error('恢复用例不得创建新intent'); },
+      delete: async (_key, operationIds) => {
+        deleted.push([...operationIds]);
+        for (const id of operationIds) records.delete(id);
+      },
+    };
+    const receipt = (index: number, state: SessionCatalogOperationReceipt['state']): SessionCatalogOperationReceipt => ({
+      operation_id: ids[index]!, client_sequence: index + 1, queue_seq: index + 1,
+      kind: intents[index]!.kind, state, created_node_id: null,
+      committed_catalog_revision: state === 'committed' ? 9 : null,
+      error_code: state === 'rejected' ? 'revision_changed' : state === 'dependency_failed' ? 'dependency_failed' : null,
+      error_detail: state === 'rejected' ? 'B被其它客户端修改' : null,
+      pending_settlement: false, receipt_revision: 2, updated_at: '2026-10-09T00:00:00Z',
+    });
+    let releaseStatus!: () => void;
+    const statusGate = new Promise<void>((resolve) => { releaseStatus = resolve; });
+    let releaseBranch!: () => void;
+    const branchGate = new Promise<void>((resolve) => { releaseBranch = resolve; });
+    let branchRequested!: () => void;
+    const branchStarted = new Promise<void>((resolve) => { branchRequested = resolve; });
+    let dispatched!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => { dispatched = resolve; });
+    let refreshing = false;
+    const nodes = ['a', 'b', 'c', 'external'].map((suffix): SessionCatalogNode => ({
+      node_id: 'cnode_' + suffix, kind: 'folder', name: suffix === 'a' ? 'A已提交' : suffix,
+      parent_node_id: null, has_children: false, node_revision: 3, state: 'active',
+    }));
+    installGatewayFetch(withCatalogDefaults(async ({ path }) => {
+      if (path === '/api/gateway/health') return apiResponse({ gateway_id: partition.gatewayId });
+      if (path === '/api/v1/workspace') return apiResponse({ workspace_id: partition.workspaceId });
+      if (path === '/api/v1/session-catalog/snapshot') return apiResponse({ workspace_id: partition.workspaceId,
+        catalog_revision: 12, event_seq_watermark: 4, generation: 1 });
+      if (path === '/api/v1/session-catalog/children') {
+        if (refreshing) { branchRequested(); await branchGate; }
+        const items = nodes.map((node) => refreshing && node.node_id === 'cnode_external'
+          ? { ...node, name: '外部客户端已提交', node_revision: 4 } : node);
+        return apiResponse({ revision: refreshing ? 'catalog-12' : 'catalog-7',
+          catalog_revision: refreshing ? 12 : 7, parent_node_id: null, items,
+          total: items.length, cursor: null, consistency_warning: null });
+      }
+      return undefined;
+    }));
+    const errors: string[] = [];
+    let explorer!: ReturnType<typeof useSessionResourceExplorer>;
+    const dispatchedFacts: Array<{ intents: unknown; names: string[]; removed: string[][] }> = [];
+    const runtime = createSessionCatalogOutboxRuntime({ apiPort: 49_459,
+      openPersistence: async () => persistence, reconcileIntervalMs: 60_000,
+      onError: (message) => errors.push(message), adapter: {
+        queryStatus: async (_port, target) => {
+          await statusGate;
+          return { workspace_id: target.backend_workspace_id!, catalog_revision: 12,
+            items: [receipt(0, 'committed'), receipt(1, 'rejected'), receipt(2, 'dependency_failed')],
+            unknown_operation_ids: [ids[3]!] };
+        },
+        enqueue: async (_port, target, submitted) => {
+          dispatchedFacts.push({ intents: submitted,
+            names: explorer.branches.get('ws-test:root')?.items.map((node) => node.name) ?? [],
+            removed: deleted.map((group) => [...group]) });
+          dispatched();
+          return { workspace_id: target.backend_workspace_id!, accepted_count: submitted.length,
+            receipts: [receipt(3, 'queued')], created_node_ids: {} };
+        },
+      } });
+    const access = testGatewayUserAccess();
+    runtime.activatePrincipal(access);
+    let renderer!: ReactTestRenderer;
+    const generatorResources = emptyGeneratorResources();
+    function Harness() {
+      const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
+      explorer = useSessionResourceExplorer({ ...explorerProps({ sessionCatalogOutboxRuntime: runtime,
+        sessionCatalogOutboxSnapshot: snapshot, gatewayUserAccess: access }), generatorResources });
+      return null;
+    }
+    try {
+      await act(async () => { renderer = create(<Harness />); await flushEffects(); });
+      await act(async () => { await explorer.loadBranch('ws-test'); });
+      const handle = await runtime.openWorkspace(TEST_WORKSPACE_REQUEST_TARGET, access);
+      await act(async () => { explorer.toggleExpanded("catalog:ws-test:cnode_external"); });
+      const expandedBefore = [...explorer.expandedIds];
+      expect(expandedBefore).toContain("catalog:ws-test:cnode_external");
+      refreshing = true;
+      await act(async () => { releaseStatus(); await branchStarted; });
+      expect(dispatchedFacts).toEqual([]);
+      expect(deleted).toEqual([]);
+      expect(handle.driver.current().operations.map((operation) => operation.client_operation_id)).toEqual(ids);
+      await act(async () => { releaseBranch(); await flushEffects(); });
+      await act(async () => { await flushEffects(); });
+      await dispatchStarted;
+      expect(dispatchedFacts).toHaveLength(1);
+      expect(dispatchedFacts[0]!.names).toContain('外部客户端已提交');
+      expect(dispatchedFacts[0]!.names).toContain('A已提交');
+      expect(dispatchedFacts[0]!.names).toContain('C独立pending');
+      expect(dispatchedFacts[0]!.removed.flat()).toEqual(expect.arrayContaining([ids[1]!, ids[2]!]));
+      expect(explorer.branches.get('ws-test:root')?.catalog_revision).toBe(12);
+      expect(explorer.branches.get('ws-test:root')?.items.map((node) => node.name)).not.toContain('B失败目录');
+      expect([...explorer.expandedIds]).toEqual(expandedBefore);
+      const currentC = handle.driver.current().operations.find((operation) => operation.client_operation_id === ids[3])!;
+      expect(catalogOutboxBatchToIntents([currentC])).toEqual(catalogOutboxBatchToIntents([originalC]));
+      expect(dispatchedFacts[0]!.intents).toEqual(catalogOutboxBatchToIntents([originalC]));
+      expect(currentC.base_catalog_revision).toBe(7);
+      expect(currentC.client_operation_id).toBe(originalC.client_operation_id);
+      expect(errors.some((message) => message.includes('B被其它客户端修改'))).toBe(true);
+    } finally {
+      releaseStatus(); releaseBranch(); runtime.dispose();
+      if (renderer) await act(async () => { renderer.unmount(); });
+    }
+  });
+});
+
+describe("真实 confirmed owner 刷新失败的恢复", () => {
+  for (const stage of ["snapshot", "children"] as const) {
+    test(`${stage} 读取失败保留 accepted 及依赖，恢复后只清失败闭包`, async () => {
+      const mounted = await mountPendingParent();
+      await act(async () => { await mounted.explorer().createSessionFolder("ws-test", "父目录"); });
+      const parent = mounted.handle.driver.current().operations[0]!;
+      await act(async () => {
+        await mounted.actions().createSessionFolder("ws-test", parent.client_ref, "子目录");
+        await mounted.explorer().createSessionFolder("ws-test", "独立目录");
+        mounted.explorer().toggleExpanded("catalog:ws-test:kept-expansion");
+      });
+      const accepted = catalogOutboxBatchToIntents(mounted.handle.driver.current().operations);
+      mounted.setReadFailure(stage);
+      await expect(mounted.settle(true)).rejects.toThrow(`权威 ${stage} 读取失败`);
+      await act(async () => {
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 800));
+        await flushEffects();
+      });
+      expect(catalogOutboxBatchToIntents(mounted.handle.driver.current().operations)).toEqual(accepted);
+      expect(mounted.handle.driver.current().operations.map((operation) => operation.state)).toEqual(["accepted", "accepted", "accepted"]);
+      expect(mounted.errors.join("；")).toContain("父目录创建被明确拒绝");
+      const confirmedRevision = mounted.explorer().branches.get("ws-test:root")?.catalog_revision;
+      if (stage === "children") expect(confirmedRevision).toBe(7);
+      else expect(confirmedRevision).toBeGreaterThanOrEqual(7);
+      mounted.setReadFailure(null);
+      await mounted.settle(true);
+      expect(mounted.explorer().branches.get("ws-test:root")?.items.map((node) => node.name)).toEqual(["独立目录"]);
+      expect(mounted.explorer().expandedIds.has("catalog:ws-test:kept-expansion")).toBe(true);
+      expect(mounted.explorer().branches.has(`ws-test:${parent.client_ref}`)).toBe(false);
+      expect(mounted.handle.driver.current().operations.every((operation) => operation.state === "committed")).toBe(true);
+    });
+  }
 });

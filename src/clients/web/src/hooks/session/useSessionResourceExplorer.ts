@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getSessionCatalogBreadcrumb,
   listSessionCatalogChildren,
@@ -34,6 +34,7 @@ import {
 } from "../../state/session/sessionCatalogOutbox";
 import {
   sessionCatalogOutboxScopeKey,
+  type SessionCatalogFailureOwner,
   type SessionCatalogOutboxRuntime,
   type SessionCatalogOutboxSnapshot,
 } from "./sessionCatalogOutboxRuntime";
@@ -209,7 +210,17 @@ export function useSessionResourceExplorer({
   const [revealError, setRevealError] = useState<string | null>(null);
   const [branches, setBranches] = useState<Map<string, CatalogBranchState>>(new Map());
   const branchesRef = useRef(branches);
-  branchesRef.current = branches;
+  const updateBranches = useCallback((update: (previous: Map<string, CatalogBranchState>) => Map<string, CatalogBranchState>) => {
+    const next = update(branchesRef.current);
+    branchesRef.current = next;
+    setBranches(next);
+  }, []);
+  const projectionCommitRef = useRef<{
+    branches: Map<string, CatalogBranchState>;
+    snapshot: SessionCatalogOutboxSnapshot | undefined;
+  } | null>(null);
+  const projectionWaitersRef = useRef<Set<() => void>>(new Set());
+  const failureRefreshRef = useRef<SessionCatalogFailureOwner["refresh"] | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState(emptySearch);
   const [searching, setSearching] = useState(false);
@@ -346,6 +357,7 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeId?: string | null,
     append = false,
+    confirmedRead: { deferPublication?: boolean; minimumCatalogRevision?: number; signal?: AbortSignal } = {},
   ): Promise<SessionCatalogPage | undefined> => {
     if (sessionCatalogOutboxRuntime && gatewayUserAccess) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
@@ -360,7 +372,8 @@ export function useSessionResourceExplorer({
     );
     // 未确认 Folder 没有后端 node；其子项由 outbox 纯投影展示，不能拿 client_ref 请求 API。
     if (parent && !parent.created_node_id) return undefined;
-    const requestKey = `${key}:${append ? "append" : "replace"}`;
+    const requestKey = `${key}:${append ? "append" : "replace"}`
+      + (confirmedRead.deferPublication ? `:confirmed:${confirmedRead.minimumCatalogRevision ?? 0}` : "");
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
     if (inFlight) {
       return inFlight;
@@ -368,7 +381,7 @@ export function useSessionResourceExplorer({
     const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
     branchRequestRefs.current.set(key, requestId);
     const current = branchesRef.current.get(key);
-    setBranches((previous) => {
+    updateBranches((previous) => {
       const next = new Map(previous);
       next.set(key, {
         revision: current?.revision ?? "",
@@ -395,19 +408,28 @@ export function useSessionResourceExplorer({
               workspaceRequestTarget(workspaceId),
               parentNodeId,
               append ? current?.cursor : null,
+              { signal: confirmedRead.signal },
             );
             break;
           } catch (error) {
-            if (attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
+            if (confirmedRead.signal?.aborted
+              || attempt >= CATALOG_RETRY_LIMIT - 1 || !isRetryableCatalogError(error)) {
               throw error;
             }
             await catalogRetryDelay(attempt);
           }
         }
-        if (branchRequestRefs.current.get(key) !== requestId) {
-          return page;
+        if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
+        if (branchRequestRefs.current.get(key) !== requestId) return page;
+        const minimumRevision = Math.max(
+          confirmedRead.minimumCatalogRevision ?? 0,
+          branchesRef.current.get(key)?.catalog_revision ?? 0,
+        );
+        if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < minimumRevision) {
+          throw new Error(`会话目录权威分支 revision 落后: ${workspaceId}/${parentNodeId ?? "root"}, actual=${page.catalog_revision}, minimum=${minimumRevision}`);
         }
-        setBranches((previous) => {
+        if (confirmedRead.deferPublication) return page;
+        updateBranches((previous) => {
           const next = new Map(previous);
           const previousItems = append ? next.get(key)?.items ?? [] : [];
           const items = [...previousItems, ...page.items];
@@ -431,7 +453,7 @@ export function useSessionResourceExplorer({
           return undefined;
         }
         const message = errorMessage(error);
-        setBranches((previous) => {
+        updateBranches((previous) => {
           const next = new Map(previous);
           next.set(key, branchFailureState(next.get(key), parentNodeId ?? null, message));
           return next;
@@ -441,14 +463,15 @@ export function useSessionResourceExplorer({
     })();
     trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort, gatewayUserAccess, openCatalogOutbox, readCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
+  }, [apiPort, gatewayUserAccess, openCatalogOutbox, readCatalogOutbox, sessionCatalogOutboxRuntime, updateBranches, workspaceRequestTarget]);
 
   const loadCatalogBranch = useCallback(async (
     workspaceId: string,
     parentNodeId: string | null,
+    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal },
   ): Promise<SessionCatalogPage> => {
     const key = branchKey(workspaceId, parentNodeId);
-    const request = loadBranch(workspaceId, parentNodeId);
+    const request = loadBranch(workspaceId, parentNodeId, false, { ...confirmedRead, deferPublication: true });
     const requestId = branchRequestRefs.current.get(key);
     const page = await request;
     if (!page || branchRequestRefs.current.get(key) !== requestId) {
@@ -480,9 +503,9 @@ export function useSessionResourceExplorer({
     const maximumRevision = Math.max(...pages.map((page) => page.catalog_revision));
     const pruneableOperationIds = operations
       .filter((operation) => selectedIds.has(operation.client_operation_id)
-        && catalogOutboxOperationIsTerminal(operation)
-        && (operation.committed_catalog_revision === null
-          || operation.committed_catalog_revision <= minimumRevision))
+        && operation.state === "committed"
+        && operation.committed_catalog_revision !== null
+        && operation.committed_catalog_revision <= minimumRevision)
       .map((operation) => operation.client_operation_id);
     if (pruneableOperationIds.length > 0) {
       await handle.driver.prune(maximumRevision, pruneableOperationIds);
@@ -493,26 +516,55 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeIds: Array<string | null>,
     operationIds?: readonly string[],
+    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal } = {},
   ) => {
-    const uniqueParentNodeIds = [...new Set(parentNodeIds)];
-    const results = await Promise.all(uniqueParentNodeIds.map(async (parentNodeId) => {
+    const results = await Promise.all([...new Set(parentNodeIds)].map(async (parentNodeId) => {
+      const key = branchKey(workspaceId, parentNodeId);
+      const request = loadCatalogBranch(workspaceId, parentNodeId, confirmedRead);
+      const requestId = branchRequestRefs.current.get(key);
       try {
-        return { page: await loadCatalogBranch(workspaceId, parentNodeId), error: null };
+        return { key, requestId, parentNodeId, page: await request, error: null };
       } catch (error) {
-        return {
-          page: null,
-          error: `${parentNodeId ?? "root"}: ${errorMessage(error)}`,
-        };
+        return { key, requestId, parentNodeId, page: null, error: errorMessage(error) };
       }
     }));
-    const errors = results.flatMap((result) => result.error === null ? [] : [result.error]);
-    if (errors.length > 0) {
-      throw new Error(`重新读取会话目录失败: ${errors.join("；")}`);
+    const errors = results.flatMap((result) => result.error === null ? [] : [`${result.parentNodeId ?? "root"}: ${result.error}`]);
+    if (confirmedRead.signal?.aborted) errors.push("权威分支刷新已取消");
+    for (const result of results) {
+      if (branchRequestRefs.current.get(result.key) !== result.requestId) {
+        errors.push(`${result.parentNodeId ?? "root"}: 分支刷新已被更新请求取代`);
+      }
     }
     const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
+    if (new Set(pages.map((page) => page.catalog_revision)).size > 1) {
+      errors.push("权威分支的 catalog revision 不一致，保留原 confirmed 等待重新对账");
+    }
+    if (errors.length > 0) {
+      const message = `重新读取会话目录失败: ${errors.join("；")}`;
+      updateBranches((previous) => {
+        const next = new Map(previous);
+        for (const result of results) {
+          if (branchRequestRefs.current.get(result.key) !== result.requestId) continue;
+          next.set(result.key, branchFailureState(next.get(result.key), result.parentNodeId, message));
+        }
+        return next;
+      });
+      throw new Error(message);
+    }
+    // 同一批权威页一次进入现有 confirmed，避免外部移动被投影为两处不同 revision 的节点。
+    updateBranches((previous) => {
+      const next = new Map(previous);
+      for (const result of results) {
+        if (result.page) next.set(result.key, { ...result.page, loading: false, error: null });
+      }
+      for (const result of results) {
+        if (result.page) updateParentNodeChildFlag(next, workspaceId, result.parentNodeId, result.page.total > 0);
+      }
+      return next;
+    });
     await pruneOutboxAfterBranchRefresh(workspaceId, pages, operationIds);
     return pages;
-  }, [loadCatalogBranch, pruneOutboxAfterBranchRefresh]);
+  }, [loadCatalogBranch, pruneOutboxAfterBranchRefresh, updateBranches]);
 
   const refreshCatalogWorkspace = useCallback(async (
     workspaceId: string,
@@ -520,6 +572,9 @@ export function useSessionResourceExplorer({
       additionalParentNodeIds?: readonly (string | null)[];
       operationIds?: readonly string[];
       forceRoot?: boolean;
+      outbox?: CatalogOutbox;
+      minimumCatalogRevision?: number;
+      signal?: AbortSignal;
     } = {},
   ) => {
     const parentNodeIds = new Set<string | null>();
@@ -534,9 +589,9 @@ export function useSessionResourceExplorer({
     const scopedSnapshotKey = gatewayUserAccess
       ? sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess)
       : null;
-    const currentOutbox = scopedSnapshotKey
+    const currentOutbox = options.outbox ?? (scopedSnapshotKey
       ? sessionCatalogOutboxRuntime?.getSnapshot().get(scopedSnapshotKey)?.outbox
-      : null;
+      : null);
     const terminalOperations = currentOutbox?.operations.filter(
       catalogOutboxOperationIsTerminal,
     ) ?? [];
@@ -568,10 +623,11 @@ export function useSessionResourceExplorer({
       parentNodeIds.add(null);
     }
     const refreshKey = `${workspaceId}\u0000${options.forceRoot ? "root" : ""}\u0000`
-      + [...operationIds].sort().join("\u0001");
+      + [...operationIds].sort().join("\u0001")
+      + `\u0000${options.minimumCatalogRevision ?? "current"}`;
     const inFlight = catalogRefreshInFlightRef.current.get(refreshKey);
     if (inFlight) return await inFlight;
-    const request = reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds);
+    const request = reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds, options);
     catalogRefreshInFlightRef.current.set(refreshKey, request);
     try {
       return await request;
@@ -586,6 +642,75 @@ export function useSessionResourceExplorer({
     reconcileCatalogBranches,
     sessionCatalogOutboxRuntime,
   ]);
+
+  failureRefreshRef.current = async (workspaceTarget, outbox, minimumCatalogRevision, signal) => {
+    const workspaceId = workspaceTarget.workspace_id;
+    const confirmedRevisions = [...branchesRef.current.entries()]
+      .filter(([key]) => key.startsWith(`${workspaceId}:`))
+      .map(([, branch]) => branch.catalog_revision ?? 0);
+    const floor = Math.max(minimumCatalogRevision, ...confirmedRevisions);
+    const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget, { signal });
+    if (signal.aborted) throw new Error("会话目录失败对账已取消");
+    if (catalog.catalog_revision < floor) {
+      throw new Error(`会话目录权威 snapshot 落后: actual=${catalog.catalog_revision}, minimum=${floor}`);
+    }
+    await refreshCatalogWorkspace(workspaceId, {
+      outbox, operationIds: [], forceRoot: true,
+      minimumCatalogRevision: catalog.catalog_revision, signal,
+    });
+  };
+
+  useEffect(() => {
+    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) return;
+    const controllers = new Set<AbortController>();
+    let active = true;
+    const owner: SessionCatalogFailureOwner = {
+      async refresh(...args) {
+        if (!active || !failureRefreshRef.current) throw new Error("会话目录 confirmed owner 已离开");
+        const controller = new AbortController();
+        controllers.add(controller);
+        const signal = args[3];
+        const abort = () => controller.abort();
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+        try {
+          await failureRefreshRef.current(args[0], args[1], args[2], controller.signal);
+        } finally {
+          controllers.delete(controller);
+          signal.removeEventListener("abort", abort);
+        }
+      },
+      waitForProjection(signal) {
+        return new Promise<void>((resolve, reject) => {
+          const finish = (error?: Error) => {
+            projectionWaitersRef.current.delete(check);
+            signal.removeEventListener("abort", check);
+            if (error) reject(error);
+            else resolve();
+          };
+          const check = () => {
+            if (!active || signal.aborted) {
+              finish(new Error("会话目录 confirmed 投影等待已取消"));
+              return;
+            }
+            const commit = projectionCommitRef.current;
+            if (commit?.branches === branchesRef.current
+              && commit.snapshot === sessionCatalogOutboxRuntime.getSnapshot()) finish();
+          };
+          projectionWaitersRef.current.add(check);
+          signal.addEventListener("abort", check, { once: true });
+          check();
+        });
+      },
+    };
+    const unregister = sessionCatalogOutboxRuntime.registerFailureOwner(gatewayUserAccess, owner);
+    return () => {
+      active = false;
+      unregister();
+      for (const controller of controllers) controller.abort();
+      for (const check of [...projectionWaitersRef.current]) check();
+    };
+  }, [gatewayUserAccess, sessionCatalogOutboxRuntime]);
 
   const refreshResourceTree = useCallback(async () => {
     if (activeWorkspaceId && sessionCatalogOutboxRuntime && gatewayUserAccess) {
@@ -613,7 +738,7 @@ export function useSessionResourceExplorer({
             // loading 占位上，界面永久显示「正在加载…」。
             if (branchRequestRefs.current.get(rootKey) === requestId) {
               const message = errorMessage(error);
-              setBranches((previous) => {
+              updateBranches((previous) => {
                 const next = new Map(previous);
                 next.set(rootKey, branchFailureState(next.get(rootKey), null, message));
                 return next;
@@ -622,7 +747,7 @@ export function useSessionResourceExplorer({
             throw error;
           }
           if (branchRequestRefs.current.get(rootKey) === requestId) {
-            setBranches((previous) => {
+            updateBranches((previous) => {
               const next = new Map(previous);
               next.set(rootKey, {
                 ...rootPage,
@@ -700,7 +825,7 @@ export function useSessionResourceExplorer({
     }
     const requestId = (branchRequestRefs.current.get(key) ?? 0) + 1;
     branchRequestRefs.current.set(key, requestId);
-    setBranches((previous) => {
+    updateBranches((previous) => {
       const next = new Map(previous);
       next.set(key, {
         revision: effectiveLoaded?.revision ?? "",
@@ -734,7 +859,7 @@ export function useSessionResourceExplorer({
         }
         items.push(...page.items);
         const found = items.some((item) => item.node_id === targetNodeId);
-        setBranches((previous) => {
+        updateBranches((previous) => {
           const next = new Map(previous);
           next.set(key, {
             ...page,
@@ -769,7 +894,7 @@ export function useSessionResourceExplorer({
         throw error;
       }
       const message = errorMessage(error);
-      setBranches((previous) => {
+      updateBranches((previous) => {
         const next = new Map(previous);
         const branch = next.get(key);
         next.set(key, {
@@ -1228,6 +1353,11 @@ export function useSessionResourceExplorer({
     return projected;
   }, [branches, readCatalogOutbox]);
 
+  useLayoutEffect(() => {
+    projectionCommitRef.current = { branches, snapshot: sessionCatalogOutboxSnapshot };
+    for (const check of [...projectionWaitersRef.current]) check();
+  }, [branches, projectedBranches, sessionCatalogOutboxSnapshot]);
+
   useEffect(() => {
     void refreshNavigation().catch(() => {
       // refreshNavigation 已将错误写入可见的导航错误状态。
@@ -1270,7 +1400,7 @@ export function useSessionResourceExplorer({
           continue;
         }
         const terminalOperations = entry.outbox.operations.filter((operation) =>
-          catalogOutboxOperationIsTerminal(operation)
+          operation.state === "committed"
           && !trackedOutboxOperationKeysRef.current.has(
             `${entry.partitionKey}\u0000${operation.client_operation_id}`,
           ),
@@ -1285,17 +1415,6 @@ export function useSessionResourceExplorer({
         nextSyncKeys.set(scopeKey, signature);
         if (terminalOutboxSyncKeysRef.current.get(scopeKey) === signature) continue;
         void refreshCatalogWorkspace(entry.gatewayWorkspaceId, { operationIds })
-          .then(() => {
-            const failures = terminalOperations.filter(
-              (operation) => operation.state !== "committed",
-            );
-            for (const operation of failures) {
-              sessionCatalogOutboxRuntime?.reportError(
-                `会话目录操作 ${operation.client_operation_id}未提交 (${operation.state})`
-                + `: ${operation.error_detail ?? operation.error_code ?? "后端未提供错误详情"}`,
-              );
-            }
-          })
           .catch((error: unknown) => {
             sessionCatalogOutboxRuntime?.reportError(
               `会话目录终态分支刷新失败 (${entry.gatewayWorkspaceId}, `
