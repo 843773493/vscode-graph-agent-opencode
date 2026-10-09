@@ -6,12 +6,12 @@
 
 | Agent | 实际模型 | 当前范围与状态 |
 |---|---|---|
-| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **041 active**：036整体STOP，唯一测试文件SHA c75d1124、生产编辑0；001未变37例＋002真实50pass＋033同源123例合取，机械0，独审在途。041只在NWT一次修四导航消费者完整callee，按冻结op核跨页完成，保原计时/规模，先代表入口有限调试再STOP |
+| `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **041 active**：036整体STOP，唯一测试文件SHA c75d1124、生产编辑0；001未变37例＋002真实50pass＋033同源123例合取，机械0、独审无阻断，已集成375600b2/原4.7闭合。041只在NWT一次修四导航消费者完整callee，按冻结op核跨页完成，保原计时/规模，先代表入口有限调试再STOP |
 | `/root/caller_inventory013` | `gpt-6-luna/max` | **029唯一full STOP/失败**：测试exit1、pytest636.73s、wrapper wall639.109s；300文件完成后首并发UI等待超时，Gateway0。17SHA同、owned0、alias撤；不重跑 |
 | `/root/a06_navigation_independent` | `gpt-6-luna/max` | **037只读定位STOP**：reportbe96d1d3，两operation均committed complete，分别由另一页处理；等待器只看发起页全局status。下一同Sol按op ID核处理页完成及原发起页真实UI，不改统计合同。034及029固定增审已STOP/0finding，031 correction保 |
 | `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **046只读准备包 active**：只按039纠正/040/043与原规范给同Sol下个完整Section8批提供最小依赖/复用收据，不泛查、不实施。039/044已STOP；不加EXPLAIN或每子面单独变异门。033已STOP/123pass，原argv/PID漏记不补造 |
 | `/root/luna_federation_codes032` | `gpt-6-luna/max` | **035已集成82f518e8**：四relay预期一次迁齐，原直连/业务异常保；1pass/37.61s、Ruff0、owned0、五源SHA同。未变32unit复用 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **036固定独审 active**：固定e0dc18e4/原4.7四门及有效正对照/033同源复用，仅只读；035 finding已关闭。040/043已STOP，完整App pending/reopen及确定性replay/外置harness仍待同Sol，不重复既有收据 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **036固定独审 STOP/无阻断**：reportb201e87d，原4.7四门充分，明确033 argv缺失/有限复用；候选已集成375600b2，等待041固定增审；035 finding已关闭。040/043已STOP，完整App pending/reopen及确定性replay/外置harness仍待同Sol，不重复既有收据 |
 
 至少3常驻、最多15活动agent；闲置不制造改动。主统一调度、禁止派生；主只维护文档/固定交付/串行集成，不手写业务源码。Luna只外围小修/独审/验收，不做大型核心改造。
 
@@ -20,7 +20,7 @@
 - ROOT=`/data1/hyf/20260822_agent/vscode-graph-agent-opencode`；旧`/data/hyf/20260629_agent/vscode-graph-agent-opencode`为软链接。
 - T=ROOT/out/tests/temp/2026/10/04/024121-team-execution；A=T/coordinator/artifacts/sol-efficiency-trial；RV=ROOT/out/tests/temp/2026/10/09/a06-final-review。
 - NWT=`ROOT/out/worktrees/2026/10/09/a06-final-review/navigation-fixture-receipt`，仅此活跃代码worktree；禁止复用迁移排除的历史业务工作区、/tmp、整仓复制和新venv。
-- 最新已核HEAD=`07e1b8dc6f1d8647b5d1363b1accca7bec2645a6`，收据`RV/coordinator/artifacts/current-docs045-integration/receipt.json`；最新源码集成仍82f518e8，恢复仍须核实际HEAD。共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节，禁止裸Git写index、reset/rebase/amend/清暂存。
+- 最新已核源码HEAD=`375600b2936aaeb819533354f050fc1d947d5769`，收据`RV/coordinator/artifacts/detail-final-closure036-integration/receipt.json`，恢复仍须核实际HEAD。共享`.git/index` SHA=`4ea3d8d2b20107d2153748714d659e2a1c982039edd2d848a72fdb3d07049958`，保原字节，禁止裸Git写index、reset/rebase/amend/清暂存。
 - 主Git用fresh私有index，固定blob串行集成；旧`doc-overlay012.idx`不可提交。每次从当前HEAD read-tree并核精确路径，record/verify0后检查祖先链/sharedindex。status/read也显式index与GIT_OPTIONAL_LOCKS=0。
 - 官方dev停止；不改全局配置、不按端口杀别人的registry。Python复用ROOT `.venv`，UV_PROJECT_ENVIRONMENT显式ROOT/.venv、UV_NO_SYNC=1、uv run --no-sync、唯一PYTHONPATH、PYTHONDONTWRITEBYTECODE=1；任何测试timeout＋ulimit-d4194304。
 - 正式导航业务workspace/日志在NWT/out/tests/integration/clients/web/test_navigation_mutation_measurements/，沿完整正式fixture；不能把源码根注册为业务工作区。
@@ -59,7 +59,7 @@
 
 ## 原任务验收队列
 
-- itemized当前55/89；§7.5-F的五类架构材料已对表齐备，A06-ARCH-01关闭与e11增量归属已主核，原7.5整项不据此勾。报告`RV/a06_architecture_final/artifacts/task7-5F-evidence014/report.json`。
+- itemized当前56/89（原4.7有限合取闭合）；§7.5-F的五类架构材料已对表齐备，A06-ARCH-01关闭与e11增量归属已主核，原7.5整项不据此勾。报告`RV/a06_architecture_final/artifacts/task7-5F-evidence014/report.json`。
 - 015原1.5/1.6/1.7/4.7只核源码/摘要，旧“source_binding/metadata→extensions尚未实现”已纠正；报告只支持本轮未核底层raw，**不等于全局缺证**。单正文4.7不接受旧AES/key/cipher收据。先复用accepted具名raw与真实依赖身份，再判原子缺口，不要求一个新HEAD的一条联合命令。
 - 014原8.1/8.3-E只读对表已STOP；pending父Folder完整App链、thread身份三面及负向变异仍待原子映射，不推新增生产缺口。8.4当前原三节点已补齐46/0；旧004工厂callee SHA已变化，017一次补真正受影响节点，复用其余未变审查，不为缺单独fake-clock测试加门。原8.4闭合收据`RV/coordinator/artifacts/task8-4-original-closure017/receipt.json`，不代8.8/8.14或产品E2E。
 - 原core最终清单`E/navigation-index-only-10-3/remaining-original-goal.json`（E=T/sol_vertical_implementer/artifacts/final-original-scope-source-bulk-core-and-boundaries），原ledger=`E/a06-final-task-evidence-ledger.json`。已接受A01–A03/R01/R03/Section8/H4/H5/H6/URI按具名键复用；旧组合actual1/124保真，补绿nodes单列。
@@ -88,3 +88,5 @@
 034已串行集成`1e9eea6c16c356dd0d281558ab20f679b61b89cf`，收据`RV/coordinator/artifacts/distribution-domain034-integration/receipt.json`。035组合固定`521c66222c9357cf4d5fcc904367bf5b70662430`、六路径strict/机械/独审/guard0，已串行集成`82f518e8fc42a7d7f2eabb64d9d99e887ba930fb`；032其余复用。033 reporte5af/actualfaa0/rawf89f主核，四门具体未覆盖交同Sol036，不把123总数代整项闭合。036lease初始1e9已通知82f联邦不冲突增量；必要source闭包只detail/path/seal/projector/同链test，排除联邦和NWT导航。036已盘调用闭包，现无源码finding；一次补必要路径、真实seal与union负向节点，再统一protected batch/STOP，不重跑033123项。
 
 037已核冻结A/B两原请求与202/terminal：A由page5处理、B由page4处理，均revision3 committed/effect complete，发布项和目录快照完整。report SHA`be96d1d30f7287404bbcac3993859b44bf8acd4071e9123783dbec364c496639`；只支持跨页等待归属缺口，不宣布任意页generic完成能作某operation证明。036 attempt001真实49pass/30fail、pytest70.12s、wall76.369s、owned0；新测试C前置缺合法epoch/D改ref_id撞UNIQUE，均fixture错误，原raw保留。同Sol一次修真实prepare与union输入正对照后只重跑受影响nodes，无生产finding不改码。
+
+036最终接受：唯一测试文件c75d1124已集成375600b2，原4.7 A–D映射见`RV/coordinator/artifacts/detail-final-closure036-verified/receipt.json`；独审reportb201e87d无阻断。001的30失败保真；00250pass/57.33s与001未变37例、033同源123例合取，不补造033 argv/PID，不称437全量或动态import闭包。041仍在NWT同批实施，ROOT detail禁止干扰；下一同Sol完整Section8确定性fixture/harness/产品验收批由046只读准备最小包。
