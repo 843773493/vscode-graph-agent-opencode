@@ -7,11 +7,11 @@
 | Agent | 实际模型 | 当前范围与状态 |
 |---|---|---|
 | `/root/sol_vertical_implementer` | `gpt-6.1-sol/max` | **050 active/ROOT**：041整体STOP，002代表入口0/39.53s、2真实跨页确认/错op与乱序拒绝；固定b04504a9、机械0，NWT只交独审/full。050一次收齐原Section8确定性身份replay、外置harness及唯一产品E2E原门，必要callee同闭包授权，不微交接；036已375600b2接受 |
-| `/root/caller_inventory013` | `gpt-6-luna/max` | **041唯一full active/NWT**：固定b04504a9/17SHA，按lease原timeout900＋ulimit-d4194304执行一次，保300/40/20及原门；actual/raw/owned回执分列。029真实失败保留，不重跑旧候选或拿旧minimal归full |
-| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **041固定增审 active**：只审86e085a1→b04504a9三消费者增量/真实callee及原统计，不测试或写源码；finding即时回报以协调唯一full。037/029旧报告与纠正保留 |
-| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **046 STOP/准备包已给Sol050**：reportc120711f，仅原039纠正/040/043最小依赖，不新增门。039/044已STOP，闲置不制造任务；033123pass仅按实际依赖有限复用，原argv/PID漏记不补造 |
+| `/root/caller_inventory013` | `gpt-6-luna/max` | **041 full STOP、未启动**：started=false、无PID/handle/raw/actual，主核owned0并撤精确alias；NAV041-001修复及独审关闭后才给新候选唯一full。029真实失败保留 |
+| `/root/a06_navigation_independent` | `gpt-6-luna/max` | **041固定增审 STOP**：NAV041-001确认页双rAF未验当前DOM完成文案，待052修；full/queryHolds误读已撤、原报告保留。不测试或写源码 |
+| `/root/candidate_boundary_reviewer` | `gpt-6-luna/max` | **052 active/NWT两测试消费者窄修**：恢复确认页真实DOM完成屏障及Python字段断言，保冻结op与发起页目标可见、原计时/规模；静态＋受保护原minimal后整体STOP，不碰ROOT/Sol050。046准备包已交Sol |
 | `/root/luna_federation_codes032` | `gpt-6-luna/max` | **035已集成82f518e8**：四relay预期一次迁齐，原直连/业务异常保；1pass/37.61s、Ruff0、owned0、五源SHA同。未变32unit复用 |
-| `/root/a06_architecture_final` | `gpt-6-luna/max` | **049 STOP/局部typed收据对表**：1.5/1.6/1.7复合门仍未闭合，不推实现缺失，不据个别文件SHA匹配外推整测试。report继承旧pinned HEAD的字段已主另存纠正，不作源码漂移。036独审b201e87d接受；040/043不重复 |
+| `/root/a06_architecture_final` | `gpt-6-luna/max` | **053 active/只读最终typed收据**：仅补049未核的E最终具名raw/原1.5–1.7原子对表，约10分钟先交可执行结论；不重复早期A02泛查或改Sol050。049继承旧HEAD字段已主另存纠正，036已接受 |
 
 至少3常驻、最多15活动agent；闲置不制造改动。主统一调度、禁止派生；主只维护文档/固定交付/串行集成，不手写业务源码。Luna只外围小修/独审/验收，不做大型核心改造。
 
@@ -94,3 +94,5 @@
 041最终STOP/report275ffd6c，原003消费者一次迁齐：001真实exit1/62.173s，浏览器完整但把可选query hold计数当handoff门；002真实exit0/41.584859s（pytest39.53s），2真实终态消费/UI跨页确认，错op/乱序拒绝，诊断hold0/1保原值。四SHA同、owned0、作者alias已撤。固定`b04504a91a825d3556bb7b514fb73b1b09eb0d75`从540157c8构造、四路径strict/机械0；17运行相关源码与NWT一致，28个不相关旧文档/已接受owner差异逐路径deferred，不冒称整NWT=ROOT HEAD。manifest/增量/机械见`RV/coordinator/artifacts/navigation-crosspage041-fixed/`；独审与唯一full lease分别`RV/a06_navigation_independent/artifacts/navigation-crosspage041-review/`和`RV/caller_inventory013/artifacts/navigation-crosspage041-full/`，各index已主read-tree候选。full alias=`ROOT/out/.navigation-full041-tmp`，仅owned0后核target再unlink；原full尚未通过。
 
 050 active lease/report根=`RV/sol_vertical_implementer/artifacts/section8-product050-full-closure/`；workdir=ROOT/index=`RV/sol_vertical_implementer/git/section8-product050-full-closure.idx`，主已初始化540157c8，禁作者Git/派生/skill/spec/NWT。原8.1-G/H、8.3-E、8.13A-S及8.14剩余门同一完整批推进；唯一Web E2E owner仍`tests/e2e/clients/web/test_basic_chat_tool_loop.py`。原8.14不含额外外部资源矩阵，017未变46pass有限复用；原少数缺口在现有runtime owner验。正式测试目录沿owner；shortTMPDIR=`ROOT/out/.section8-050-tmp`→正式`runtime/test-control/tmp`，最后owned0仅unlink。全部测试timeout＋ulimit，ROOT venv/--no-sync/唯一ROOT PYTHONPATH；先完整改齐，核心少量入口集中调试，末尾受影响边界，整体STOP后固定独审。046仅准备计划，049仅partial evidence，不把它们记为实现通过。
+
+041增审report322bedb8唯一NAV041-001：历史event/count不能替代确认瞬间当前DOM文案；主已核029原屏障，拒收待窄修。full owner明确未启动，主核进程0/撤alias，`RV/caller_inventory013/artifacts/navigation-crosspage041-full/not-started-stop.json`记录无actual/raw，不能算测试失败或成功。052 lease/report根=`RV/candidate_boundary_reviewer/artifacts/navigation-dom052-narrow/`，index已read-tree b04504a9，只有NWT MJS/Python两测试消费者写权限；原minimal timeout240＋ulimit，short alias `ROOT/out/.navigation052-tmp` 指向正式runtime/navigation-author052/tmp。053 lease/report根=`RV/a06_architecture_final/artifacts/typed-original053-final-receipts/`，当前3e977c8只读最终E收据，有限补证不重复049。Sol050已实际编辑精确ModelCallIdentity与无共享顺序游标replay，维持整批推进；尚无测试结果，不将running记成通过。

@@ -306,3 +306,5 @@ DOM辅助003的补充证据004确认实际4次验证（前3失败、最后工具
 043只读核原8.13发现，旧Provider403摘要只给owner文件、没有node级raw；同时SessionThread/model-call精确replay及外置phase harness仍未实现。把整个产品验收归为配额阻塞会隐藏可推进的原任务。保原403收据，确定性fixture/harness由同Sol下个完整Section8批收齐，不换外部profile、不另建重复E2E owner、不把源码推断的selector冒称原失败证据；实际实施效果待收。
 
 041同作者集中迁完整跨页callee。001浏览器已完成5文件/2跨页/2Gateway，新增汇总却把query hold分支0误作handoff失败，actual1/62.173s；分支计数只作诊断，真实handoff从被冻结op的Response消费/UI完成事实求证，002实际0/41.584859s、2跨页确认/错op与乱序拒绝、原计时规模保持。只证明代表机制与同批修订已验证；固定机械0，原full/独审在途，不能宣布长量化已经绿。后续只重验受影响共同前置，不为收据缺字段反复冻结微交接。
+
+041独审NAV041-001发现确认屏障仅检查历史完成event/count，记录了当前DOM文案却没有断言；可能在确认页显示queued时过门。主核029原合同后撤销尚未启动的full（started=false/owned0），隔离Luna052只恢复确认页屏障前/双rAF内真实DOM完成与Python断言，保冻结op归属及发起页目标可见。历史event证明归属，确认快照证明当时界面，两者不可互代；后续修订实测待收，不先记有效。独审误读full/queryHolds分支已自行撤回，保原报告，不改合法分支迎合假finding。
