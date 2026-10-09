@@ -1,3 +1,9 @@
+027派单纠正：026浏览器代表入口完整但Pythonsample漏owner_preimage_sha256（actual1/59.708s）；025此前漏client_sequence，说明作者只补报错key，主又用单次smoke→STOP边界放大交接。现在同作者盘齐整个producer/projection/Python minimal/full字段，一次改齐后集中调试，再整体STOP；不逐字段冻结、倒填默认或放宽原断言。旧失败保留，效果待027真实整体交付。
+
+导航025作者两次受保护minimal实际1/46.334s、1/51.049s。001浏览器5文件＋2跨页＋2Gateway完成，但输出遗漏client_sequence；002发起页全局completionCount可由A完成增加，B仍queued，旧等待穿透。HTTP仅证明A committed、B queued、另一页B committed，不证明同operation状态倒退。025STOP/raw/四SHA/PGID0已保；同Sol026联合等真实UI文本与计数、保双rAF/elapsed/原规模，效果待运行，不交独审代调试。
+
+016审计主派单误用“禁源码”而未明确仅禁写，审计者未读测试断言，raw的-q摘要无法独立逐条映射；同时先读取早期A03 pending。主纠正读/写授权、最新具名接受版本及实际依赖SHA；完整exit0测试可结合被执行源码断言核覆盖，无须raw打印每条assert。016只保已核局部收据，不认新增生产缺口，不再延长泛审；此纠正的后续效果待验证。
+
 导航024独立minimal actual1/39.56s：copy实际202/正文完整，但requestfinished先标completed，response.allHeaders异步未写proxy ID即被判不匹配；原四源码/PGID0已主核，不是owner事故。022–024仅静态派单把真正callee时序漏到交付阶段，主收回微包静态门，由同Sol025整闭包最多2次代表入口调试后STOP，Luna独验；效果待运行。
 
 对表015只核源码与摘要未展开已接受raw，不能把本轮未核解释成全局缺证，更不能要求一个新HEAD的一条联合命令替代可复用多收据。该报告另存baseline末位更正；裸status违租约，主核sharedindex仍4ea3原字节，撤回该agent全部Git权。旧规则重复未落实，不再加一套同义流程。
